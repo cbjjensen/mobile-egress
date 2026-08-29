@@ -19,6 +19,7 @@ class ScanPairingCoordinator(
 ) {
     private val pairingController = PairingController(initiallyPaired)
     private val pairingScanSession = PairingScanSession()
+    private var acceptedScannedBundle: String? = null
 
     var state = PairingUiState(paired = initiallyPaired, pairingStatus = initialStatus)
         private set
@@ -36,6 +37,7 @@ class ScanPairingCoordinator(
     }
 
     fun cancelScan() {
+        acceptedScannedBundle = null
         pairingScanSession.cancel()
         state = state.copy(
             pairingScanState = pairingScanSession.state,
@@ -53,11 +55,12 @@ class ScanPairingCoordinator(
         syncScanState()
     }
 
-    fun beginDecoded(scannedBundle: String): Boolean {
-        if (!pairingScanSession.acceptDecoded(scannedBundle) || state.pairingInProgress) {
+    fun submitDecoded(scannedBundle: String): Boolean {
+        if (state.pairingInProgress || !pairingScanSession.acceptDecoded(scannedBundle)) {
             syncScanState()
             return false
         }
+        acceptedScannedBundle = scannedBundle
         pairingController.reduce(PairingEvent.PairRequested)
         state = state.copy(
             pairingInProgress = true,
@@ -67,8 +70,10 @@ class ScanPairingCoordinator(
         return true
     }
 
-    suspend fun enrollDecoded(scannedBundle: String) {
+    suspend fun enrollAcceptedScan() {
         if (!state.pairingInProgress || state.pairingScanState != PairingScanState.Pairing) return
+        val scannedBundle = acceptedScannedBundle ?: return
+        acceptedScannedBundle = null
         val result = runCatching { enrollmentRepository.pair(scannedBundle) }
         val pairingState = pairingController.reduce(
             if (result.isSuccess) PairingEvent.PairSucceeded else PairingEvent.PairFailed,

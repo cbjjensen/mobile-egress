@@ -23,7 +23,7 @@ import org.junit.Test
 
 class ScanPairingCoordinatorTest {
     @Test
-    fun `decoded scan enters redacted pairing state before direct repository enrollment`() = runTest {
+    fun `one submitted scan enters redacted pairing state and enrolls that value`() = runTest {
         val enrollmentEntered = CompletableDeferred<Unit>()
         val completeEnrollment = CompletableDeferred<Unit>()
         val identities = FakeIdentityPersistence()
@@ -31,13 +31,13 @@ class ScanPairingCoordinatorTest {
             decoder = PairingBundleParser { Instant.parse("2026-08-29T18:00:00Z") },
             credentialKeys = FakeCredentialKeys(),
             identityPersistence = identities,
-            enrollmentPerformer = EnrollmentPerformer { _, deviceKey, _ ->
+            enrollmentPerformer = EnrollmentPerformer { bundle, deviceKey, _ ->
                 enrollmentEntered.complete(Unit)
                 completeEnrollment.await()
                 AgentIdentity(
-                    relayOrigin = "https://relay.example:8443",
+                    relayOrigin = bundle.relayOrigin,
                     role = "agent",
-                    serial = "A1",
+                    serial = "serial-${bundle.capability}",
                     keyAlias = deviceKey.alias,
                     certificatePem = "certificate",
                     caCertificatePem = "ca",
@@ -48,7 +48,7 @@ class ScanPairingCoordinatorTest {
         val scannedBundle = validBundle()
 
         coordinator.requestScan(cameraPermissionGranted = true)
-        assertTrue(coordinator.beginDecoded(scannedBundle))
+        assertTrue(coordinator.submitDecoded(scannedBundle))
         assertEquals(
             PairingUiState(
                 pairingInProgress = true,
@@ -58,7 +58,7 @@ class ScanPairingCoordinatorTest {
             coordinator.state,
         )
 
-        val enrollment = async { coordinator.enrollDecoded(scannedBundle) }
+        val enrollment = async { coordinator.enrollAcceptedScan() }
         enrollmentEntered.await()
         assertEquals(
             PairingUiState(
@@ -74,15 +74,50 @@ class ScanPairingCoordinatorTest {
 
         assertEquals("Paired", coordinator.state.pairingStatus)
         assertTrue(coordinator.state.paired)
-        assertEquals("A1", identities.current?.serial)
+        assertEquals("serial-submitted-scan-capability", identities.current?.serial)
+        assertEquals("https://submitted-scan.example:9443", identities.current?.relayOrigin)
+    }
+
+    @Test
+    fun `wrong-role submitted scan is rejected through the coordinator with generic state`() = runTest {
+        val identities = FakeIdentityPersistence()
+        val repository = EnrollmentRepository(
+            decoder = PairingBundleParser { Instant.parse("2026-08-29T18:00:00Z") },
+            credentialKeys = FakeCredentialKeys(),
+            identityPersistence = identities,
+            enrollmentPerformer = EnrollmentPerformer { _, _, _ -> error("must not enroll a wrong role") },
+        )
+        val coordinator = ScanPairingCoordinator(repository, initiallyPaired = false)
+
+        coordinator.requestScan(cameraPermissionGranted = true)
+        assertTrue(coordinator.submitDecoded(wrongRoleBundle()))
+        coordinator.enrollAcceptedScan()
+
+        assertEquals(
+            PairingUiState(
+                pairingStatus = "Pairing bundle rejected",
+                pairingScanState = PairingScanState.Pairing,
+            ),
+            coordinator.state,
+        )
+        assertEquals(null, identities.current)
     }
 
     private fun validBundle(): String = buildJsonObject {
         put("version", 1)
+        put("relayUrl", "https://submitted-scan.example:9443")
+        put("caCertificatePem", testCaPem())
+        put("capability", "submitted-scan-capability")
+        put("role", "agent")
+        put("expiresAt", "2026-08-29T18:10:00Z")
+    }.toString().encodeBase64Url()
+
+    private fun wrongRoleBundle(): String = buildJsonObject {
+        put("version", 1)
         put("relayUrl", "https://relay.example:8443")
         put("caCertificatePem", testCaPem())
         put("capability", "one-use-high-entropy-capability")
-        put("role", "agent")
+        put("role", "owner")
         put("expiresAt", "2026-08-29T18:10:00Z")
     }.toString().encodeBase64Url()
 

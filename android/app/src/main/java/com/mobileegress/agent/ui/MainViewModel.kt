@@ -84,13 +84,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onQrDecoded(scannedBundle: String) {
-        if (!pairingCoordinator.beginDecoded(scannedBundle)) {
+        if (!pairingCoordinator.submitDecoded(scannedBundle)) {
             syncPairingState()
             return
         }
         syncPairingState()
         viewModelScope.launch {
-            pairingCoordinator.enrollDecoded(scannedBundle)
+            pairingCoordinator.enrollAcceptedScan()
             syncPairingState()
         }
     }

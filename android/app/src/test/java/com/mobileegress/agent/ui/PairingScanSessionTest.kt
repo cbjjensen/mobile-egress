@@ -46,6 +46,19 @@ class PairingScanSessionTest {
     }
 
     @Test
+    fun `synchronous scanner initialization failure is reduced to unavailable`() {
+        val session = PairingScanSession()
+
+        session.requestScan(cameraPermissionGranted = true)
+        guardScannerInitialization(session::onScannerUnavailable) {
+            throw IllegalStateException("camera provider initialization detail")
+        }
+
+        assertEquals(PairingScanState.ScannerUnavailable, session.state)
+        assertEquals("Scanner unavailable", session.status)
+    }
+
+    @Test
     fun `only the first decoded code is accepted per scan session`() {
         val session = PairingScanSession()
         val invitation = "secret-agent-invitation"
