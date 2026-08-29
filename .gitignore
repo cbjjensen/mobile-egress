@@ -1,0 +1,29 @@
+.env
+.env.*
+!.env.example
+
+# Runtime secrets and state
+data/
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# Go and desktop build outputs
+bin/
+build/
+dist/
+coverage.out
+
+# Android and Gradle
+android/.gradle/
+android/local.properties
+android/**/build/
+
+# Desktop frontend
+windows-client/frontend/node_modules/
+windows-client/build/
+
+# Agent coordination scratch space
+.superpowers/
