@@ -96,6 +96,31 @@ func TestCoreRetriesClientSetupWithoutReenrollingOwner(t *testing.T) {
 	}
 }
 
+func TestCoreRejectsRepeatedOwnerBootstrapWithoutStoppingClientProxy(t *testing.T) {
+	t.Parallel()
+
+	owner := testIdentity("owner", "OWNER")
+	gateway := &bootstrapGateway{owner: owner, client: testIdentity("client", "CLIENT"), tunnel: &fakeTunnel{healthy: true}}
+	core, err := NewCore(context.Background(), securestore.NewMemoryStore(), gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := pairing.Bundle{RelayURL: owner.RelayURL, Role: "owner"}
+	if err := core.BootstrapOwner(context.Background(), bundle); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.StartProxy(availablePort(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := core.BootstrapOwner(context.Background(), bundle); err == nil {
+		t.Fatal("repeated BootstrapOwner() succeeded")
+	}
+	if !core.Status().Running {
+		t.Fatal("rejected repeated bootstrap stopped the active client proxy")
+	}
+}
+
 func testIdentity(role, serial string) relayclient.Identity {
 	return relayclient.Identity{
 		RelayURL: "https://relay.example", Role: role, Serial: serial,

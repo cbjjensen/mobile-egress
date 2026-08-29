@@ -95,14 +95,14 @@ func (core *Core) BootstrapOwner(ctx context.Context, bundle pairing.Bundle) err
 	if bundle.Role != "owner" {
 		return errors.New("an owner invitation is required")
 	}
-	if err := core.stopProxy(); err != nil {
-		return err
-	}
 	core.mu.RLock()
 	hasOwner := core.owner != nil
 	core.mu.RUnlock()
 	if hasOwner {
 		return errors.New("owner identity is already enrolled")
+	}
+	if err := core.stopProxy(); err != nil {
+		return err
 	}
 	identity, err := core.gateway.Enroll(ctx, bundle)
 	if err != nil {

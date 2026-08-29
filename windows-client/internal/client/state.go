@@ -52,6 +52,7 @@ type persistedGeneration struct {
 	Settings         persistedSettings  `json:"settings"`
 	Owner            *persistedIdentity `json:"owner,omitempty"`
 	Client           *persistedIdentity `json:"client,omitempty"`
+	LegacyIdentity   *persistedIdentity `json:"legacyIdentity,omitempty"`
 	PrivateKeyPEM    string             `json:"privateKeyPem,omitempty"`
 	CertificatePEM   string             `json:"certificatePem,omitempty"`
 	CACertificatePEM string             `json:"caCertificatePem,omitempty"`
@@ -246,21 +247,23 @@ func (generation *persistedGeneration) migrateLegacyIdentity() (bool, error) {
 	if !legacyPresent {
 		return false, nil
 	}
-	if generation.Owner != nil || generation.Client != nil {
+	if generation.Owner != nil || generation.Client != nil || generation.LegacyIdentity != nil {
 		return false, errors.New("active secure generation mixes legacy and dual identities")
 	}
 	identity := relayclient.Identity{
 		RelayURL: generation.Settings.RelayURL, Role: generation.Settings.Role, Serial: generation.Settings.Serial,
 		PrivateKeyPEM: generation.PrivateKeyPEM, CertificatePEM: generation.CertificatePEM, CACertificatePEM: generation.CACertificatePEM,
 	}
-	if !completeIdentity(identity) || (identity.Role != "owner" && identity.Role != "client") {
+	if !completeIdentity(identity) || (identity.Role != "owner" && identity.Role != "client" && identity.Role != "agent") {
 		return false, errors.New("active secure generation has an invalid legacy identity")
 	}
 	persisted := persistedIdentityFrom(identity)
 	if identity.Role == "owner" {
 		generation.Owner = &persisted
-	} else {
+	} else if identity.Role == "client" {
 		generation.Client = &persisted
+	} else {
+		generation.LegacyIdentity = &persisted
 	}
 	generation.Settings.RelayURL = ""
 	generation.Settings.Role = ""

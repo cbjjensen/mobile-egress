@@ -141,6 +141,73 @@ func TestRepositoryMigratesLegacySingleRoleIdentityIntoItsDedicatedSlot(t *testi
 	}
 }
 
+func TestRepositoryQuarantinesLegacyAgentIdentityWithoutBlockingNewOwnerState(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	legacyAgent := relayclient.Identity{
+		RelayURL: "https://relay.example:8443", Role: "agent", Serial: "AGENT123",
+		PrivateKeyPEM: "agent-key", CertificatePEM: "agent-chain", CACertificatePEM: "relay-ca",
+	}
+	legacy := persistedGeneration{
+		Credentials:   Credentials{Username: "username", Password: "password"},
+		Settings:      persistedSettings{RelayURL: legacyAgent.RelayURL, Role: legacyAgent.Role, Serial: legacyAgent.Serial, Port: 1080},
+		PrivateKeyPEM: legacyAgent.PrivateKeyPEM, CertificatePEM: legacyAgent.CertificatePEM, CACertificatePEM: legacyAgent.CACertificatePEM,
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, generationKey("BBBBBBBBBBBBBBBBBBBBBA"), raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, activeGenerationKey, []byte("BBBBBBBBBBBBBBBBBBBBBA")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewCore(ctx, store, &bootstrapGateway{tunnel: &fakeTunnel{healthy: true}}); err != nil {
+		t.Fatalf("NewCore() blocked on a legacy agent: %v", err)
+	}
+	repository := NewRepository(store)
+	if _, err := repository.LoadOrCreateCredentials(ctx); err != nil {
+		t.Fatalf("LoadOrCreateCredentials() blocked on a legacy agent: %v", err)
+	}
+	if _, _, err := repository.LoadOwnerIdentity(ctx); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("legacy agent became an owner identity: %v", err)
+	}
+	if _, _, err := repository.LoadClientIdentity(ctx); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("legacy agent became a client identity: %v", err)
+	}
+	newOwner := relayclient.Identity{
+		RelayURL: legacyAgent.RelayURL, Role: "owner", Serial: "OWNER456",
+		PrivateKeyPEM: "owner-key", CertificatePEM: "owner-chain", CACertificatePEM: "relay-ca",
+	}
+	if err := repository.SaveOwnerIdentity(ctx, newOwner); err != nil {
+		t.Fatalf("SaveOwnerIdentity() after legacy agent migration = %v", err)
+	}
+
+	active, err := store.Get(ctx, activeGenerationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migratedRaw, err := store.Get(ctx, generationKey(string(active)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated map[string]json.RawMessage
+	if err := json.Unmarshal(migratedRaw, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	var quarantined relayclient.Identity
+	if err := json.Unmarshal(migrated["legacyIdentity"], &quarantined); err != nil {
+		t.Fatal(err)
+	}
+	if len(migrated["owner"]) == 0 || len(migrated["client"]) != 0 || quarantined.Role != "agent" || quarantined.Serial != legacyAgent.Serial {
+		t.Fatalf("legacy agent was not safely quarantined: %s", migratedRaw)
+	}
+}
+
 func TestRepositoryPairingGenerationSwitchIsAtomicOnStoreFailure(t *testing.T) {
 	t.Parallel()
 
