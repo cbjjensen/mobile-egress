@@ -97,9 +97,22 @@ func (core *Core) BootstrapOwner(ctx context.Context, bundle pairing.Bundle) err
 	}
 	core.mu.RLock()
 	hasOwner := core.owner != nil
+	var existingClient *relayclient.Identity
+	if core.client != nil {
+		clientIdentity := *core.client
+		existingClient = &clientIdentity
+	}
 	core.mu.RUnlock()
 	if hasOwner {
 		return errors.New("owner identity is already enrolled")
+	}
+	if existingClient != nil && !sameRelayTrust(
+		existingClient.RelayURL,
+		existingClient.CACertificatePEM,
+		bundle.RelayURL,
+		bundle.CACertificatePEM,
+	) {
+		return errors.New("owner invitation does not match the existing client relay")
 	}
 	if err := core.stopProxy(); err != nil {
 		return err
@@ -110,6 +123,14 @@ func (core *Core) BootstrapOwner(ctx context.Context, bundle pairing.Bundle) err
 	}
 	if !validIdentityForRole(identity, "owner") {
 		return errors.New("relay returned an invalid owner identity")
+	}
+	if existingClient != nil && !sameRelayTrust(
+		existingClient.RelayURL,
+		existingClient.CACertificatePEM,
+		identity.RelayURL,
+		identity.CACertificatePEM,
+	) {
+		return errors.New("relay returned an Owner for a different client relay")
 	}
 	if err := core.repository.SaveOwnerIdentity(ctx, identity); err != nil {
 		return err
@@ -126,6 +147,47 @@ func (core *Core) RetryClientSetup(ctx context.Context) error {
 	return core.setupClient(ctx)
 }
 
+func (core *Core) ReplaceClient(ctx context.Context) error {
+	core.operations.Lock()
+	defer core.operations.Unlock()
+	core.mu.RLock()
+	if core.owner == nil {
+		core.mu.RUnlock()
+		return errors.New("owner identity required")
+	}
+	if core.client == nil {
+		core.mu.RUnlock()
+		return errors.New("client identity required")
+	}
+	owner := *core.owner
+	existingClient := *core.client
+	core.mu.RUnlock()
+	if !sameRelayTrust(
+		owner.RelayURL,
+		owner.CACertificatePEM,
+		existingClient.RelayURL,
+		existingClient.CACertificatePEM,
+	) {
+		return errors.New("stored Owner and Client relay trust does not match")
+	}
+	clientIdentity, err := core.enrollClient(ctx, owner)
+	if err != nil {
+		return err
+	}
+	if err := core.repository.SaveClientIdentity(ctx, clientIdentity); err != nil {
+		return err
+	}
+	core.mu.Lock()
+	proxy := core.proxy
+	tunnel := core.tunnel
+	core.client = &clientIdentity
+	core.proxy = nil
+	core.tunnel = nil
+	core.mu.Unlock()
+	_ = stopProxyResources(proxy, tunnel)
+	return nil
+}
+
 func (core *Core) setupClient(ctx context.Context) error {
 	core.mu.RLock()
 	if core.owner == nil {
@@ -138,22 +200,9 @@ func (core *Core) setupClient(ctx context.Context) error {
 	}
 	owner := *core.owner
 	core.mu.RUnlock()
-	issued, err := core.gateway.IssuePairing(ctx, owner, "client")
+	clientIdentity, err := core.enrollClient(ctx, owner)
 	if err != nil {
 		return err
-	}
-	if issued.Role != "client" || issued.Code == "" {
-		return errors.New("relay returned an invalid client pairing response")
-	}
-	clientIdentity, err := core.gateway.Enroll(ctx, pairing.Bundle{
-		Version: pairing.Version, RelayURL: owner.RelayURL, CACertificatePEM: owner.CACertificatePEM,
-		Capability: issued.Code, Role: "client", ExpiresAt: issued.ExpiresAt,
-	})
-	if err != nil {
-		return err
-	}
-	if !validIdentityForRole(clientIdentity, "client") {
-		return errors.New("relay returned an invalid client identity")
 	}
 	if err := core.repository.SaveClientIdentity(ctx, clientIdentity); err != nil {
 		return err
@@ -162,6 +211,35 @@ func (core *Core) setupClient(ctx context.Context) error {
 	core.client = &clientIdentity
 	core.mu.Unlock()
 	return nil
+}
+
+func (core *Core) enrollClient(ctx context.Context, owner relayclient.Identity) (relayclient.Identity, error) {
+	issued, err := core.gateway.IssuePairing(ctx, owner, "client")
+	if err != nil {
+		return relayclient.Identity{}, err
+	}
+	if issued.Role != "client" || issued.Code == "" {
+		return relayclient.Identity{}, errors.New("relay returned an invalid client pairing response")
+	}
+	clientIdentity, err := core.gateway.Enroll(ctx, pairing.Bundle{
+		Version: pairing.Version, RelayURL: owner.RelayURL, CACertificatePEM: owner.CACertificatePEM,
+		Capability: issued.Code, Role: "client", ExpiresAt: issued.ExpiresAt,
+	})
+	if err != nil {
+		return relayclient.Identity{}, err
+	}
+	if !validIdentityForRole(clientIdentity, "client") {
+		return relayclient.Identity{}, errors.New("relay returned an invalid client identity")
+	}
+	if !sameRelayTrust(
+		owner.RelayURL,
+		owner.CACertificatePEM,
+		clientIdentity.RelayURL,
+		clientIdentity.CACertificatePEM,
+	) {
+		return relayclient.Identity{}, errors.New("relay returned a Client for a different Owner relay")
+	}
+	return clientIdentity, nil
 }
 
 func validIdentityForRole(identity relayclient.Identity, role string) bool {
@@ -225,6 +303,10 @@ func (core *Core) stopProxy() error {
 	core.proxy = nil
 	core.tunnel = nil
 	core.mu.Unlock()
+	return stopProxyResources(proxy, tunnel)
+}
+
+func stopProxyResources(proxy *socks.Server, tunnel Tunnel) error {
 	var firstErr error
 	if proxy != nil {
 		firstErr = proxy.Stop()
@@ -249,6 +331,7 @@ func (core *Core) Status() Status {
 	status := Status{Relay: "offline", Port: port, OwnerReady: owner != nil, ClientReady: clientIdentity != nil}
 	if clientIdentity != nil {
 		status.Paired = true
+		status.ClientSerial = clientIdentity.Serial
 		status.Proxy = ProxyEndpoint{Credentials: credentials, Port: port}.String()
 	}
 	if owner != nil || clientIdentity != nil {

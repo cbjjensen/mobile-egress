@@ -28,11 +28,15 @@ The Windows secure store keeps independent Owner and Client identities in one DP
 
 If Client enrollment fails after the Owner enrollment succeeds, the Owner identity remains usable and the UI offers a retry action that issues a fresh Client invitation. The consumed invitation itself is never retained. Existing single-identity state migrates on load: existing Client data becomes the Client identity; existing Owner data becomes the Owner identity and requires Client setup.
 
+When both identities exist, their normalized relay origins and pinned CA text must match exactly. A migrated Client blocks an Owner invitation for different relay trust before the invitation is consumed or stored.
+
 ### Desktop experience
 
 The setup screen accepts an Owner invitation by paste and reports only finite, redacted error classes. Once the Owner identity exists, the Phone screen issues one Agent invitation, encodes it as an in-memory QR image, and hides it after its expiry or successful replacement. The raw Agent invitation is neither displayed nor copied.
 
 The proxy screen remains a local, authenticated SOCKS5 listener at `127.0.0.1`. It starts only when the Client identity is available and uses that identity for the relay session. Owner controls remain available on the same desktop installation for Agent invitation issuance and revocation.
+
+The Owner screen shows the safe local Client certificate serial and provides explicit local Client replacement. After the operator records and revokes that serial, replacement uses the Owner control identity to issue and consume a fresh Client invitation in memory, then atomically replaces only the local Client after enrollment and protected persistence succeed. Failures retain the prior local Client; SOCKS never uses the Owner identity.
 
 ### Android experience
 

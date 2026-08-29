@@ -31,7 +31,9 @@ export default function App() {
 
   async function action(work: () => Promise<void>) {
     setBusy(true); setError('')
-    try { await work(); await refresh() } catch { setError('Unable to complete that action. Please try again.') } finally { setBusy(false) }
+    try { await work(); await refresh(); return true }
+    catch { setError('Unable to complete that action. Please try again.'); return false }
+    finally { setBusy(false) }
   }
 
   useEffect(() => {
@@ -67,9 +69,9 @@ export default function App() {
 
   async function revoke(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const serial = String(new FormData(event.currentTarget).get('serial'))
-    await action(() => api().Revoke(serial))
-    event.currentTarget.reset()
+    const form = event.currentTarget
+    const serial = String(new FormData(form).get('serial'))
+    if (await action(() => api().Revoke(serial))) form.reset()
   }
 
   const ready = status.relay === 'connected' && status.agentAvailable
@@ -126,8 +128,15 @@ export default function App() {
 
     {tab === 'owner' && <section className="stack">
       {!status.ownerReady ? <article className="card"><h2>Owner identity required</h2><p>Complete setup with the Owner invitation to manage phone access.</p></article> : <>
-        <article className="card danger"><h2>Revoke device</h2><p>Revocation closes that identity's active relay session.</p>
+        <article className="card"><h2>Recover the local Windows Client</h2><p>Use this flow after the current local Client certificate is revoked or must be replaced. The Owner identity remains separate and is never used by the SOCKS proxy.</p>
+          <div className="serialline"><span>Current local Client certificate serial</span><code>{status.clientSerial ?? 'No local Client enrolled'}</code></div>
+          <ol className="recovery-steps"><li>Record the Client serial shown above.</li><li>Revoke that serial with the form below.</li><li>Choose Replace Client to enroll a fresh local Client.</li><li>Start the proxy again and verify the selected application's egress.</li></ol>
+        </article>
+        <article className="card danger"><h2>Revoke certificate</h2><p>Revocation closes that identity's active relay session. A failed request keeps the entered serial so you can verify it and retry.</p>
           <form className="inline" onSubmit={revoke}><label>Certificate serial<input name="serial" required pattern="[0-9A-Fa-f]+" /></label><button disabled={busy}>Revoke</button></form>
+        </article>
+        <article className="card"><h2>Replace Client</h2><p>This uses the Owner identity to issue and consume a fresh Client invitation in memory, replaces only the local Client after enrollment succeeds, and stops any old local proxy session.</p>
+          <button className="primary" onClick={() => void action(() => api().ReplaceClient())} disabled={busy || !status.clientReady}>Replace Client</button>
         </article>
       </>}
     </section>}

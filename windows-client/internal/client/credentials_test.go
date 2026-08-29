@@ -141,6 +141,99 @@ func TestRepositoryMigratesLegacySingleRoleIdentityIntoItsDedicatedSlot(t *testi
 	}
 }
 
+func TestRepositoryAcceptsDualIdentitiesForSameNormalizedRelayOriginAndExactCA(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	repository := NewRepository(store)
+	clientIdentity := relayclient.Identity{
+		RelayURL: "https://RELAY.EXAMPLE:443/", Role: "client", Serial: "C11E17",
+		PrivateKeyPEM: "client-key", CertificatePEM: "client-chain", CACertificatePEM: "same-ca",
+	}
+	owner := relayclient.Identity{
+		RelayURL: "https://relay.example", Role: "owner", Serial: "0A11CE",
+		PrivateKeyPEM: "owner-key", CertificatePEM: "owner-chain", CACertificatePEM: "same-ca",
+	}
+	if err := repository.SaveClientIdentity(ctx, clientIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveOwnerIdentity(ctx, owner); err != nil {
+		t.Fatalf("SaveOwnerIdentity() for the same relay = %v", err)
+	}
+	if got, _, err := repository.LoadOwnerIdentity(ctx); err != nil || got != owner {
+		t.Fatalf("loaded owner = %#v, %v; want %#v", got, err, owner)
+	}
+	if got, _, err := repository.LoadClientIdentity(ctx); err != nil || got != clientIdentity {
+		t.Fatalf("loaded client = %#v, %v; want %#v", got, err, clientIdentity)
+	}
+}
+
+func TestRepositoryRejectsMismatchedDualIdentityWithoutReplacingClient(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	repository := NewRepository(store)
+	clientIdentity := relayclient.Identity{
+		RelayURL: "https://relay-a.example", Role: "client", Serial: "C11E17",
+		PrivateKeyPEM: "client-key", CertificatePEM: "client-chain", CACertificatePEM: "relay-a-ca",
+	}
+	if err := repository.SaveClientIdentity(ctx, clientIdentity); err != nil {
+		t.Fatal(err)
+	}
+	owner := relayclient.Identity{
+		RelayURL: "https://relay-b.example", Role: "owner", Serial: "0A11CE",
+		PrivateKeyPEM: "owner-key", CertificatePEM: "owner-chain", CACertificatePEM: "relay-b-ca",
+	}
+
+	if err := repository.SaveOwnerIdentity(ctx, owner); err == nil {
+		t.Fatal("SaveOwnerIdentity() accepted an Owner from a different relay")
+	}
+	if got, _, err := NewRepository(store).LoadClientIdentity(ctx); err != nil || got != clientIdentity {
+		t.Fatalf("client after rejected Owner save = %#v, %v; want %#v", got, err, clientIdentity)
+	}
+	if _, _, err := NewRepository(store).LoadOwnerIdentity(ctx); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("rejected Owner was persisted: %v", err)
+	}
+}
+
+func TestRepositoryRejectsPersistedDualIdentitiesWithMismatchedRelayTrust(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	owner := persistedIdentity{
+		RelayURL: "https://relay.example", Role: "owner", Serial: "0A11CE",
+		PrivateKeyPEM: "owner-key", CertificatePEM: "owner-chain", CACertificatePEM: "owner-ca",
+	}
+	clientIdentity := persistedIdentity{
+		RelayURL: "https://relay.example/", Role: "client", Serial: "C11E17",
+		PrivateKeyPEM: "client-key", CertificatePEM: "client-chain", CACertificatePEM: "different-ca",
+	}
+	generation := persistedGeneration{
+		Credentials: Credentials{Username: "username", Password: "password"},
+		Settings:    persistedSettings{Port: 1080},
+		Owner:       &owner,
+		Client:      &clientIdentity,
+	}
+	raw, err := json.Marshal(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const generationID = "CCCCCCCCCCCCCCCCCCCCCA"
+	if err := store.Put(ctx, generationKey(generationID), raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, activeGenerationKey, []byte(generationID)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewRepository(store).LoadOrCreateCredentials(ctx); err == nil {
+		t.Fatal("LoadOrCreateCredentials() accepted mismatched persisted Owner and Client trust")
+	}
+}
+
 func TestRepositoryQuarantinesLegacyAgentIdentityWithoutBlockingNewOwnerState(t *testing.T) {
 	t.Parallel()
 

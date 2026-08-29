@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"reflect"
 	"strings"
@@ -114,21 +115,79 @@ func TestAgentQrViewDoesNotExposeInvitationText(t *testing.T) {
 	}
 }
 
-type desktopGateway struct{}
+func TestReplaceClientReturnsOnlyAGenericRecoveryError(t *testing.T) {
+	t.Parallel()
 
-func (desktopGateway) Enroll(context.Context, pairing.Bundle) (relayclient.Identity, error) {
-	return relayclient.Identity{}, nil
+	owner := desktopIdentity("owner", "0A11CE")
+	clientIdentity := desktopIdentity("client", "C11E17")
+	store := securestore.NewMemoryStore()
+	repository := client.NewRepository(store)
+	if err := repository.SaveOwnerIdentity(context.Background(), owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveClientIdentity(context.Background(), clientIdentity); err != nil {
+		t.Fatal(err)
+	}
+	core, err := client.NewCore(context.Background(), store, desktopGateway{enrollErr: errors.New("sensitive relay detail")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacer, ok := any(&DesktopApp{core: core}).(interface{ ReplaceClient() error })
+	if !ok {
+		t.Fatal("DesktopApp does not expose ReplaceClient")
+	}
+
+	err = replacer.ReplaceClient()
+	if err == nil {
+		t.Fatal("ReplaceClient() succeeded when enrollment failed")
+	}
+	if got, want := err.Error(), "Unable to replace the local Windows Client. Please try again."; got != want {
+		t.Fatalf("ReplaceClient() error = %q, want generic error %q", got, want)
+	}
+}
+
+func TestRevokeReturnsOnlyAGenericOwnerControlError(t *testing.T) {
+	t.Parallel()
+
+	owner := desktopIdentity("owner", "0A11CE")
+	store := securestore.NewMemoryStore()
+	if err := client.NewRepository(store).SaveOwnerIdentity(context.Background(), owner); err != nil {
+		t.Fatal(err)
+	}
+	core, err := client.NewCore(context.Background(), store, desktopGateway{revokeErr: errors.New("sensitive relay detail")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = (&DesktopApp{core: core}).Revoke("C11E17")
+	if err == nil {
+		t.Fatal("Revoke() succeeded when the relay rejected it")
+	}
+	if got, want := err.Error(), "Unable to revoke that certificate. Verify the serial and try again."; got != want {
+		t.Fatalf("Revoke() error = %q, want generic error %q", got, want)
+	}
+}
+
+type desktopGateway struct {
+	enrollErr error
+	revokeErr error
+}
+
+func (gateway desktopGateway) Enroll(context.Context, pairing.Bundle) (relayclient.Identity, error) {
+	return relayclient.Identity{}, gateway.enrollErr
 }
 
 func (desktopGateway) DialSession(context.Context, relayclient.Identity) (client.Tunnel, error) {
 	return nil, nil
 }
 
-func (desktopGateway) IssuePairing(context.Context, relayclient.Identity, string) (relayclient.PairingCode, error) {
-	return relayclient.PairingCode{Code: "agent-invitation", Role: "agent", ExpiresAt: time.Now().Add(time.Minute)}, nil
+func (desktopGateway) IssuePairing(_ context.Context, _ relayclient.Identity, role string) (relayclient.PairingCode, error) {
+	return relayclient.PairingCode{Code: "agent-invitation", Role: role, ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 
-func (desktopGateway) Revoke(context.Context, relayclient.Identity, string) error { return nil }
+func (gateway desktopGateway) Revoke(context.Context, relayclient.Identity, string) error {
+	return gateway.revokeErr
+}
 
 func desktopIdentity(role, serial string) relayclient.Identity {
 	return relayclient.Identity{

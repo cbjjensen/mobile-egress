@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
 
+	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
@@ -136,6 +138,9 @@ func (repository *Repository) saveIdentity(ctx context.Context, role string, ide
 	} else {
 		generation.Client = &persisted
 	}
+	if err := generation.validateDualIdentityTrust(); err != nil {
+		return err
+	}
 	return repository.commitGeneration(ctx, generation)
 }
 
@@ -234,6 +239,9 @@ func (repository *Repository) loadGeneration(ctx context.Context) (persistedGene
 	if err != nil {
 		return persistedGeneration{}, err
 	}
+	if err := generation.validateDualIdentityTrust(); err != nil {
+		return persistedGeneration{}, err
+	}
 	if migrated {
 		if err := repository.commitGeneration(ctx, generation); err != nil {
 			return persistedGeneration{}, fmt.Errorf("migrate active secure generation: %w", err)
@@ -279,6 +287,46 @@ func persistedIdentityFrom(identity relayclient.Identity) persistedIdentity {
 		RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial,
 		PrivateKeyPEM: identity.PrivateKeyPEM, CertificatePEM: identity.CertificatePEM, CACertificatePEM: identity.CACertificatePEM,
 	}
+}
+
+func (generation persistedGeneration) validateDualIdentityTrust() error {
+	if generation.Owner == nil || generation.Client == nil {
+		return nil
+	}
+	if !sameRelayTrust(
+		generation.Owner.RelayURL,
+		generation.Owner.CACertificatePEM,
+		generation.Client.RelayURL,
+		generation.Client.CACertificatePEM,
+	) {
+		return errors.New("stored Owner and Client relay trust does not match")
+	}
+	return nil
+}
+
+func sameRelayTrust(firstRelayURL, firstCA, secondRelayURL, secondCA string) bool {
+	firstOrigin, firstErr := normalizedRelayOrigin(firstRelayURL)
+	secondOrigin, secondErr := normalizedRelayOrigin(secondRelayURL)
+	return firstErr == nil && secondErr == nil && firstOrigin == secondOrigin && firstCA == secondCA
+}
+
+func normalizedRelayOrigin(raw string) (string, error) {
+	origin, err := pairing.RelayOrigin(raw)
+	if err != nil {
+		return "", err
+	}
+	hostname := strings.ToLower(origin.Hostname())
+	port := origin.Port()
+	if port == "443" {
+		port = ""
+	}
+	host := hostname
+	if port != "" {
+		host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
+	}
+	return (&url.URL{Scheme: "https", Host: host}).String(), nil
 }
 
 func completeIdentity(identity relayclient.Identity) bool {
@@ -330,6 +378,7 @@ type Status struct {
 	Role           string `json:"role,omitempty"`
 	OwnerReady     bool   `json:"ownerReady"`
 	ClientReady    bool   `json:"clientReady"`
+	ClientSerial   string `json:"clientSerial,omitempty"`
 	Running        bool   `json:"running"`
 	Relay          string `json:"relay"`
 	AgentAvailable bool   `json:"agentAvailable"`

@@ -120,6 +120,15 @@ func (app *DesktopApp) RetryClientSetup() error {
 	return nil
 }
 
+func (app *DesktopApp) ReplaceClient() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	if err := app.core.ReplaceClient(ctx); err != nil {
+		return errors.New("Unable to replace the local Windows Client. Please try again.")
+	}
+	return nil
+}
+
 func (app *DesktopApp) StartProxy(port uint16) error { return app.core.StartProxy(port) }
 
 func (app *DesktopApp) StopProxy() error { return app.core.StopProxy() }
@@ -150,7 +159,10 @@ func (app *DesktopApp) IssueAgentQr() (AgentQrView, error) {
 func (app *DesktopApp) Revoke(serial string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return app.core.Revoke(ctx, serial)
+	if err := app.core.Revoke(ctx, serial); err != nil {
+		return errors.New("Unable to revoke that certificate. Verify the serial and try again.")
+	}
+	return nil
 }
 
 func (app *DesktopApp) Quit() {

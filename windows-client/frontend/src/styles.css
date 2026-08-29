@@ -34,6 +34,10 @@ button:disabled { opacity: .55; cursor: wait; }
 .pill { border-radius: 99px; padding: 6px 9px; background: #283342; color: #9aa8ba; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 .pill.on { color: #72e4ac; background: #1a4736; }
 .copyline, .issued { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; margin-top: 17px; padding: 10px; background: #0c1118; border: 1px solid #253141; border-radius: 10px; }
+.serialline { display: grid; gap: 6px; margin: 14px 0; padding: 12px; background: #0c1118; border: 1px solid #253141; border-radius: 10px; }
+.serialline span { color: #8090a5; font-size: 12px; }
+.serialline code { overflow-wrap: anywhere; }
+.recovery-steps { margin: 0; padding-left: 22px; color: #aab7c8; line-height: 1.7; }
 .qr-card { display: grid; justify-items: center; gap: 12px; padding-top: 18px; }
 .qr-card img { width: min(256px, 100%); border-radius: 12px; background: #fff; padding: 10px; image-rendering: pixelated; }
 .qr-card p { margin: 0; text-align: center; }

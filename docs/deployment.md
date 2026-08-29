@@ -40,6 +40,8 @@ Before changing relay images, create a protected backup of `deploy/data`. For a 
 
 For a suspected state/CA compromise, stop the relay and Windows/Android clients, preserve the existing `deploy/data` as a restricted forensic copy outside normal deployment use, and do not restart from it. Initialize an empty replacement state directory to create a fresh CA, bootstrap with a newly generated Owner bundle, then re-pair every Windows and Android identity. Revocation under the old state does not restore trust because the old CA private key may have been copied. Revocation still rejects new sessions and closes active sessions for the active state while an incident is being contained.
 
+For local Windows Client recovery, use the Owner screen in this order: record the displayed current local Client certificate serial, revoke that serial, choose **Replace Client**, then start the loopback proxy again and verify the selected application's egress. Replacement uses the retained Owner identity only to issue a fresh one-use Client invitation, consumes that invitation in memory, and atomically replaces the local Client after successful enrollment. The SOCKS tunnel continues to use only the Client identity. A failed revocation keeps the entered serial available for correction, and a failed replacement preserves the previously stored Client identity.
+
 ## Required physical-device checklist (still required; not executed by automated verification)
 
 Use an Android 10+ phone with a real cellular plan and an owner-controlled Windows machine. Record only aggregate outcomes and redacted error classes.
@@ -49,7 +51,7 @@ Use an Android 10+ phone with a real cellular plan and an owner-controlled Windo
 - [ ] With Wi-Fi still present, abruptly disable cellular data or otherwise lose the cellular network. Active proxy streams must close and new proxy requests must fail; no request may fall back to Wi-Fi. Restore cellular and verify a new session reconnects before new traffic succeeds.
 - [ ] Confirm the one-phone rule: pair or start a second phone and verify the relay keeps only one active Agent; take the active phone offline and verify the Windows client reports an offline/fail-closed state.
 - [ ] Attempt private, loopback, link-local, multicast, and reserved destinations through SOCKS. Each must be denied without making a target connection.
-- [ ] Revoke the Windows Client and the Android Agent separately from Owner mode. Verify each loses active access immediately and cannot reconnect. Re-enroll the Android Agent by scanning a freshly generated Agent QR; re-enroll the Windows Client with a newly issued Client invitation.
+- [ ] Record the current local Windows Client certificate serial from Owner mode, revoke that serial, verify it loses active access and cannot reconnect, choose **Replace Client**, then restart the proxy and verify selected-application egress. Separately revoke the Android Agent, verify it loses access, and re-enroll it by scanning a freshly generated Agent QR.
 - [ ] Use a controlled public TCP test destination that returns a response and then EOF. Confirm the complete response arrives before the stream closes.
 - [ ] Trigger a local client close and a relay/Agent close at nearly the same time. Confirm the close is idempotent, no spurious protocol violation remains, and unrelated streams continue.
 - [ ] Run eight active streams with one continuously producing data. Confirm a quieter stream still progresses; overload one stream and confirm only that stream is rejected or closed without starving the others.

@@ -31,6 +31,10 @@ Keep Wi-Fi enabled while verifying the cellular-only guarantee: after abrupt cel
 
 IP rotation is intentionally unsupported. Reconnecting the Agent can restore its cellular-bound relay session, but the application cannot reset carrier data or guarantee a changed carrier IP.
 
+## Local Windows Client recovery
+
+The Owner screen displays the current local Client certificate serial because relay v1 has no identity-list endpoint. Record that serial before revocation. Revoke it from the same Owner screen, choose **Replace Client**, then restart the loopback proxy and verify the selected application's egress. Replacement authenticates the control request with the retained Owner, consumes the fresh Client invitation in memory, and replaces only the local Client after enrollment and protected persistence succeed. The SOCKS proxy never falls back to the Owner identity. If revocation fails, correct or retry the retained serial; if replacement fails, the previously stored local Client remains selected.
+
 ## Health and rollback
 
 Health is limited to relay readiness, connected identities, active stream counts, and aggregate counters. If the agent is offline, new SOCKS requests fail; no fallback route occurs. To revoke access, revoke the affected Windows or Android certificate identity from owner mode; revocation rejects new sessions and closes active sessions for that identity. To fully halt service, stop the relay container and Android foreground service.

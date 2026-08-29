@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -101,6 +102,31 @@ class ScanPairingCoordinatorTest {
             coordinator.state,
         )
         assertEquals(null, identities.current)
+    }
+
+    @Test
+    fun `cancelling an accepted scan cannot strand pairing in progress`() = runTest {
+        var enrollmentAttempts = 0
+        val repository = EnrollmentRepository(
+            decoder = PairingBundleParser { Instant.parse("2026-08-29T18:00:00Z") },
+            credentialKeys = FakeCredentialKeys(),
+            identityPersistence = FakeIdentityPersistence(),
+            enrollmentPerformer = EnrollmentPerformer { _, _, _ ->
+                enrollmentAttempts++
+                error("cancelled handoff must not enroll")
+            },
+        )
+        val coordinator = ScanPairingCoordinator(repository, initiallyPaired = false)
+
+        coordinator.requestScan(cameraPermissionGranted = true)
+        assertTrue(coordinator.submitDecoded(validBundle()))
+        coordinator.cancelScan()
+        coordinator.enrollAcceptedScan()
+
+        assertFalse(coordinator.state.pairingInProgress)
+        assertEquals("Unpaired", coordinator.state.pairingStatus)
+        assertEquals(PairingScanState.Idle, coordinator.state.pairingScanState)
+        assertEquals(0, enrollmentAttempts)
     }
 
     private fun validBundle(): String = buildJsonObject {

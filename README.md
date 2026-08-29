@@ -66,6 +66,8 @@ The Windows app then shows a short-lived Agent QR code. Install the signed Andro
 
 There are no automatic application updates, public SOCKS endpoint, or promised IP rotation. The Android app can reconnect a cellular-bound session after a network change, but cannot force a carrier IP change or guarantee a new carrier IP.
 
+If the local Windows Client must be revoked and recovered, use the app's Owner screen: record its displayed certificate serial, revoke it, choose **Replace Client**, then restart and verify the proxy. No Client invitation is exposed during this local recovery flow.
+
 ## Explicit package and release commands
 
 These commands are intentionally separate from `test-all`:

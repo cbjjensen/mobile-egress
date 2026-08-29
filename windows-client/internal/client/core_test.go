@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -121,6 +122,294 @@ func TestCoreRejectsRepeatedOwnerBootstrapWithoutStoppingClientProxy(t *testing.
 	}
 }
 
+func TestCoreBootstrapsOwnerForExistingClientOnSameNormalizedRelay(t *testing.T) {
+	t.Parallel()
+
+	clientIdentity := testIdentity("client", "C11E17")
+	clientIdentity.RelayURL = "https://RELAY.EXAMPLE:443/"
+	owner := testIdentity("owner", "0A11CE")
+	gateway := &bootstrapGateway{owner: owner, client: clientIdentity, tunnel: &fakeTunnel{healthy: true}}
+	store := securestore.NewMemoryStore()
+	if err := NewRepository(store).SaveClientIdentity(context.Background(), clientIdentity); err != nil {
+		t.Fatal(err)
+	}
+	core, err := NewCore(context.Background(), store, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := core.BootstrapOwner(context.Background(), pairing.Bundle{
+		RelayURL: "https://relay.example/", CACertificatePEM: clientIdentity.CACertificatePEM, Role: "owner",
+	}); err != nil {
+		t.Fatalf("BootstrapOwner() for the same normalized relay = %v", err)
+	}
+	if status := core.Status(); !status.OwnerReady || !status.ClientReady {
+		t.Fatalf("Status() = %#v, want both Owner and Client ready", status)
+	}
+}
+
+func TestCoreRejectsMismatchedOwnerBeforeConsumingInvitationForMigratedClient(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		relayURL string
+		ca       string
+	}{
+		{name: "different relay origin", relayURL: "https://relay-b.example", ca: "relay-a-ca"},
+		{name: "different pinned CA", relayURL: "https://relay-a.example/", ca: "relay-b-ca"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			clientIdentity := testIdentity("client", "C11E17")
+			clientIdentity.RelayURL = "https://relay-a.example"
+			clientIdentity.CACertificatePEM = "relay-a-ca"
+			store := securestore.NewMemoryStore()
+			seedLegacyCoreIdentity(t, store, clientIdentity)
+			owner := testIdentity("owner", "0A11CE")
+			owner.RelayURL = test.relayURL
+			owner.CACertificatePEM = test.ca
+			gateway := &bootstrapGateway{owner: owner, client: clientIdentity, tunnel: &fakeTunnel{healthy: true}}
+			core, err := NewCore(ctx, store, gateway)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = core.BootstrapOwner(ctx, pairing.Bundle{
+				RelayURL: test.relayURL, CACertificatePEM: test.ca, Role: "owner",
+			})
+			if err == nil {
+				t.Fatal("BootstrapOwner() accepted mismatched Owner trust")
+			}
+			if gateway.ownerEnrollments != 0 {
+				t.Fatalf("Owner invitation was consumed %d times", gateway.ownerEnrollments)
+			}
+			if status := core.Status(); status.OwnerReady || !status.ClientReady {
+				t.Fatalf("Status() after rejection = %#v, want only existing Client ready", status)
+			}
+			if got, _, loadErr := NewRepository(store).LoadClientIdentity(ctx); loadErr != nil || got != clientIdentity {
+				t.Fatalf("migrated Client after rejection = %#v, %v; want %#v", got, loadErr, clientIdentity)
+			}
+			if _, _, loadErr := NewRepository(store).LoadOwnerIdentity(ctx); !errors.Is(loadErr, securestore.ErrNotFound) {
+				t.Fatalf("mismatched Owner was saved: %v", loadErr)
+			}
+		})
+	}
+}
+
+func TestCoreReplacesLocalClientWithOwnerAndPreservesOwner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	owner := testIdentity("owner", "0A11CE")
+	oldClient := testIdentity("client", "C11E17")
+	newClient := testIdentity("client", "F2E5")
+	store := securestore.NewMemoryStore()
+	repository := NewRepository(store)
+	if err := repository.SaveOwnerIdentity(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveClientIdentity(ctx, oldClient); err != nil {
+		t.Fatal(err)
+	}
+	gateway := &bootstrapGateway{owner: owner, client: newClient, tunnel: &fakeTunnel{healthy: true}}
+	core, err := NewCore(ctx, store, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacer, ok := any(core).(interface{ ReplaceClient(context.Context) error })
+	if !ok {
+		t.Fatal("Core does not expose ReplaceClient")
+	}
+
+	if err := replacer.ReplaceClient(ctx); err != nil {
+		t.Fatalf("ReplaceClient() = %v", err)
+	}
+	if got, _, err := NewRepository(store).LoadOwnerIdentity(ctx); err != nil || got != owner {
+		t.Fatalf("Owner after replacement = %#v, %v; want %#v", got, err, owner)
+	}
+	if got, _, err := NewRepository(store).LoadClientIdentity(ctx); err != nil || got != newClient {
+		t.Fatalf("Client after replacement = %#v, %v; want %#v", got, err, newClient)
+	}
+	if got := statusClientSerial(t, core.Status()); got != newClient.Serial {
+		t.Fatalf("status Client serial = %q, want %q", got, newClient.Serial)
+	}
+	if gateway.issueSerial != owner.Serial {
+		t.Fatalf("Client replacement issued with serial %q, want Owner %q", gateway.issueSerial, owner.Serial)
+	}
+	if err := core.StartProxy(availablePort(t)); err != nil {
+		t.Fatalf("StartProxy() after replacement = %v", err)
+	}
+	defer core.Close()
+	if gateway.sessionSerial != newClient.Serial {
+		t.Fatalf("proxy after replacement used serial %q, want new Client %q", gateway.sessionSerial, newClient.Serial)
+	}
+}
+
+func TestCoreFailedClientReplacementPreservesUsableOldClient(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	owner := testIdentity("owner", "0A11CE")
+	oldClient := testIdentity("client", "C11E17")
+	store := securestore.NewMemoryStore()
+	repository := NewRepository(store)
+	if err := repository.SaveOwnerIdentity(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveClientIdentity(ctx, oldClient); err != nil {
+		t.Fatal(err)
+	}
+	gateway := &bootstrapGateway{
+		owner: owner, client: testIdentity("client", "F2E5"), tunnel: &fakeTunnel{healthy: true},
+		failClientEnroll: true,
+	}
+	core, err := NewCore(ctx, store, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacer, ok := any(core).(interface{ ReplaceClient(context.Context) error })
+	if !ok {
+		t.Fatal("Core does not expose ReplaceClient")
+	}
+
+	if err := replacer.ReplaceClient(ctx); err == nil {
+		t.Fatal("ReplaceClient() succeeded when fresh Client enrollment failed")
+	}
+	if got, _, err := NewRepository(store).LoadOwnerIdentity(ctx); err != nil || got != owner {
+		t.Fatalf("Owner after failed replacement = %#v, %v; want %#v", got, err, owner)
+	}
+	if got, _, err := NewRepository(store).LoadClientIdentity(ctx); err != nil || got != oldClient {
+		t.Fatalf("Client after failed replacement = %#v, %v; want old Client %#v", got, err, oldClient)
+	}
+	if got := statusClientSerial(t, core.Status()); got != oldClient.Serial {
+		t.Fatalf("status Client serial after failure = %q, want %q", got, oldClient.Serial)
+	}
+	if err := core.StartProxy(availablePort(t)); err != nil {
+		t.Fatalf("old Client was not usable after failed replacement: %v", err)
+	}
+	defer core.Close()
+	if gateway.sessionSerial != oldClient.Serial {
+		t.Fatalf("proxy after failure used serial %q, want old Client %q", gateway.sessionSerial, oldClient.Serial)
+	}
+}
+
+func TestCoreClientReplacementStoreFailureDoesNotSwitchIdentity(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	owner := testIdentity("owner", "0A11CE")
+	oldClient := testIdentity("client", "C11E17")
+	store := &faultStore{Store: securestore.NewMemoryStore()}
+	repository := NewRepository(store)
+	if err := repository.SaveOwnerIdentity(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveClientIdentity(ctx, oldClient); err != nil {
+		t.Fatal(err)
+	}
+	core, err := NewCore(ctx, store, &bootstrapGateway{
+		owner: owner, client: testIdentity("client", "F2E5"), tunnel: &fakeTunnel{healthy: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacer, ok := any(core).(interface{ ReplaceClient(context.Context) error })
+	if !ok {
+		t.Fatal("Core does not expose ReplaceClient")
+	}
+	store.failWithPrefix(generationPrefix)
+
+	if err := replacer.ReplaceClient(ctx); err == nil {
+		t.Fatal("ReplaceClient() succeeded when secure persistence failed")
+	}
+	if got, _, err := NewRepository(store).LoadOwnerIdentity(ctx); err != nil || got != owner {
+		t.Fatalf("Owner after persistence failure = %#v, %v; want %#v", got, err, owner)
+	}
+	if got, _, err := NewRepository(store).LoadClientIdentity(ctx); err != nil || got != oldClient {
+		t.Fatalf("Client after persistence failure = %#v, %v; want old Client %#v", got, err, oldClient)
+	}
+	if got := statusClientSerial(t, core.Status()); got != oldClient.Serial {
+		t.Fatalf("status Client serial after persistence failure = %q, want %q", got, oldClient.Serial)
+	}
+}
+
+func TestCoreClientReplacementRemainsSuccessfulAfterOldSessionCleanupError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	owner := testIdentity("owner", "0A11CE")
+	oldClient := testIdentity("client", "C11E17")
+	newClient := testIdentity("client", "F2E5")
+	store := securestore.NewMemoryStore()
+	repository := NewRepository(store)
+	if err := repository.SaveOwnerIdentity(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveClientIdentity(ctx, oldClient); err != nil {
+		t.Fatal(err)
+	}
+	gateway := &bootstrapGateway{
+		owner: owner, client: newClient,
+		tunnel: &fakeTunnel{healthy: true, closeErr: errors.New("old tunnel cleanup failed")},
+	}
+	core, err := NewCore(ctx, store, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := core.StartProxy(availablePort(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := core.ReplaceClient(ctx); err != nil {
+		t.Fatalf("ReplaceClient() after the new Client committed = %v", err)
+	}
+	if status := core.Status(); status.Running || status.ClientSerial != newClient.Serial {
+		t.Fatalf("Status() after replacement = %#v, want stopped proxy and new Client", status)
+	}
+	if got, _, err := NewRepository(store).LoadClientIdentity(ctx); err != nil || got != newClient {
+		t.Fatalf("stored Client after replacement = %#v, %v; want %#v", got, err, newClient)
+	}
+}
+
+func statusClientSerial(t *testing.T, status Status) string {
+	t.Helper()
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view map[string]any
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatal(err)
+	}
+	serial, _ := view["clientSerial"].(string)
+	return serial
+}
+
+func seedLegacyCoreIdentity(t *testing.T, store securestore.Store, identity relayclient.Identity) {
+	t.Helper()
+	legacy := persistedGeneration{
+		Credentials: Credentials{Username: "username", Password: "password"},
+		Settings: persistedSettings{
+			RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial, Port: 1080,
+		},
+		PrivateKeyPEM: identity.PrivateKeyPEM, CertificatePEM: identity.CertificatePEM,
+		CACertificatePEM: identity.CACertificatePEM,
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const generationID = "DDDDDDDDDDDDDDDDDDDDDA"
+	if err := store.Put(context.Background(), generationKey(generationID), raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), activeGenerationKey, []byte(generationID)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testIdentity(role, serial string) relayclient.Identity {
 	return relayclient.Identity{
 		RelayURL: "https://relay.example", Role: role, Serial: serial,
@@ -207,9 +496,10 @@ func (gateway *fakeGateway) Revoke(_ context.Context, _ relayclient.Identity, se
 }
 
 type fakeTunnel struct {
-	mu      sync.Mutex
-	healthy bool
-	closed  bool
+	mu       sync.Mutex
+	healthy  bool
+	closed   bool
+	closeErr error
 }
 
 func (tunnel *fakeTunnel) Healthy() bool {
@@ -236,7 +526,7 @@ func (tunnel *fakeTunnel) Close() error {
 	tunnel.mu.Lock()
 	tunnel.closed = true
 	tunnel.mu.Unlock()
-	return nil
+	return tunnel.closeErr
 }
 
 func TestCoreStartsStopsAndExposesOnlyRedactedStatusForStoredClient(t *testing.T) {

@@ -3,6 +3,7 @@ export type Status = {
   role?: 'owner' | 'client'
   ownerReady: boolean
   clientReady: boolean
+  clientSerial?: string
   running: boolean
   relay: 'connected' | 'offline'
   agentAvailable: boolean
@@ -19,6 +20,7 @@ type DesktopAPI = {
   GetStatus(): Promise<Status>
   BootstrapOwner(encodedBundle: string): Promise<void>
   RetryClientSetup(): Promise<void>
+  ReplaceClient(): Promise<void>
   StartProxy(port: number): Promise<void>
   StopProxy(): Promise<void>
   ProxyLine(): Promise<string>

@@ -37,9 +37,19 @@ class ScanPairingCoordinator(
     }
 
     fun cancelScan() {
+        if (state.pairingInProgress && acceptedScannedBundle == null) {
+            return
+        }
+        val pairingState = if (state.pairingInProgress) {
+            pairingController.reduce(PairingEvent.PairFailed)
+        } else {
+            pairingController.state
+        }
         acceptedScannedBundle = null
         pairingScanSession.cancel()
         state = state.copy(
+            pairingInProgress = false,
+            paired = pairingState == PairingState.Paired,
             pairingScanState = pairingScanSession.state,
             pairingStatus = pairedStatus(),
         )

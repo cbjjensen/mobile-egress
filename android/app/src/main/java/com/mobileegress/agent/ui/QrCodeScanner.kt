@@ -51,11 +51,19 @@ fun QrCodeScanner(
     val latestOnQrNotRecognized = rememberUpdatedState(onQrNotRecognized)
     val latestOnScannerUnavailable = rememberUpdatedState(onScannerUnavailable)
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
 
     DisposableEffect(lifecycleOwner) {
         val accepted = AtomicBoolean(false)
         val disposed = AtomicBoolean(false)
         var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>? = null
+        val dispatchAcceptedResult = { callback: () -> Unit ->
+            if (accepted.compareAndSet(false, true)) {
+                mainExecutor.execute {
+                    if (!disposed.get()) callback()
+                }
+            }
+        }
         val reportScannerUnavailable = {
             if (!disposed.get() && accepted.compareAndSet(false, true)) {
                 latestOnScannerUnavailable.value()
@@ -107,15 +115,13 @@ fun QrCodeScanner(
                                             false,
                                         )
                                         val result = reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
-                                        if (accepted.compareAndSet(false, true)) {
-                                            latestOnQrDecoded.value(result.text)
-                                        }
+                                        dispatchAcceptedResult { latestOnQrDecoded.value(result.text) }
                                     } catch (_: NotFoundException) {
                                         // Keep scanning until a QR code is visible.
                                     } catch (_: FormatException) {
-                                        if (accepted.compareAndSet(false, true)) latestOnQrNotRecognized.value()
+                                        dispatchAcceptedResult { latestOnQrNotRecognized.value() }
                                     } catch (_: ChecksumException) {
-                                        if (accepted.compareAndSet(false, true)) latestOnQrNotRecognized.value()
+                                        dispatchAcceptedResult { latestOnQrNotRecognized.value() }
                                     } finally {
                                         reader.reset()
                                         imageProxy.close()
