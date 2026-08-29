@@ -8,9 +8,6 @@ import com.mobileegress.agent.pairing.EnrollmentClient
 import com.mobileegress.agent.pairing.CellularEnrollmentPerformer
 import com.mobileegress.agent.pairing.EnrollmentRepository
 import com.mobileegress.agent.pairing.PairingBundleParser
-import com.mobileegress.agent.pairing.PairingController
-import com.mobileegress.agent.pairing.PairingEvent
-import com.mobileegress.agent.pairing.PairingState
 import com.mobileegress.agent.security.CredentialStoreException
 import com.mobileegress.agent.security.DeviceKeyStore
 import com.mobileegress.agent.security.SecureIdentityStore
@@ -43,8 +40,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         ),
     )
     private val initialUiState = initialState()
-    private val pairingController = PairingController(initialUiState.paired)
-    private val pairingScanSession = PairingScanSession()
+    private val pairingCoordinator = ScanPairingCoordinator(
+        enrollmentRepository = enrollmentRepository,
+        initiallyPaired = initialUiState.paired,
+        initialStatus = initialUiState.pairingStatus,
+    )
     private val mutableState = MutableStateFlow(initialUiState)
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
 
@@ -57,71 +57,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun requestQrScan(cameraPermissionGranted: Boolean): ScanRequest {
-        val request = pairingScanSession.requestScan(cameraPermissionGranted)
-        syncScanState()
+        val request = pairingCoordinator.requestScan(cameraPermissionGranted)
+        syncPairingState()
         return request
     }
 
     fun onCameraPermissionResult(granted: Boolean): ScanRequest {
-        val request = pairingScanSession.onCameraPermissionResult(granted)
-        syncScanState()
+        val request = pairingCoordinator.onCameraPermissionResult(granted)
+        syncPairingState()
         return request
     }
 
     fun cancelQrScan() {
-        pairingScanSession.cancel()
-        mutableState.update {
-            it.copy(
-                pairingScanState = pairingScanSession.state,
-                pairingStatus = pairedStatus(),
-            )
-        }
+        pairingCoordinator.cancelScan()
+        syncPairingState()
     }
 
     fun onQrNotRecognized() {
-        pairingScanSession.rejectUnrecognizedQr()
-        syncScanState()
+        pairingCoordinator.onQrNotRecognized()
+        syncPairingState()
+    }
+
+    fun onScannerUnavailable() {
+        pairingCoordinator.onScannerUnavailable()
+        syncPairingState()
     }
 
     fun onQrDecoded(scannedBundle: String) {
-        if (!pairingScanSession.acceptDecoded(scannedBundle)) {
-            syncScanState()
+        if (!pairingCoordinator.beginDecoded(scannedBundle)) {
+            syncPairingState()
             return
         }
-        pair(scannedBundle)
-    }
-
-    private fun pair(scannedBundle: String) {
-        if (mutableState.value.pairingInProgress) return
-        pairingController.reduce(PairingEvent.PairRequested)
-        mutableState.update {
-            it.copy(
-                pairingScanState = pairingScanSession.state,
-                pairingInProgress = true,
-                pairingStatus = "Pairing",
-            )
-        }
+        syncPairingState()
         viewModelScope.launch {
-            val result = runCatching { enrollmentRepository.pair(scannedBundle) }
-            val error = result.exceptionOrNull()
-            val pairingState = pairingController.reduce(
-                if (result.isSuccess) PairingEvent.PairSucceeded else PairingEvent.PairFailed,
-            )
-            mutableState.update {
-                if (result.isSuccess) {
-                    it.copy(
-                        pairingInProgress = false,
-                        paired = pairingState == PairingState.Paired,
-                        pairingStatus = "Paired",
-                    )
-                } else {
-                    it.copy(
-                        pairingInProgress = false,
-                        paired = pairingState == PairingState.Paired,
-                        pairingStatus = PairingFailureStatus.forError(requireNotNull(error)),
-                    )
-                }
-            }
+            pairingCoordinator.enrollDecoded(scannedBundle)
+            syncPairingState()
         }
     }
 
@@ -139,22 +109,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun copySafeStatus(): String = mutableState.value.runtime.copySafeText(mutableState.value.paired)
 
-    private fun syncScanState() {
+    private fun syncPairingState() {
+        val pairing = pairingCoordinator.state
         mutableState.update {
             it.copy(
-                pairingScanState = pairingScanSession.state,
-                pairingStatus = when (pairingScanSession.state) {
-                    PairingScanState.CameraPermissionRequired,
-                    PairingScanState.QrNotRecognized,
-                    -> pairingScanSession.status
-                    else -> it.pairingStatus
-                },
+                pairingInProgress = pairing.pairingInProgress,
+                paired = pairing.paired,
+                pairingStatus = pairing.pairingStatus,
+                pairingScanState = pairing.pairingScanState,
             )
         }
     }
-
-    private fun pairedStatus(): String =
-        if (pairingController.state == PairingState.Paired) "Paired" else "Unpaired"
 
     private fun initialState(): MainUiState = try {
         val paired = identityStore.load() != null

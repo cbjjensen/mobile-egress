@@ -10,6 +10,7 @@ enum class PairingScanState {
     AwaitingCameraPermission,
     Scanning,
     CameraPermissionRequired,
+    ScannerUnavailable,
     QrNotRecognized,
     Pairing,
 }
@@ -27,6 +28,7 @@ class PairingScanSession {
     val status: String
         get() = when (state) {
             PairingScanState.CameraPermissionRequired -> "Camera permission required"
+            PairingScanState.ScannerUnavailable -> "Scanner unavailable"
             PairingScanState.QrNotRecognized -> "QR not recognized"
             else -> "Unpaired"
         }
@@ -64,6 +66,10 @@ class PairingScanSession {
 
     fun rejectUnrecognizedQr() {
         if (state == PairingScanState.Scanning) state = PairingScanState.QrNotRecognized
+    }
+
+    fun onScannerUnavailable() {
+        if (state == PairingScanState.Scanning) state = PairingScanState.ScannerUnavailable
     }
 
     fun cancel() {

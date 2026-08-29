@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
                     onCancelQrScan = viewModel::cancelQrScan,
                     onQrDecoded = viewModel::onQrDecoded,
                     onQrNotRecognized = viewModel::onQrNotRecognized,
+                    onScannerUnavailable = viewModel::onScannerUnavailable,
                     scannerLifecycleOwner = this@MainActivity,
                     onStart = ::startFromVisibleUi,
                     onStop = viewModel::stopAgent,
@@ -101,6 +102,7 @@ private fun AgentScreen(
     onCancelQrScan: () -> Unit,
     onQrDecoded: (String) -> Unit,
     onQrNotRecognized: () -> Unit,
+    onScannerUnavailable: () -> Unit,
     scannerLifecycleOwner: androidx.lifecycle.LifecycleOwner,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -145,6 +147,7 @@ private fun AgentScreen(
                                 .height(320.dp),
                             onQrDecoded = onQrDecoded,
                             onQrNotRecognized = onQrNotRecognized,
+                            onScannerUnavailable = onScannerUnavailable,
                         )
                         Button(onClick = onCancelQrScan) { Text("Cancel scan") }
                     }

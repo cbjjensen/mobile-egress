@@ -35,6 +35,17 @@ class PairingScanSessionTest {
     }
 
     @Test
+    fun `scanner provider failure reports only a generic unavailable status`() {
+        val session = PairingScanSession()
+
+        session.requestScan(cameraPermissionGranted = true)
+        session.onScannerUnavailable()
+
+        assertEquals(PairingScanState.ScannerUnavailable, session.state)
+        assertEquals("Scanner unavailable", session.status)
+    }
+
+    @Test
     fun `only the first decoded code is accepted per scan session`() {
         val session = PairingScanSession()
         val invitation = "secret-agent-invitation"
@@ -69,7 +80,7 @@ class PairingScanSessionTest {
     }
 
     @Test
-    fun `invalid and expired scanned bundles have the same generic rejection`() {
+    fun `invalid expired and wrong-role scanned bundles have the same generic rejection`() {
         val parser = PairingBundleParser { Instant.parse("2026-08-29T18:00:00Z") }
         val expiredBundle = buildJsonObject {
             put("version", 1)
@@ -79,8 +90,16 @@ class PairingScanSessionTest {
             put("role", "agent")
             put("expiresAt", "2026-08-29T17:59:59Z")
         }.toString().encodeBase64Url()
+        val wrongRoleBundle = buildJsonObject {
+            put("version", 1)
+            put("relayUrl", "https://relay.example:8443")
+            put("caCertificatePem", testCaPem())
+            put("capability", "one-use-high-entropy-capability")
+            put("role", "owner")
+            put("expiresAt", "2026-08-29T18:10:00Z")
+        }.toString().encodeBase64Url()
 
-        listOf("not-a-pairing-bundle", expiredBundle).forEach { scannedValue ->
+        listOf("not-a-pairing-bundle", expiredBundle, wrongRoleBundle).forEach { scannedValue ->
             val error = runCatching { parser.parse(scannedValue) }.exceptionOrNull()
 
             assertNotNull(error)
