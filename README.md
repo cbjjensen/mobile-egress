@@ -58,6 +58,14 @@ npm run build
 
 The production executable is written to `windows-client\build\bin`. Device identity, relay trust, local settings, and generated SOCKS credentials are encrypted for the current Windows user with DPAPI. Closing the window hides it to the notification tray; choosing **Quit** stops the loopback proxy and closes every local stream. The app never configures the Windows system proxy or changes the default route.
 
+## First-time setup and ordinary use
+
+One relay administrator manually installs and initializes the EC2 relay once, then confidentially transfers its one-use Owner invitation to the first Windows installation. The Windows app pastes that invitation, enrolls its protected Owner identity, and automatically enrolls a separate protected Client identity for its local loopback SOCKS service. No AWS credential is entered into either application.
+
+The Windows app then shows a short-lived Agent QR code. Install the signed Android APK manually, scan that code in the Android app, and start the cellular Agent. The code is the only pairing path for Android: do not transfer or paste an Agent invitation. In normal use, start the Android Agent, start the Windows loopback proxy, and put the generated SOCKS line only into the selected Windows application. No scripts are required for that flow.
+
+There are no automatic application updates, public SOCKS endpoint, or promised IP rotation. The Android app can reconnect a cellular-bound session after a network change, but cannot force a carrier IP change or guarantee a new carrier IP.
+
 ## Explicit package and release commands
 
 These commands are intentionally separate from `test-all`:

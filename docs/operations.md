@@ -4,7 +4,7 @@ Read [deployment and release](deployment.md) before initializing a relay or crea
 
 ## Relay bootstrap
 
-Deploy the relay container with a mounted state directory and public TLS endpoint. Initialize once with its reachable host and exact public HTTPS origin; capture the owner pairing bundle only in a password manager. The bundle contains the public relay address, CA certificate trust anchor, owner role, expiry, and high-entropy one-time capability. The private CA remains only in the protected relay state directory. Enroll an owner Windows app first, then use its pairing screen for the Android agent and ordinary Windows clients.
+Deploy the relay container with a mounted state directory and public TLS endpoint. A relay administrator manually initializes it once with its reachable host and exact public HTTPS origin, then captures the Owner pairing invitation only in a password manager. The invitation contains the public relay address, CA certificate trust anchor, owner role, expiry, and high-entropy one-time capability. The private CA remains only in the protected relay state directory. Transfer that invitation only through an authenticated confidential channel to one Windows app; that app enrolls its Owner identity and automatically enrolls its separate local Client identity.
 
 For the included Compose deployment, copy `deploy/.env.example` to `deploy/.env`, set `RELAY_PUBLIC_NAME` and `RELAY_PUBLIC_URL`, then initialize once from the repository root:
 
@@ -16,12 +16,17 @@ Save the single printed Owner pairing bundle immediately and transfer it to the 
 
 ## Normal use
 
-1. Start the Android agent from its visible UI and confirm it reports Cellular / Connected.
-2. Start the Windows tray app's local proxy.
-3. Copy its generated SOCKS5 line into the specific browser, HTTP client, or program that should use mobile egress. Do not configure the Windows system proxy or default route; only explicitly configured software uses the phone's carrier path.
-4. Stop the Windows proxy or Android agent to remove the path immediately.
+Install the Windows application and signed Android APK manually through owner-controlled channels. These are installation responsibilities, not an automatic-update process. For ordinary use, no scripts or AWS credentials are needed:
+
+1. In the Windows app, create the short-lived Agent QR and use Android **Scan QR** to pair. Android does not accept a pasted Agent invitation.
+2. Start the Android agent from its visible UI and confirm it reports Cellular / Connected.
+3. Start the same Windows app's local proxy, which uses its separate Client identity.
+4. Copy its generated SOCKS5 line into the specific browser, HTTP client, or program that should use mobile egress. Do not configure the Windows system proxy or default route; only explicitly configured software uses the phone's carrier path.
+5. Stop the Windows proxy or Android agent to remove the path immediately.
 
 Keep Wi-Fi enabled while verifying the cellular-only guarantee: after abrupt cellular loss, existing streams must close and new SOCKS requests must fail closed rather than use Wi-Fi. An offline Agent is an unavailable egress path, not an alternate route.
+
+IP rotation is intentionally unsupported. Reconnecting the Agent can restore its cellular-bound relay session, but the application cannot reset carrier data or guarantee a changed carrier IP.
 
 ## Health and rollback
 
