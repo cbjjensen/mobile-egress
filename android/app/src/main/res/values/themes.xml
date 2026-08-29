@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.MobileEgress" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#315F97</item>
+        <item name="android:navigationBarColor">#F8F9FF</item>
+        <item name="android:statusBarColor">#F8F9FF</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -19,6 +19,7 @@ coverage.out
 # Android and Gradle
 android/.gradle/
 android/local.properties
+android/keystore.properties
 android/**/build/
 
 # Desktop frontend
