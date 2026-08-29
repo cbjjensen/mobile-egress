@@ -10,7 +10,7 @@ This directory is a standalone Kotlin/Jetpack Compose Android application for a 
 - The private device key is non-exportable. The issued certificate material and relay identity are AES-GCM encrypted with a separate AndroidKeyStore key. The one-use bundle and capability are not persisted.
 - The foreground service can start only from the visible app Start action (or its visible notification Stop action), returns `START_NOT_STICKY`, and has no boot receiver. Its `specialUse` declaration documents the personal sideloaded relay use case.
 - Relay TLS and every target TCP socket use the selected cellular `Network`. Cellular loss closes the WebSocket and all target streams; an available Wi-Fi path is never selected as fallback.
-- Opaque stream data and protocol control frames use separate bounded queues. `opened`, `rejected`, and terminal `close` frames are serviced first; if their dedicated path saturates, the whole WebSocket closes so the relay performs session cleanup.
+- Opaque stream data and protocol control frames use separate bounded queues. Immediate controls are serviced first; a normal target EOF reserves its required `close` but sends it only after that stream's accepted data drains. Per-stream data bounds and fair scheduling keep a busy stream from consuming another stream's queue share. An overloaded stream discards only its own queued data and closes with finite `agent_unavailable`; if the dedicated control path saturates, the whole WebSocket closes so the relay performs session cleanup.
 - UI, notifications, copied status, and application code expose only aggregate state, stream counts, byte totals, and finite error classes. The app does not log payloads, target values, certificates, capabilities, or keys.
 
 ## Local build

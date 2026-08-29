@@ -51,6 +51,7 @@ class AgentSession(
     private val outbound = OutboundMailbox(
         controlCapacity = OUTBOUND_CONTROL_QUEUE_CAPACITY,
         dataCapacity = OUTBOUND_DATA_QUEUE_CAPACITY,
+        perStreamDataCapacity = OUTBOUND_PER_STREAM_DATA_QUEUE_CAPACITY,
     )
     private val streams = java.util.concurrent.ConcurrentHashMap<String, TargetStream>()
     private val admission = StreamAdmission(MAX_AGENT_STREAMS)
@@ -199,7 +200,7 @@ class AgentSession(
                 stream.reader = launch { targetReadLoop(stream) }
                 stream.writer = launch { targetWriteLoop(stream) }
             } catch (_: Exception) {
-                closeStream(stream, "target_failure", notifyRelay = true, ErrorClass.TargetConnect)
+                failStream(stream, "target_failure", notifyRelay = true, ErrorClass.TargetConnect)
             }
         }
     }
@@ -209,7 +210,7 @@ class AgentSession(
             ?: throw ProtocolException("Data for an unknown stream")
         val payload = envelope.decodePayload()
         if (stream.inbound.trySend(payload).isFailure) {
-            closeStream(stream, "target_failure", notifyRelay = true, ErrorClass.Backpressure)
+            failStream(stream, BACKPRESSURE_CLOSE_CODE, notifyRelay = true, ErrorClass.Backpressure)
         }
     }
 
@@ -225,7 +226,7 @@ class AgentSession(
             if (isTombstoned(envelope.streamId)) return
             throw ProtocolException("Close for an unknown stream")
         }
-        closeStream(stream, code, notifyRelay = false, ErrorClass.None)
+        closeStreamFromRelay(stream)
     }
 
     private suspend fun targetReadLoop(stream: TargetStream) {
@@ -237,15 +238,15 @@ class AgentSession(
                 if (read < 0) break
                 if (read == 0) continue
                 val chunk = buffer.copyOf(read)
-                if (!enqueueData(stream.id, chunk)) {
-                    closeStream(stream, "target_failure", notifyRelay = true, ErrorClass.Backpressure)
+                if (!trySendData(stream.id, chunk)) {
+                    failStream(stream, BACKPRESSURE_CLOSE_CODE, notifyRelay = true, ErrorClass.Backpressure)
                     return
                 }
                 AgentStatusBus.update { it.copy(bytesDown = it.bytesDown + read) }
             }
-            closeStream(stream, "target_closed", notifyRelay = true, ErrorClass.None)
+            closeStreamAfterDraining(stream, "target_closed")
         } catch (_: Exception) {
-            closeStream(stream, "target_failure", notifyRelay = true, ErrorClass.TargetConnect)
+            failStream(stream, "target_failure", notifyRelay = true, ErrorClass.TargetConnect)
         }
     }
 
@@ -258,7 +259,7 @@ class AgentSession(
                 AgentStatusBus.update { it.copy(bytesUp = it.bytesUp + payload.size) }
             }
         } catch (_: Exception) {
-            closeStream(stream, "target_failure", notifyRelay = true, ErrorClass.TargetConnect)
+            failStream(stream, "target_failure", notifyRelay = true, ErrorClass.TargetConnect)
         }
     }
 
@@ -266,7 +267,15 @@ class AgentSession(
         enqueueRequiredControl("rejected", streamId, WireProtocol.finiteErrorCode(code))
     }
 
-    private fun closeStream(
+    private fun closeStreamAfterDraining(stream: TargetStream, code: String) {
+        if (!stream.closed.compareAndSet(false, true)) return
+        if (!closed.get()) {
+            if (!enqueueRequiredControlAfterData("close", stream.id, WireProtocol.finiteErrorCode(code))) return
+        }
+        releaseStream(stream, ErrorClass.None)
+    }
+
+    private fun failStream(
         stream: TargetStream,
         code: String,
         notifyRelay: Boolean,
@@ -277,6 +286,16 @@ class AgentSession(
         if (notifyRelay && !closed.get()) {
             if (!enqueueRequiredControl("close", stream.id, WireProtocol.finiteErrorCode(code))) return
         }
+        releaseStream(stream, errorClass)
+    }
+
+    private fun closeStreamFromRelay(stream: TargetStream) {
+        if (!stream.closed.compareAndSet(false, true)) return
+        outbound.blockAndDiscardData(stream.id)
+        releaseStream(stream, ErrorClass.None)
+    }
+
+    private fun releaseStream(stream: TargetStream, errorClass: ErrorClass) {
         streams.remove(stream.id, stream)
         admission.release(stream.id)
         rememberTombstone(stream.id)
@@ -296,7 +315,7 @@ class AgentSession(
         }
     }
 
-    private fun enqueueData(streamId: String, payload: ByteArray): Boolean =
+    private fun trySendData(streamId: String, payload: ByteArray): Boolean =
         !closed.get() && outbound.offerData(streamId, WireProtocol.encode("data", streamId, payload))
 
     private fun enqueueRequiredControl(
@@ -306,6 +325,20 @@ class AgentSession(
     ): Boolean {
         if (closed.get()) return false
         return outbound.offerRequiredControl(WireProtocol.encode(type, streamId, payload)) {
+            terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
+        }
+    }
+
+    private fun enqueueRequiredControlAfterData(
+        type: String,
+        streamId: String,
+        payload: ByteArray,
+    ): Boolean {
+        if (closed.get()) return false
+        return outbound.offerRequiredControlAfterData(
+            streamId,
+            WireProtocol.encode(type, streamId, payload),
+        ) {
             terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
         }
     }
@@ -365,10 +398,12 @@ class AgentSession(
         private const val MAX_TOMBSTONES = 32
         private const val OUTBOUND_CONTROL_QUEUE_CAPACITY = 32
         private const val OUTBOUND_DATA_QUEUE_CAPACITY = 64
+        private const val OUTBOUND_PER_STREAM_DATA_QUEUE_CAPACITY = 8
         private const val STREAM_INBOUND_QUEUE_CAPACITY = 4
         private const val STREAM_CHUNK_BYTES = 32 * 1024
         private const val TARGET_CONNECT_TIMEOUT_MILLIS = 30_000
         private const val NORMAL_CLOSE = 1000
         private const val POLICY_VIOLATION_CLOSE = 1008
+        private const val BACKPRESSURE_CLOSE_CODE = "agent_unavailable"
     }
 }
