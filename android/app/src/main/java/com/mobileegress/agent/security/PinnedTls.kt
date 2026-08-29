@@ -14,6 +14,7 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509TrustManager
 import okhttp3.ConnectionSpec
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 
 object PinnedTls {
@@ -38,7 +39,9 @@ object PinnedTls {
         }
         return OkHttpClient.Builder()
             .socketFactory(network.socketFactory)
-            .dns { hostname -> network.getAllByName(hostname).toList() }
+            .dns(object : Dns {
+                override fun lookup(hostname: String) = network.getAllByName(hostname).toList()
+            })
             .sslSocketFactory(context.socketFactory, trustManager)
             .connectionSpecs(listOf(ConnectionSpec.RESTRICTED_TLS))
             .retryOnConnectionFailure(false)

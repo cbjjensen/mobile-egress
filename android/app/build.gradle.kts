@@ -75,6 +75,7 @@ android {
             "META-INF/LGPL2.1",
             "META-INF/LICENSE.md",
             "META-INF/NOTICE.md",
+            "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
         )
     }
 }

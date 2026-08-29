@@ -8,6 +8,7 @@ import kotlinx.serialization.json.put
 import org.bouncycastle.asn1.x509.KeyUsage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PairingBundleParserTest {
@@ -25,6 +26,24 @@ class PairingBundleParserTest {
         assertEquals("agent", result.role)
         assertEquals("one-use-high-entropy-capability", result.capability)
         assertEquals(Instant.parse("2026-08-29T18:10:00Z"), result.expiresAt)
+    }
+
+    @Test
+    fun `parses a CA PEM whose final line has a complete base64 group before padding`() {
+        val pem = """
+            -----BEGIN CERTIFICATE-----
+            MIIBUDCB+KADAgECAgEBMAoGCCqGSM49BAMCMCAxHjAcBgNVBAMTFW1vYmlsZS1l
+            Z3Jlc3MtdGVzdC1jYTAeFw0yNTAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBaMCAx
+            HjAcBgNVBAMTFW1vYmlsZS1lZ3Jlc3MtdGVzdC1jYTBZMBMGByqGSM49AgEGCCqG
+            SM49AwEHA0IABPKnio8xSOMTFYGVYFy9NuxyxyXyK/lCeU1DB/5hDUfxYd8+WQcz
+            rGz1TtG3J11GXflH0oMPmtr6DY9Jy4KTBjyjIzAhMA8GA1UdEwEB/wQFMAMBAf8w
+            DgYDVR0PAQH/BAQDAgKEMAoGCCqGSM49BAMCA0cAMEQCIBYKNKGPpfddOF30Xv62
+            D9n4+F7xwJL/1aa/Se1PwAfeAiAe6X3wKgMwZG/B/zZ8IeH3sZb3yfs5MP/p/Rou
+            g+91EA==
+            -----END CERTIFICATE-----
+        """.trimIndent() + "\n"
+
+        assertTrue(PairingBundleParser.parseCaCertificate(pem, now).basicConstraints >= 0)
     }
 
     @Test

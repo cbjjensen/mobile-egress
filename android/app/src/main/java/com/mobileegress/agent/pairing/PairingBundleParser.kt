@@ -154,7 +154,7 @@ class PairingBundleParser(
         }
 
         private val SINGLE_CERTIFICATE_PEM = Regex(
-            "\\A-----BEGIN CERTIFICATE-----\\r?\\n(?:[A-Za-z0-9+/]{1,64}\\r?\\n)+(?:[A-Za-z0-9+/]{2,3}={1,2}\\r?\\n)?-----END CERTIFICATE-----\\r?\\n?\\z",
+            "\\A-----BEGIN CERTIFICATE-----\\r?\\n(?:[A-Za-z0-9+/]{1,64}\\r?\\n)*(?:[A-Za-z0-9+/]{1,62}==|[A-Za-z0-9+/]{1,63}=|[A-Za-z0-9+/]{1,64})\\r?\\n-----END CERTIFICATE-----\\r?\\n?\\z",
         )
     }
 }
