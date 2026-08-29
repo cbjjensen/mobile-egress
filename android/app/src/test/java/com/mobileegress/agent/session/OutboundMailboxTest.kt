@@ -2,24 +2,76 @@ package com.mobileegress.agent.session
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OutboundMailboxTest {
+    @Test
+    fun `client close cancels pending normal eof without affecting another stream`() {
+        val mailbox = OutboundMailbox(controlCapacity = 2, dataCapacity = 6, perStreamDataCapacity = 3)
+        val closingFirst = byteArrayOf(1)
+        val closingSecond = byteArrayOf(2)
+        val closingTerminal = byteArrayOf(3)
+        val activeFirst = byteArrayOf(4)
+        val activeSecond = byteArrayOf(5)
+        var canceledTerminalEmitted = false
+
+        assertTrue(mailbox.offerData("closing-stream", closingFirst))
+        assertTrue(mailbox.offerData("closing-stream", closingSecond))
+        assertTrue(
+            mailbox.offerRequiredControlAfterData(
+                "closing-stream",
+                closingTerminal,
+                onEmitted = { canceledTerminalEmitted = true },
+            ) {},
+        )
+        assertTrue(mailbox.offerData("active-stream", activeFirst))
+
+        val claimedClosingFrame = requireNotNull(mailbox.poll())
+        assertEquals(closingFirst.toList(), claimedClosingFrame.bytes.toList())
+        assertTrue(mailbox.cancelGracefulStream("closing-stream"))
+        var canceledFrameSent = false
+        assertEquals(
+            OutboundEmission.Canceled,
+            mailbox.emit(claimedClosingFrame) {
+                canceledFrameSent = true
+                true
+            },
+        )
+        assertFalse(canceledFrameSent)
+        assertFalse(canceledTerminalEmitted)
+        assertTrue(mailbox.offerData("active-stream", activeSecond))
+
+        assertEquals(activeFirst.toList(), emitNext(mailbox).toList())
+        assertEquals(activeSecond.toList(), emitNext(mailbox).toList())
+        assertNull(mailbox.poll())
+        assertFalse(canceledTerminalEmitted)
+    }
+
     @Test
     fun `normal target eof writes every accepted chunk before close`() {
         val mailbox = OutboundMailbox(controlCapacity = 2, dataCapacity = 4, perStreamDataCapacity = 2)
         val firstChunk = byteArrayOf(1)
         val secondChunk = byteArrayOf(2)
         val terminalClose = byteArrayOf(3)
+        var terminalEmitted = false
 
         assertTrue(mailbox.offerData("eof-stream", firstChunk))
         assertTrue(mailbox.offerData("eof-stream", secondChunk))
-        assertTrue(mailbox.offerRequiredControlAfterData("eof-stream", terminalClose) {})
+        assertTrue(
+            mailbox.offerRequiredControlAfterData(
+                "eof-stream",
+                terminalClose,
+                onEmitted = { terminalEmitted = true },
+            ) {},
+        )
 
-        assertEquals(firstChunk.toList(), mailbox.poll()!!.toList())
-        assertEquals(secondChunk.toList(), mailbox.poll()!!.toList())
-        assertEquals(terminalClose.toList(), mailbox.poll()!!.toList())
+        assertEquals(firstChunk.toList(), emitNext(mailbox).toList())
+        assertEquals(secondChunk.toList(), emitNext(mailbox).toList())
+        assertFalse(terminalEmitted)
+        assertEquals(terminalClose.toList(), emitNext(mailbox).toList())
+        assertTrue(terminalEmitted)
         assertFalse(mailbox.offerData("eof-stream", byteArrayOf(4)))
     }
 
@@ -32,9 +84,9 @@ class OutboundMailboxTest {
         assertFalse(mailbox.offerData("busy-stream", byteArrayOf(3)))
         assertTrue(mailbox.offerData("other-stream", byteArrayOf(4)))
 
-        assertEquals(listOf(1.toByte()), mailbox.poll()!!.toList())
-        assertEquals(listOf(4.toByte()), mailbox.poll()!!.toList())
-        assertEquals(listOf(2.toByte()), mailbox.poll()!!.toList())
+        assertEquals(listOf(1.toByte()), pollBytes(mailbox).toList())
+        assertEquals(listOf(4.toByte()), pollBytes(mailbox).toList())
+        assertEquals(listOf(2.toByte()), pollBytes(mailbox).toList())
     }
 
     @Test
@@ -52,8 +104,8 @@ class OutboundMailboxTest {
         assertFalse(mailbox.offerData("closing-stream", byteArrayOf(9)))
         assertTrue(mailbox.offerRequiredControl(terminalClose) {})
 
-        assertEquals(terminalClose.toList(), mailbox.poll()!!.toList())
-        assertEquals(otherStreamData.toList(), mailbox.poll()!!.toList())
+        assertEquals(terminalClose.toList(), pollBytes(mailbox).toList())
+        assertEquals(otherStreamData.toList(), pollBytes(mailbox).toList())
     }
 
     @Test
@@ -67,4 +119,12 @@ class OutboundMailboxTest {
         assertFalse(queued)
         assertTrue(sessionClosed)
     }
+
+    private fun emitNext(mailbox: OutboundMailbox): ByteArray {
+        val frame = requireNotNull(mailbox.poll())
+        assertEquals(OutboundEmission.Emitted, mailbox.emit(frame) { true })
+        return frame.bytes
+    }
+
+    private fun pollBytes(mailbox: OutboundMailbox): ByteArray = requireNotNull(mailbox.poll()).bytes
 }
