@@ -1,0 +1,52 @@
+# Deployment and release
+
+Mobile Egress is a personal, self-hosted path for selected Windows applications. This guide covers only systems operated by the owner; it does not describe publishing a proxy endpoint or a customer rollout.
+
+## Secure relay initialization
+
+1. Run the read-only prerequisite check: `& .\scripts\preflight.ps1 -Components Docker`.
+2. Copy `deploy/.env.example` to the ignored `deploy/.env`. Set the exact externally reachable `RELAY_PUBLIC_NAME` and `RELAY_PUBLIC_URL`; do not place credentials, pairing bundles, certificates, or relay state in that file.
+3. Initialize once with `docker compose -f deploy/docker-compose.yml --profile init run --rm relay-init`.
+4. Capture the single Owner pairing bundle directly into an owner-controlled password manager. It contains a one-use capability and private CA material, so do not paste it into issue trackers, shell history, chat logs, screenshots, or source control.
+5. Transfer the bundle only over an authenticated confidential channel to the first owner Windows client. Confirm its exact relay origin and expiry before pairing. The client verifies the bundle CA before sending its capability or CSR and rejects a returned CA mismatch.
+6. Start the relay with `docker compose -f deploy/docker-compose.yml up -d relay`. Keep `deploy/data` private, backed up, and outside sync folders. Port 8443 is the encrypted relay endpoint, not a SOCKS service.
+
+After the owner client enrolls, generate a separate short-lived, one-use Agent bundle for the phone and a distinct Client bundle for every additional Windows computer. Treat each bundle as a secret until consumed, then delete the transferred copy.
+
+## Pairing and normal use
+
+On Android, paste only the owner-supplied Agent bundle into the masked pairing field. Pair from the visible application, confirm the field clears, then start the foreground service using **Start**. The notification and UI must say cellular/connected before proxy traffic is attempted. The app binds relay and destination sockets to cellular; it must not use Wi-Fi when cellular disappears.
+
+On Windows, start the loopback SOCKS proxy and copy its generated `socks5://username:password@127.0.0.1:port` line only into the browser, HTTP client, or other software that should use mobile egress. Do not set a Windows system proxy or alter the default route. Software without that proxy line keeps its ordinary network path.
+
+## Windows and Android releases
+
+Use the package commands only when an artifact is intended:
+
+```powershell
+& .\scripts\build-relay-image.ps1
+& .\scripts\build-windows.ps1 -Installer
+```
+
+The Windows installer is an NSIS artifact produced by Wails in `windows-client\build\bin`; distribute it only through an owner-controlled channel after exercising it on a non-primary Windows profile. WebView2 remains a runtime prerequisite.
+
+For Android, generate and back up a dedicated keystore outside this checkout. Copy `android\keystore.properties.example` to the ignored `android\keystore.properties`, fill it locally, and confirm the file is untracked. First run `& .\scripts\release-android.ps1 -ValidateOnly`, then run `& .\scripts\release-android.ps1`. The script assembles and verifies the APK without echoing `storeFile`, passwords, or aliases. Preserve the keystore and its recovery material in an owner-controlled secret manager; a lost key prevents seamless updates and an exposed key permits a malicious replacement APK.
+
+## Rollback and revocation
+
+Before changing relay images, create a protected backup of `deploy/data`. If an image rollback is required, deploy the previous image while reusing the same state directory; replacing it creates a different CA and invalidates enrolled identities. If the state directory or Owner bundle is suspected exposed, stop the relay, revoke affected enrolled identities from Owner mode, and re-enroll only from newly issued bundles. Revoking an identity rejects new sessions and closes active streams. Stop the Android foreground service and Windows proxy to halt the path immediately while investigating.
+
+## Required physical-device checklist
+
+Use an Android 10+ phone with a real cellular plan and an owner-controlled Windows machine. Record only aggregate outcomes and redacted error classes.
+
+- [ ] Install the verified signed APK, grant notification permission, pair one freshly issued Agent bundle, and confirm the foreground notification reports cellular/connected.
+- [ ] Keep Wi-Fi connected, configure the SOCKS line in exactly one test application, and compare an external IP check: only that proxy-configured software must report the phone carrier IP. An unconfigured application must retain its normal path.
+- [ ] With Wi-Fi still present, abruptly disable cellular data or otherwise lose the cellular network. Active proxy streams must close and new proxy requests must fail; no request may fall back to Wi-Fi. Restore cellular and verify a new session reconnects before new traffic succeeds.
+- [ ] Confirm the one-phone rule: pair or start a second phone and verify the relay keeps only one active Agent; take the active phone offline and verify the Windows client reports an offline/fail-closed state.
+- [ ] Attempt private, loopback, link-local, multicast, and reserved destinations through SOCKS. Each must be denied without making a target connection.
+- [ ] Revoke the Windows client and the Android Agent separately from Owner mode. Verify each loses active access immediately, cannot reconnect, and requires a newly issued bundle to re-enroll.
+- [ ] Use a controlled public TCP test destination that returns a response and then EOF. Confirm the complete response arrives before the stream closes.
+- [ ] Trigger a local client close and a relay/Agent close at nearly the same time. Confirm the close is idempotent, no spurious protocol violation remains, and unrelated streams continue.
+- [ ] Run eight active streams with one continuously producing data. Confirm a quieter stream still progresses; overload one stream and confirm only that stream is rejected or closed without starving the others.
+- [ ] Review Windows, Android (`adb logcat`), relay, and container logs. Verify they contain only state, counts, byte totals, and finite redacted errors—never destinations, payloads, proxy credentials, pairing bundles, capabilities, certificates, or keys.

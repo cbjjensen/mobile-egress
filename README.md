@@ -20,7 +20,20 @@ It deliberately has no public SOCKS listener. The public relay accepts only encr
 - Node.js 22+ and WebView2 for the Windows Wails application
 - JDK 17+ and Android SDK Platform 35+ for the Android app
 
-The current machine has Go and Node available, but requires JDK 17+ and Android SDK tooling before the Android build can run.
+Run the read-only prerequisite detector before building. It does not install software or inspect signing values:
+
+```powershell
+& .\scripts\preflight.ps1
+& .\scripts\preflight.ps1 -Components Android
+```
+
+`MISSING:` means a required tool is not installed or configured; `INVALID:` means a discovered tool failed its validation. The full local gate is explicit and never creates a relay image, Wails executable, installer, or release APK:
+
+```powershell
+& .\scripts\test-all.ps1
+```
+
+It runs Go test/vet/build, frontend typecheck/build, and Compose configuration validation. Android test, lint, and debug assembly run only after JDK 17+ and Android SDK Platform 35/Build-Tools 35 validate. If those Android prerequisites are absent, the command exits nonzero with remediation rather than reporting partial success.
 
 ## Windows client bootstrap
 
@@ -45,8 +58,29 @@ npm run build
 
 The production executable is written to `windows-client\build\bin`. Device identity, relay trust, local settings, and generated SOCKS credentials are encrypted for the current Windows user with DPAPI. Closing the window hides it to the notification tray; choosing **Quit** stops the loopback proxy and closes every local stream. The app never configures the Windows system proxy or changes the default route.
 
+## Explicit package and release commands
+
+These commands are intentionally separate from `test-all`:
+
+```powershell
+# Build the local relay image only when requested.
+& .\scripts\build-relay-image.ps1
+
+# Build the Wails executable, or explicitly request an NSIS installer.
+& .\scripts\build-windows.ps1
+& .\scripts\build-windows.ps1 -Installer
+
+# Validate ignored, untracked Android signing inputs, then build and verify a signed APK.
+& .\scripts\release-android.ps1 -ValidateOnly
+& .\scripts\release-android.ps1
+```
+
+The Android release command requires `android\keystore.properties` to be ignored and untracked, and never prints its values. Keep the keystore outside the repository. Generated executables and package artifacts are ignored by Git; source files remain visible to Git.
+
 ## Safety boundary
 
 This project is for devices and servers you administer. It allows TCP connections only to public Internet addresses. It rejects loopback, private, link-local, multicast, unspecified, and reserved destinations, and must not be repurposed as a public proxy service.
 
 See [architecture](docs/architecture.md), [security model](docs/security-model.md), and [operations](docs/operations.md) before deploying it.
+
+For secure relay initialization, release handling, rollback, and the required physical-device checks, follow [deployment and release](docs/deployment.md) together with [operations](docs/operations.md).
