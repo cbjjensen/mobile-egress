@@ -5,7 +5,9 @@ package desktop
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
+	qrcode "github.com/skip2/go-qrcode"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -36,10 +39,9 @@ type DesktopApp struct {
 	shutdown sync.Once
 }
 
-type PairingView struct {
-	Bundle    string `json:"bundle"`
-	Role      string `json:"role"`
-	ExpiresAt string `json:"expiresAt"`
+type AgentQrView struct {
+	ImageDataURL string `json:"imageDataUrl"`
+	ExpiresAt    string `json:"expiresAt"`
 }
 
 func Run() error {
@@ -96,14 +98,26 @@ func (app *DesktopApp) beforeClose(ctx context.Context) bool {
 
 func (app *DesktopApp) GetStatus() client.Status { return app.core.Status() }
 
-func (app *DesktopApp) Pair(encodedBundle string) error {
+func (app *DesktopApp) BootstrapOwner(encodedBundle string) error {
 	bundle, err := pairing.Decode(encodedBundle)
 	if err != nil {
-		return err
+		return errors.New("Unable to complete secure setup. Verify the owner invitation and try again.")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
-	return app.core.Pair(ctx, bundle)
+	if err := app.core.BootstrapOwner(ctx, bundle); err != nil {
+		return errors.New("Unable to complete secure setup. Verify the owner invitation and try again.")
+	}
+	return nil
+}
+
+func (app *DesktopApp) RetryClientSetup() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	if err := app.core.RetryClientSetup(ctx); err != nil {
+		return errors.New("Unable to finish Windows client setup. Please try again.")
+	}
+	return nil
 }
 
 func (app *DesktopApp) StartProxy(port uint16) error { return app.core.StartProxy(port) }
@@ -112,18 +126,25 @@ func (app *DesktopApp) StopProxy() error { return app.core.StopProxy() }
 
 func (app *DesktopApp) ProxyLine() (string, error) { return app.core.ProxyLine() }
 
-func (app *DesktopApp) IssuePairing(role string) (PairingView, error) {
+func (app *DesktopApp) IssueAgentQr() (AgentQrView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	result, err := app.core.IssuePairing(ctx, role)
+	result, err := app.core.IssuePairing(ctx, "agent")
 	if err != nil {
-		return PairingView{}, err
+		return AgentQrView{}, errors.New("Unable to create a phone pairing code. Please try again.")
 	}
 	encoded, err := pairing.Encode(result)
 	if err != nil {
-		return PairingView{}, err
+		return AgentQrView{}, errors.New("Unable to create a phone pairing code. Please try again.")
 	}
-	return PairingView{Bundle: encoded, Role: result.Role, ExpiresAt: result.ExpiresAt.UTC().Format(time.RFC3339)}, nil
+	png, err := qrcode.Encode(encoded, qrcode.Medium, 256)
+	if err != nil {
+		return AgentQrView{}, errors.New("Unable to create a phone pairing code. Please try again.")
+	}
+	return AgentQrView{
+		ImageDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+		ExpiresAt:    result.ExpiresAt.UTC().Format(time.RFC3339),
+	}, nil
 }
 
 func (app *DesktopApp) Revoke(serial string) error {
@@ -147,6 +168,10 @@ func (app *DesktopApp) trayReady() {
 	statusItem.Disable()
 	showItem := systray.AddMenuItem("Show Mobile Egress", "Open the client window")
 	toggleItem := systray.AddMenuItem("Start proxy", "Start or stop the loopback SOCKS proxy")
+	if !app.core.Status().ClientReady {
+		toggleItem.SetTitle("Set up Windows client to start proxy")
+		toggleItem.Disable()
+	}
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Stop the proxy and quit")
 
@@ -163,7 +188,7 @@ func (app *DesktopApp) trayReady() {
 			status := app.core.Status()
 			if status.Running {
 				_ = app.core.StopProxy()
-			} else if status.Paired && status.Role == "client" {
+			} else if status.ClientReady {
 				_ = app.core.StartProxy(status.Port)
 			}
 		case <-quitItem.ClickedCh:
@@ -180,8 +205,13 @@ func (app *DesktopApp) trayReady() {
 			}
 			if status.Running {
 				toggleItem.SetTitle("Stop proxy")
-			} else {
+				toggleItem.Enable()
+			} else if status.ClientReady {
 				toggleItem.SetTitle("Start proxy")
+				toggleItem.Enable()
+			} else {
+				toggleItem.SetTitle("Set up Windows client to start proxy")
+				toggleItem.Disable()
 			}
 		}
 	}

@@ -246,15 +246,17 @@ func (core *Core) Status() Status {
 	port := core.port
 	credentials := core.credentials
 	core.mu.RUnlock()
-	status := Status{Relay: "offline", Port: port}
-	if owner != nil || clientIdentity != nil {
+	status := Status{Relay: "offline", Port: port, OwnerReady: owner != nil, ClientReady: clientIdentity != nil}
+	if clientIdentity != nil {
 		status.Paired = true
+		status.Proxy = ProxyEndpoint{Credentials: credentials, Port: port}.String()
+	}
+	if owner != nil || clientIdentity != nil {
 		if clientIdentity != nil {
 			status.Role = clientIdentity.Role
 		} else {
 			status.Role = owner.Role
 		}
-		status.Proxy = ProxyEndpoint{Credentials: credentials, Port: port}.String()
 	}
 	if proxy != nil {
 		proxyStatus := proxy.Status()

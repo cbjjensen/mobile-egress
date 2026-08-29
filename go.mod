@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/getlantern/systray v1.2.2
 	github.com/gorilla/websocket v1.5.3
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/wailsapp/go-webview2 v1.0.22
 	github.com/wailsapp/wails/v2 v2.14.0
 	golang.org/x/sys v0.47.0

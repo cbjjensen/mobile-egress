@@ -1,6 +1,8 @@
 export type Status = {
   paired: boolean
   role?: 'owner' | 'client'
+  ownerReady: boolean
+  clientReady: boolean
   running: boolean
   relay: 'connected' | 'offline'
   agentAvailable: boolean
@@ -11,15 +13,16 @@ export type Status = {
   proxy?: string
 }
 
-export type Pairing = { bundle: string; role: string; expiresAt: string }
+export type AgentQr = { imageDataUrl: string; expiresAt: string }
 
 type DesktopAPI = {
   GetStatus(): Promise<Status>
-  Pair(bundle: string): Promise<void>
+  BootstrapOwner(encodedBundle: string): Promise<void>
+  RetryClientSetup(): Promise<void>
   StartProxy(port: number): Promise<void>
   StopProxy(): Promise<void>
   ProxyLine(): Promise<string>
-  IssuePairing(role: string): Promise<Pairing>
+  IssueAgentQr(): Promise<AgentQr>
   Revoke(serial: string): Promise<void>
   Quit(): Promise<void>
 }

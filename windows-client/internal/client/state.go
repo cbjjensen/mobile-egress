@@ -328,6 +328,8 @@ func (endpoint ProxyEndpoint) String() string {
 type Status struct {
 	Paired         bool   `json:"paired"`
 	Role           string `json:"role,omitempty"`
+	OwnerReady     bool   `json:"ownerReady"`
+	ClientReady    bool   `json:"clientReady"`
 	Running        bool   `json:"running"`
 	Relay          string `json:"relay"`
 	AgentAvailable bool   `json:"agentAvailable"`
