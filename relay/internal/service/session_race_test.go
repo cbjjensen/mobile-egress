@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
+	"mobile-egress/relay/internal/enrollment"
 	"mobile-egress/relay/internal/protocol"
 )
 
@@ -221,6 +223,30 @@ func TestAgentOpenedAfterStoredDeadlineClosesStreamBeforeSweep(t *testing.T) {
 	closed := readEnvelope(t, client)
 	if closed.Type != protocol.TypeClose || decodedErrorCode(t, closed) != "opening_timeout" {
 		t.Fatalf("late opened response = %#v, want opening_timeout close", closed)
+	}
+}
+
+func TestClosedStreamTombstonesAreBoundedAndPurgedBySweep(t *testing.T) {
+	service := &Service{
+		streams:       make(map[string]*stream),
+		closedStreams: make(map[string]closedStreamTombstone),
+	}
+	client := &session{role: enrollment.RoleClient}
+	agent := &session{role: enrollment.RoleAgent}
+	for index := 0; index < 512; index++ {
+		id := "closed-" + strconv.Itoa(index)
+		tracked := &stream{id: id, client: client, agent: agent}
+		service.streams[id] = tracked
+		service.activeStreams++
+		service.removeStreamLocked(tracked)
+	}
+	if got := len(service.closedStreams); got > 128 {
+		t.Fatalf("closed stream tombstones = %d, want at most 128", got)
+	}
+
+	service.expireStreams(time.Now().Add(time.Minute))
+	if got := len(service.closedStreams); got != 0 {
+		t.Fatalf("closed stream tombstones after sweep = %d, want 0", got)
 	}
 }
 

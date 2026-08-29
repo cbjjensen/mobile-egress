@@ -22,8 +22,10 @@ import (
 )
 
 const (
-	maxWebSocketMessageBytes = 2 << 20
-	webSocketWriteTimeout    = time.Second
+	maxWebSocketMessageBytes      = 2 << 20
+	webSocketWriteTimeout         = time.Second
+	maxClosedStreamTombstones     = 128
+	closedStreamTombstoneLifetime = 30 * time.Second
 )
 
 type lookupNetIPFunc func(context.Context, string, string) ([]netip.Addr, error)
@@ -72,9 +74,16 @@ const (
 type stream struct {
 	id              string
 	client          *session
+	agent           *session
 	state           streamState
 	openingDeadline time.Time
 	lastActivity    time.Time
+}
+
+type closedStreamTombstone struct {
+	client    *session
+	agent     *session
+	expiresAt time.Time
 }
 
 type clientOpenRequest struct {
@@ -240,7 +249,7 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 		service.mu.Unlock()
 		return
 	}
-	if _, exists := service.streams[envelope.StreamID]; exists {
+	if _, exists := service.streams[envelope.StreamID]; exists || service.closedStreamIDInUseLocked(envelope.StreamID, now) {
 		service.mu.Unlock()
 		service.rejectOpen(client, envelope.StreamID, "stream_in_use")
 		return
@@ -268,7 +277,7 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 	}
 	agent := service.agent
 	tracked := &stream{
-		id: envelope.StreamID, client: client, state: streamOpening,
+		id: envelope.StreamID, client: client, agent: agent, state: streamOpening,
 		openingDeadline: now.Add(service.openingTimeout), lastActivity: now,
 	}
 	service.streams[envelope.StreamID] = tracked
@@ -293,7 +302,15 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 	}
 	service.mu.Lock()
 	tracked, exists := service.streams[envelope.StreamID]
-	if !exists || tracked.client != client {
+	if !exists {
+		if service.absorbLateCloseLocked(client, enrollment.RoleClient, envelope, time.Now()) {
+			service.mu.Unlock()
+			return nil
+		}
+		service.mu.Unlock()
+		return errors.New("client does not own stream")
+	}
+	if tracked.client != client {
 		service.mu.Unlock()
 		return errors.New("client does not own stream")
 	}
@@ -301,7 +318,7 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 		service.mu.Unlock()
 		return errors.New("data before stream opened")
 	}
-	agent := service.agent
+	agent := tracked.agent
 	tracked.lastActivity = time.Now()
 	if envelope.Type == protocol.TypeClose {
 		if !validEnvelopeErrorCode(envelope) {
@@ -330,7 +347,15 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 	}
 	service.mu.Lock()
 	tracked, exists := service.streams[envelope.StreamID]
-	if !exists || service.agent != agent {
+	if !exists {
+		if service.absorbLateCloseLocked(agent, enrollment.RoleAgent, envelope, time.Now()) {
+			service.mu.Unlock()
+			return nil
+		}
+		service.mu.Unlock()
+		return errors.New("agent stream not found")
+	}
+	if tracked.agent != agent {
 		service.mu.Unlock()
 		return errors.New("agent stream not found")
 	}
@@ -484,9 +509,57 @@ func (service *Service) removeStreamLocked(tracked *stream) {
 		return
 	}
 	delete(service.streams, tracked.id)
+	service.rememberClosedStreamLocked(tracked, time.Now())
 	if service.activeStreams > 0 {
 		service.activeStreams--
 	}
+}
+
+func (service *Service) rememberClosedStreamLocked(tracked *stream, now time.Time) {
+	if len(service.closedStreams) >= maxClosedStreamTombstones {
+		oldestID := ""
+		var oldestExpiry time.Time
+		for id, tombstone := range service.closedStreams {
+			if oldestID == "" || tombstone.expiresAt.Before(oldestExpiry) {
+				oldestID = id
+				oldestExpiry = tombstone.expiresAt
+			}
+		}
+		delete(service.closedStreams, oldestID)
+	}
+	service.closedStreams[tracked.id] = closedStreamTombstone{
+		client: tracked.client, agent: tracked.agent, expiresAt: now.Add(closedStreamTombstoneLifetime),
+	}
+}
+
+func (service *Service) absorbLateCloseLocked(sender *session, role enrollment.Role, envelope protocol.Envelope, now time.Time) bool {
+	if envelope.Type != protocol.TypeClose || !validEnvelopeErrorCode(envelope) {
+		return false
+	}
+	tombstone, exists := service.closedStreams[envelope.StreamID]
+	if !exists {
+		return false
+	}
+	if !now.Before(tombstone.expiresAt) {
+		delete(service.closedStreams, envelope.StreamID)
+		return false
+	}
+	if role == enrollment.RoleClient {
+		return tombstone.client == sender
+	}
+	return role == enrollment.RoleAgent && tombstone.agent == sender
+}
+
+func (service *Service) closedStreamIDInUseLocked(streamID string, now time.Time) bool {
+	tombstone, exists := service.closedStreams[streamID]
+	if !exists {
+		return false
+	}
+	if !now.Before(tombstone.expiresAt) {
+		delete(service.closedStreams, streamID)
+		return false
+	}
+	return true
 }
 
 func (service *Service) runStreamJanitor() {
@@ -504,6 +577,11 @@ func (service *Service) runStreamJanitor() {
 
 func (service *Service) expireStreams(now time.Time) {
 	service.mu.Lock()
+	for id, tombstone := range service.closedStreams {
+		if !now.Before(tombstone.expiresAt) {
+			delete(service.closedStreams, id)
+		}
+	}
 	expiredCodes := make([]string, 0)
 	notifications := make([]streamNotification, 0)
 	agent := service.agent

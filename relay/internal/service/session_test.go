@@ -124,6 +124,79 @@ func TestClientOpenResolvesPublicTargetAndRoutesOnlyOwningStream(t *testing.T) {
 	}
 }
 
+func TestLateCloseFromWrongClientIsAProtocolViolation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client", "client", "agent")
+	owner := mustDialSession(t, fixture, devices[0].client)
+	defer owner.Close()
+	wrongClient := mustDialSession(t, fixture, devices[1].client)
+	defer wrongClient.Close()
+	agent := mustDialSession(t, fixture, devices[2].client)
+	defer agent.Close()
+
+	writeEnvelope(t, owner, openEnvelope("closed-owner-stream", "1.1.1.1", 443))
+	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "closed-owner-stream" {
+		t.Fatalf("agent received wrong open: %#v", forwarded)
+	}
+	writeEnvelope(t, owner, protocol.Envelope{
+		Version: 1, Type: protocol.TypeClose, StreamID: "closed-owner-stream",
+		Payload: encodeErrorCode("client_closed"),
+	})
+	if closed := readEnvelope(t, agent); closed.Type != protocol.TypeClose {
+		t.Fatalf("agent received %#v, want owner close", closed)
+	}
+
+	writeEnvelope(t, wrongClient, protocol.Envelope{
+		Version: 1, Type: protocol.TypeClose, StreamID: "closed-owner-stream",
+		Payload: encodeErrorCode("client_closed"),
+	})
+	wrongClient.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := wrongClient.ReadMessage(); err == nil {
+		t.Fatal("wrong client remained connected after closing another client's tombstone")
+	}
+
+	writeEnvelope(t, owner, openEnvelope("owner-still-usable", "8.8.8.8", 443))
+	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "owner-still-usable" || forwarded.Type != protocol.TypeOpen {
+		t.Fatalf("correct client/agent sessions were damaged: %#v", forwarded)
+	}
+}
+
+func TestNonCloseFrameForClosedStreamIsAProtocolViolation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client", "agent")
+	client := mustDialSession(t, fixture, devices[0].client)
+	defer client.Close()
+	agent := mustDialSession(t, fixture, devices[1].client)
+	defer agent.Close()
+
+	writeEnvelope(t, client, openEnvelope("terminal-stream", "1.1.1.1", 443))
+	_ = readEnvelope(t, agent)
+	writeEnvelope(t, client, protocol.Envelope{
+		Version: 1, Type: protocol.TypeClose, StreamID: "terminal-stream",
+		Payload: encodeErrorCode("client_closed"),
+	})
+	_ = readEnvelope(t, agent)
+	writeEnvelope(t, client, protocol.Envelope{
+		Version: 1, Type: protocol.TypeData, StreamID: "terminal-stream",
+		Payload: base64.RawURLEncoding.EncodeToString([]byte("late-data")),
+	})
+	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := client.ReadMessage(); err == nil {
+		t.Fatal("client remained connected after data for a terminal stream")
+	}
+
+	writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypePing})
+	if pong := readEnvelope(t, agent); pong.Type != protocol.TypePong {
+		t.Fatalf("agent received %#v, want pong after client protocol violation", pong)
+	}
+}
+
 func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 	t.Parallel()
 

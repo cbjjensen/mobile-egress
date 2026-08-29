@@ -28,3 +28,5 @@ Every binary message is a length-delimited JSON envelope:
 5. Both peers exchange ordered `data` frames until either sends `close`.
 
 The relay applies per-client and per-agent stream limits. It sends `close` on session loss, timeout, revocation, policy rejection, or failed target connection.
+
+`close` is terminal and idempotent across peers. After removing a stream, the relay retains a bounded, short-lived ownership tombstone so a matching Client or Agent `close` already in flight is absorbed without forwarding; a frame from the wrong session or any non-`close` frame for that terminal stream remains a protocol violation.

@@ -33,6 +33,7 @@ type Service struct {
 	agent            *session
 	sessions         map[string]*session
 	streams          map[string]*stream
+	closedStreams    map[string]closedStreamTombstone
 	maxClientStreams int
 	maxAgentStreams  int
 	openingTimeout   time.Duration
@@ -132,6 +133,7 @@ func Open(stateDir string) (*Service, error) {
 		store: state, caCert: caCert, caCertPEM: caCertPEM, caKey: caKey,
 		serverCert: serverCert, clientRoots: roots,
 		sessions: make(map[string]*session), streams: make(map[string]*stream),
+		closedStreams:    make(map[string]closedStreamTombstone),
 		maxClientStreams: 4, maxAgentStreams: 8,
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
