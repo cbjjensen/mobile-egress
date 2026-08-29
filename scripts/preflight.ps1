@@ -4,7 +4,8 @@ param(
     [string[]]$Components = @('All'),
     [ValidateSet('None', 'Android')]
     [string]$SimulateMissing = 'None',
-    [switch]$SimulateJavaHomeMismatch
+    [switch]$SimulateJavaHomeMismatch,
+    [switch]$SimulateDockerUnavailable
 )
 
 $ErrorActionPreference = 'Stop'
@@ -164,6 +165,12 @@ function Test-Jdk {
 }
 
 function Test-Docker {
+    if ($SimulateDockerUnavailable) {
+        Add-Invalid 'Docker Engine could not be validated. Start Docker Desktop (or the Docker daemon) and retry.'
+        Write-Host 'OK: Docker Compose v2 is available'
+        return
+    }
+
     $docker = Get-Command 'docker' -ErrorAction SilentlyContinue
     if ($null -eq $docker) {
         Add-Missing 'Docker Engine and Docker Compose. Install Docker Desktop or Docker Engine with the Compose v2 plugin.'

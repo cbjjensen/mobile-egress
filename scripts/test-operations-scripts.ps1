@@ -34,7 +34,7 @@ Assert-Condition ($LASTEXITCODE -eq 11) 'This machine must report its JAVA_HOME 
 Assert-Condition ($machineAndroidOutput -match 'INVALID: JAVA_HOME points to JDK 8, below the required 17') 'The JAVA_HOME JDK 8 validation result was not reported accurately.'
 Assert-Condition ($machineAndroidOutput -match 'MISSING: Android SDK Platform 35 and Build-Tools 35') 'The missing Android SDK result was not reported accurately.'
 
-$dockerOutput = & $preflight -Components Docker *>&1 | Out-String
+$dockerOutput = & $preflight -Components Docker -SimulateDockerUnavailable *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 11) 'A present but unavailable Docker daemon must be reported as a validation failure.'
 Assert-Condition ($dockerOutput -match 'INVALID: Docker Engine could not be validated') 'Docker daemon validation failure was not reported accurately.'
 Assert-Condition ($dockerOutput -match 'OK: Docker Compose v2 is available') 'Docker Compose availability must still be reported independently.'
