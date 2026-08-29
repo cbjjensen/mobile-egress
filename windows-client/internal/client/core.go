@@ -50,7 +50,8 @@ type Core struct {
 	repository  *Repository
 	gateway     Gateway
 	credentials Credentials
-	identity    *relayclient.Identity
+	owner       *relayclient.Identity
+	client      *relayclient.Identity
 	port        uint16
 	tunnel      Tunnel
 	proxy       *socks.Server
@@ -66,9 +67,15 @@ func NewCore(ctx context.Context, store securestore.Store, gateway Gateway) (*Co
 		return nil, err
 	}
 	core := &Core{repository: repository, gateway: gateway, credentials: credentials, port: 1080}
-	identity, port, err := repository.LoadIdentity(ctx)
+	owner, _, err := repository.LoadOwnerIdentity(ctx)
 	if err == nil {
-		core.identity = &identity
+		core.owner = &owner
+	} else if !errors.Is(err, securestore.ErrNotFound) {
+		return nil, err
+	}
+	clientIdentity, port, err := repository.LoadClientIdentity(ctx)
+	if err == nil {
+		core.client = &clientIdentity
 		if port != 0 {
 			core.port = port
 		}
@@ -79,22 +86,86 @@ func NewCore(ctx context.Context, store securestore.Store, gateway Gateway) (*Co
 }
 
 func (core *Core) Pair(ctx context.Context, bundle pairing.Bundle) error {
+	return core.BootstrapOwner(ctx, bundle)
+}
+
+func (core *Core) BootstrapOwner(ctx context.Context, bundle pairing.Bundle) error {
 	core.operations.Lock()
 	defer core.operations.Unlock()
+	if bundle.Role != "owner" {
+		return errors.New("an owner invitation is required")
+	}
 	if err := core.stopProxy(); err != nil {
 		return err
+	}
+	core.mu.RLock()
+	hasOwner := core.owner != nil
+	core.mu.RUnlock()
+	if hasOwner {
+		return errors.New("owner identity is already enrolled")
 	}
 	identity, err := core.gateway.Enroll(ctx, bundle)
 	if err != nil {
 		return err
 	}
-	if err := core.repository.SaveIdentity(ctx, identity); err != nil {
+	if !validIdentityForRole(identity, "owner") {
+		return errors.New("relay returned an invalid owner identity")
+	}
+	if err := core.repository.SaveOwnerIdentity(ctx, identity); err != nil {
 		return err
 	}
 	core.mu.Lock()
-	core.identity = &identity
+	core.owner = &identity
+	core.mu.Unlock()
+	return core.setupClient(ctx)
+}
+
+func (core *Core) RetryClientSetup(ctx context.Context) error {
+	core.operations.Lock()
+	defer core.operations.Unlock()
+	return core.setupClient(ctx)
+}
+
+func (core *Core) setupClient(ctx context.Context) error {
+	core.mu.RLock()
+	if core.owner == nil {
+		core.mu.RUnlock()
+		return errors.New("owner identity required")
+	}
+	if core.client != nil {
+		core.mu.RUnlock()
+		return nil
+	}
+	owner := *core.owner
+	core.mu.RUnlock()
+	issued, err := core.gateway.IssuePairing(ctx, owner, "client")
+	if err != nil {
+		return err
+	}
+	if issued.Role != "client" || issued.Code == "" {
+		return errors.New("relay returned an invalid client pairing response")
+	}
+	clientIdentity, err := core.gateway.Enroll(ctx, pairing.Bundle{
+		Version: pairing.Version, RelayURL: owner.RelayURL, CACertificatePEM: owner.CACertificatePEM,
+		Capability: issued.Code, Role: "client", ExpiresAt: issued.ExpiresAt,
+	})
+	if err != nil {
+		return err
+	}
+	if !validIdentityForRole(clientIdentity, "client") {
+		return errors.New("relay returned an invalid client identity")
+	}
+	if err := core.repository.SaveClientIdentity(ctx, clientIdentity); err != nil {
+		return err
+	}
+	core.mu.Lock()
+	core.client = &clientIdentity
 	core.mu.Unlock()
 	return nil
+}
+
+func validIdentityForRole(identity relayclient.Identity, role string) bool {
+	return identity.Role == role && identity.RelayURL != "" && identity.Serial != "" && identity.PrivateKeyPEM != "" && identity.CertificatePEM != "" && identity.CACertificatePEM != ""
 }
 
 func (core *Core) StartProxy(port uint16) error {
@@ -108,11 +179,11 @@ func (core *Core) StartProxy(port uint16) error {
 		core.mu.RUnlock()
 		return errors.New("SOCKS proxy is already running")
 	}
-	if core.identity == nil {
+	if core.client == nil {
 		core.mu.RUnlock()
 		return errors.New("pair this Windows client first")
 	}
-	identity := *core.identity
+	identity := *core.client
 	core.mu.RUnlock()
 	if identity.Role != "client" {
 		return errors.New("only a client identity may start the SOCKS proxy")
@@ -168,16 +239,21 @@ func (core *Core) stopProxy() error {
 
 func (core *Core) Status() Status {
 	core.mu.RLock()
-	identity := core.identity
+	owner := core.owner
+	clientIdentity := core.client
 	proxy := core.proxy
 	tunnel := core.tunnel
 	port := core.port
 	credentials := core.credentials
 	core.mu.RUnlock()
 	status := Status{Relay: "offline", Port: port}
-	if identity != nil {
+	if owner != nil || clientIdentity != nil {
 		status.Paired = true
-		status.Role = identity.Role
+		if clientIdentity != nil {
+			status.Role = clientIdentity.Role
+		} else {
+			status.Role = owner.Role
+		}
 		status.Proxy = ProxyEndpoint{Credentials: credentials, Port: port}.String()
 	}
 	if proxy != nil {
@@ -199,7 +275,7 @@ func (core *Core) Status() Status {
 
 func (core *Core) ProxyLine() (string, error) {
 	core.mu.RLock()
-	paired := core.identity != nil
+	paired := core.client != nil
 	endpoint := ProxyEndpoint{Credentials: core.credentials, Port: core.port}
 	core.mu.RUnlock()
 	if !paired {
@@ -210,11 +286,11 @@ func (core *Core) ProxyLine() (string, error) {
 
 func (core *Core) IssuePairing(ctx context.Context, role string) (pairing.Bundle, error) {
 	core.mu.RLock()
-	if core.identity == nil {
+	if core.owner == nil {
 		core.mu.RUnlock()
 		return pairing.Bundle{}, errors.New("owner identity required")
 	}
-	identity := *core.identity
+	identity := *core.owner
 	core.mu.RUnlock()
 	if identity.Role != "owner" {
 		return pairing.Bundle{}, errors.New("owner identity required")
@@ -232,11 +308,11 @@ func (core *Core) IssuePairing(ctx context.Context, role string) (pairing.Bundle
 
 func (core *Core) Revoke(ctx context.Context, serial string) error {
 	core.mu.RLock()
-	if core.identity == nil {
+	if core.owner == nil {
 		core.mu.RUnlock()
 		return errors.New("owner identity required")
 	}
-	identity := *core.identity
+	identity := *core.owner
 	core.mu.RUnlock()
 	if identity.Role != "owner" {
 		return errors.New("owner identity required")

@@ -32,18 +32,29 @@ type Repository struct {
 }
 
 type persistedSettings struct {
-	RelayURL string `json:"relayUrl"`
-	Role     string `json:"role"`
-	Serial   string `json:"serial"`
+	RelayURL string `json:"relayUrl,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Serial   string `json:"serial,omitempty"`
 	Port     uint16 `json:"port"`
 }
 
+type persistedIdentity struct {
+	RelayURL         string `json:"relayUrl"`
+	Role             string `json:"role"`
+	Serial           string `json:"serial"`
+	PrivateKeyPEM    string `json:"privateKeyPem"`
+	CertificatePEM   string `json:"certificatePem"`
+	CACertificatePEM string `json:"caCertificatePem"`
+}
+
 type persistedGeneration struct {
-	Credentials      Credentials       `json:"credentials"`
-	Settings         persistedSettings `json:"settings"`
-	PrivateKeyPEM    string            `json:"privateKeyPem,omitempty"`
-	CertificatePEM   string            `json:"certificatePem,omitempty"`
-	CACertificatePEM string            `json:"caCertificatePem,omitempty"`
+	Credentials      Credentials        `json:"credentials"`
+	Settings         persistedSettings  `json:"settings"`
+	Owner            *persistedIdentity `json:"owner,omitempty"`
+	Client           *persistedIdentity `json:"client,omitempty"`
+	PrivateKeyPEM    string             `json:"privateKeyPem,omitempty"`
+	CertificatePEM   string             `json:"certificatePem,omitempty"`
+	CACertificatePEM string             `json:"caCertificatePem,omitempty"`
 }
 
 func NewRepository(store securestore.Store) *Repository {
@@ -85,7 +96,26 @@ func generateCredentials() (Credentials, error) {
 }
 
 func (repository *Repository) SaveIdentity(ctx context.Context, identity relayclient.Identity) error {
-	if identity.RelayURL == "" || identity.Role == "" || identity.Serial == "" || identity.PrivateKeyPEM == "" || identity.CertificatePEM == "" || identity.CACertificatePEM == "" {
+	switch identity.Role {
+	case "owner":
+		return repository.SaveOwnerIdentity(ctx, identity)
+	case "client":
+		return repository.SaveClientIdentity(ctx, identity)
+	default:
+		return errors.New("identity role is invalid")
+	}
+}
+
+func (repository *Repository) SaveOwnerIdentity(ctx context.Context, identity relayclient.Identity) error {
+	return repository.saveIdentity(ctx, "owner", identity)
+}
+
+func (repository *Repository) SaveClientIdentity(ctx context.Context, identity relayclient.Identity) error {
+	return repository.saveIdentity(ctx, "client", identity)
+}
+
+func (repository *Repository) saveIdentity(ctx context.Context, role string, identity relayclient.Identity) error {
+	if !completeIdentity(identity) || identity.Role != role {
 		return errors.New("identity is incomplete")
 	}
 	repository.mu.Lock()
@@ -98,31 +128,56 @@ func (repository *Repository) SaveIdentity(ctx context.Context, identity relaycl
 	if port == 0 {
 		port = 1080
 	}
-	generation.Settings = persistedSettings{RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial, Port: port}
-	generation.PrivateKeyPEM = identity.PrivateKeyPEM
-	generation.CertificatePEM = identity.CertificatePEM
-	generation.CACertificatePEM = identity.CACertificatePEM
+	generation.Settings.Port = port
+	persisted := persistedIdentityFrom(identity)
+	if role == "owner" {
+		generation.Owner = &persisted
+	} else {
+		generation.Client = &persisted
+	}
 	return repository.commitGeneration(ctx, generation)
 }
 
 func (repository *Repository) LoadIdentity(ctx context.Context) (relayclient.Identity, uint16, error) {
+	identity, port, err := repository.LoadClientIdentity(ctx)
+	if err == nil || !errors.Is(err, securestore.ErrNotFound) {
+		return identity, port, err
+	}
+	return repository.LoadOwnerIdentity(ctx)
+}
+
+func (repository *Repository) LoadOwnerIdentity(ctx context.Context) (relayclient.Identity, uint16, error) {
+	return repository.loadIdentity(ctx, "owner")
+}
+
+func (repository *Repository) LoadClientIdentity(ctx context.Context) (relayclient.Identity, uint16, error) {
+	return repository.loadIdentity(ctx, "client")
+}
+
+func (repository *Repository) loadIdentity(ctx context.Context, role string) (relayclient.Identity, uint16, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	generation, err := repository.loadGeneration(ctx)
 	if err != nil {
 		return relayclient.Identity{}, 0, err
 	}
-	settings := generation.Settings
-	if settings.RelayURL == "" && settings.Role == "" && settings.Serial == "" {
+	var stored *persistedIdentity
+	if role == "owner" {
+		stored = generation.Owner
+	} else {
+		stored = generation.Client
+	}
+	if stored == nil {
 		return relayclient.Identity{}, 0, securestore.ErrNotFound
 	}
-	if settings.RelayURL == "" || settings.Role == "" || settings.Serial == "" || generation.PrivateKeyPEM == "" || generation.CertificatePEM == "" || generation.CACertificatePEM == "" {
+	identity := relayclient.Identity{
+		RelayURL: stored.RelayURL, Role: stored.Role, Serial: stored.Serial,
+		PrivateKeyPEM: stored.PrivateKeyPEM, CertificatePEM: stored.CertificatePEM, CACertificatePEM: stored.CACertificatePEM,
+	}
+	if !completeIdentity(identity) || identity.Role != role {
 		return relayclient.Identity{}, 0, errors.New("stored identity is incomplete")
 	}
-	return relayclient.Identity{
-		RelayURL: settings.RelayURL, Role: settings.Role, Serial: settings.Serial,
-		PrivateKeyPEM: generation.PrivateKeyPEM, CertificatePEM: generation.CertificatePEM, CACertificatePEM: generation.CACertificatePEM,
-	}, settings.Port, nil
+	return identity, generation.Settings.Port, nil
 }
 
 func (repository *Repository) SavePort(ctx context.Context, port uint16) error {
@@ -135,8 +190,8 @@ func (repository *Repository) SavePort(ctx context.Context, port uint16) error {
 	if err != nil {
 		return err
 	}
-	if generation.Settings.RelayURL == "" {
-		return errors.New("stored settings are invalid")
+	if generation.Client == nil {
+		return securestore.ErrNotFound
 	}
 	generation.Settings.Port = port
 	return repository.commitGeneration(ctx, generation)
@@ -174,7 +229,57 @@ func (repository *Repository) loadGeneration(ctx context.Context) (persistedGene
 	if json.Unmarshal(raw, &generation) != nil || generation.Credentials.Username == "" || generation.Credentials.Password == "" {
 		return persistedGeneration{}, errors.New("active secure generation is invalid")
 	}
+	migrated, err := generation.migrateLegacyIdentity()
+	if err != nil {
+		return persistedGeneration{}, err
+	}
+	if migrated {
+		if err := repository.commitGeneration(ctx, generation); err != nil {
+			return persistedGeneration{}, fmt.Errorf("migrate active secure generation: %w", err)
+		}
+	}
 	return generation, nil
+}
+
+func (generation *persistedGeneration) migrateLegacyIdentity() (bool, error) {
+	legacyPresent := generation.Settings.RelayURL != "" || generation.Settings.Role != "" || generation.Settings.Serial != "" || generation.PrivateKeyPEM != "" || generation.CertificatePEM != "" || generation.CACertificatePEM != ""
+	if !legacyPresent {
+		return false, nil
+	}
+	if generation.Owner != nil || generation.Client != nil {
+		return false, errors.New("active secure generation mixes legacy and dual identities")
+	}
+	identity := relayclient.Identity{
+		RelayURL: generation.Settings.RelayURL, Role: generation.Settings.Role, Serial: generation.Settings.Serial,
+		PrivateKeyPEM: generation.PrivateKeyPEM, CertificatePEM: generation.CertificatePEM, CACertificatePEM: generation.CACertificatePEM,
+	}
+	if !completeIdentity(identity) || (identity.Role != "owner" && identity.Role != "client") {
+		return false, errors.New("active secure generation has an invalid legacy identity")
+	}
+	persisted := persistedIdentityFrom(identity)
+	if identity.Role == "owner" {
+		generation.Owner = &persisted
+	} else {
+		generation.Client = &persisted
+	}
+	generation.Settings.RelayURL = ""
+	generation.Settings.Role = ""
+	generation.Settings.Serial = ""
+	generation.PrivateKeyPEM = ""
+	generation.CertificatePEM = ""
+	generation.CACertificatePEM = ""
+	return true, nil
+}
+
+func persistedIdentityFrom(identity relayclient.Identity) persistedIdentity {
+	return persistedIdentity{
+		RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial,
+		PrivateKeyPEM: identity.PrivateKeyPEM, CertificatePEM: identity.CertificatePEM, CACertificatePEM: identity.CACertificatePEM,
+	}
+}
+
+func completeIdentity(identity relayclient.Identity) bool {
+	return identity.RelayURL != "" && identity.Role != "" && identity.Serial != "" && identity.PrivateKeyPEM != "" && identity.CertificatePEM != "" && identity.CACertificatePEM != ""
 }
 
 func (repository *Repository) commitGeneration(ctx context.Context, generation persistedGeneration) error {

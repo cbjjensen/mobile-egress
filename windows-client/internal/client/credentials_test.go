@@ -84,6 +84,63 @@ func TestRepositoryPersistsCompleteIdentityGenerationThroughSecureStore(t *testi
 	}
 }
 
+func TestRepositoryMigratesLegacySingleRoleIdentityIntoItsDedicatedSlot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	legacyOwner := relayclient.Identity{
+		RelayURL: "https://relay.example:8443", Role: "owner", Serial: "OWNER123",
+		PrivateKeyPEM: "owner-key", CertificatePEM: "owner-chain", CACertificatePEM: "relay-ca",
+	}
+	legacy := persistedGeneration{
+		Credentials:   Credentials{Username: "username", Password: "password"},
+		Settings:      persistedSettings{RelayURL: legacyOwner.RelayURL, Role: legacyOwner.Role, Serial: legacyOwner.Serial, Port: 1080},
+		PrivateKeyPEM: legacyOwner.PrivateKeyPEM, CertificatePEM: legacyOwner.CertificatePEM, CACertificatePEM: legacyOwner.CACertificatePEM,
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, generationKey("AAAAAAAAAAAAAAAAAAAAAA"), raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, activeGenerationKey, []byte("AAAAAAAAAAAAAAAAAAAAAA")); err != nil {
+		t.Fatal(err)
+	}
+
+	repository := NewRepository(store)
+	identities, ok := any(repository).(interface {
+		LoadOwnerIdentity(context.Context) (relayclient.Identity, uint16, error)
+		LoadClientIdentity(context.Context) (relayclient.Identity, uint16, error)
+	})
+	if !ok {
+		t.Fatal("Repository does not expose independent owner and client identity loads")
+	}
+	got, _, err := identities.LoadOwnerIdentity(ctx)
+	if err != nil || got != legacyOwner {
+		t.Fatalf("migrated owner = %#v, %v; want %#v", got, err, legacyOwner)
+	}
+	migratedActive, err := store.Get(ctx, activeGenerationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migratedRaw, err := store.Get(ctx, generationKey(string(migratedActive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated persistedGeneration
+	if err := json.Unmarshal(migratedRaw, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Owner == nil || migrated.Owner.Serial != legacyOwner.Serial || migrated.Client != nil || migrated.PrivateKeyPEM != "" || migrated.Settings.Role != "" {
+		t.Fatalf("legacy generation was not rewritten as owner-only dual state: %#v", migrated)
+	}
+	if _, _, err := identities.LoadClientIdentity(ctx); !errors.Is(err, securestore.ErrNotFound) {
+		t.Fatalf("migrated owner unexpectedly created a client: %v", err)
+	}
+}
+
 func TestRepositoryPairingGenerationSwitchIsAtomicOnStoreFailure(t *testing.T) {
 	t.Parallel()
 

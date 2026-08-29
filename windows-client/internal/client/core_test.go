@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -14,6 +15,141 @@ import (
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
+
+func TestCoreOwnerBootstrapCreatesClientForProxyAndRetainsOwnerControls(t *testing.T) {
+	t.Parallel()
+
+	owner := testIdentity("owner", "OWNER")
+	clientIdentity := testIdentity("client", "CLIENT")
+	gateway := &bootstrapGateway{owner: owner, client: clientIdentity, tunnel: &fakeTunnel{healthy: true}}
+	store := securestore.NewMemoryStore()
+	core, err := NewCore(context.Background(), store, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := core.Pair(context.Background(), pairing.Bundle{RelayURL: owner.RelayURL, Role: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.StartProxy(availablePort(t)); err != nil {
+		t.Fatalf("StartProxy() after owner bootstrap = %v", err)
+	}
+	if _, err := core.IssuePairing(context.Background(), "agent"); err != nil {
+		t.Fatalf("IssuePairing() after owner bootstrap = %v", err)
+	}
+	if gateway.sessionSerial != clientIdentity.Serial {
+		t.Fatalf("proxy session used serial %q, want client serial %q", gateway.sessionSerial, clientIdentity.Serial)
+	}
+	if gateway.issueSerial != owner.Serial {
+		t.Fatalf("owner control used serial %q, want owner serial %q", gateway.issueSerial, owner.Serial)
+	}
+
+	repository := NewRepository(store)
+	identities, ok := any(repository).(interface {
+		LoadOwnerIdentity(context.Context) (relayclient.Identity, uint16, error)
+		LoadClientIdentity(context.Context) (relayclient.Identity, uint16, error)
+	})
+	if !ok {
+		t.Fatal("Repository does not expose independent owner and client identity loads")
+	}
+	if got, _, err := identities.LoadOwnerIdentity(context.Background()); err != nil || got != owner {
+		t.Fatalf("stored owner = %#v, %v; want %#v", got, err, owner)
+	}
+	if got, _, err := identities.LoadClientIdentity(context.Background()); err != nil || got != clientIdentity {
+		t.Fatalf("stored client = %#v, %v; want %#v", got, err, clientIdentity)
+	}
+}
+
+func TestCoreRetriesClientSetupWithoutReenrollingOwner(t *testing.T) {
+	t.Parallel()
+
+	owner := testIdentity("owner", "OWNER")
+	clientIdentity := testIdentity("client", "CLIENT")
+	gateway := &bootstrapGateway{owner: owner, client: clientIdentity, tunnel: &fakeTunnel{healthy: true}, failClientEnroll: true}
+	core, err := NewCore(context.Background(), securestore.NewMemoryStore(), gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Pair(context.Background(), pairing.Bundle{RelayURL: owner.RelayURL, Role: "owner"}); err == nil {
+		t.Fatal("Pair() succeeded when automatic client enrollment failed")
+	}
+	if gateway.ownerEnrollments != 1 {
+		t.Fatalf("owner enrollments = %d, want 1", gateway.ownerEnrollments)
+	}
+
+	gateway.failClientEnroll = false
+	retrier, ok := any(core).(interface{ RetryClientSetup(context.Context) error })
+	if !ok {
+		t.Fatal("Core does not expose RetryClientSetup")
+	}
+	if err := retrier.RetryClientSetup(context.Background()); err != nil {
+		t.Fatalf("RetryClientSetup() = %v", err)
+	}
+	if gateway.ownerEnrollments != 1 {
+		t.Fatalf("retry re-enrolled owner %d times", gateway.ownerEnrollments)
+	}
+	if gateway.clientEnrollments != 2 {
+		t.Fatalf("client enrollments = %d, want 2", gateway.clientEnrollments)
+	}
+	if err := core.StartProxy(availablePort(t)); err != nil {
+		t.Fatalf("StartProxy() after retry = %v", err)
+	}
+}
+
+func testIdentity(role, serial string) relayclient.Identity {
+	return relayclient.Identity{
+		RelayURL: "https://relay.example", Role: role, Serial: serial,
+		PrivateKeyPEM: role + "-key", CertificatePEM: role + "-chain", CACertificatePEM: "ca",
+	}
+}
+
+type bootstrapGateway struct {
+	mu                sync.Mutex
+	owner             relayclient.Identity
+	client            relayclient.Identity
+	tunnel            *fakeTunnel
+	failClientEnroll  bool
+	ownerEnrollments  int
+	clientEnrollments int
+	sessionSerial     string
+	issueSerial       string
+}
+
+func (gateway *bootstrapGateway) Enroll(_ context.Context, bundle pairing.Bundle) (relayclient.Identity, error) {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	switch bundle.Role {
+	case "owner":
+		gateway.ownerEnrollments++
+		return gateway.owner, nil
+	case "client":
+		gateway.clientEnrollments++
+		if gateway.failClientEnroll {
+			return relayclient.Identity{}, errors.New("client enrollment unavailable")
+		}
+		return gateway.client, nil
+	default:
+		return relayclient.Identity{}, errors.New("unexpected enrollment role")
+	}
+}
+
+func (gateway *bootstrapGateway) DialSession(_ context.Context, identity relayclient.Identity) (Tunnel, error) {
+	gateway.mu.Lock()
+	gateway.sessionSerial = identity.Serial
+	gateway.mu.Unlock()
+	return gateway.tunnel, nil
+}
+
+func (gateway *bootstrapGateway) IssuePairing(_ context.Context, identity relayclient.Identity, role string) (relayclient.PairingCode, error) {
+	gateway.mu.Lock()
+	gateway.issueSerial = identity.Serial
+	gateway.mu.Unlock()
+	return relayclient.PairingCode{Code: "client-pairing-code", Role: role, ExpiresAt: time.Now().Add(time.Minute)}, nil
+}
+
+func (gateway *bootstrapGateway) Revoke(context.Context, relayclient.Identity, string) error {
+	return nil
+}
 
 type fakeGateway struct {
 	mu       sync.Mutex
@@ -78,7 +214,7 @@ func (tunnel *fakeTunnel) Close() error {
 	return nil
 }
 
-func TestCorePairsStartsStopsAndExposesOnlyRedactedStatus(t *testing.T) {
+func TestCoreStartsStopsAndExposesOnlyRedactedStatusForStoredClient(t *testing.T) {
 	t.Parallel()
 
 	identity := relayclient.Identity{
@@ -86,11 +222,12 @@ func TestCorePairsStartsStopsAndExposesOnlyRedactedStatus(t *testing.T) {
 		PrivateKeyPEM: "key", CertificatePEM: "chain", CACertificatePEM: "ca",
 	}
 	gateway := &fakeGateway{identity: identity, tunnel: &fakeTunnel{healthy: true}}
-	core, err := NewCore(context.Background(), securestore.NewMemoryStore(), gateway)
-	if err != nil {
+	store := securestore.NewMemoryStore()
+	if err := NewRepository(store).SaveClientIdentity(context.Background(), identity); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.Pair(context.Background(), pairing.Bundle{RelayURL: identity.RelayURL, Role: "client"}); err != nil {
+	core, err := NewCore(context.Background(), store, gateway)
+	if err != nil {
 		t.Fatal(err)
 	}
 	port := availablePort(t)
@@ -119,48 +256,42 @@ func TestCorePairsStartsStopsAndExposesOnlyRedactedStatus(t *testing.T) {
 	}
 }
 
-func TestCoreRestrictsOwnerOperationsAndTunnelRole(t *testing.T) {
+func TestCoreRequiresOwnerForControlAndClientForProxy(t *testing.T) {
 	t.Parallel()
 
 	owner := relayclient.Identity{
 		RelayURL: "https://relay.example", Role: "owner", Serial: "ABC",
 		PrivateKeyPEM: "key", CertificatePEM: "chain", CACertificatePEM: "ca",
 	}
-	gateway := &fakeGateway{identity: owner, tunnel: &fakeTunnel{healthy: true}}
-	core, err := NewCore(context.Background(), securestore.NewMemoryStore(), gateway)
-	if err != nil {
+	ownerStore := securestore.NewMemoryStore()
+	if err := NewRepository(ownerStore).SaveOwnerIdentity(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.Pair(context.Background(), pairing.Bundle{RelayURL: owner.RelayURL, Role: "owner"}); err != nil {
+	core, err := NewCore(context.Background(), ownerStore, &fakeGateway{identity: owner, tunnel: &fakeTunnel{healthy: true}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := core.StartProxy(availablePort(t)); err == nil {
-		t.Fatal("StartProxy accepted an owner identity")
-	}
-	issued, err := core.IssuePairing(context.Background(), "agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if issued.RelayURL != owner.RelayURL || issued.CACertificatePEM != owner.CACertificatePEM || issued.Capability != "pairing-code" || issued.Role != "agent" {
-		t.Fatalf("owner pairing bundle did not carry persisted trust: %#v", issued)
-	}
-	if err := core.Revoke(context.Background(), "ABC123"); err != nil {
-		t.Fatal(err)
+		t.Fatal("StartProxy accepted an owner-only installation")
 	}
 
-	clientGateway := &fakeGateway{identity: relayclient.Identity{
+	clientIdentity := relayclient.Identity{
 		RelayURL: owner.RelayURL, Role: "client", Serial: "DEF",
 		PrivateKeyPEM: "key", CertificatePEM: "chain", CACertificatePEM: "ca",
-	}, tunnel: &fakeTunnel{healthy: true}}
-	clientCore, err := NewCore(context.Background(), securestore.NewMemoryStore(), clientGateway)
-	if err != nil {
+	}
+	clientStore := securestore.NewMemoryStore()
+	if err := NewRepository(clientStore).SaveClientIdentity(context.Background(), clientIdentity); err != nil {
 		t.Fatal(err)
 	}
-	if err := clientCore.Pair(context.Background(), pairing.Bundle{RelayURL: owner.RelayURL, Role: "client"}); err != nil {
+	clientCore, err := NewCore(context.Background(), clientStore, &fakeGateway{identity: clientIdentity, tunnel: &fakeTunnel{healthy: true}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := clientCore.IssuePairing(context.Background(), "agent"); err == nil {
 		t.Fatal("client identity issued an owner pairing code")
+	}
+	if err := clientCore.Revoke(context.Background(), "ABC123"); err == nil {
+		t.Fatal("client identity revoked a device")
 	}
 }
 
