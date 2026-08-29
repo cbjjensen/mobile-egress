@@ -227,7 +227,8 @@ class AgentSession(
         WireProtocol.finiteErrorCode(code)
         val stream = streams[envelope.streamId]
         if (stream == null) {
-            if (isTombstoned(envelope.streamId)) return
+            val canceledPendingFrame = outbound.cancelStream(envelope.streamId)
+            if (canceledPendingFrame || isTombstoned(envelope.streamId)) return
             throw ProtocolException("Close for an unknown stream")
         }
         closeStreamFromRelay(stream)
@@ -268,6 +269,7 @@ class AgentSession(
     }
 
     private fun reject(streamId: String, code: String) {
+        rememberTombstone(streamId)
         enqueueRequiredControl("rejected", streamId, WireProtocol.finiteErrorCode(code))
     }
 
@@ -298,7 +300,7 @@ class AgentSession(
         val reserved = synchronized(stream.terminalLock) {
             if (stream.terminalState != StreamTerminalState.Open || closed.get()) return
             outbound.blockAndDiscardData(stream.id)
-            outbound.offerRequiredControl(terminalFrame) {}.also { accepted ->
+            outbound.offerRequiredControl(terminalFrame, streamId = stream.id) {}.also { accepted ->
                 if (accepted) stream.terminalState = StreamTerminalState.ForcedPending
             }
         }
@@ -312,10 +314,10 @@ class AgentSession(
     private fun closeStreamFromRelay(stream: TargetStream) {
         val shouldRelease = synchronized(stream.terminalLock) {
             when (stream.terminalState) {
-                StreamTerminalState.Open -> outbound.blockAndDiscardData(stream.id)
-                StreamTerminalState.GracefulPending -> outbound.cancelGracefulStream(stream.id)
-                StreamTerminalState.ForcedPending -> Unit
                 StreamTerminalState.Released -> return
+                StreamTerminalState.Open,
+                StreamTerminalState.GracefulPending,
+                StreamTerminalState.ForcedPending -> outbound.cancelStream(stream.id)
             }
             stream.terminalState = StreamTerminalState.Released
             true
@@ -374,7 +376,10 @@ class AgentSession(
         payload: ByteArray = byteArrayOf(),
     ): Boolean {
         if (closed.get()) return false
-        return outbound.offerRequiredControl(WireProtocol.encode(type, streamId, payload)) {
+        return outbound.offerRequiredControl(
+            WireProtocol.encode(type, streamId, payload),
+            streamId = streamId.takeIf { it.isNotEmpty() },
+        ) {
             terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
         }
     }

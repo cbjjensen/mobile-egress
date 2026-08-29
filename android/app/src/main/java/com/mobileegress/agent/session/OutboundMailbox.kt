@@ -3,12 +3,17 @@ package com.mobileegress.agent.session
 import java.util.ArrayDeque
 import kotlinx.coroutines.channels.Channel
 
+internal class OutboundCancellation(
+    var canceled: Boolean,
+    var outstanding: Int = 0,
+)
+
 class OutboundFrame internal constructor(
     val bytes: ByteArray,
     internal val streamId: String? = null,
-    internal val isData: Boolean = false,
-    internal val gracefulStreamId: String? = null,
-    internal val onEmitted: () -> Unit = {},
+    internal val streamCancellation: OutboundCancellation? = null,
+    internal val dataCancellation: OutboundCancellation? = null,
+    internal val onEmitted: (() -> Unit)? = null,
 )
 
 enum class OutboundEmission { Emitted, Canceled, Failed }
@@ -24,8 +29,9 @@ class OutboundMailbox(
     private val readyStreams = ArrayDeque<String>()
     private val blockedDataStreams = LinkedHashSet<String>()
     private val canceledDataStreams = LinkedHashSet<String>()
-    private val pendingGracefulStreams = HashSet<String>()
-    private val canceledGracefulStreams = LinkedHashSet<String>()
+    private val canceledStreams = LinkedHashSet<String>()
+    private val streamCancellations = HashMap<String, OutboundCancellation>()
+    private val dataCancellations = HashMap<String, OutboundCancellation>()
     private val available = Channel<Unit>(Channel.CONFLATED)
     private var dataSize = 0
     private var closed = false
@@ -42,7 +48,8 @@ class OutboundMailbox(
             val streamData = dataByStream.getOrPut(streamId) { ArrayDeque() }
             if (streamData.size >= perStreamDataCapacity) return@synchronized false
             if (streamData.isEmpty()) readyStreams.addLast(streamId)
-            streamData.addLast(OutboundFrame(frame, streamId = streamId, isData = true))
+            val outboundFrame = createFrame(frame, streamId = streamId, isData = true)
+            streamData.addLast(outboundFrame)
             dataSize += 1
             true
         }
@@ -54,29 +61,42 @@ class OutboundMailbox(
         synchronized(lock) {
             blockDataStream(streamId)
             cancelDataStream(streamId)
+            dataCancellations[streamId]?.canceled = true
             discardData(streamId)
         }
     }
 
-    fun cancelGracefulStream(streamId: String): Boolean = synchronized(lock) {
-        if (!pendingGracefulStreams.remove(streamId)) return@synchronized false
+    fun cancelStream(streamId: String): Boolean = synchronized(lock) {
+        val hadOutstandingFrame = (streamCancellations[streamId]?.outstanding ?: 0) > 0
         blockDataStream(streamId)
         cancelDataStream(streamId)
+        streamCancellations[streamId]?.canceled = true
+        dataCancellations[streamId]?.canceled = true
         discardData(streamId)
-        canceledGracefulStreams += streamId
-        trim(canceledGracefulStreams)
-        controls.removeAll { it.afterDataStreamId == streamId }
-        true
+        canceledStreams += streamId
+        trim(canceledStreams)
+        controls.removeAll { control ->
+            (control.frame.streamId == streamId).also { removed ->
+                if (removed) release(control.frame)
+            }
+        }
+        hadOutstandingFrame
     }
 
     fun allowData(streamId: String) = synchronized(lock) {
+        streamCancellations.remove(streamId)?.canceled = true
+        dataCancellations.remove(streamId)?.canceled = true
         blockedDataStreams -= streamId
         canceledDataStreams -= streamId
-        canceledGracefulStreams -= streamId
+        canceledStreams -= streamId
     }
 
-    fun offerRequiredControl(frame: ByteArray, onSaturated: () -> Unit): Boolean {
-        val queued = offerControl(ControlFrame(OutboundFrame(frame)))
+    fun offerRequiredControl(
+        frame: ByteArray,
+        streamId: String?,
+        onSaturated: () -> Unit,
+    ): Boolean {
+        val queued = offerControl(frame, streamId)
         if (!queued) onSaturated()
         return queued
     }
@@ -90,18 +110,12 @@ class OutboundMailbox(
         val queued = synchronized(lock) {
             if (closed || controls.size >= controlCapacity) return@synchronized false
             blockDataStream(streamId)
-            pendingGracefulStreams += streamId
-            controls.addLast(
-                ControlFrame(
-                    frame = OutboundFrame(
-                        bytes = frame,
-                        streamId = streamId,
-                        gracefulStreamId = streamId,
-                        onEmitted = onEmitted,
-                    ),
-                    afterDataStreamId = streamId,
-                ),
+            val outboundFrame = createFrame(
+                bytes = frame,
+                streamId = streamId,
+                onEmitted = onEmitted,
             )
+            controls.addLast(ControlFrame(frame = outboundFrame, afterDataStreamId = streamId))
             true
         }
         if (queued) available.trySend(Unit)
@@ -127,21 +141,17 @@ class OutboundMailbox(
     fun emit(frame: OutboundFrame, sender: (ByteArray) -> Boolean): OutboundEmission {
         var emittedCallback: (() -> Unit)? = null
         val result = synchronized(lock) {
-            val canceledData = frame.isData && frame.streamId?.let { it in canceledDataStreams } == true
-            val canceledTerminal =
-                frame.gracefulStreamId?.let { it in canceledGracefulStreams } == true
-            val canceled = canceledData || canceledTerminal
+            val canceledStream = frame.streamCancellation?.canceled == true
+            val canceledData = frame.dataCancellation?.canceled == true
+            val canceled = canceledStream || canceledData
             if (canceled) {
                 OutboundEmission.Canceled
             } else if (!sender(frame.bytes)) {
                 OutboundEmission.Failed
             } else {
-                frame.gracefulStreamId?.let { streamId ->
-                    pendingGracefulStreams -= streamId
-                    emittedCallback = frame.onEmitted
-                }
+                emittedCallback = frame.onEmitted
                 OutboundEmission.Emitted
-            }
+            }.also { release(frame) }
         }
         emittedCallback?.invoke()
         return result
@@ -156,17 +166,20 @@ class OutboundMailbox(
             readyStreams.clear()
             blockedDataStreams.clear()
             canceledDataStreams.clear()
-            pendingGracefulStreams.clear()
-            canceledGracefulStreams.clear()
+            canceledStreams.clear()
+            streamCancellations.values.forEach { it.canceled = true }
+            dataCancellations.values.forEach { it.canceled = true }
+            streamCancellations.clear()
+            dataCancellations.clear()
             dataSize = 0
         }
         available.close()
     }
 
-    private fun offerControl(frame: ControlFrame): Boolean {
+    private fun offerControl(bytes: ByteArray, streamId: String?): Boolean {
         val queued = synchronized(lock) {
             if (closed || controls.size >= controlCapacity) return@synchronized false
-            controls.addLast(frame)
+            controls.addLast(ControlFrame(createFrame(bytes, streamId = streamId)))
             true
         }
         if (queued) available.trySend(Unit)
@@ -198,8 +211,59 @@ class OutboundMailbox(
     }
 
     private fun discardData(streamId: String) {
-        dataByStream.remove(streamId)?.let { discarded -> dataSize -= discarded.size }
+        dataByStream.remove(streamId)?.let { discarded ->
+            dataSize -= discarded.size
+            discarded.forEach(::release)
+        }
         readyStreams.removeAll { it == streamId }
+    }
+
+    private fun createFrame(
+        bytes: ByteArray,
+        streamId: String?,
+        isData: Boolean = false,
+        onEmitted: (() -> Unit)? = null,
+    ): OutboundFrame {
+        val streamCancellation = streamId?.let {
+            cancellation(streamCancellations, it, it in canceledStreams)
+        }
+        val dataCancellation = streamId?.takeIf { isData }?.let {
+            cancellation(dataCancellations, it, it in canceledDataStreams)
+        }
+        return OutboundFrame(
+            bytes = bytes,
+            streamId = streamId,
+            streamCancellation = streamCancellation,
+            dataCancellation = dataCancellation,
+            onEmitted = onEmitted,
+        )
+    }
+
+    private fun cancellation(
+        cancellations: MutableMap<String, OutboundCancellation>,
+        streamId: String,
+        canceled: Boolean,
+    ): OutboundCancellation = cancellations.getOrPut(streamId) {
+        OutboundCancellation(canceled = canceled)
+    }.also { it.outstanding += 1 }
+
+    private fun release(frame: OutboundFrame) {
+        frame.streamId?.let { streamId ->
+            release(streamCancellations, streamId, frame.streamCancellation)
+            release(dataCancellations, streamId, frame.dataCancellation)
+        }
+    }
+
+    private fun release(
+        cancellations: MutableMap<String, OutboundCancellation>,
+        streamId: String,
+        cancellation: OutboundCancellation?,
+    ) {
+        cancellation ?: return
+        cancellation.outstanding -= 1
+        if (cancellation.outstanding == 0 && cancellations[streamId] === cancellation) {
+            cancellations.remove(streamId)
+        }
     }
 
     private fun blockDataStream(streamId: String) {
