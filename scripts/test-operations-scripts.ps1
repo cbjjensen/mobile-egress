@@ -89,3 +89,4 @@ Assert-Condition ($testAllScript -match 'docker compose -f deploy/docker-compose
 Assert-Condition ($testAllScript -match '\$androidPrerequisiteExit') 'test-all must preserve a nonzero Android prerequisite exit after printing remediation.'
 
 Write-Host 'Operations script checks passed.'
+exit 0
