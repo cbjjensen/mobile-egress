@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'operations-common.ps1')
 $androidRoot = Join-Path $repositoryRoot 'android'
 $propertiesPath = Join-Path $androidRoot 'keystore.properties'
 
@@ -56,9 +57,9 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$sdkRoot = if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_HOME)) { $env:ANDROID_HOME } else { $env:ANDROID_SDK_ROOT }
+$sdkRoot = Get-MobileEgressAndroidSdkRoot -RepositoryRoot $repositoryRoot
 if ([string]::IsNullOrWhiteSpace($sdkRoot)) {
-    Write-Host 'Android SDK location is unavailable after validation. Set ANDROID_HOME before running the release command.'
+    Write-Host (Get-MobileEgressAndroidSdkRemediation)
     exit 10
 }
 

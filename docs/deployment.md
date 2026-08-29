@@ -7,7 +7,7 @@ Mobile Egress is a personal, self-hosted path for selected Windows applications.
 1. Run the read-only prerequisite check: `& .\scripts\preflight.ps1 -Components Docker`.
 2. Copy `deploy/.env.example` to the ignored `deploy/.env`. Set the exact externally reachable `RELAY_PUBLIC_NAME` and `RELAY_PUBLIC_URL`; do not place credentials, pairing bundles, certificates, or relay state in that file.
 3. Initialize once with `docker compose -f deploy/docker-compose.yml --profile init run --rm relay-init`.
-4. Capture the single Owner pairing bundle directly into an owner-controlled password manager. It contains a one-use capability and private CA material, so do not paste it into issue trackers, shell history, chat logs, screenshots, or source control.
+4. Capture the single Owner pairing bundle directly into an owner-controlled password manager. It contains the CA certificate trust anchor and a high-entropy one-use capability, so do not paste it into issue trackers, shell history, chat logs, screenshots, or source control. The private CA remains only in protected relay state.
 5. Transfer the bundle only over an authenticated confidential channel to the first owner Windows client. Confirm its exact relay origin and expiry before pairing. The client verifies the bundle CA before sending its capability or CSR and rejects a returned CA mismatch.
 6. Start the relay with `docker compose -f deploy/docker-compose.yml up -d relay`. Keep `deploy/data` private, backed up, and outside sync folders. Port 8443 is the encrypted relay endpoint, not a SOCKS service.
 
@@ -34,7 +34,9 @@ For Android, generate and back up a dedicated keystore outside this checkout. Co
 
 ## Rollback and revocation
 
-Before changing relay images, create a protected backup of `deploy/data`. If an image rollback is required, deploy the previous image while reusing the same state directory; replacing it creates a different CA and invalidates enrolled identities. If the state directory or Owner bundle is suspected exposed, stop the relay, revoke affected enrolled identities from Owner mode, and re-enroll only from newly issued bundles. Revoking an identity rejects new sessions and closes active streams. Stop the Android foreground service and Windows proxy to halt the path immediately while investigating.
+Before changing relay images, create a protected backup of `deploy/data`. For a non-compromise operational rollback, deploy the previous image while reusing the same state directory so enrolled identities remain valid. Do not use that procedure when relay state or its CA private key may have been exposed.
+
+For a suspected state/CA compromise, stop the relay and Windows/Android clients, preserve the existing `deploy/data` as a restricted forensic copy outside normal deployment use, and do not restart from it. Initialize an empty replacement state directory to create a fresh CA, bootstrap with a newly generated Owner bundle, then re-pair every Windows and Android identity. Revocation under the old state does not restore trust because the old CA private key may have been copied. Revocation still rejects new sessions and closes active sessions for the active state while an incident is being contained.
 
 ## Required physical-device checklist
 

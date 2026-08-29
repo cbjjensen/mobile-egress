@@ -30,8 +30,8 @@ Assert-Condition ($LASTEXITCODE -eq 0) 'The repository-required Go 1.26 installa
 Assert-Condition ($goOutput -match 'OK: Go version 26') 'Go versions must be parsed from the go1.26 format, not as major version 1.'
 
 $machineAndroidOutput = & $preflight -Components Android *>&1 | Out-String
-Assert-Condition ($LASTEXITCODE -eq 11) 'This machine must report its discovered JDK 8 as an invalid JDK 17+ prerequisite.'
-Assert-Condition ($machineAndroidOutput -match 'INVALID: JDK version 8 is below the required 17') 'The JDK 8 validation result was not reported accurately.'
+Assert-Condition ($LASTEXITCODE -eq 11) 'This machine must report its JAVA_HOME JDK 8 as an invalid JDK 17+ prerequisite.'
+Assert-Condition ($machineAndroidOutput -match 'INVALID: JAVA_HOME points to JDK 8, below the required 17') 'The JAVA_HOME JDK 8 validation result was not reported accurately.'
 Assert-Condition ($machineAndroidOutput -match 'MISSING: Android SDK Platform 35 and Build-Tools 35') 'The missing Android SDK result was not reported accurately.'
 
 $dockerOutput = & $preflight -Components Docker *>&1 | Out-String
@@ -39,7 +39,42 @@ Assert-Condition ($LASTEXITCODE -eq 11) 'A present but unavailable Docker daemon
 Assert-Condition ($dockerOutput -match 'INVALID: Docker Engine could not be validated') 'Docker daemon validation failure was not reported accurately.'
 Assert-Condition ($dockerOutput -match 'OK: Docker Compose v2 is available') 'Docker Compose availability must still be reported independently.'
 
+$javaHomeMismatchOutput = & $preflight -Components Android -SimulateJavaHomeMismatch *>&1 | Out-String
+Assert-Condition ($LASTEXITCODE -eq 11) 'A JDK 17 PATH with JDK 8 JAVA_HOME mismatch must fail validation.'
+Assert-Condition ($javaHomeMismatchOutput -match 'JAVA_HOME.*JDK 8') 'JAVA_HOME must take precedence over a newer PATH javac.'
+Assert-Condition ($javaHomeMismatchOutput -match 'PATH JDK 17 is ignored') 'The mismatch remediation must explain that PATH is ignored while JAVA_HOME is set.'
+
+$commonOperations = Join-Path $PSScriptRoot 'operations-common.ps1'
+. $commonOperations
+$temporarySdkFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-sdk-root-" + [guid]::NewGuid().ToString('N'))
+$originalAndroidHome = $env:ANDROID_HOME
+$originalAndroidSdkRoot = $env:ANDROID_SDK_ROOT
+try {
+    $null = New-Item -ItemType Directory -Path $temporarySdkFixture
+    $fixtureAndroidDirectory = Join-Path $temporarySdkFixture 'android'
+    $null = New-Item -ItemType Directory -Path $fixtureAndroidDirectory
+    Set-Content -LiteralPath (Join-Path $fixtureAndroidDirectory 'local.properties') -Value 'sdk.dir=C\:\\fixture-sdk'
+    $env:ANDROID_HOME = $null
+    $env:ANDROID_SDK_ROOT = $null
+    $resolvedSdkRoot = Get-MobileEgressAndroidSdkRoot -RepositoryRoot $temporarySdkFixture
+    Assert-Condition ($resolvedSdkRoot -eq 'C:\fixture-sdk') 'The shared SDK resolver must use android/local.properties when environment roots are absent.'
+} finally {
+    $env:ANDROID_HOME = $originalAndroidHome
+    $env:ANDROID_SDK_ROOT = $originalAndroidSdkRoot
+    if (Test-Path -LiteralPath $temporarySdkFixture) {
+        Remove-Item -LiteralPath (Join-Path $fixtureAndroidDirectory 'local.properties') -Force
+        Remove-Item -LiteralPath $fixtureAndroidDirectory -Force
+        Remove-Item -LiteralPath $temporarySdkFixture -Force
+    }
+}
+
+$preflightScript = Get-Content -Raw $preflight
 $releaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'release-android.ps1')
+Assert-Condition ($preflightScript -match "operations-common\.ps1'\)") 'Preflight must load the shared operations resolver.'
+Assert-Condition ($releaseScript -match "operations-common\.ps1'\)") 'Android release must load the shared operations resolver.'
+Assert-Condition ($preflightScript -match 'Get-MobileEgressAndroidSdkRoot -RepositoryRoot') 'Preflight must use the shared Android SDK-root resolver.'
+Assert-Condition ($releaseScript -match 'Get-MobileEgressAndroidSdkRoot -RepositoryRoot') 'Android release must use the shared Android SDK-root resolver.'
+
 Assert-Condition ($releaseScript -notmatch '(?i)write-(host|output|information).*?(storePassword|keyPassword|keyAlias|storeFile)') 'The release script must not print signing properties.'
 Assert-Condition ($releaseScript -match 'check-ignore -q -- android/keystore.properties') 'The release script must require the signing properties file to remain ignored.'
 

@@ -3,11 +3,13 @@ param(
     [ValidateSet('All', 'Go', 'Node', 'Docker', 'WebView2', 'Android')]
     [string[]]$Components = @('All'),
     [ValidateSet('None', 'Android')]
-    [string]$SimulateMissing = 'None'
+    [string]$SimulateMissing = 'None',
+    [switch]$SimulateJavaHomeMismatch
 )
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'operations-common.ps1')
 $missing = [System.Collections.Generic.List[string]]::new()
 $invalid = [System.Collections.Generic.List[string]]::new()
 
@@ -99,8 +101,30 @@ function Test-Node {
 }
 
 function Test-Jdk {
-    $javac = Get-Command 'javac' -ErrorAction SilentlyContinue
-    if ($null -eq $javac) {
+    if ($SimulateJavaHomeMismatch) {
+        Add-Invalid 'JAVA_HOME points to JDK 8, below the required 17. Set JAVA_HOME to JDK 17 or later; PATH JDK 17 is ignored while JAVA_HOME is set.'
+        return
+    }
+
+    $compilerSource = 'PATH'
+    if (-not [string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
+        $javacPath = Join-Path $env:JAVA_HOME 'bin\javac.exe'
+        $compilerSource = 'JAVA_HOME'
+        if (-not (Test-Path -LiteralPath $javacPath -PathType Leaf)) {
+            Add-Invalid 'JAVA_HOME is set but bin\javac.exe is missing. Set JAVA_HOME to a JDK 17 or later directory; PATH is ignored while JAVA_HOME is set.'
+            return
+        }
+    } else {
+        $javac = Get-Command 'javac' -ErrorAction SilentlyContinue
+        if ($null -eq $javac) {
+            Add-Missing 'JDK 17 or later. Install a JDK (not only a JRE), set JAVA_HOME, and ensure javac.exe is on PATH.'
+            return
+        }
+
+        $javacPath = $javac.Source
+    }
+
+    if ([string]::IsNullOrWhiteSpace($javacPath)) {
         Add-Missing 'JDK 17 or later. Install a JDK (not only a JRE), set JAVA_HOME, and ensure javac.exe is on PATH.'
         return
     }
@@ -108,31 +132,35 @@ function Test-Jdk {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & javac -version 2>&1 | Out-String
+        $output = & $javacPath -version 2>&1 | Out-String
         $javacExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
 
     if ($javacExitCode -ne 0) {
-        Add-Invalid 'JDK could not be validated. Install JDK 17 or later, set JAVA_HOME, and ensure javac.exe is on PATH.'
+        Add-Invalid "$compilerSource JDK could not be validated. Install JDK 17 or later, set JAVA_HOME, and ensure javac.exe is on PATH."
         return
     }
 
     $match = [regex]::Match($output, 'javac\s+(?<version>(?:1\.)?\d+)')
     if (-not $match.Success) {
-        Add-Invalid 'JDK returned an unrecognized version. Install JDK 17 or later, set JAVA_HOME, and ensure javac.exe is on PATH.'
+        Add-Invalid "$compilerSource JDK returned an unrecognized version. Install JDK 17 or later, set JAVA_HOME, and ensure javac.exe is on PATH."
         return
     }
 
     $version = $match.Groups['version'].Value
     $major = if ($version.StartsWith('1.')) { [int]$version.Substring(2) } else { [int]$version }
     if ($major -lt 17) {
-        Add-Invalid "JDK version $major is below the required 17. Install JDK 17 or later, set JAVA_HOME, and ensure javac.exe is on PATH."
+        if ($compilerSource -eq 'JAVA_HOME') {
+            Add-Invalid "JAVA_HOME points to JDK $major, below the required 17. Set JAVA_HOME to JDK 17 or later; PATH is ignored while JAVA_HOME is set."
+        } else {
+            Add-Invalid "JDK version $major is below the required 17. Install JDK 17 or later, set JAVA_HOME, and ensure javac.exe is on PATH."
+        }
         return
     }
 
-    Write-Host "OK: JDK version $major"
+    Write-Host "OK: $compilerSource JDK version $major"
 }
 
 function Test-Docker {
@@ -191,42 +219,18 @@ function Test-WebView2 {
     }
 }
 
-function Get-AndroidSdkRoot {
-    $configuredRoot = $env:ANDROID_HOME
-    if ([string]::IsNullOrWhiteSpace($configuredRoot)) {
-        $configuredRoot = $env:ANDROID_SDK_ROOT
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
-        return $configuredRoot
-    }
-
-    $localProperties = Join-Path $repositoryRoot 'android\local.properties'
-    if (-not (Test-Path -LiteralPath $localProperties -PathType Leaf)) {
-        return $null
-    }
-
-    $sdkLine = Get-Content -LiteralPath $localProperties | Where-Object { $_ -match '^\s*sdk\.dir\s*=' } | Select-Object -First 1
-    if ($null -eq $sdkLine) {
-        return $null
-    }
-
-    $value = ($sdkLine -replace '^\s*sdk\.dir\s*=', '').Trim()
-    return ($value -replace '\\\\', '\' -replace '\\:', ':')
-}
-
 function Test-Android {
     if ($SimulateMissing -eq 'Android') {
         Add-Missing 'JDK 17 or later. Install a JDK (not only a JRE), set JAVA_HOME, and ensure javac.exe is on PATH.'
-        Add-Missing 'Android SDK Platform 35 and Build-Tools 35. Install them with Android Studio SDK Manager, then set ANDROID_HOME or android/local.properties.'
+        Add-Missing (Get-MobileEgressAndroidSdkRemediation)
         return
     }
 
     Test-Jdk
 
-    $sdkRoot = Get-AndroidSdkRoot
+    $sdkRoot = Get-MobileEgressAndroidSdkRoot -RepositoryRoot $repositoryRoot
     if ([string]::IsNullOrWhiteSpace($sdkRoot)) {
-        Add-Missing 'Android SDK Platform 35 and Build-Tools 35. Install them with Android Studio SDK Manager, then set ANDROID_HOME or android/local.properties.'
+        Add-Missing (Get-MobileEgressAndroidSdkRemediation)
         return
     }
 
@@ -239,7 +243,7 @@ function Test-Android {
     }
 
     if (-not (Test-Path -LiteralPath $platform -PathType Leaf) -or $buildTools.Count -eq 0) {
-        Add-Missing 'Android SDK Platform 35 and Build-Tools 35. Install both with Android Studio SDK Manager, then set ANDROID_HOME or android/local.properties.'
+        Add-Missing (Get-MobileEgressAndroidSdkRemediation)
         return
     }
 
