@@ -47,6 +47,12 @@ func TestValidatePublicTCPDestinationRejectsNonPublicAddresses(t *testing.T) {
 		{name: "documentation IPv4", address: netip.MustParseAddr("192.0.2.1")},
 		{name: "benchmark", address: netip.MustParseAddr("198.18.0.1")},
 		{name: "documentation IPv6", address: netip.MustParseAddr("2001:db8::1")},
+		{name: "IPv4 mapped IPv6", address: netip.MustParseAddr("::ffff:1.1.1.1")},
+		{name: "NAT64 local use IPv6", address: netip.MustParseAddr("64:ff9b:1::c000:201")},
+		{name: "NAT64 well-known IPv6", address: netip.MustParseAddr("64:ff9b::c000:201")},
+		{name: "Teredo IPv6", address: netip.MustParseAddr("2001:0::1")},
+		{name: "6to4 IPv6", address: netip.MustParseAddr("2002::1")},
+		{name: "IANA reserved IPv6", address: netip.MustParseAddr("3fff::1")},
 	}
 
 	for _, test := range tests {

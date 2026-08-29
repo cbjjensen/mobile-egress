@@ -55,16 +55,18 @@ type Session struct {
 }
 
 type relayStream struct {
-	session    *Session
-	id         string
-	inbound    chan []byte
-	done       chan struct{}
-	openResult chan error
-	openOnce   sync.Once
-	finishOnce sync.Once
-	sendClose  sync.Once
-	readMu     sync.Mutex
-	remaining  []byte
+	session      *Session
+	id           string
+	inbound      chan []byte
+	done         chan struct{}
+	openResult   chan error
+	openOnce     sync.Once
+	finishOnce   sync.Once
+	sendClose    sync.Once
+	readMu       sync.Mutex
+	remaining    []byte
+	terminal     atomic.Bool
+	drainInbound atomic.Bool
 }
 
 func DialSession(ctx context.Context, identity Identity) (*Session, error) {
@@ -269,7 +271,7 @@ func (session *Session) readLoop() {
 				return
 			}
 			session.removeStream(stream.id)
-			stream.finish(io.EOF)
+			stream.finishAfterInboundDrain()
 		}
 	}
 }
@@ -356,10 +358,28 @@ func (stream *relayStream) Read(buffer []byte) (int, error) {
 	stream.readMu.Lock()
 	defer stream.readMu.Unlock()
 	for len(stream.remaining) == 0 {
+		if stream.terminal.Load() && !stream.drainInbound.Load() {
+			return 0, io.EOF
+		}
+		if stream.drainInbound.Load() {
+			select {
+			case value := <-stream.inbound:
+				stream.remaining = value
+				continue
+			default:
+				return 0, io.EOF
+			}
+		}
 		select {
 		case value := <-stream.inbound:
+			if stream.terminal.Load() && !stream.drainInbound.Load() {
+				return 0, io.EOF
+			}
 			stream.remaining = value
 		case <-stream.done:
+			if stream.drainInbound.Load() {
+				continue
+			}
 			return 0, io.EOF
 		}
 	}
@@ -411,7 +431,15 @@ func (stream *relayStream) resolve(err error) {
 
 func (stream *relayStream) finish(err error) {
 	stream.resolve(err)
-	stream.finishOnce.Do(func() { close(stream.done) })
+	stream.finishOnce.Do(func() {
+		stream.terminal.Store(true)
+		close(stream.done)
+	})
+}
+
+func (stream *relayStream) finishAfterInboundDrain() {
+	stream.drainInbound.Store(true)
+	stream.finish(io.EOF)
 }
 
 func newStreamID() (string, error) {

@@ -15,7 +15,7 @@ Device credentials are certificate-backed. The relay verifies active certificate
 
 ## Destination policy
 
-The relay resolves requested hostnames then rejects any candidate address that is loopback, unspecified, private, carrier-grade NAT, link-local, multicast, documentation-only, benchmark, or otherwise non-global-unicast. The Android agent validates the supplied IP again before connecting. SOCKS5 supports `CONNECT` only.
+The relay resolves requested hostnames then rejects any candidate address that is loopback, unspecified, private, carrier-grade NAT, link-local, multicast, documentation-only, benchmark, or otherwise non-global-unicast. IPv6 literals are public only when they fall within `2000::/3`, excluding special/tunneling ranges including `2001::/23`, `2002::/16`, and `3fff::/20`; transition and embedded-IPv4 ranges outside `2000::/3` fail closed. This strict literal policy follows the [IANA IPv6 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml). The Android agent validates the supplied IP again before connecting. SOCKS5 supports `CONNECT` only.
 
 ## Logging and privacy
 

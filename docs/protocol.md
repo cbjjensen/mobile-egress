@@ -24,7 +24,7 @@ Stream IDs are non-empty, bounded, opaque base64url values for stream messages a
 ## Stream lifecycle
 
 1. Windows receives a SOCKS5 `CONNECT` request and sends the requested host and port to the relay.
-2. Relay resolves/validates the destination and creates a stream ID.
+2. Relay resolves/validates the destination and creates a stream ID. Public IPv6 candidates must be in `2000::/3` and outside special/tunneling ranges such as `2001::/23`, `2002::/16`, and `3fff::/20`, following the [IANA IPv6 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml); candidates outside that policy fail closed.
 3. Relay sends `open` to Android; Android validates the IP, binds a socket to cellular, then replies `opened` or `rejected`.
 4. Relay returns SOCKS success only after `opened`.
 5. Both peers exchange ordered `data` frames until either sends `close`.

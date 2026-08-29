@@ -6,6 +6,8 @@ import java.net.InetAddress
 class DestinationRejected : IllegalArgumentException("Destination is not a public TCP address")
 
 object PublicAddressPolicy {
+    private val publicIpv6Prefix = prefix("2000::", 3)
+
     private val forbiddenPrefixes = listOf(
         prefix("0.0.0.0", 8),
         prefix("10.0.0.0", 8),
@@ -25,8 +27,11 @@ object PublicAddressPolicy {
         prefix("::", 128),
         prefix("::1", 128),
         prefix("100::", 64),
+        prefix("2001::", 23),
         prefix("2001:2::", 48),
         prefix("2001:db8::", 32),
+        prefix("2002::", 16),
+        prefix("3fff::", 20),
         prefix("fc00::", 7),
         prefix("fe80::", 10),
         prefix("ff00::", 8),
@@ -41,6 +46,7 @@ object PublicAddressPolicy {
             address.isLinkLocalAddress ||
             address.isSiteLocalAddress ||
             address.isMulticastAddress ||
+            (address is Inet6Address && !publicIpv6Prefix.contains(address.address)) ||
             forbiddenPrefixes.any { it.contains(address.address) }
         ) {
             throw DestinationRejected()
@@ -53,7 +59,7 @@ object PublicAddressPolicy {
         if (':' in value) {
             if (value.any { it !in "0123456789abcdefABCDEF:." }) return null
             return try {
-                InetAddress.getByName(value).takeIf { it is Inet6Address || it.address.size == 4 }
+                InetAddress.getByName(value).takeIf { it is Inet6Address }
             } catch (_: Exception) {
                 null
             }

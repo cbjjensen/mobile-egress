@@ -6,6 +6,8 @@ import (
 	"net/netip"
 )
 
+var publicIPv6Prefix = netip.MustParsePrefix("2000::/3")
+
 var nonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
@@ -23,8 +25,11 @@ var nonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("224.0.0.0/4"),
 	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
 	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
 	netip.MustParsePrefix("fc00::/7"),
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("ff00::/8"),
@@ -45,8 +50,12 @@ func ValidatePublicTCPAddress(address netip.Addr, port int) error {
 		return fmt.Errorf("TCP port %d is outside the valid range", port)
 	}
 
+	if !address.IsValid() || (address.Is6() && !publicIPv6Prefix.Contains(address)) {
+		return fmt.Errorf("destination address is not public")
+	}
+
 	address = address.Unmap()
-	if !address.IsValid() || !address.IsGlobalUnicast() || address.IsPrivate() {
+	if !address.IsGlobalUnicast() || address.IsPrivate() {
 		return fmt.Errorf("destination address is not public")
 	}
 

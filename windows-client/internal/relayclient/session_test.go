@@ -82,6 +82,7 @@ func TestUnreadStreamDoesNotBlockOtherStreamFrames(t *testing.T) {
 	t.Parallel()
 
 	sendFlood := make(chan struct{})
+	allowServerClose := make(chan struct{})
 	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
 		first := readTestWireEnvelope(t, connection)
 		writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: first.StreamID})
@@ -96,11 +97,13 @@ func TestUnreadStreamDoesNotBlockOtherStreamFrames(t *testing.T) {
 			next := readTestWireEnvelope(t, connection)
 			if next.Type == "open" {
 				writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: next.StreamID})
+				<-allowServerClose
 				return
 			}
 		}
 	})
 	defer fixture.Close()
+	defer close(allowServerClose)
 	session, err := DialSession(context.Background(), fixture.identity)
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +123,80 @@ func TestUnreadStreamDoesNotBlockOtherStreamFrames(t *testing.T) {
 		t.Fatalf("second stream was blocked by unread first stream: %v", err)
 	}
 	defer second.Close()
+}
+
+func TestSessionDrainsRelayDataBeforeNormalCloseForDelayedConsumer(t *testing.T) {
+	const (
+		attempts        = 12
+		framesPerStream = 4
+	)
+
+	readyForClose := make(chan string)
+	allowClose := make(chan struct{})
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		for attempt := 0; attempt < attempts; attempt++ {
+			open := readTestWireEnvelope(t, connection)
+			writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: open.StreamID})
+			readyForClose <- open.StreamID
+			<-allowClose
+			for frame := 0; frame < framesPerStream; frame++ {
+				writeWireEnvelope(t, connection, wireEnvelope{
+					Version: 1, Type: "data", StreamID: open.StreamID,
+					Payload: base64.RawURLEncoding.EncodeToString([]byte{byte('a' + frame)}),
+				})
+			}
+			writeWireEnvelope(t, connection, wireEnvelope{
+				Version: 1, Type: "close", StreamID: open.StreamID,
+				Payload: base64.RawURLEncoding.EncodeToString([]byte("target_closed")),
+			})
+		}
+	})
+	defer fixture.Close()
+
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	for attempt := 0; attempt < attempts; attempt++ {
+		opened, err := session.OpenStream(context.Background(), "drain.example", 443)
+		if err != nil {
+			t.Fatalf("open stream %d: %v", attempt, err)
+		}
+		stream := opened.(*relayStream)
+		if stream.id != <-readyForClose {
+			t.Fatalf("stream %d readiness id mismatch", attempt)
+		}
+		allowClose <- struct{}{}
+
+		select {
+		case <-stream.done:
+		case <-time.After(time.Second):
+			t.Fatalf("stream %d did not process relay close", attempt)
+		}
+
+		payload := make([]byte, framesPerStream)
+		if _, err := io.ReadFull(stream, payload); err != nil {
+			t.Fatalf("stream %d lost data accepted before close: %v", attempt, err)
+		}
+		if string(payload) != "abcd" {
+			t.Fatalf("stream %d payload = %q, want abcd", attempt, payload)
+		}
+		if count, err := stream.Read(make([]byte, 1)); count != 0 || err != io.EOF {
+			t.Fatalf("stream %d post-drain read = (%d, %v), want (0, EOF)", attempt, count, err)
+		}
+	}
+}
+
+func TestRelayStreamLocalTerminalDoesNotDrainBufferedInbound(t *testing.T) {
+	stream := &relayStream{inbound: make(chan []byte, 1), done: make(chan struct{}), openResult: make(chan error, 1)}
+	stream.inbound <- []byte("accepted-before-local-close")
+	stream.finish(io.EOF)
+
+	if count, err := stream.Read(make([]byte, 1)); count != 0 || err != io.EOF {
+		t.Fatalf("local terminal read = (%d, %v), want (0, EOF)", count, err)
+	}
 }
 
 type sessionFixture struct {
