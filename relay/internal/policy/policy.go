@@ -34,6 +34,13 @@ var nonPublicPrefixes = []netip.Prefix{
 // port is a valid TCP port number. Callers must resolve host names before using
 // this function.
 func ValidatePublicTCPDestination(address netip.Addr, port int) error {
+	return ValidatePublicTCPAddress(address, port)
+}
+
+// ValidatePublicTCPAddress confirms that a relay-resolved address is safe for
+// an outbound TCP connection. ValidatePublicTCPDestination remains as a
+// compatibility name for Task 1 consumers.
+func ValidatePublicTCPAddress(address netip.Addr, port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("TCP port %d is outside the valid range", port)
 	}

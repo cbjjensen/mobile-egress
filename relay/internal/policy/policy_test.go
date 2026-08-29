@@ -20,6 +20,17 @@ func TestValidatePublicTCPDestinationAcceptsPublicAddresses(t *testing.T) {
 	}
 }
 
+func TestValidatePublicTCPAddressPreservesDestinationPolicyAPI(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidatePublicTCPAddress(netip.MustParseAddr("1.1.1.1"), 443); err != nil {
+		t.Fatalf("ValidatePublicTCPAddress() rejected a public target: %v", err)
+	}
+	if err := ValidatePublicTCPAddress(netip.MustParseAddr("127.0.0.1"), 443); err == nil {
+		t.Fatal("ValidatePublicTCPAddress() accepted loopback")
+	}
+}
+
 func TestValidatePublicTCPDestinationRejectsNonPublicAddresses(t *testing.T) {
 	t.Parallel()
 

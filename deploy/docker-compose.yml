@@ -1,0 +1,39 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
+    restart: unless-stopped
+    command:
+      - serve
+      - --state-dir
+      - /var/lib/mobile-egress/state
+      - --listen
+      - ${RELAY_LISTEN:-0.0.0.0:8443}
+    ports:
+      - "${RELAY_PORT:-8443}:8443/tcp"
+    volumes:
+      - ./data:/var/lib/mobile-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --no-check-certificate -q -O - https://127.0.0.1:8443/healthz | grep -q '"readiness":true'
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  relay-init:
+    profiles:
+      - init
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
+    command:
+      - init
+      - --state-dir
+      - /var/lib/mobile-egress/state
+      - --public-name
+      - ${RELAY_PUBLIC_NAME:-relay.example.com}
+    volumes:
+      - ./data:/var/lib/mobile-egress
