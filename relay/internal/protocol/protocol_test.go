@@ -71,3 +71,30 @@ func TestParseEnvelopeRejectsPayloadOverOneMiB(t *testing.T) {
 		t.Fatal("ParseEnvelope() accepted a payload larger than one MiB")
 	}
 }
+
+func TestParseEnvelopeRejectsConcatenatedJSONValues(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"version":1,"type":"ping","streamId":"","payload":""}null`
+	if _, err := ParseEnvelope([]byte(raw)); err == nil {
+		t.Fatal("ParseEnvelope() accepted concatenated JSON values")
+	}
+}
+
+func TestParseEnvelopeRejectsAlternateCasedFieldNames(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"Version":1,"type":"ping","streamId":"","payload":""}`
+	if _, err := ParseEnvelope([]byte(raw)); err == nil {
+		t.Fatal("ParseEnvelope() accepted an alternate-cased field name")
+	}
+}
+
+func TestParseEnvelopeRejectsDuplicateRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"version":2,"version":1,"type":"ping","streamId":"","payload":""}`
+	if _, err := ParseEnvelope([]byte(raw)); err == nil {
+		t.Fatal("ParseEnvelope() accepted duplicate required fields")
+	}
+}

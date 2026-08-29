@@ -41,34 +41,41 @@ type Envelope struct {
 	Payload  string      `json:"payload"`
 }
 
-type rawEnvelope struct {
-	Version  *int         `json:"version"`
-	Type     *MessageType `json:"type"`
-	StreamID *string      `json:"streamId"`
-	Payload  *string      `json:"payload"`
-}
-
 // ParseEnvelope decodes and validates a v1 JSON envelope.
 func ParseEnvelope(raw []byte) (Envelope, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-
-	var decoded rawEnvelope
-	if err := decoder.Decode(&decoded); err != nil {
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
 		return Envelope{}, fmt.Errorf("%w: malformed JSON", ErrInvalidEnvelope)
 	}
-	if err := ensureEOF(decoder); err != nil {
-		return Envelope{}, fmt.Errorf("%w: trailing JSON", ErrInvalidEnvelope)
-	}
-	if decoded.Version == nil || decoded.Type == nil || decoded.StreamID == nil || decoded.Payload == nil {
-		return Envelope{}, fmt.Errorf("%w: required field missing", ErrInvalidEnvelope)
+
+	var envelope Envelope
+	seen := make(map[string]bool, 4)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return Envelope{}, fmt.Errorf("%w: malformed JSON", ErrInvalidEnvelope)
+		}
+		key, ok := token.(string)
+		if !ok || !isEnvelopeKey(key) || seen[key] {
+			return Envelope{}, fmt.Errorf("%w: invalid envelope field", ErrInvalidEnvelope)
+		}
+		seen[key] = true
+
+		if err := decodeEnvelopeField(decoder, key, &envelope); err != nil {
+			return Envelope{}, err
+		}
 	}
 
-	envelope := Envelope{
-		Version:  *decoded.Version,
-		Type:     *decoded.Type,
-		StreamID: *decoded.StreamID,
-		Payload:  *decoded.Payload,
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return Envelope{}, fmt.Errorf("%w: malformed JSON", ErrInvalidEnvelope)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return Envelope{}, fmt.Errorf("%w: trailing JSON", ErrInvalidEnvelope)
+	}
+	if len(seen) != 4 {
+		return Envelope{}, fmt.Errorf("%w: required field missing", ErrInvalidEnvelope)
 	}
 	if err := envelope.Validate(); err != nil {
 		return Envelope{}, err
@@ -115,14 +122,38 @@ func (envelope Envelope) DecodePayload() ([]byte, error) {
 	}
 	return payload, nil
 }
-
-func ensureEOF(decoder *json.Decoder) error {
-	var extra any
-	err := decoder.Decode(&extra)
-	if err == io.EOF {
-		return nil
+func decodeEnvelopeField(decoder *json.Decoder, key string, envelope *Envelope) error {
+	switch key {
+	case "version":
+		var value *int
+		if err := decoder.Decode(&value); err != nil || value == nil {
+			return fmt.Errorf("%w: invalid version", ErrInvalidEnvelope)
+		}
+		envelope.Version = *value
+	case "type":
+		var value *MessageType
+		if err := decoder.Decode(&value); err != nil || value == nil {
+			return fmt.Errorf("%w: invalid message type", ErrInvalidEnvelope)
+		}
+		envelope.Type = *value
+	case "streamId":
+		var value *string
+		if err := decoder.Decode(&value); err != nil || value == nil {
+			return fmt.Errorf("%w: invalid stream ID", ErrInvalidEnvelope)
+		}
+		envelope.StreamID = *value
+	case "payload":
+		var value *string
+		if err := decoder.Decode(&value); err != nil || value == nil {
+			return fmt.Errorf("%w: invalid payload", ErrInvalidEnvelope)
+		}
+		envelope.Payload = *value
 	}
-	return err
+	return nil
+}
+
+func isEnvelopeKey(key string) bool {
+	return key == "version" || key == "type" || key == "streamId" || key == "payload"
 }
 
 func isValidMessageType(messageType MessageType) bool {
