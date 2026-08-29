@@ -2,6 +2,7 @@ package com.mobileegress.agent.security
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.mobileegress.agent.pairing.EnrollmentCredentialKeys
 import java.io.StringWriter
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -20,10 +21,10 @@ data class DeviceKey(
     val publicKey: PublicKey,
 )
 
-class DeviceKeyStore {
+class DeviceKeyStore : EnrollmentCredentialKeys {
     private fun keyStore(): KeyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
 
-    fun create(): DeviceKey {
+    override fun create(): DeviceKey {
         val alias = "$DEVICE_KEY_PREFIX${UUID.randomUUID()}"
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEY_STORE)
         generator.initialize(
@@ -42,13 +43,13 @@ class DeviceKeyStore {
 
     fun privateKey(alias: String): PrivateKey? = keyStore().getKey(alias, null) as? PrivateKey
 
-    fun delete(alias: String) {
+    override fun delete(alias: String) {
         if (alias.startsWith(DEVICE_KEY_PREFIX)) {
             keyStore().deleteEntry(alias)
         }
     }
 
-    fun createCsrPem(deviceKey: DeviceKey): String {
+    override fun createCsrPem(deviceKey: DeviceKey): String {
         val request = JcaPKCS10CertificationRequestBuilder(
             X500Principal("CN=mobile-egress-android"),
             deviceKey.publicKey,

@@ -3,6 +3,7 @@ package com.mobileegress.agent.security
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.mobileegress.agent.pairing.AgentIdentityPersistence
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.Base64
@@ -25,12 +26,12 @@ data class AgentIdentity(
 
 class CredentialStoreException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-class SecureIdentityStore(context: Context) {
+class SecureIdentityStore(context: Context) : AgentIdentityPersistence {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = false }
 
     @Synchronized
-    fun load(): AgentIdentity? {
+    override fun load(): AgentIdentity? {
         val stored = preferences.getString(IDENTITY, null) ?: return null
         return try {
             val pieces = stored.split(':')
@@ -52,7 +53,7 @@ class SecureIdentityStore(context: Context) {
     }
 
     @Synchronized
-    fun save(identity: AgentIdentity) {
+    override fun save(identity: AgentIdentity) {
         require(identity.role == "agent")
         try {
             val iv = ByteArray(12).also(SecureRandom()::nextBytes)

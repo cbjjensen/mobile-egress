@@ -14,7 +14,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 
-internal fun testCaPem(): String {
+internal fun testCaPem(keyUsage: Int? = KeyUsage.keyCertSign or KeyUsage.digitalSignature): String {
     val keys = KeyPairGenerator.getInstance("EC").apply {
         initialize(ECGenParameterSpec("secp256r1"))
     }.generateKeyPair()
@@ -28,7 +28,9 @@ internal fun testCaPem(): String {
         keys.public,
     )
     builder.addExtension(Extension.basicConstraints, true, BasicConstraints(true))
-    builder.addExtension(Extension.keyUsage, true, KeyUsage(KeyUsage.keyCertSign or KeyUsage.digitalSignature))
+    if (keyUsage != null) {
+        builder.addExtension(Extension.keyUsage, true, KeyUsage(keyUsage))
+    }
     val certificate = JcaX509CertificateConverter().getCertificate(
         builder.build(JcaContentSignerBuilder("SHA256withECDSA").build(keys.private)),
     )

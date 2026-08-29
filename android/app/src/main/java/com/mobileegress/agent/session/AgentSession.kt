@@ -48,7 +48,10 @@ class AgentSession(
 ) {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.IO)
-    private val outbound = Channel<ByteArray>(capacity = OUTBOUND_QUEUE_CAPACITY)
+    private val outbound = OutboundMailbox(
+        controlCapacity = OUTBOUND_CONTROL_QUEUE_CAPACITY,
+        dataCapacity = OUTBOUND_DATA_QUEUE_CAPACITY,
+    )
     private val streams = java.util.concurrent.ConcurrentHashMap<String, TargetStream>()
     private val admission = StreamAdmission(MAX_AGENT_STREAMS)
     private val closed = AtomicBoolean(false)
@@ -132,17 +135,22 @@ class AgentSession(
     }
 
     private suspend fun writeLoop(socket: WebSocket) {
-        for (message in outbound) {
-            if (!socket.send(message.toByteString())) {
-                terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
-                return
+        try {
+            while (true) {
+                val message = outbound.receive() ?: return
+                if (!socket.send(message.toByteString())) {
+                    terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
+                    return
+                }
             }
+        } catch (_: Exception) {
+            terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
         }
     }
 
     private fun handleEnvelope(envelope: WireEnvelope) {
         when (envelope.type) {
-            "ping" -> if (!enqueue("pong")) terminate(ErrorClass.Backpressure, false)
+            "ping" -> enqueueRequiredControl("pong")
             "pong" -> Unit
             "open" -> openStream(envelope)
             "data" -> routeData(envelope)
@@ -179,6 +187,7 @@ class AgentSession(
             return
         }
         val stream = TargetStream(envelope.streamId, socket)
+        outbound.allowData(stream.id)
         streams[envelope.streamId] = stream
         publishStreamCount()
         scope.launch {
@@ -186,10 +195,7 @@ class AgentSession(
                 stream.socket.connect(InetSocketAddress(address, target.port), TARGET_CONNECT_TIMEOUT_MILLIS)
                 stream.socket.tcpNoDelay = true
                 if (stream.closed.get() || closed.get()) return@launch
-                if (!enqueue("opened", stream.id)) {
-                    closeStream(stream, "target_failure", notifyRelay = false, ErrorClass.Backpressure)
-                    return@launch
-                }
+                if (!enqueueRequiredControl("opened", stream.id)) return@launch
                 stream.reader = launch { targetReadLoop(stream) }
                 stream.writer = launch { targetWriteLoop(stream) }
             } catch (_: Exception) {
@@ -231,7 +237,7 @@ class AgentSession(
                 if (read < 0) break
                 if (read == 0) continue
                 val chunk = buffer.copyOf(read)
-                if (!enqueue("data", stream.id, chunk)) {
+                if (!enqueueData(stream.id, chunk)) {
                     closeStream(stream, "target_failure", notifyRelay = true, ErrorClass.Backpressure)
                     return
                 }
@@ -257,9 +263,7 @@ class AgentSession(
     }
 
     private fun reject(streamId: String, code: String) {
-        if (!enqueue("rejected", streamId, WireProtocol.finiteErrorCode(code))) {
-            terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
-        }
+        enqueueRequiredControl("rejected", streamId, WireProtocol.finiteErrorCode(code))
     }
 
     private fun closeStream(
@@ -269,6 +273,10 @@ class AgentSession(
         errorClass: ErrorClass,
     ) {
         if (!stream.closed.compareAndSet(false, true)) return
+        outbound.blockAndDiscardData(stream.id)
+        if (notifyRelay && !closed.get()) {
+            if (!enqueueRequiredControl("close", stream.id, WireProtocol.finiteErrorCode(code))) return
+        }
         streams.remove(stream.id, stream)
         admission.release(stream.id)
         rememberTombstone(stream.id)
@@ -280,9 +288,6 @@ class AgentSession(
         }
         stream.reader?.cancel()
         stream.writer?.cancel()
-        if (notifyRelay && !closed.get()) {
-            enqueue("close", stream.id, WireProtocol.finiteErrorCode(code))
-        }
         AgentStatusBus.update {
             it.copy(
                 activeStreams = admission.size,
@@ -291,8 +296,19 @@ class AgentSession(
         }
     }
 
-    private fun enqueue(type: String, streamId: String = "", payload: ByteArray = byteArrayOf()): Boolean =
-        !closed.get() && outbound.trySend(WireProtocol.encode(type, streamId, payload)).isSuccess
+    private fun enqueueData(streamId: String, payload: ByteArray): Boolean =
+        !closed.get() && outbound.offerData(streamId, WireProtocol.encode("data", streamId, payload))
+
+    private fun enqueueRequiredControl(
+        type: String,
+        streamId: String = "",
+        payload: ByteArray = byteArrayOf(),
+    ): Boolean {
+        if (closed.get()) return false
+        return outbound.offerRequiredControl(WireProtocol.encode(type, streamId, payload)) {
+            terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
+        }
+    }
 
     private fun protocolFailure(socket: WebSocket) {
         socket.close(POLICY_VIOLATION_CLOSE, "protocol_error")
@@ -305,13 +321,12 @@ class AgentSession(
         outbound.close()
         admission.clear()
         streams.values.toList().forEach { stream ->
-            if (stream.closed.compareAndSet(false, true)) {
-                stream.inbound.close()
-                try {
-                    stream.socket.close()
-                } catch (_: Exception) {
-                    // Session teardown is best effort.
-                }
+            stream.closed.set(true)
+            stream.inbound.close()
+            try {
+                stream.socket.close()
+            } catch (_: Exception) {
+                // Session teardown is best effort.
             }
         }
         streams.clear()
@@ -348,7 +363,8 @@ class AgentSession(
     companion object {
         private const val MAX_AGENT_STREAMS = 8
         private const val MAX_TOMBSTONES = 32
-        private const val OUTBOUND_QUEUE_CAPACITY = 64
+        private const val OUTBOUND_CONTROL_QUEUE_CAPACITY = 32
+        private const val OUTBOUND_DATA_QUEUE_CAPACITY = 64
         private const val STREAM_INBOUND_QUEUE_CAPACITY = 4
         private const val STREAM_CHUNK_BYTES = 32 * 1024
         private const val TARGET_CONNECT_TIMEOUT_MILLIS = 30_000

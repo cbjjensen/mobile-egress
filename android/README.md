@@ -6,9 +6,11 @@ This directory is a standalone Kotlin/Jetpack Compose Android application for a 
 
 - Pair only with the exact, immutable base64url Agent bundle supplied by an enrolled owner. The bundle must contain version 1, an HTTPS relay origin, one CA certificate, the `agent` role, a nonempty one-use capability, and an unexpired RFC 3339 expiry.
 - Pairing generates a P-256 key in AndroidKeyStore and sends a signed CSR only after TLS verifies against the bundle CA. A returned CA mismatch, certificate/key mismatch, serial mismatch, or non-Agent identity is rejected.
+- Pairing CAs must explicitly permit certificate signing. Re-pair commits the new encrypted identity before best-effort removal of the old key; failed old-key cleanup can leave an unreferenced orphan and cannot roll back or delete the new key.
 - The private device key is non-exportable. The issued certificate material and relay identity are AES-GCM encrypted with a separate AndroidKeyStore key. The one-use bundle and capability are not persisted.
 - The foreground service can start only from the visible app Start action (or its visible notification Stop action), returns `START_NOT_STICKY`, and has no boot receiver. Its `specialUse` declaration documents the personal sideloaded relay use case.
 - Relay TLS and every target TCP socket use the selected cellular `Network`. Cellular loss closes the WebSocket and all target streams; an available Wi-Fi path is never selected as fallback.
+- Opaque stream data and protocol control frames use separate bounded queues. `opened`, `rejected`, and terminal `close` frames are serviced first; if their dedicated path saturates, the whole WebSocket closes so the relay performs session cleanup.
 - UI, notifications, copied status, and application code expose only aggregate state, stream counts, byte totals, and finite error classes. The app does not log payloads, target values, certificates, capabilities, or keys.
 
 ## Local build

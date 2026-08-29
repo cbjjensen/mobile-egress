@@ -6,10 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.mobileegress.agent.network.CellularNetworkAcquirer
 import com.mobileegress.agent.network.CellularUnavailable
 import com.mobileegress.agent.pairing.EnrollmentClient
+import com.mobileegress.agent.pairing.CellularEnrollmentPerformer
 import com.mobileegress.agent.pairing.EnrollmentException
 import com.mobileegress.agent.pairing.EnrollmentRepository
 import com.mobileegress.agent.pairing.PairingBundleException
 import com.mobileegress.agent.pairing.PairingBundleParser
+import com.mobileegress.agent.pairing.PairingController
+import com.mobileegress.agent.pairing.PairingEvent
+import com.mobileegress.agent.pairing.PairingState
 import com.mobileegress.agent.security.CredentialStoreException
 import com.mobileegress.agent.security.DeviceKeyStore
 import com.mobileegress.agent.security.SecureIdentityStore
@@ -33,13 +37,17 @@ data class MainUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val identityStore = SecureIdentityStore(application)
     private val enrollmentRepository = EnrollmentRepository(
-        parser = PairingBundleParser(),
-        networkAcquirer = CellularNetworkAcquirer(application),
-        deviceKeyStore = DeviceKeyStore(),
-        identityStore = identityStore,
-        enrollmentClient = EnrollmentClient(),
+        decoder = PairingBundleParser(),
+        credentialKeys = DeviceKeyStore(),
+        identityPersistence = identityStore,
+        enrollmentPerformer = CellularEnrollmentPerformer(
+            CellularNetworkAcquirer(application),
+            EnrollmentClient(),
+        ),
     )
-    private val mutableState = MutableStateFlow(initialState())
+    private val initialUiState = initialState()
+    private val pairingController = PairingController(initialUiState.paired)
+    private val mutableState = MutableStateFlow(initialUiState)
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
 
     init {
@@ -51,24 +59,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updatePairingBundle(value: String) {
-        mutableState.update { it.copy(pairingBundle = value, pairingStatus = if (it.paired) "Paired" else "Unpaired") }
+        mutableState.update {
+            it.copy(
+                pairingBundle = value,
+                pairingStatus = if (pairingController.state == PairingState.Paired) "Paired" else "Unpaired",
+            )
+        }
     }
 
     fun pair() {
         val immutableBundle = mutableState.value.pairingBundle
         if (immutableBundle.isBlank() || mutableState.value.pairingInProgress) return
+        pairingController.reduce(PairingEvent.PairRequested)
         mutableState.update {
             it.copy(pairingBundle = "", pairingInProgress = true, pairingStatus = "Pairing")
         }
         viewModelScope.launch {
             val result = runCatching { enrollmentRepository.pair(immutableBundle) }
             val error = result.exceptionOrNull()
+            val pairingState = pairingController.reduce(
+                if (result.isSuccess) PairingEvent.PairSucceeded else PairingEvent.PairFailed,
+            )
             mutableState.update {
                 if (result.isSuccess) {
-                    it.copy(pairingInProgress = false, paired = true, pairingStatus = "Paired")
+                    it.copy(
+                        pairingInProgress = false,
+                        paired = pairingState == PairingState.Paired,
+                        pairingStatus = "Paired",
+                    )
                 } else {
                     it.copy(
                         pairingInProgress = false,
+                        paired = pairingState == PairingState.Paired,
                         pairingStatus = when (error) {
                             is PairingBundleException -> "Pairing bundle rejected"
                             is CellularUnavailable -> "Cellular unavailable"

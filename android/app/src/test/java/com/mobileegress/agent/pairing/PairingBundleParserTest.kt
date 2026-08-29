@@ -5,6 +5,7 @@ import java.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.bouncycastle.asn1.x509.KeyUsage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -44,6 +45,8 @@ class PairingBundleParserTest {
         listOf(
             bundle(caPem = ""),
             bundle(caPem = "not-a-certificate"),
+            bundle(caPem = testCaPem(KeyUsage.digitalSignature)),
+            bundle(caPem = testCaPem(keyUsage = null)),
             bundle(capability = "   "),
             bundle(expiresAt = ""),
             bundle(expiresAt = "not-a-time"),

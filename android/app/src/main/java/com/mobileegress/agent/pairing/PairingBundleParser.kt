@@ -28,9 +28,13 @@ data class PairingBundle(
 
 class PairingBundleException(message: String) : IllegalArgumentException(message)
 
+fun interface PairingDecoder {
+    fun parse(input: String): PairingBundle
+}
+
 class PairingBundleParser(
     private val now: () -> Instant = Instant::now,
-) {
+) : PairingDecoder {
     private val json = Json {
         ignoreUnknownKeys = false
         isLenient = false
@@ -39,7 +43,7 @@ class PairingBundleParser(
         allowTrailingComma = false
     }
 
-    fun parse(input: String): PairingBundle {
+    override fun parse(input: String): PairingBundle {
         val encoded = input.trim()
         if (encoded.isEmpty() || encoded.length > MAX_ENCODED_BYTES || !BASE64URL.matches(encoded)) {
             throw PairingBundleException("Pairing bundle is not unpadded base64url")
@@ -143,7 +147,7 @@ class PairingBundleParser(
                 throw PairingBundleException("Pairing bundle CA is not currently valid")
             }
             val keyUsage = certificate.keyUsage
-            if (certificate.basicConstraints < 0 || (keyUsage != null && (keyUsage.size <= 5 || !keyUsage[5]))) {
+            if (certificate.basicConstraints < 0 || keyUsage == null || keyUsage.size <= 5 || !keyUsage[5]) {
                 throw PairingBundleException("Pairing bundle certificate is not a CA")
             }
             return certificate
