@@ -1,0 +1,282 @@
+package socks
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+)
+
+type fakeOpener struct {
+	mu          sync.Mutex
+	healthy     bool
+	openGate    <-chan struct{}
+	opened      int
+	openCalls   int
+	remoteConns []net.Conn
+}
+
+func (opener *fakeOpener) Healthy() bool { return opener.healthy }
+
+func (opener *fakeOpener) OpenStream(ctx context.Context, host string, port uint16) (io.ReadWriteCloser, error) {
+	opener.mu.Lock()
+	opener.openCalls++
+	opener.mu.Unlock()
+	if opener.openGate != nil {
+		select {
+		case <-opener.openGate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if !opener.healthy {
+		return nil, ErrRelayUnavailable
+	}
+	client, remote := net.Pipe()
+	opener.mu.Lock()
+	opener.opened++
+	opener.remoteConns = append(opener.remoteConns, remote)
+	opener.mu.Unlock()
+	return client, nil
+}
+
+func (opener *fakeOpener) latestRemote(t *testing.T) net.Conn {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		opener.mu.Lock()
+		if len(opener.remoteConns) > 0 {
+			remote := opener.remoteConns[len(opener.remoteConns)-1]
+			opener.mu.Unlock()
+			return remote
+		}
+		opener.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stream was not opened")
+	return nil
+}
+
+func TestServerBindsOnlyIPv4Loopback(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(Config{Username: "user", Password: "password", Opener: &fakeOpener{healthy: true}})
+	if err := server.Start(0); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+
+	address := server.Addr()
+	if address == nil || address.IP.String() != "127.0.0.1" {
+		t.Fatalf("listener address = %v, want 127.0.0.1", address)
+	}
+}
+
+func TestServerRequiresRFC1929UsernamePasswordAuthentication(t *testing.T) {
+	t.Parallel()
+
+	server := startTestServer(t, &fakeOpener{healthy: true})
+	defer server.Stop()
+
+	connection := dialServer(t, server)
+	defer connection.Close()
+	writeAll(t, connection, []byte{5, 1, 0})
+	readEqual(t, connection, []byte{5, 0xff})
+
+	connection = dialServer(t, server)
+	defer connection.Close()
+	writeAll(t, connection, []byte{5, 1, 2})
+	readEqual(t, connection, []byte{5, 2})
+	writeAll(t, connection, authRequest("wrong", "password"))
+	readEqual(t, connection, []byte{1, 1})
+
+	connection = dialServer(t, server)
+	defer connection.Close()
+	writeAll(t, connection, []byte{5, 1, 2})
+	readEqual(t, connection, []byte{5, 2})
+	writeAll(t, connection, authRequest("user", "password"))
+	readEqual(t, connection, []byte{1, 0})
+}
+
+func TestConnectWaitsForRelayOpenedThenRoutesBytesBothDirections(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	opener := &fakeOpener{healthy: true, openGate: gate}
+	server := startTestServer(t, opener)
+	defer server.Stop()
+	connection := authenticatedConnection(t, server)
+	defer connection.Close()
+
+	writeAll(t, connection, connectDomainRequest(1, "example.test", 443))
+	_ = connection.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	one := make([]byte, 1)
+	if _, err := connection.Read(one); err == nil {
+		t.Fatal("SOCKS success was sent before relay stream opened")
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	close(gate)
+	readEqual(t, connection, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
+
+	remote := opener.latestRemote(t)
+	defer remote.Close()
+	writeAll(t, connection, []byte("upstream"))
+	readEqual(t, remote, []byte("upstream"))
+	writeAll(t, remote, []byte("downstream"))
+	readEqual(t, connection, []byte("downstream"))
+}
+
+func TestServerRejectsBindAndUDPWithoutOpeningRelayStream(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []byte{2, 3} {
+		command := command
+		t.Run(strconv.Itoa(int(command)), func(t *testing.T) {
+			opener := &fakeOpener{healthy: true}
+			server := startTestServer(t, opener)
+			defer server.Stop()
+			connection := authenticatedConnection(t, server)
+			defer connection.Close()
+
+			writeAll(t, connection, connectDomainRequest(command, "blocked.example", 53))
+			readEqual(t, connection, []byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+			opener.mu.Lock()
+			calls := opener.openCalls
+			opener.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("OpenStream calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestServerRejectsConnectWhenRelayAgentIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	opener := &fakeOpener{healthy: false}
+	server := startTestServer(t, opener)
+	defer server.Stop()
+	connection := authenticatedConnection(t, server)
+	defer connection.Close()
+
+	writeAll(t, connection, connectDomainRequest(1, "not-recorded.example", 443))
+	readEqual(t, connection, []byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
+	opener.mu.Lock()
+	calls := opener.openCalls
+	opener.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("OpenStream calls = %d, want 0 for unhealthy agent", calls)
+	}
+}
+
+func TestServerCapsActiveStreamsAtFourAndStopClosesEveryConnection(t *testing.T) {
+	t.Parallel()
+
+	opener := &fakeOpener{healthy: true}
+	server := startTestServer(t, opener)
+	connections := make([]net.Conn, 0, 5)
+	for index := 0; index < 4; index++ {
+		connection := authenticatedConnection(t, server)
+		writeAll(t, connection, connectDomainRequest(1, "stream.example", 443))
+		readEqual(t, connection, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
+		connections = append(connections, connection)
+	}
+	fifth := authenticatedConnection(t, server)
+	writeAll(t, fifth, connectDomainRequest(1, "over-limit.example", 443))
+	readEqual(t, fifth, []byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
+	_ = fifth.Close()
+
+	if status := server.Status(); status.ActiveStreams != 4 {
+		t.Fatalf("active streams = %d, want 4", status.ActiveStreams)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if status := server.Status(); status.Running || status.ActiveStreams != 0 {
+		t.Fatalf("status after Stop() = %#v", status)
+	}
+	for _, connection := range connections {
+		_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+		if _, err := connection.Read(make([]byte, 1)); err == nil {
+			t.Fatal("client socket remained open after Stop()")
+		}
+		_ = connection.Close()
+	}
+	for _, remote := range opener.remoteConns {
+		_ = remote.SetReadDeadline(time.Now().Add(time.Second))
+		if _, err := remote.Read(make([]byte, 1)); err == nil {
+			t.Fatal("relay stream remained open after Stop()")
+		}
+		_ = remote.Close()
+	}
+}
+
+func startTestServer(t *testing.T, opener *fakeOpener) *Server {
+	t.Helper()
+	server := NewServer(Config{Username: "user", Password: "password", Opener: opener})
+	if err := server.Start(0); err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func dialServer(t *testing.T, server *Server) net.Conn {
+	t.Helper()
+	connection, err := net.DialTimeout("tcp4", server.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
+}
+
+func authenticatedConnection(t *testing.T, server *Server) net.Conn {
+	t.Helper()
+	connection := dialServer(t, server)
+	writeAll(t, connection, []byte{5, 1, 2})
+	readEqual(t, connection, []byte{5, 2})
+	writeAll(t, connection, authRequest("user", "password"))
+	readEqual(t, connection, []byte{1, 0})
+	return connection
+}
+
+func authRequest(username, password string) []byte {
+	request := []byte{1, byte(len(username))}
+	request = append(request, username...)
+	request = append(request, byte(len(password)))
+	request = append(request, password...)
+	return request
+}
+
+func connectDomainRequest(command byte, host string, port uint16) []byte {
+	request := []byte{5, command, 0, 3, byte(len(host))}
+	request = append(request, host...)
+	request = append(request, byte(port>>8), byte(port))
+	return request
+}
+
+func writeAll(t *testing.T, writer io.Writer, value []byte) {
+	t.Helper()
+	if _, err := writer.Write(value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readEqual(t *testing.T, reader io.Reader, want []byte) {
+	t.Helper()
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(reader, got); err != nil {
+		if errors.Is(err, io.EOF) {
+			t.Fatalf("read EOF, want %v", want)
+		}
+		t.Fatal(err)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("read = %v, want %v", got, want)
+		}
+	}
+}

@@ -23,6 +23,11 @@ android/**/build/
 
 # Desktop frontend
 windows-client/frontend/node_modules/
+windows-client/frontend/wailsjs/
+windows-client/frontend/package.json.md5
+windows-client/frontend/*.tsbuildinfo
+windows-client/internal/assets/bundle/*
+!windows-client/internal/assets/bundle/.keep
 windows-client/build/
 
 # Agent coordination scratch space
