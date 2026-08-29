@@ -18,18 +18,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,6 +37,11 @@ class MainActivity : ComponentActivity() {
     ) {
         viewModel.startAgent()
     }
+    private val cameraPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        viewModel.onCameraPermissionResult(granted)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,13 +50,29 @@ class MainActivity : ComponentActivity() {
             MobileEgressTheme {
                 AgentScreen(
                     state = state,
-                    onBundleChanged = viewModel::updatePairingBundle,
-                    onPair = viewModel::pair,
+                    onScanQr = ::scanQrFromVisibleUi,
+                    onCancelQrScan = viewModel::cancelQrScan,
+                    onQrDecoded = viewModel::onQrDecoded,
+                    onQrNotRecognized = viewModel::onQrNotRecognized,
+                    scannerLifecycleOwner = this@MainActivity,
                     onStart = ::startFromVisibleUi,
                     onStop = viewModel::stopAgent,
                     onCopyStatus = ::copySafeStatus,
                 )
             }
+        }
+    }
+
+    private fun scanQrFromVisibleUi() {
+        when (
+            viewModel.requestQrScan(
+                ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
+            )
+        ) {
+            ScanRequest.RequestCameraPermission -> cameraPermission.launch(Manifest.permission.CAMERA)
+            ScanRequest.None,
+            ScanRequest.StartScanner,
+            -> Unit
         }
     }
 
@@ -80,8 +97,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AgentScreen(
     state: MainUiState,
-    onBundleChanged: (String) -> Unit,
-    onPair: () -> Unit,
+    onScanQr: () -> Unit,
+    onCancelQrScan: () -> Unit,
+    onQrDecoded: (String) -> Unit,
+    onQrNotRecognized: () -> Unit,
+    scannerLifecycleOwner: androidx.lifecycle.LifecycleOwner,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onCopyStatus: () -> Unit,
@@ -105,27 +125,28 @@ private fun AgentScreen(
                 ) {
                     Text("Pair", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Paste the immutable Agent bundle supplied by the enrolled owner. Its contents stay masked and are cleared before enrollment.",
+                        "Scan the Agent QR code supplied by the enrolled owner. The invitation is sent directly for pairing and is never displayed or retained.",
                         style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        value = state.pairingBundle,
-                        onValueChange = onBundleChanged,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Owner pairing bundle") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        enabled = !state.pairingInProgress && !state.runtime.running,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
-                            onClick = onPair,
-                            enabled = state.pairingBundle.isNotBlank() && !state.pairingInProgress && !state.runtime.running,
+                            onClick = onScanQr,
+                            enabled = !state.pairingInProgress && !state.runtime.running,
                         ) {
-                            Text(if (state.pairingInProgress) "Pairing" else "Pair")
+                            Text(if (state.pairingInProgress) "Pairing" else "Scan QR")
                         }
                         Text(state.pairingStatus, modifier = Modifier.padding(top = 12.dp))
+                    }
+                    if (state.pairingScanState == PairingScanState.Scanning) {
+                        QrCodeScanner(
+                            lifecycleOwner = scannerLifecycleOwner,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(320.dp),
+                            onQrDecoded = onQrDecoded,
+                            onQrNotRecognized = onQrNotRecognized,
+                        )
+                        Button(onClick = onCancelQrScan) { Text("Cancel scan") }
                     }
                 }
             }

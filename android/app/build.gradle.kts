@@ -89,6 +89,10 @@ dependencies {
 
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
     implementation("androidx.lifecycle:lifecycle-service:2.9.1")
@@ -100,6 +104,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.81")
+    implementation("com.google.zxing:core:3.5.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
