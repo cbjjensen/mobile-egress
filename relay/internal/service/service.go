@@ -40,6 +40,7 @@ type Service struct {
 	sweepInterval    time.Duration
 	janitorOnce      sync.Once
 	stopJanitor      chan struct{}
+	lookupNetIP      lookupNetIPFunc
 }
 
 type healthResponse struct {
@@ -134,6 +135,7 @@ func Open(stateDir string) (*Service, error) {
 		maxClientStreams: 4, maxAgentStreams: 8,
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
+		lookupNetIP: defaultLookupNetIP,
 	}, nil
 }
 

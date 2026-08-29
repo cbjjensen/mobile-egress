@@ -152,7 +152,7 @@ func (service *Service) handleRevoke(writer http.ResponseWriter, request *http.R
 		return
 	}
 	serial := strings.ToUpper(input.Serial)
-	if err := service.store.revokeIdentity(request.Context(), serial, time.Now().UTC()); err != nil {
+	if err := service.revokeIdentity(request.Context(), serial, time.Now().UTC()); err != nil {
 		if errors.Is(err, errIdentityNotFound) {
 			writeAPIError(writer, http.StatusNotFound, "identity_not_found")
 		} else {
@@ -160,7 +160,6 @@ func (service *Service) handleRevoke(writer http.ResponseWriter, request *http.R
 		}
 		return
 	}
-	service.closeIdentitySession(serial, "revoked")
 	writer.WriteHeader(http.StatusNoContent)
 }
 

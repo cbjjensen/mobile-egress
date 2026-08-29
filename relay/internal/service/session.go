@@ -21,7 +21,16 @@ import (
 	"mobile-egress/relay/internal/protocol"
 )
 
-const maxWebSocketMessageBytes = 2 << 20
+const (
+	maxWebSocketMessageBytes = 2 << 20
+	webSocketWriteTimeout    = time.Second
+)
+
+type lookupNetIPFunc func(context.Context, string, string) ([]netip.Addr, error)
+
+func defaultLookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, network, host)
+}
 
 var relayErrorCodes = map[string]struct{}{
 	"agent_stream_limit":  {},
@@ -78,9 +87,9 @@ type agentOpenRequest struct {
 	Port int    `json:"port"`
 }
 
-type expiredStream struct {
-	stream *stream
-	code   string
+type streamNotification struct {
+	target   *session
+	envelope protocol.Envelope
 }
 
 var sessionUpgrader = websocket.Upgrader{
@@ -106,6 +115,12 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 	if service.closed {
 		service.mu.Unlock()
 		writeAPIError(writer, http.StatusServiceUnavailable, "not_ready")
+		return
+	}
+	currentRole, revoked, err := service.store.identityStatus(request.Context(), serial)
+	if err != nil || revoked || currentRole != role {
+		service.mu.Unlock()
+		writeAPIError(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	if _, exists := service.sessions[serial]; exists || (role == enrollment.RoleAgent && service.agent != nil) {
@@ -194,7 +209,7 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 	}
 	resolveContext, cancelResolve := context.WithTimeout(context.Background(), service.openingTimeout)
 	defer cancelResolve()
-	addresses, err := net.DefaultResolver.LookupNetIP(resolveContext, "ip", target.Host)
+	addresses, err := service.lookupNetIP(resolveContext, "ip", target.Host)
 	if err != nil || len(addresses) == 0 {
 		service.rejectOpen(client, envelope.StreamID, "dns_failure")
 		return
@@ -220,6 +235,11 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 
 	now := time.Now()
 	service.mu.Lock()
+	currentRole, revoked, identityErr := service.store.identityStatus(context.Background(), client.serial)
+	if identityErr != nil || revoked || currentRole != enrollment.RoleClient || !client.registered || service.sessions[client.serial] != client {
+		service.mu.Unlock()
+		return
+	}
 	if _, exists := service.streams[envelope.StreamID]; exists {
 		service.mu.Unlock()
 		service.rejectOpen(client, envelope.StreamID, "stream_in_use")
@@ -253,16 +273,17 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 	}
 	service.streams[envelope.StreamID] = tracked
 	service.activeStreams++
-	service.mu.Unlock()
-
+	errorCode := ""
 	if err := service.store.incrementTotalStreams(context.Background()); err != nil {
-		service.removeStream(tracked)
-		service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
-		return
+		service.removeStreamLocked(tracked)
+		errorCode = "agent_unavailable"
+	} else if err := agent.send(forward); err != nil {
+		service.removeStreamLocked(tracked)
+		errorCode = "agent_unavailable"
 	}
-	if err := agent.send(forward); err != nil {
-		service.removeStream(tracked)
-		service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
+	service.mu.Unlock()
+	if errorCode != "" {
+		service.rejectOpen(client, envelope.StreamID, errorCode)
 	}
 }
 
@@ -317,6 +338,14 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 		if tracked.state != streamOpening || envelope.Payload != "" {
 			service.mu.Unlock()
 			return errors.New("invalid opened frame")
+		}
+		if !time.Now().Before(tracked.openingDeadline) {
+			service.removeStreamLocked(tracked)
+			notifications := service.streamCloseNotificationsLocked(tracked, "opening_timeout", agent)
+			service.mu.Unlock()
+			_ = service.store.incrementError(context.Background(), "opening_timeout")
+			service.dispatchNotifications(notifications)
+			return nil
 		}
 		tracked.state = streamOpen
 	}
@@ -381,9 +410,48 @@ func (service *Service) protocolViolation(activeSession *session) {
 
 func (service *Service) detachSession(activeSession *session, code string) {
 	service.mu.Lock()
-	if !activeSession.registered {
-		service.mu.Unlock()
+	notifications := service.detachSessionLocked(activeSession, code)
+	service.mu.Unlock()
+	service.dispatchNotifications(notifications)
+}
+
+func (service *Service) closeIdentitySession(serial, code string) {
+	service.mu.Lock()
+	activeSession := service.sessions[serial]
+	var notifications []streamNotification
+	if activeSession != nil {
+		notifications = service.detachSessionLocked(activeSession, code)
+	}
+	service.mu.Unlock()
+	if activeSession == nil {
 		return
+	}
+	service.dispatchNotifications(notifications)
+	activeSession.close(code)
+}
+
+func (service *Service) revokeIdentity(ctx context.Context, serial string, now time.Time) error {
+	service.mu.Lock()
+	if err := service.store.revokeIdentity(ctx, serial, now); err != nil {
+		service.mu.Unlock()
+		return err
+	}
+	activeSession := service.sessions[serial]
+	var notifications []streamNotification
+	if activeSession != nil {
+		notifications = service.detachSessionLocked(activeSession, "revoked")
+	}
+	service.mu.Unlock()
+	service.dispatchNotifications(notifications)
+	if activeSession != nil {
+		activeSession.close("revoked")
+	}
+	return nil
+}
+
+func (service *Service) detachSessionLocked(activeSession *session, code string) []streamNotification {
+	if !activeSession.registered {
+		return nil
 	}
 	activeSession.registered = false
 	delete(service.sessions, activeSession.serial)
@@ -393,42 +461,22 @@ func (service *Service) detachSession(activeSession *session, code string) {
 	} else if activeSession.role == enrollment.RoleClient && service.connectedClients > 0 {
 		service.connectedClients--
 	}
-	affected := make([]*stream, 0)
-	for _, tracked := range service.streams {
-		if activeSession.role == enrollment.RoleAgent || tracked.client == activeSession {
-			affected = append(affected, tracked)
-			service.removeStreamLocked(tracked)
-		}
-	}
 	agent := service.agent
-	service.mu.Unlock()
-
-	for _, tracked := range affected {
-		closeFrame := protocol.Envelope{Version: protocol.Version1, Type: protocol.TypeClose, StreamID: tracked.id, Payload: encodeRelayError(code)}
+	notifications := make([]streamNotification, 0)
+	for _, tracked := range service.streams {
+		if activeSession.role != enrollment.RoleAgent && tracked.client != activeSession {
+			continue
+		}
+		service.removeStreamLocked(tracked)
+		frame := streamCloseEnvelope(tracked.id, code)
 		if tracked.client != activeSession {
-			_ = tracked.client.send(closeFrame)
+			notifications = append(notifications, streamNotification{target: tracked.client, envelope: frame})
 		}
 		if agent != nil && agent != activeSession {
-			_ = agent.send(closeFrame)
+			notifications = append(notifications, streamNotification{target: agent, envelope: frame})
 		}
 	}
-}
-
-func (service *Service) closeIdentitySession(serial, code string) {
-	service.mu.RLock()
-	activeSession := service.sessions[serial]
-	service.mu.RUnlock()
-	if activeSession == nil {
-		return
-	}
-	service.detachSession(activeSession, code)
-	activeSession.close(code)
-}
-
-func (service *Service) removeStream(tracked *stream) {
-	service.mu.Lock()
-	service.removeStreamLocked(tracked)
-	service.mu.Unlock()
+	return notifications
 }
 
 func (service *Service) removeStreamLocked(tracked *stream) {
@@ -456,7 +504,9 @@ func (service *Service) runStreamJanitor() {
 
 func (service *Service) expireStreams(now time.Time) {
 	service.mu.Lock()
-	expired := make([]expiredStream, 0)
+	expiredCodes := make([]string, 0)
+	notifications := make([]streamNotification, 0)
+	agent := service.agent
 	for _, tracked := range service.streams {
 		code := ""
 		if tracked.state == streamOpening && !now.Before(tracked.openingDeadline) {
@@ -465,20 +515,16 @@ func (service *Service) expireStreams(now time.Time) {
 			code = "idle_timeout"
 		}
 		if code != "" {
-			expired = append(expired, expiredStream{stream: tracked, code: code})
+			expiredCodes = append(expiredCodes, code)
 			service.removeStreamLocked(tracked)
+			notifications = append(notifications, service.streamCloseNotificationsLocked(tracked, code, agent)...)
 		}
 	}
-	agent := service.agent
 	service.mu.Unlock()
-	for _, item := range expired {
-		_ = service.store.incrementError(context.Background(), item.code)
-		frame := protocol.Envelope{Version: protocol.Version1, Type: protocol.TypeClose, StreamID: item.stream.id, Payload: encodeRelayError(item.code)}
-		_ = item.stream.client.send(frame)
-		if agent != nil {
-			_ = agent.send(frame)
-		}
+	for _, code := range expiredCodes {
+		_ = service.store.incrementError(context.Background(), code)
 	}
+	service.dispatchNotifications(notifications)
 }
 
 func (activeSession *session) send(envelope protocol.Envelope) error {
@@ -486,19 +532,48 @@ func (activeSession *session) send(envelope protocol.Envelope) error {
 	if err != nil {
 		return err
 	}
-	activeSession.writeMu.Lock()
+	deadline := time.Now().Add(webSocketWriteTimeout)
+	for !activeSession.writeMu.TryLock() {
+		if !time.Now().Before(deadline) {
+			return errors.New("WebSocket writer unavailable")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	defer activeSession.writeMu.Unlock()
+	if err := activeSession.conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
 	return activeSession.conn.WriteMessage(websocket.BinaryMessage, message)
 }
 
 func (activeSession *session) close(code string) {
 	activeSession.closeOnce.Do(func() {
-		activeSession.writeMu.Lock()
 		_ = activeSession.conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, code), time.Now().Add(time.Second))
 		_ = activeSession.conn.Close()
-		activeSession.writeMu.Unlock()
 	})
+}
+
+func (service *Service) streamCloseNotificationsLocked(tracked *stream, code string, agent *session) []streamNotification {
+	frame := streamCloseEnvelope(tracked.id, code)
+	notifications := []streamNotification{{target: tracked.client, envelope: frame}}
+	if agent != nil {
+		notifications = append(notifications, streamNotification{target: agent, envelope: frame})
+	}
+	return notifications
+}
+
+func (service *Service) dispatchNotifications(notifications []streamNotification) {
+	for _, notification := range notifications {
+		notification := notification
+		go func() {
+			_ = notification.target.send(notification.envelope)
+		}()
+	}
+}
+
+func streamCloseEnvelope(streamID, code string) protocol.Envelope {
+	return protocol.Envelope{Version: protocol.Version1, Type: protocol.TypeClose, StreamID: streamID, Payload: encodeRelayError(code)}
 }
 
 func encodeRelayError(code string) string {
