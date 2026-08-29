@@ -49,7 +49,7 @@ Use an Android 10+ phone with a real cellular plan and an owner-controlled Windo
 - [ ] With Wi-Fi still present, abruptly disable cellular data or otherwise lose the cellular network. Active proxy streams must close and new proxy requests must fail; no request may fall back to Wi-Fi. Restore cellular and verify a new session reconnects before new traffic succeeds.
 - [ ] Confirm the one-phone rule: pair or start a second phone and verify the relay keeps only one active Agent; take the active phone offline and verify the Windows client reports an offline/fail-closed state.
 - [ ] Attempt private, loopback, link-local, multicast, and reserved destinations through SOCKS. Each must be denied without making a target connection.
-- [ ] Revoke the Windows client and the Android Agent separately from Owner mode. Verify each loses active access immediately, cannot reconnect, and requires a newly issued bundle to re-enroll.
+- [ ] Revoke the Windows Client and the Android Agent separately from Owner mode. Verify each loses active access immediately and cannot reconnect. Re-enroll the Android Agent by scanning a freshly generated Agent QR; re-enroll the Windows Client with a newly issued Client invitation.
 - [ ] Use a controlled public TCP test destination that returns a response and then EOF. Confirm the complete response arrives before the stream closes.
 - [ ] Trigger a local client close and a relay/Agent close at nearly the same time. Confirm the close is idempotent, no spurious protocol violation remains, and unrelated streams continue.
 - [ ] Run eight active streams with one continuously producing data. Confirm a quieter stream still progresses; overload one stream and confirm only that stream is rejected or closed without starving the others.

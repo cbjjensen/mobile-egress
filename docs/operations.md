@@ -14,15 +14,18 @@ docker compose -f deploy/docker-compose.yml --profile init run --rm relay-init
 
 Save the single printed Owner pairing bundle immediately and transfer it to the owner only over an authenticated confidential channel. The Windows client verifies the enrollment TLS peer against the CA inside that owner-supplied bundle before it sends the one-time capability or CSR; the enrollment response must return the same CA. Start the TLS relay with `docker compose -f deploy/docker-compose.yml up -d relay`. The bind mount is `deploy/data:/var/lib/mobile-egress`; initialized CA, relay certificate, and SQLite files live in its `state` subdirectory. Port 8443 is the encrypted relay endpoint, not a SOCKS listener.
 
-## Normal use
+## First-time setup or re-pairing
 
-Install the Windows application and signed Android APK manually through owner-controlled channels. These are installation responsibilities, not an automatic-update process. For ordinary use, no scripts or AWS credentials are needed:
+Install the Windows application and signed Android APK manually through owner-controlled channels. These are installation responsibilities, not an automatic-update process. The relay administrator confidentially transfers the one-use Owner invitation only for the first Windows setup; the Windows app pastes it and automatically enrolls its separate local Client identity. When the Android Agent is first paired or needs re-pairing, create a short-lived Agent QR in that Windows app and use Android **Scan QR**. Android does not accept a pasted Agent invitation.
 
-1. In the Windows app, create the short-lived Agent QR and use Android **Scan QR** to pair. Android does not accept a pasted Agent invitation.
-2. Start the Android agent from its visible UI and confirm it reports Cellular / Connected.
-3. Start the same Windows app's local proxy, which uses its separate Client identity.
-4. Copy its generated SOCKS5 line into the specific browser, HTTP client, or program that should use mobile egress. Do not configure the Windows system proxy or default route; only explicitly configured software uses the phone's carrier path.
-5. Stop the Windows proxy or Android agent to remove the path immediately.
+## Daily use
+
+No scripts or AWS credentials are needed for ordinary use:
+
+1. Start the Android agent from its visible UI and confirm it reports Cellular / Connected.
+2. Start the same Windows app's local proxy, which uses its separate Client identity.
+3. Copy its generated SOCKS5 line into the specific browser, HTTP client, or program that should use mobile egress. Do not configure the Windows system proxy or default route; only explicitly configured software uses the phone's carrier path.
+4. Stop the Windows proxy or Android agent to remove the path immediately.
 
 Keep Wi-Fi enabled while verifying the cellular-only guarantee: after abrupt cellular loss, existing streams must close and new SOCKS requests must fail closed rather than use Wi-Fi. An offline Agent is an unavailable egress path, not an alternate route.
 
