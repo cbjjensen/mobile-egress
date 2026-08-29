@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"mobile-egress/windows-client/internal/relayclient"
@@ -44,7 +46,7 @@ func TestRepositoryGeneratesAndPersistsThirtyTwoByteSOCKSCredentials(t *testing.
 	}
 }
 
-func TestRepositoryPersistsIdentityArtifactsSeparatelyThroughSecureStore(t *testing.T) {
+func TestRepositoryPersistsCompleteIdentityGenerationThroughSecureStore(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -60,24 +62,17 @@ func TestRepositoryPersistsIdentityArtifactsSeparatelyThroughSecureStore(t *test
 	if err := repository.SavePort(ctx, 1080); err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]string{
-		privateKeyKey: "private-key", certificateChainKey: "certificate-chain", relayCAKey: "relay-ca",
-	} {
-		got, err := store.Get(ctx, key)
-		if err != nil {
-			t.Fatalf("Get(%q): %v", key, err)
-		}
-		if string(got) != want {
-			t.Fatalf("Get(%q) = %q, want %q", key, got, want)
-		}
-	}
-	settings, err := store.Get(ctx, settingsKey)
+	active, err := store.Get(ctx, activeGenerationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"private-key", "certificate-chain", "relay-ca"} {
-		if strings.Contains(string(settings), forbidden) {
-			t.Fatalf("settings contain identity artifact %q: %s", forbidden, settings)
+	generation, err := store.Get(ctx, generationKey(string(active)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"private-key", "certificate-chain", "relay-ca"} {
+		if !strings.Contains(string(generation), required) {
+			t.Fatalf("active secure generation is missing %q", required)
 		}
 	}
 	loaded, port, err := NewRepository(store).LoadIdentity(ctx)
@@ -87,6 +82,108 @@ func TestRepositoryPersistsIdentityArtifactsSeparatelyThroughSecureStore(t *test
 	if loaded != identity || port != 1080 {
 		t.Fatalf("loaded identity/port = %#v/%d, want %#v/1080", loaded, port, identity)
 	}
+}
+
+func TestRepositoryPairingGenerationSwitchIsAtomicOnStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := &faultStore{Store: securestore.NewMemoryStore()}
+	repository := NewRepository(store)
+	credentials, err := repository.LoadOrCreateCredentials(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := relayclient.Identity{
+		RelayURL: "https://one.example:8443", Role: "client", Serial: "AAA",
+		PrivateKeyPEM: "first-key", CertificatePEM: "first-chain", CACertificatePEM: "first-ca",
+	}
+	if err := repository.SaveIdentity(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := relayclient.Identity{
+		RelayURL: "https://two.example:8443", Role: "client", Serial: "BBB",
+		PrivateKeyPEM: "second-key", CertificatePEM: "second-chain", CACertificatePEM: "second-ca",
+	}
+	store.fail(activeGenerationKey)
+	if err := repository.SaveIdentity(ctx, second); err == nil {
+		t.Fatal("SaveIdentity succeeded after the active-generation switch failed")
+	}
+
+	reloaded := NewRepository(store)
+	got, _, err := reloaded.LoadIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != first {
+		t.Fatalf("failed generation switch replaced last valid identity: %#v", got)
+	}
+	gotCredentials, err := reloaded.LoadOrCreateCredentials(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCredentials != credentials {
+		t.Fatal("failed generation switch replaced local SOCKS credentials")
+	}
+}
+
+func TestRepositoryPreservesPairingWhenNewGenerationWriteFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := &faultStore{Store: securestore.NewMemoryStore()}
+	repository := NewRepository(store)
+	first := relayclient.Identity{
+		RelayURL: "https://one.example:8443", Role: "client", Serial: "AAA",
+		PrivateKeyPEM: "first-key", CertificatePEM: "first-chain", CACertificatePEM: "first-ca",
+	}
+	if err := repository.SaveIdentity(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	store.failWithPrefix(generationPrefix)
+	second := relayclient.Identity{
+		RelayURL: "https://two.example:8443", Role: "client", Serial: "BBB",
+		PrivateKeyPEM: "second-key", CertificatePEM: "second-chain", CACertificatePEM: "second-ca",
+	}
+	if err := repository.SaveIdentity(ctx, second); err == nil {
+		t.Fatal("SaveIdentity succeeded after the new generation write failed")
+	}
+	got, _, err := NewRepository(store).LoadIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != first {
+		t.Fatalf("failed generation write replaced last valid identity: %#v", got)
+	}
+}
+
+type faultStore struct {
+	securestore.Store
+	mu         sync.Mutex
+	failKey    string
+	failPrefix string
+}
+
+func (store *faultStore) failWithPrefix(prefix string) {
+	store.mu.Lock()
+	store.failPrefix = prefix
+	store.mu.Unlock()
+}
+
+func (store *faultStore) fail(key string) {
+	store.mu.Lock()
+	store.failKey = key
+	store.mu.Unlock()
+}
+
+func (store *faultStore) Put(ctx context.Context, key string, value []byte) error {
+	store.mu.Lock()
+	fail := key == store.failKey || (store.failPrefix != "" && strings.HasPrefix(key, store.failPrefix))
+	store.mu.Unlock()
+	if fail {
+		return errors.New("injected secure-store write failure")
+	}
+	return store.Store.Put(ctx, key, value)
 }
 
 func TestProxyEndpointRedactsSecretsAndStatusHasNoDestinationModel(t *testing.T) {

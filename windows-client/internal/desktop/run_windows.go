@@ -20,10 +20,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	windowssys "golang.org/x/sys/windows"
+	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/assets"
 	"mobile-egress/windows-client/internal/client"
 	"mobile-egress/windows-client/internal/prerequisites"
-	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
 
@@ -37,7 +37,7 @@ type DesktopApp struct {
 }
 
 type PairingView struct {
-	Code      string `json:"code"`
+	Bundle    string `json:"bundle"`
 	Role      string `json:"role"`
 	ExpiresAt string `json:"expiresAt"`
 }
@@ -96,10 +96,14 @@ func (app *DesktopApp) beforeClose(ctx context.Context) bool {
 
 func (app *DesktopApp) GetStatus() client.Status { return app.core.Status() }
 
-func (app *DesktopApp) Pair(relayURL, capability, role string) error {
+func (app *DesktopApp) Pair(encodedBundle string) error {
+	bundle, err := pairing.Decode(encodedBundle)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
-	return app.core.Pair(ctx, relayURL, capability, role)
+	return app.core.Pair(ctx, bundle)
 }
 
 func (app *DesktopApp) StartProxy(port uint16) error { return app.core.StartProxy(port) }
@@ -115,7 +119,11 @@ func (app *DesktopApp) IssuePairing(role string) (PairingView, error) {
 	if err != nil {
 		return PairingView{}, err
 	}
-	return pairingView(result), nil
+	encoded, err := pairing.Encode(result)
+	if err != nil {
+		return PairingView{}, err
+	}
+	return PairingView{Bundle: encoded, Role: result.Role, ExpiresAt: result.ExpiresAt.UTC().Format(time.RFC3339)}, nil
 }
 
 func (app *DesktopApp) Revoke(serial string) error {
@@ -130,10 +138,6 @@ func (app *DesktopApp) Quit() {
 	if ctx := app.runtimeContext(); ctx != nil {
 		runtime.Quit(ctx)
 	}
-}
-
-func pairingView(result relayclient.PairingCode) PairingView {
-	return PairingView{Code: result.Code, Role: result.Role, ExpiresAt: result.ExpiresAt.UTC().Format(time.RFC3339)}
 }
 
 func (app *DesktopApp) trayReady() {

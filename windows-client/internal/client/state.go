@@ -9,17 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
+	"sync"
 
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
 
 const (
-	credentialsKey      = "local-socks-credentials-v1"
-	settingsKey         = "local-settings-v1"
-	privateKeyKey       = "client-private-key-v1"
-	certificateChainKey = "client-certificate-chain-v1"
-	relayCAKey          = "relay-ca-certificate-v1"
+	activeGenerationKey = "active-identity-generation-v1"
+	generationPrefix    = "identity-generation-v1-"
 )
 
 type Credentials struct {
@@ -28,6 +27,7 @@ type Credentials struct {
 }
 
 type Repository struct {
+	mu    sync.Mutex
 	store securestore.Store
 }
 
@@ -38,34 +38,36 @@ type persistedSettings struct {
 	Port     uint16 `json:"port"`
 }
 
+type persistedGeneration struct {
+	Credentials      Credentials       `json:"credentials"`
+	Settings         persistedSettings `json:"settings"`
+	PrivateKeyPEM    string            `json:"privateKeyPem,omitempty"`
+	CertificatePEM   string            `json:"certificatePem,omitempty"`
+	CACertificatePEM string            `json:"caCertificatePem,omitempty"`
+}
+
 func NewRepository(store securestore.Store) *Repository {
 	return &Repository{store: store}
 }
 
 func (repository *Repository) LoadOrCreateCredentials(ctx context.Context) (Credentials, error) {
-	raw, err := repository.store.Get(ctx, credentialsKey)
-	if err == nil {
-		var credentials Credentials
-		if json.Unmarshal(raw, &credentials) != nil || credentials.Username == "" || credentials.Password == "" {
-			return Credentials{}, errors.New("stored SOCKS credentials are invalid")
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	generation, err := repository.loadGeneration(ctx)
+	if errors.Is(err, securestore.ErrNotFound) {
+		generation.Credentials, err = generateCredentials()
+		generation.Settings.Port = 1080
+		if err == nil {
+			err = repository.commitGeneration(ctx, generation)
 		}
-		return credentials, nil
 	}
-	if !errors.Is(err, securestore.ErrNotFound) {
-		return Credentials{}, err
-	}
-	credentials, err := generateCredentials()
 	if err != nil {
 		return Credentials{}, err
 	}
-	raw, err = json.Marshal(credentials)
-	if err != nil {
-		return Credentials{}, err
+	if generation.Credentials.Username == "" || generation.Credentials.Password == "" {
+		return Credentials{}, errors.New("stored SOCKS credentials are invalid")
 	}
-	if err := repository.store.Put(ctx, credentialsKey, raw); err != nil {
-		return Credentials{}, err
-	}
-	return credentials, nil
+	return generation.Credentials, nil
 }
 
 func generateCredentials() (Credentials, error) {
@@ -86,44 +88,40 @@ func (repository *Repository) SaveIdentity(ctx context.Context, identity relaycl
 	if identity.RelayURL == "" || identity.Role == "" || identity.Serial == "" || identity.PrivateKeyPEM == "" || identity.CertificatePEM == "" || identity.CACertificatePEM == "" {
 		return errors.New("identity is incomplete")
 	}
-	port := uint16(1080)
-	if raw, err := repository.store.Get(ctx, settingsKey); err == nil {
-		var current persistedSettings
-		if json.Unmarshal(raw, &current) == nil && current.Port != 0 {
-			port = current.Port
-		}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	generation, err := repository.loadOrCreateGeneration(ctx)
+	if err != nil {
+		return err
 	}
-	for key, value := range map[string]string{
-		privateKeyKey: identity.PrivateKeyPEM, certificateChainKey: identity.CertificatePEM, relayCAKey: identity.CACertificatePEM,
-	} {
-		if err := repository.store.Put(ctx, key, []byte(value)); err != nil {
-			return err
-		}
+	port := generation.Settings.Port
+	if port == 0 {
+		port = 1080
 	}
-	settings, _ := json.Marshal(persistedSettings{RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial, Port: port})
-	return repository.store.Put(ctx, settingsKey, settings)
+	generation.Settings = persistedSettings{RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial, Port: port}
+	generation.PrivateKeyPEM = identity.PrivateKeyPEM
+	generation.CertificatePEM = identity.CertificatePEM
+	generation.CACertificatePEM = identity.CACertificatePEM
+	return repository.commitGeneration(ctx, generation)
 }
 
 func (repository *Repository) LoadIdentity(ctx context.Context) (relayclient.Identity, uint16, error) {
-	raw, err := repository.store.Get(ctx, settingsKey)
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	generation, err := repository.loadGeneration(ctx)
 	if err != nil {
 		return relayclient.Identity{}, 0, err
 	}
-	var settings persistedSettings
-	if json.Unmarshal(raw, &settings) != nil || settings.RelayURL == "" || settings.Role == "" || settings.Serial == "" {
-		return relayclient.Identity{}, 0, errors.New("stored settings are invalid")
+	settings := generation.Settings
+	if settings.RelayURL == "" && settings.Role == "" && settings.Serial == "" {
+		return relayclient.Identity{}, 0, securestore.ErrNotFound
 	}
-	values := make(map[string]string, 3)
-	for _, key := range []string{privateKeyKey, certificateChainKey, relayCAKey} {
-		value, loadErr := repository.store.Get(ctx, key)
-		if loadErr != nil || len(value) == 0 {
-			return relayclient.Identity{}, 0, errors.New("stored identity is incomplete")
-		}
-		values[key] = string(value)
+	if settings.RelayURL == "" || settings.Role == "" || settings.Serial == "" || generation.PrivateKeyPEM == "" || generation.CertificatePEM == "" || generation.CACertificatePEM == "" {
+		return relayclient.Identity{}, 0, errors.New("stored identity is incomplete")
 	}
 	return relayclient.Identity{
 		RelayURL: settings.RelayURL, Role: settings.Role, Serial: settings.Serial,
-		PrivateKeyPEM: values[privateKeyKey], CertificatePEM: values[certificateChainKey], CACertificatePEM: values[relayCAKey],
+		PrivateKeyPEM: generation.PrivateKeyPEM, CertificatePEM: generation.CertificatePEM, CACertificatePEM: generation.CACertificatePEM,
 	}, settings.Port, nil
 }
 
@@ -131,17 +129,78 @@ func (repository *Repository) SavePort(ctx context.Context, port uint16) error {
 	if port == 0 {
 		return errors.New("SOCKS port must be non-zero")
 	}
-	raw, err := repository.store.Get(ctx, settingsKey)
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	generation, err := repository.loadGeneration(ctx)
 	if err != nil {
 		return err
 	}
-	var settings persistedSettings
-	if json.Unmarshal(raw, &settings) != nil {
+	if generation.Settings.RelayURL == "" {
 		return errors.New("stored settings are invalid")
 	}
-	settings.Port = port
-	raw, _ = json.Marshal(settings)
-	return repository.store.Put(ctx, settingsKey, raw)
+	generation.Settings.Port = port
+	return repository.commitGeneration(ctx, generation)
+}
+
+func (repository *Repository) loadOrCreateGeneration(ctx context.Context) (persistedGeneration, error) {
+	generation, err := repository.loadGeneration(ctx)
+	if err == nil {
+		return generation, nil
+	}
+	if !errors.Is(err, securestore.ErrNotFound) {
+		return persistedGeneration{}, err
+	}
+	credentials, err := generateCredentials()
+	if err != nil {
+		return persistedGeneration{}, err
+	}
+	return persistedGeneration{Credentials: credentials, Settings: persistedSettings{Port: 1080}}, nil
+}
+
+func (repository *Repository) loadGeneration(ctx context.Context) (persistedGeneration, error) {
+	active, err := repository.store.Get(ctx, activeGenerationKey)
+	if err != nil {
+		return persistedGeneration{}, err
+	}
+	id := string(active)
+	if !validGenerationID(id) {
+		return persistedGeneration{}, errors.New("active secure generation pointer is invalid")
+	}
+	raw, err := repository.store.Get(ctx, generationKey(id))
+	if err != nil {
+		return persistedGeneration{}, errors.New("active secure generation is unavailable")
+	}
+	var generation persistedGeneration
+	if json.Unmarshal(raw, &generation) != nil || generation.Credentials.Username == "" || generation.Credentials.Password == "" {
+		return persistedGeneration{}, errors.New("active secure generation is invalid")
+	}
+	return generation, nil
+}
+
+func (repository *Repository) commitGeneration(ctx context.Context, generation persistedGeneration) error {
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		return fmt.Errorf("generate identity generation: %w", err)
+	}
+	id := base64.RawURLEncoding.EncodeToString(idBytes)
+	raw, err := json.Marshal(generation)
+	if err != nil {
+		return err
+	}
+	if err := repository.store.Put(ctx, generationKey(id), raw); err != nil {
+		return err
+	}
+	return repository.store.Put(ctx, activeGenerationKey, []byte(id))
+}
+
+func generationKey(id string) string { return generationPrefix + id }
+
+func validGenerationID(id string) bool {
+	if len(id) != 22 || strings.TrimSpace(id) != id {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(id)
+	return err == nil && len(decoded) == 16
 }
 
 type ProxyEndpoint struct {

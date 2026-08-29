@@ -15,8 +15,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"mobile-egress/pairing"
 )
 
 func TestEnrollGeneratesP256CSRAndValidatesReturnedIdentity(t *testing.T) {
@@ -24,7 +27,7 @@ func TestEnrollGeneratesP256CSRAndValidatesReturnedIdentity(t *testing.T) {
 
 	fixture := newEnrollmentFixture(t, false)
 	defer fixture.Close()
-	identity, err := Enroll(context.Background(), fixture.server.URL, "one-use-owner-capability", "owner")
+	identity, err := Enroll(context.Background(), fixture.bundle("one-use-owner-capability", "owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,17 +50,34 @@ func TestEnrollRejectsCertificateChainThatDoesNotMatchReturnedCA(t *testing.T) {
 
 	fixture := newEnrollmentFixture(t, true)
 	defer fixture.Close()
-	if _, err := Enroll(context.Background(), fixture.server.URL, "one-use-client-capability", "client"); err == nil {
+	if _, err := Enroll(context.Background(), fixture.bundle("one-use-client-capability", "client")); err == nil {
 		t.Fatal("Enroll() accepted a certificate chain signed by a different CA")
 	}
 }
 
+func TestEnrollPinsTLSBeforeSendingPairingCapability(t *testing.T) {
+	t.Parallel()
+
+	fixture := newEnrollmentFixture(t, false)
+	defer fixture.Close()
+	_, _, unrelatedCAPEM := newTestCA(t, "unrelated-bootstrap-ca")
+	bundle := fixture.bundle("must-not-cross-untrusted-tls", "client")
+	bundle.CACertificatePEM = string(unrelatedCAPEM)
+	if _, err := Enroll(context.Background(), bundle); err == nil {
+		t.Fatal("Enroll() trusted a relay not signed by the supplied CA")
+	}
+	if fixture.requestReceived.Load() {
+		t.Fatal("pairing capability was sent before TLS trust was established")
+	}
+}
+
 type enrollmentFixture struct {
-	server *httptest.Server
-	ca     *x509.Certificate
-	caKey  *ecdsa.PrivateKey
-	caPEM  []byte
-	badCA  []byte
+	server          *httptest.Server
+	ca              *x509.Certificate
+	caKey           *ecdsa.PrivateKey
+	caPEM           []byte
+	badCA           []byte
+	requestReceived atomic.Bool
 }
 
 func newEnrollmentFixture(t *testing.T, mismatchedCA bool) *enrollmentFixture {
@@ -76,6 +96,7 @@ func newEnrollmentFixture(t *testing.T, mismatchedCA bool) *enrollmentFixture {
 			http.NotFound(writer, request)
 			return
 		}
+		fixture.requestReceived.Store(true)
 		var input struct {
 			Code   string `json:"code"`
 			Role   string `json:"role"`
@@ -117,6 +138,13 @@ func newEnrollmentFixture(t *testing.T, mismatchedCA bool) *enrollmentFixture {
 	server.StartTLS()
 	fixture.server = server
 	return fixture
+}
+
+func (fixture *enrollmentFixture) bundle(capability, role string) pairing.Bundle {
+	return pairing.Bundle{
+		Version: pairing.Version, RelayURL: fixture.server.URL,
+		CACertificatePEM: string(fixture.caPEM), Capability: capability, Role: role,
+	}
 }
 
 func (fixture *enrollmentFixture) Close() { fixture.server.Close() }

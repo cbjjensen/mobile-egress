@@ -35,5 +35,7 @@ services:
       - /var/lib/mobile-egress/state
       - --public-name
       - ${RELAY_PUBLIC_NAME:-relay.example.com}
+      - --public-url
+      - ${RELAY_PUBLIC_URL:-https://relay.example.com:8443}
     volumes:
       - ./data:/var/lib/mobile-egress

@@ -215,6 +215,126 @@ func TestServerCapsActiveStreamsAtFourAndStopClosesEveryConnection(t *testing.T)
 	}
 }
 
+func TestAcceptedConnectionAfterStopIsClosedInsteadOfRegistered(t *testing.T) {
+	server := startTestServer(t, &fakeOpener{healthy: true})
+	server.mu.Lock()
+	listener := server.listener
+	server.mu.Unlock()
+	if err := server.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	accepted, peer := net.Pipe()
+	defer peer.Close()
+	tracked := &trackedConnection{client: accepted}
+	if server.registerAccepted(listener, tracked) {
+		t.Fatal("connection accepted by a stopped listener was registered")
+	}
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := peer.Read(make([]byte, 1)); err == nil {
+		t.Fatal("connection accepted while stopping was left open")
+	}
+}
+
+func TestConcurrentStopAndAcceptNeverLeavesAuthenticationSocket(t *testing.T) {
+	for iteration := 0; iteration < 40; iteration++ {
+		server := startTestServer(t, &fakeOpener{healthy: true})
+		address := server.Addr().String()
+		var clientsMu sync.Mutex
+		clients := make([]net.Conn, 0, 16)
+		var dialers sync.WaitGroup
+		for index := 0; index < 16; index++ {
+			dialers.Add(1)
+			go func() {
+				defer dialers.Done()
+				connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond)
+				if err == nil {
+					clientsMu.Lock()
+					clients = append(clients, connection)
+					clientsMu.Unlock()
+				}
+			}()
+		}
+		stopped := make(chan error, 1)
+		go func() { stopped <- server.Stop() }()
+		select {
+		case err := <-stopped:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Stop hung with concurrent accepts on iteration %d", iteration)
+		}
+		dialers.Wait()
+		clientsMu.Lock()
+		for _, connection := range clients {
+			_ = connection.Close()
+		}
+		clientsMu.Unlock()
+	}
+}
+
+func TestAbandonedPreOpenConnectionsReleaseAllFourSlots(t *testing.T) {
+	gate := make(chan struct{})
+	opener := &fakeOpener{healthy: true, openGate: gate}
+	server := NewServer(Config{Username: "user", Password: "password", Opener: opener, OpenTimeout: 30 * time.Second})
+	if err := server.Start(0); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+
+	clients := make([]net.Conn, 0, 4)
+	for index := 0; index < 4; index++ {
+		connection := authenticatedConnection(t, server)
+		writeAll(t, connection, connectDomainRequest(1, "abandoned.example", 443))
+		clients = append(clients, connection)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		opener.mu.Lock()
+		calls := opener.openCalls
+		opener.mu.Unlock()
+		if calls == 4 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, connection := range clients {
+		_ = connection.Close()
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for server.Status().ActiveStreams != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if active := server.Status().ActiveStreams; active != 0 {
+		t.Fatalf("abandoned pre-open connections retained %d stream slots", active)
+	}
+
+	close(gate)
+	fifth := authenticatedConnection(t, server)
+	defer fifth.Close()
+	writeAll(t, fifth, connectDomainRequest(1, "replacement.example", 443))
+	readEqual(t, fifth, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
+}
+
+func TestPreOpenConnectionHasLocalOpeningDeadline(t *testing.T) {
+	gate := make(chan struct{})
+	server := NewServer(Config{
+		Username: "user", Password: "password", Opener: &fakeOpener{healthy: true, openGate: gate},
+		OpenTimeout: 75 * time.Millisecond,
+	})
+	if err := server.Start(0); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	connection := authenticatedConnection(t, server)
+	defer connection.Close()
+	writeAll(t, connection, connectDomainRequest(1, "timeout.example", 443))
+	readEqual(t, connection, []byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
+	if active := server.Status().ActiveStreams; active != 0 {
+		t.Fatalf("timed-out open retained %d stream slots", active)
+	}
+}
+
 func startTestServer(t *testing.T, opener *fakeOpener) *Server {
 	t.Helper()
 	server := NewServer(Config{Username: "user", Password: "password", Opener: opener})

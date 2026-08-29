@@ -5,9 +5,9 @@ This Wails v2 application provides an authenticated SOCKS5 listener on `127.0.0.
 ## Pairing roles
 
 - **Client** identities can establish the relay tunnel and start the local SOCKS proxy.
-- **Owner** identities can issue short-lived pairing capabilities for an Android agent or another Windows client and revoke a device by certificate serial. Relay v1 intentionally does not expose an identity-list endpoint.
+- **Owner** identities can issue short-lived pairing bundles for an Android agent or another Windows client and revoke a device by certificate serial. Relay v1 intentionally does not expose an identity-list endpoint.
 
-The first enrollment pins the private relay CA returned by the enrollment endpoint after validating both the returned client certificate and the observed relay server certificate against it. Later health, control, and WebSocket traffic use that pinned CA and the DPAPI-protected client identity.
+The first enrollment requires an owner-provided bundle containing the HTTPS relay origin, private relay CA, role, expiry, and one-time capability. TLS is verified against that supplied CA before the capability or CSR is sent, and a response carrying a different CA is rejected. Later health, control, and WebSocket traffic use the same pinned CA and the DPAPI-protected client identity.
 
 ## Development
 

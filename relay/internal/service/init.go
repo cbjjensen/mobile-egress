@@ -106,6 +106,14 @@ func Initialize(ctx context.Context, options InitOptions) (string, error) {
 	return capability, nil
 }
 
+func CACertificatePEM(stateDir string) ([]byte, error) {
+	value, err := os.ReadFile(filepath.Join(filepath.Clean(stateDir), caCertFilename))
+	if err != nil {
+		return nil, fmt.Errorf("read relay CA certificate: %w", err)
+	}
+	return value, nil
+}
+
 func validateInitOptions(options InitOptions) (string, error) {
 	stateDir := filepath.Clean(strings.TrimSpace(options.StateDir))
 	if options.StateDir == "" || stateDir == "." {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 
+	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 	"mobile-egress/windows-client/internal/socks"
@@ -19,7 +20,7 @@ type Tunnel interface {
 }
 
 type Gateway interface {
-	Enroll(context.Context, string, string, string) (relayclient.Identity, error)
+	Enroll(context.Context, pairing.Bundle) (relayclient.Identity, error)
 	DialSession(context.Context, relayclient.Identity) (Tunnel, error)
 	IssuePairing(context.Context, relayclient.Identity, string) (relayclient.PairingCode, error)
 	Revoke(context.Context, relayclient.Identity, string) error
@@ -27,8 +28,8 @@ type Gateway interface {
 
 type DefaultGateway struct{}
 
-func (DefaultGateway) Enroll(ctx context.Context, relayURL, code, role string) (relayclient.Identity, error) {
-	return relayclient.Enroll(ctx, relayURL, code, role)
+func (DefaultGateway) Enroll(ctx context.Context, bundle pairing.Bundle) (relayclient.Identity, error) {
+	return relayclient.Enroll(ctx, bundle)
 }
 
 func (DefaultGateway) DialSession(ctx context.Context, identity relayclient.Identity) (Tunnel, error) {
@@ -77,13 +78,13 @@ func NewCore(ctx context.Context, store securestore.Store, gateway Gateway) (*Co
 	return core, nil
 }
 
-func (core *Core) Pair(ctx context.Context, relayURL, capability, role string) error {
+func (core *Core) Pair(ctx context.Context, bundle pairing.Bundle) error {
 	core.operations.Lock()
 	defer core.operations.Unlock()
 	if err := core.stopProxy(); err != nil {
 		return err
 	}
-	identity, err := core.gateway.Enroll(ctx, relayURL, capability, role)
+	identity, err := core.gateway.Enroll(ctx, bundle)
 	if err != nil {
 		return err
 	}
@@ -207,18 +208,26 @@ func (core *Core) ProxyLine() (string, error) {
 	return endpoint.Reveal(), nil
 }
 
-func (core *Core) IssuePairing(ctx context.Context, role string) (relayclient.PairingCode, error) {
+func (core *Core) IssuePairing(ctx context.Context, role string) (pairing.Bundle, error) {
 	core.mu.RLock()
 	if core.identity == nil {
 		core.mu.RUnlock()
-		return relayclient.PairingCode{}, errors.New("owner identity required")
+		return pairing.Bundle{}, errors.New("owner identity required")
 	}
 	identity := *core.identity
 	core.mu.RUnlock()
 	if identity.Role != "owner" {
-		return relayclient.PairingCode{}, errors.New("owner identity required")
+		return pairing.Bundle{}, errors.New("owner identity required")
 	}
-	return core.gateway.IssuePairing(ctx, identity, role)
+	issued, err := core.gateway.IssuePairing(ctx, identity, role)
+	if err != nil {
+		return pairing.Bundle{}, err
+	}
+	return pairing.Bundle{
+		Version: pairing.Version, RelayURL: identity.RelayURL,
+		CACertificatePEM: identity.CACertificatePEM, Capability: issued.Code,
+		Role: issued.Role, ExpiresAt: issued.ExpiresAt,
+	}, nil
 }
 
 func (core *Core) Revoke(ctx context.Context, serial string) error {

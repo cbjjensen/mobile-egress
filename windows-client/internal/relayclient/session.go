@@ -40,16 +40,18 @@ type Session struct {
 	client    *http.Client
 	transport *http.Transport
 
-	ctx       context.Context
-	cancel    context.CancelFunc
-	writeMu   sync.Mutex
-	mu        sync.Mutex
-	streams   map[string]*relayStream
-	connected bool
-	agent     bool
-	closeOnce sync.Once
-	bytesUp   atomic.Int64
-	bytesDown atomic.Int64
+	ctx           context.Context
+	cancel        context.CancelFunc
+	writeMu       sync.Mutex
+	mu            sync.Mutex
+	streams       map[string]*relayStream
+	closedStreams map[string]struct{}
+	closedOrder   []string
+	connected     bool
+	agent         bool
+	closeOnce     sync.Once
+	bytesUp       atomic.Int64
+	bytesDown     atomic.Int64
 }
 
 type relayStream struct {
@@ -100,7 +102,8 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 	session := &Session{
 		identity: identity, conn: connection, client: httpClient, transport: transport,
 		ctx: sessionContext, cancel: cancel, streams: make(map[string]*relayStream),
-		connected: true, agent: agentAvailable,
+		closedStreams: make(map[string]struct{}),
+		connected:     true, agent: agentAvailable,
 	}
 	go session.readLoop()
 	go session.healthLoop(baseURL.String())
@@ -212,8 +215,12 @@ func (session *Session) readLoop() {
 		}
 		session.mu.Lock()
 		stream := session.streams[envelope.StreamID]
+		_, locallyClosed := session.closedStreams[envelope.StreamID]
 		session.mu.Unlock()
 		if stream == nil {
+			if locallyClosed {
+				continue
+			}
 			return
 		}
 		switch envelope.Type {
@@ -243,8 +250,19 @@ func (session *Session) readLoop() {
 			case stream.inbound <- payload:
 				session.bytesDown.Add(int64(len(payload)))
 			case <-stream.done:
-			case <-session.ctx.Done():
-				return
+			default:
+				// A single consumer must never stall the WebSocket reader and
+				// therefore every other relay stream. The bounded stream is
+				// closed with the finite v1 client_closed reason.
+				if session.claimLocalClose(stream) {
+					stream.finish(io.EOF)
+					go func() {
+						_ = session.send(wireEnvelope{
+							Version: 1, Type: "close", StreamID: stream.id,
+							Payload: base64.RawURLEncoding.EncodeToString([]byte("client_closed")),
+						})
+					}()
+				}
 			}
 		case "close":
 			if _, err := decodeRelayCode(envelope.Payload); err != nil {
@@ -295,12 +313,39 @@ func (session *Session) removeStream(id string) {
 	session.mu.Unlock()
 }
 
+func (session *Session) claimLocalClose(stream *relayStream) bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.streams[stream.id] != stream {
+		return false
+	}
+	delete(session.streams, stream.id)
+	session.rememberClosedLocked(stream.id)
+	return true
+}
+
+func (session *Session) rememberClosedLocked(id string) {
+	const maxClosedStreamTombstones = 16
+	if _, exists := session.closedStreams[id]; exists {
+		return
+	}
+	session.closedStreams[id] = struct{}{}
+	session.closedOrder = append(session.closedOrder, id)
+	if len(session.closedOrder) > maxClosedStreamTombstones {
+		oldest := session.closedOrder[0]
+		session.closedOrder = session.closedOrder[1:]
+		delete(session.closedStreams, oldest)
+	}
+}
+
 func (session *Session) failAll(err error) {
 	session.mu.Lock()
 	session.connected = false
 	session.agent = false
 	streams := session.streams
 	session.streams = make(map[string]*relayStream)
+	session.closedStreams = make(map[string]struct{})
+	session.closedOrder = nil
 	session.mu.Unlock()
 	for _, stream := range streams {
 		stream.finish(err)
@@ -349,11 +394,12 @@ func (stream *relayStream) Write(value []byte) (int, error) {
 
 func (stream *relayStream) Close() error {
 	stream.sendClose.Do(func() {
-		stream.session.removeStream(stream.id)
-		_ = stream.session.send(wireEnvelope{
-			Version: 1, Type: "close", StreamID: stream.id,
-			Payload: base64.RawURLEncoding.EncodeToString([]byte("client_closed")),
-		})
+		if stream.session.claimLocalClose(stream) {
+			_ = stream.session.send(wireEnvelope{
+				Version: 1, Type: "close", StreamID: stream.id,
+				Payload: base64.RawURLEncoding.EncodeToString([]byte("client_closed")),
+			})
+		}
 		stream.finish(io.EOF)
 	})
 	return nil

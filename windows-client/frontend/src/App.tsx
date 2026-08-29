@@ -37,7 +37,7 @@ export default function App() {
   async function pair(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
-    await action(() => api().Pair(String(data.get('relay')), String(data.get('capability')), String(data.get('role'))))
+    await action(() => api().Pair(String(data.get('bundle'))))
   }
 
   async function toggleProxy(event: FormEvent<HTMLFormElement>) {
@@ -78,11 +78,9 @@ export default function App() {
 
     {tab === 'proxy' && <section className="stack">
       {!status.paired ? <article className="card">
-        <h2>Pair this Windows device</h2><p>Use a short-lived capability issued by the relay owner.</p>
+        <h2>Pair this Windows device</h2><p>Import the owner-provided bundle containing the relay address, pinned CA, and one-time capability.</p>
         <form onSubmit={pair}>
-          <label>Relay URL<input name="relay" type="url" required placeholder="https://relay.example:8443" /></label>
-          <label>Pairing capability<input name="capability" type="password" required autoComplete="off" /></label>
-          <label>Device role<select name="role" defaultValue="client"><option value="client">Client</option><option value="owner">Owner</option></select></label>
+          <label>Pairing bundle<textarea name="bundle" required rows={5} autoComplete="off" spellCheck={false} /></label>
           <button className="primary" disabled={busy}>Pair securely</button>
         </form>
       </article> : <>
@@ -106,7 +104,7 @@ export default function App() {
       {status.role !== 'owner' ? <article className="card"><h2>Owner identity required</h2><p>Pair this app with the relay's owner capability to issue or revoke device access.</p></article> : <>
         <article className="card"><h2>Issue pairing capability</h2>
           <form className="inline" onSubmit={issue}><label>Role<select name="role"><option value="agent">Android agent</option><option value="client">Windows client</option></select></label><button className="primary" disabled={busy}>Issue</button></form>
-          {pairing && <div className="issued"><code>{pairing.code}</code><button onClick={() => void navigator.clipboard.writeText(pairing.code)}>Copy</button><small>Expires {new Date(pairing.expiresAt).toLocaleString()}</small></div>}
+          {pairing && <div className="issued"><code>{pairing.bundle}</code><button onClick={() => void navigator.clipboard.writeText(pairing.bundle)}>Copy secure bundle</button><small>Expires {new Date(pairing.expiresAt).toLocaleString()}</small></div>}
         </article>
         <article className="card danger"><h2>Revoke device</h2><p>Revocation closes that identity's active relay session.</p>
           <form className="inline" onSubmit={revoke}><label>Certificate serial<input name="serial" required pattern="[0-9A-Fa-f]+" /></label><button disabled={busy}>Revoke</button></form>

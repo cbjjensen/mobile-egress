@@ -78,6 +78,50 @@ func TestSessionUsesRelayV1FramesAndWaitsForOpened(t *testing.T) {
 	}
 }
 
+func TestUnreadStreamDoesNotBlockOtherStreamFrames(t *testing.T) {
+	t.Parallel()
+
+	sendFlood := make(chan struct{})
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		first := readTestWireEnvelope(t, connection)
+		writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: first.StreamID})
+		<-sendFlood
+		for index := 0; index < 6; index++ {
+			writeWireEnvelope(t, connection, wireEnvelope{
+				Version: 1, Type: "data", StreamID: first.StreamID,
+				Payload: base64.RawURLEncoding.EncodeToString([]byte{byte(index)}),
+			})
+		}
+		for {
+			next := readTestWireEnvelope(t, connection)
+			if next.Type == "open" {
+				writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: next.StreamID})
+				return
+			}
+		}
+	})
+	defer fixture.Close()
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	first, err := session.OpenStream(context.Background(), "first.example", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	close(sendFlood)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	second, err := session.OpenStream(ctx, "second.example", 443)
+	if err != nil {
+		t.Fatalf("second stream was blocked by unread first stream: %v", err)
+	}
+	defer second.Close()
+}
+
 type sessionFixture struct {
 	server      *httptest.Server
 	identity    Identity
@@ -178,6 +222,69 @@ func newSessionFixture(t *testing.T) *sessionFixture {
 }
 
 func (fixture *sessionFixture) Close() { fixture.server.Close() }
+
+func newCustomSessionFixture(t *testing.T, websocketHandler func(*websocket.Conn)) *sessionFixture {
+	t.Helper()
+	ca, caKey, caPEM := newTestCA(t, "custom-session-ca")
+	serverCertificate := newSignedCertificate(t, ca, caKey, &x509.Certificate{
+		SerialNumber: big.NewInt(20), Subject: pkix.Name{CommonName: "127.0.0.1"},
+		DNSNames: []string{"127.0.0.1"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientCertificatePEM := signPublicKey(t, ca, caKey, &clientKey.PublicKey, "client")
+	clientKeyDER, err := x509.MarshalPKCS8PrivateKey(clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &sessionFixture{}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/healthz" {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"readiness": true, "agentConnected": true})
+			return
+		}
+		connection, upgradeErr := upgrader.Upgrade(writer, request, nil)
+		if upgradeErr != nil {
+			t.Error(upgradeErr)
+			return
+		}
+		defer connection.Close()
+		websocketHandler(connection)
+	})
+	server := httptest.NewUnstartedServer(handler)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{serverCertificate}, MinVersion: tls.VersionTLS13,
+		ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: roots,
+	}
+	server.StartTLS()
+	fixture.server = server
+	fixture.identity = Identity{
+		RelayURL: server.URL, Role: "client", Serial: "03",
+		PrivateKeyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKeyDER})),
+		CertificatePEM: string(clientCertificatePEM) + string(caPEM), CACertificatePEM: string(caPEM),
+	}
+	return fixture
+}
+
+func readTestWireEnvelope(t *testing.T, connection *websocket.Conn) wireEnvelope {
+	t.Helper()
+	_, raw, err := connection.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope wireEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	return envelope
+}
 
 func writeWireEnvelope(t *testing.T, connection *websocket.Conn, envelope wireEnvelope) {
 	t.Helper()

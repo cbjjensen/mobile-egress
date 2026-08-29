@@ -11,11 +11,11 @@ export type Status = {
   proxy?: string
 }
 
-export type Pairing = { code: string; role: string; expiresAt: string }
+export type Pairing = { bundle: string; role: string; expiresAt: string }
 
 type DesktopAPI = {
   GetStatus(): Promise<Status>
-  Pair(relayURL: string, capability: string, role: string): Promise<void>
+  Pair(bundle: string): Promise<void>
   StartProxy(port: number): Promise<void>
   StopProxy(): Promise<void>
   ProxyLine(): Promise<string>

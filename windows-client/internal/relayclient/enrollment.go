@@ -19,8 +19,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
+
+	"mobile-egress/pairing"
 )
 
 const maxControlResponseBytes = 256 << 10
@@ -41,16 +42,20 @@ type enrollResponse struct {
 	Role             string `json:"role"`
 }
 
-func Enroll(ctx context.Context, relayURL, capability, role string) (Identity, error) {
-	baseURL, err := validateRelayURL(relayURL)
+func Enroll(ctx context.Context, bundle pairing.Bundle) (Identity, error) {
+	if err := bundle.Validate(); err != nil {
+		return Identity{}, err
+	}
+	baseURL, err := validateRelayURL(bundle.RelayURL)
 	if err != nil {
 		return Identity{}, err
 	}
-	if strings.TrimSpace(capability) == "" {
-		return Identity{}, errors.New("pairing capability is required")
-	}
-	if role != "owner" && role != "client" {
+	if bundle.Role != "owner" && bundle.Role != "client" {
 		return Identity{}, errors.New("Windows enrollment role must be owner or client")
+	}
+	trustedCA, err := pairing.CACertificate(bundle.CACertificatePEM)
+	if err != nil {
+		return Identity{}, err
 	}
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -64,29 +69,17 @@ func Enroll(ctx context.Context, relayURL, capability, role string) (Identity, e
 		return Identity{}, fmt.Errorf("create enrollment request: %w", err)
 	}
 	requestBody, err := json.Marshal(map[string]string{
-		"code": capability, "role": role,
+		"code": bundle.Capability, "role": bundle.Role,
 		"csrPem": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})),
 	})
 	if err != nil {
 		return Identity{}, err
 	}
 
-	var peerMu sync.Mutex
-	var peerCertificates []*x509.Certificate
+	roots := x509.NewCertPool()
+	roots.AddCert(trustedCA)
 	transport := &http.Transport{TLSClientConfig: &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		// Enrollment bootstraps trust from the returned relay CA. The observed
-		// server certificate is validated against that CA before state is saved.
-		InsecureSkipVerify: true, //nolint:gosec
-		VerifyConnection: func(state tls.ConnectionState) error {
-			peerMu.Lock()
-			peerCertificates = append([]*x509.Certificate(nil), state.PeerCertificates...)
-			peerMu.Unlock()
-			if len(state.PeerCertificates) == 0 {
-				return errors.New("relay did not present a server certificate")
-			}
-			return nil
-		},
+		MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: baseURL.Hostname(),
 	}}
 	defer transport.CloseIdleConnections()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL.String()+"/v1/enroll", bytes.NewReader(requestBody))
@@ -113,10 +106,7 @@ func Enroll(ctx context.Context, relayURL, capability, role string) (Identity, e
 		return Identity{}, errors.New("relay returned an invalid enrollment response")
 	}
 
-	peerMu.Lock()
-	observedPeer := append([]*x509.Certificate(nil), peerCertificates...)
-	peerMu.Unlock()
-	if err := validateEnrollmentResult(baseURL, role, privateKey, result, observedPeer); err != nil {
+	if err := validateEnrollmentResult(bundle.Role, privateKey, trustedCA, result); err != nil {
 		return Identity{}, err
 	}
 	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
@@ -130,7 +120,7 @@ func Enroll(ctx context.Context, relayURL, capability, role string) (Identity, e
 	}, nil
 }
 
-func validateEnrollmentResult(baseURL *url.URL, requestedRole string, privateKey *ecdsa.PrivateKey, result enrollResponse, observedPeer []*x509.Certificate) error {
+func validateEnrollmentResult(requestedRole string, privateKey *ecdsa.PrivateKey, trustedCA *x509.Certificate, result enrollResponse) error {
 	if result.Role != requestedRole || result.Serial == "" {
 		return errors.New("relay returned an identity with the wrong role or serial")
 	}
@@ -138,21 +128,11 @@ func validateEnrollmentResult(baseURL *url.URL, requestedRole string, privateKey
 	if err != nil || !ca.IsCA || !ca.BasicConstraintsValid || ca.KeyUsage&x509.KeyUsageCertSign == 0 {
 		return errors.New("relay returned an invalid CA certificate")
 	}
+	if !ca.Equal(trustedCA) {
+		return errors.New("relay returned a CA different from the pairing bundle")
+	}
 	roots := x509.NewCertPool()
-	roots.AddCert(ca)
-	if len(observedPeer) == 0 {
-		return errors.New("relay server certificate was not observed")
-	}
-	serverIntermediates := x509.NewCertPool()
-	for _, certificate := range observedPeer[1:] {
-		serverIntermediates.AddCert(certificate)
-	}
-	if _, err := observedPeer[0].Verify(x509.VerifyOptions{
-		Roots: roots, Intermediates: serverIntermediates, DNSName: baseURL.Hostname(),
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}); err != nil {
-		return errors.New("relay server certificate does not verify against returned CA")
-	}
+	roots.AddCert(trustedCA)
 
 	chain, err := parseCertificateChain(result.CertificatePEM)
 	if err != nil || len(chain) == 0 {

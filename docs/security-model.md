@@ -2,7 +2,7 @@
 
 ## Enrollment
 
-Relay initialization creates a private CA and a one-time owner enrollment code. An enrolled owner Windows app can issue short-lived, one-use pairing codes for one Android agent or additional Windows clients. Pairing codes are high-entropy capabilities, never six-digit PINs.
+Relay initialization creates a private CA and a one-time owner pairing bundle containing the exact public relay origin, CA certificate, owner role, expiry, and high-entropy capability. An enrolled owner Windows app issues the same kind of short-lived, one-use bundle for one Android agent or additional Windows clients. A device verifies enrollment TLS against the bundle CA before transmitting the capability or CSR and rejects a response with a different CA. Pairing capabilities are never six-digit PINs.
 
 Device credentials are certificate-backed. The relay verifies active certificate serials for every persistent session and rejects revoked or role-incompatible identities. Revocation immediately prevents new streams and closes any active session for that identity.
 

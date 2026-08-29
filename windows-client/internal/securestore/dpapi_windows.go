@@ -42,8 +42,37 @@ func (store *DPAPIStore) Put(ctx context.Context, key string, value []byte) erro
 	if err != nil {
 		return fmt.Errorf("protect secure value: %w", err)
 	}
-	if err := os.WriteFile(store.path(key), ciphertext, 0o600); err != nil {
+	temporary, err := os.CreateTemp(store.directory, ".dpapi-write-")
+	if err != nil {
+		return fmt.Errorf("create secure value staging file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return fmt.Errorf("protect secure value permissions: %w", err)
+	}
+	if _, err := temporary.Write(ciphertext); err != nil {
+		temporary.Close()
 		return fmt.Errorf("write secure value: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return fmt.Errorf("flush secure value: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close secure value: %w", err)
+	}
+	from, err := windows.UTF16PtrFromString(temporaryPath)
+	if err != nil {
+		return err
+	}
+	to, err := windows.UTF16PtrFromString(store.path(key))
+	if err != nil {
+		return err
+	}
+	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
+		return fmt.Errorf("atomically replace secure value: %w", err)
 	}
 	return nil
 }

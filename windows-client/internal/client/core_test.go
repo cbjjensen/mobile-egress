@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
@@ -22,7 +23,7 @@ type fakeGateway struct {
 	revoked  []string
 }
 
-func (gateway *fakeGateway) Enroll(context.Context, string, string, string) (relayclient.Identity, error) {
+func (gateway *fakeGateway) Enroll(context.Context, pairing.Bundle) (relayclient.Identity, error) {
 	return gateway.identity, nil
 }
 
@@ -89,7 +90,7 @@ func TestCorePairsStartsStopsAndExposesOnlyRedactedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := core.Pair(context.Background(), identity.RelayURL, "one-use-code", "client"); err != nil {
+	if err := core.Pair(context.Background(), pairing.Bundle{RelayURL: identity.RelayURL, Role: "client"}); err != nil {
 		t.Fatal(err)
 	}
 	port := availablePort(t)
@@ -130,14 +131,18 @@ func TestCoreRestrictsOwnerOperationsAndTunnelRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := core.Pair(context.Background(), owner.RelayURL, "owner-code", "owner"); err != nil {
+	if err := core.Pair(context.Background(), pairing.Bundle{RelayURL: owner.RelayURL, Role: "owner"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := core.StartProxy(availablePort(t)); err == nil {
 		t.Fatal("StartProxy accepted an owner identity")
 	}
-	if _, err := core.IssuePairing(context.Background(), "agent"); err != nil {
+	issued, err := core.IssuePairing(context.Background(), "agent")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if issued.RelayURL != owner.RelayURL || issued.CACertificatePEM != owner.CACertificatePEM || issued.Capability != "pairing-code" || issued.Role != "agent" {
+		t.Fatalf("owner pairing bundle did not carry persisted trust: %#v", issued)
 	}
 	if err := core.Revoke(context.Background(), "ABC123"); err != nil {
 		t.Fatal(err)
@@ -151,7 +156,7 @@ func TestCoreRestrictsOwnerOperationsAndTunnelRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := clientCore.Pair(context.Background(), owner.RelayURL, "client-code", "client"); err != nil {
+	if err := clientCore.Pair(context.Background(), pairing.Bundle{RelayURL: owner.RelayURL, Role: "client"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := clientCore.IssuePairing(context.Background(), "agent"); err == nil {

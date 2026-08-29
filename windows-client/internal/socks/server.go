@@ -2,6 +2,7 @@
 package socks
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/binary"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var ErrRelayUnavailable = errors.New("healthy relay agent unavailable")
@@ -21,9 +23,10 @@ type StreamOpener interface {
 }
 
 type Config struct {
-	Username string
-	Password string
-	Opener   StreamOpener
+	Username    string
+	Password    string
+	Opener      StreamOpener
+	OpenTimeout time.Duration
 }
 
 type Status struct {
@@ -34,8 +37,10 @@ type Status struct {
 }
 
 type trackedConnection struct {
+	mu     sync.Mutex
 	client net.Conn
 	stream io.ReadWriteCloser
+	closed bool
 }
 
 type Server struct {
@@ -53,6 +58,9 @@ type Server struct {
 }
 
 func NewServer(config Config) *Server {
+	if config.OpenTimeout <= 0 {
+		config.OpenTimeout = 30 * time.Second
+	}
 	return &Server{config: config, connections: make(map[*trackedConnection]struct{})}
 }
 
@@ -94,7 +102,9 @@ func (server *Server) Stop() error {
 		return nil
 	}
 	server.listener = nil
-	server.cancel()
+	if server.cancel != nil {
+		server.cancel()
+	}
 	connections := make([]*trackedConnection, 0, len(server.connections))
 	for connection := range server.connections {
 		connections = append(connections, connection)
@@ -103,10 +113,7 @@ func (server *Server) Stop() error {
 
 	err := listener.Close()
 	for _, connection := range connections {
-		_ = connection.client.Close()
-		if connection.stream != nil {
-			_ = connection.stream.Close()
-		}
+		connection.close()
 	}
 	server.wg.Wait()
 	if errors.Is(err, net.ErrClosed) {
@@ -132,21 +139,30 @@ func (server *Server) acceptLoop(listener *net.TCPListener) {
 			return
 		}
 		tracked := &trackedConnection{client: connection}
-		server.mu.Lock()
-		server.connections[tracked] = struct{}{}
-		server.wg.Add(1)
-		server.mu.Unlock()
+		if !server.registerAccepted(listener, tracked) {
+			return
+		}
 		go server.handleConnection(tracked)
 	}
+}
+
+func (server *Server) registerAccepted(listener *net.TCPListener, tracked *trackedConnection) bool {
+	server.mu.Lock()
+	if server.listener != listener {
+		server.mu.Unlock()
+		tracked.close()
+		return false
+	}
+	server.connections[tracked] = struct{}{}
+	server.wg.Add(1)
+	server.mu.Unlock()
+	return true
 }
 
 func (server *Server) handleConnection(tracked *trackedConnection) {
 	defer server.wg.Done()
 	defer func() {
-		_ = tracked.client.Close()
-		if tracked.stream != nil {
-			_ = tracked.stream.Close()
-		}
+		tracked.close()
 		server.mu.Lock()
 		delete(server.connections, tracked)
 		server.mu.Unlock()
@@ -166,16 +182,45 @@ func (server *Server) handleConnection(tracked *trackedConnection) {
 		writeReply(tracked.client, 1)
 		return
 	}
-	defer server.releaseStream()
+	released := false
+	release := func() {
+		if !released {
+			server.releaseStream()
+			released = true
+		}
+	}
+	defer release()
 
-	stream, err := server.config.Opener.OpenStream(server.context, host, port)
-	if err != nil {
-		writeReply(tracked.client, 1)
+	openContext, cancelOpen := context.WithTimeout(server.context, server.config.OpenTimeout)
+	openingComplete := make(chan struct{})
+	clientState := make(chan preOpenResult, 1)
+	go watchClientDuringOpen(openContext, cancelOpen, tracked.client, openingComplete, clientState)
+	stream, err := server.config.Opener.OpenStream(openContext, host, port)
+	close(openingComplete)
+	state := <-clientState
+	cancelOpen()
+	if err != nil || state.err != nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		release()
+		if state.err == nil || errors.Is(state.err, context.DeadlineExceeded) {
+			_ = writeReply(tracked.client, 1)
+		}
 		return
 	}
-	tracked.stream = stream
+	if !tracked.setStream(stream) {
+		return
+	}
 	if writeReply(tracked.client, 0) != nil {
 		return
+	}
+	if len(state.buffer) > 0 {
+		written, writeErr := stream.Write(state.buffer)
+		server.bytesUp.Add(int64(written))
+		if writeErr != nil || written != len(state.buffer) {
+			return
+		}
 	}
 
 	completed := make(chan struct{}, 2)
@@ -191,6 +236,75 @@ func (server *Server) handleConnection(tracked *trackedConnection) {
 	_ = tracked.client.Close()
 	_ = stream.Close()
 	<-completed
+}
+
+type preOpenResult struct {
+	buffer []byte
+	err    error
+}
+
+func watchClientDuringOpen(ctx context.Context, cancel context.CancelFunc, connection net.Conn, openingComplete <-chan struct{}, result chan<- preOpenResult) {
+	defer connection.SetReadDeadline(time.Time{})
+	var buffered bytes.Buffer
+	readBuffer := make([]byte, 8<<10)
+	for {
+		select {
+		case <-openingComplete:
+			result <- preOpenResult{buffer: append([]byte(nil), buffered.Bytes()...)}
+			return
+		case <-ctx.Done():
+			result <- preOpenResult{err: ctx.Err()}
+			return
+		default:
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		read, err := connection.Read(readBuffer)
+		if read > 0 {
+			if buffered.Len()+read > 64<<10 {
+				cancel()
+				result <- preOpenResult{err: errors.New("pre-open client data limit exceeded")}
+				return
+			}
+			_, _ = buffered.Write(readBuffer[:read])
+		}
+		if err != nil {
+			var networkError net.Error
+			if errors.As(err, &networkError) && networkError.Timeout() {
+				continue
+			}
+			cancel()
+			result <- preOpenResult{err: err}
+			return
+		}
+	}
+}
+
+func (tracked *trackedConnection) setStream(stream io.ReadWriteCloser) bool {
+	tracked.mu.Lock()
+	if tracked.closed {
+		tracked.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
+	tracked.stream = stream
+	tracked.mu.Unlock()
+	return true
+}
+
+func (tracked *trackedConnection) close() {
+	tracked.mu.Lock()
+	if tracked.closed {
+		tracked.mu.Unlock()
+		return
+	}
+	tracked.closed = true
+	client := tracked.client
+	stream := tracked.stream
+	tracked.mu.Unlock()
+	_ = client.Close()
+	if stream != nil {
+		_ = stream.Close()
+	}
 }
 
 func (server *Server) authenticate(connection net.Conn) bool {

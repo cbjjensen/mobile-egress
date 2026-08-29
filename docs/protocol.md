@@ -2,7 +2,7 @@
 
 ## Transport
 
-Relay, Windows, and Android sessions use WebSocket over TLS with certificate authentication after enrollment. Enrollment uses the same TLS endpoint with a single-use pairing capability before a client certificate exists.
+Relay, Windows, and Android sessions use WebSocket over TLS with certificate authentication after enrollment. Enrollment uses the same TLS endpoint. Before sending a single-use pairing capability or CSR, a device validates that endpoint against the relay CA delivered in the authenticated owner pairing bundle; it also rejects an enrollment response that returns a different CA.
 
 ## Envelope
 

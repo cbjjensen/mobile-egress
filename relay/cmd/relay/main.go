@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"mobile-egress/pairing"
 	"mobile-egress/relay/internal/service"
 )
 
@@ -42,11 +44,21 @@ func runInit(arguments []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	stateDir := flags.String("state-dir", defaultStateDir, "persistent relay state directory")
 	publicName := flags.String("public-name", "", "public relay DNS name or IP address")
+	publicURL := flags.String("public-url", "", "public HTTPS relay origin included in pairing bundles")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "relay init: unexpected positional arguments")
+		return 2
+	}
+	relayURL := *publicURL
+	if relayURL == "" && *publicName != "" {
+		relayURL = "https://" + net.JoinHostPort(*publicName, "8443")
+	}
+	origin, err := pairing.RelayOrigin(relayURL)
+	if err != nil || origin.Hostname() != *publicName {
+		fmt.Fprintln(stderr, "relay init: public URL must be an HTTPS origin for public-name")
 		return 2
 	}
 	capability, err := service.Initialize(context.Background(), service.InitOptions{
@@ -56,7 +68,20 @@ func runInit(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "relay init:", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, "Owner enrollment capability:", capability)
+	caPEM, err := service.CACertificatePEM(*stateDir)
+	if err != nil {
+		fmt.Fprintln(stderr, "relay init:", err)
+		return 1
+	}
+	bundle, err := pairing.Encode(pairing.Bundle{
+		Version: pairing.Version, RelayURL: origin.String(), CACertificatePEM: string(caPEM),
+		Capability: capability, Role: "owner", ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, "relay init:", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "Owner pairing bundle:", bundle)
 	return 0
 }
 
