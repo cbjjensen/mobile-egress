@@ -81,15 +81,26 @@ $releaseCertificateRecord = Get-Content -Raw $releaseCertificateRecordPath
 Assert-Condition ($releaseCertificateRecord -match '(?im)^SHA-256 fingerprint:\s*(?:[0-9A-F]{2}:){31}[0-9A-F]{2}\s*$') 'The Android release certificate record must contain a colon-delimited SHA-256 fingerprint.'
 Assert-Condition ($releaseScript -match 'release-signing-certificate\.txt') 'The Android release must compare against the tracked certificate identity.'
 Assert-Condition ($releaseScript -match 'verify --print-certs') 'The Android release must inspect the APK signer certificate.'
-Assert-Condition ($windowsReleaseScript -match 'CodeSigningThumbprint') 'Windows release packaging must require a code-signing certificate.'
-Assert-Condition ($windowsReleaseScript -match 'signtool\.exe') 'Windows release packaging must sign and verify all executables.'
+Assert-Condition ($windowsReleaseScript -match 'CodeSigningThumbprint') 'Windows release packaging must retain the optional compatibility thumbprint assertion.'
+Assert-Condition ($windowsReleaseScript -match 'Get-WindowsReleaseSigningIdentity') 'Windows release packaging must discover the established tracked publisher identity.'
+Assert-Condition ($windowsReleaseScript -match 'Set-AuthenticodeSignature') 'Windows release packaging must use built-in PowerShell Authenticode signing.'
+Assert-Condition ($windowsReleaseScript -notmatch 'signtool\.exe') 'Windows release packaging must not require Windows SDK signtool.'
+Assert-Condition ($windowsReleaseScript -match 'TimeStamperCertificate') 'Windows release packaging must reject signatures without a timestamp certificate.'
+Assert-Condition ($windowsReleaseScript -match 'CertificateSha256') 'Windows release packaging must verify the exact SHA-256 certificate identity.'
 Assert-Condition ($windowsReleaseScript -match 'release-manifest\.json') 'Windows release packaging must produce the headless Client manifest.'
 Assert-Condition ($windowsReleaseScript -match 'embeddedReleaseManifestBase64') 'The signed controller must embed its node-release trust manifest.'
 Assert-Condition ($windowsReleaseScript -match 'signerThumbprint') 'The node-release manifest must pin the exact Authenticode signer.'
 Assert-Condition ($windowsReleaseScript -notmatch '(?m)^\s*publisher\s*=') 'The mutable release manifest must not choose a trusted publisher.'
+Assert-Condition ($windowsReleaseScript -match 'MobileEgressSetup\.exe') 'The controller package must include the guided setup executable.'
 Assert-Condition ($windowsReleaseScript -match 'mobile-egress-relay\.exe') 'The controller package must include the local relay.'
 Assert-Condition ($windowsReleaseScript -match 'mobile-egress-admin\.exe') 'The controller package must include the elevated helper.'
 Assert-Condition ($windowsReleaseScript -match 'mobile-egress-client\.exe') 'The controller package must include the headless Client release.'
+Assert-Condition ($windowsReleaseScript -match 'mobile-egress-code-signing\.cer') 'The release ZIP must include the tracked public publisher certificate.'
+Assert-Condition ($windowsReleaseScript -match 'release-signing-certificate\.txt') 'The release ZIP must include the public publisher identity record.'
+
+$androidGitRegressionOutput = & (Join-Path $PSScriptRoot 'test-android-git-check.ps1') *>&1 | Out-String
+Assert-Condition ($LASTEXITCODE -eq 0) 'The Android Git path check regression must pass under ErrorActionPreference Stop.'
+Assert-Condition ($androidGitRegressionOutput -match 'regression passed') 'The Android Git path check regression did not report success.'
 
 $releaseValidationOutput = & (Join-Path $PSScriptRoot 'release-android.ps1') -ValidateOnly -SimulateMissingSigningInputs *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 10) 'Missing Android signing inputs must exit with code 10.'

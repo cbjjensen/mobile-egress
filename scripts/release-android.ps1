@@ -25,6 +25,35 @@ function Get-SigningProperties {
     return $properties
 }
 
+function Test-RepositoryPathTracked {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory)]
+        [string]$RelativePath
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $null = & git -C $RepositoryRoot ls-files --error-unmatch -- $RelativePath 2>&1
+        $gitExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($gitExitCode -eq 0) {
+        return $true
+    }
+    if ($gitExitCode -eq 1) {
+        return $false
+    }
+    throw "Git ls-files failed while checking Android signing path: $RelativePath"
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 if ($SimulateMissingSigningInputs) {
     Write-Host 'Missing Android signing inputs. Restore the reusable ignored keystore and android\keystore.properties, or configure them before the first release.'
     exit 10
@@ -32,8 +61,7 @@ if ($SimulateMissingSigningInputs) {
 
 $propertiesFileExists = Test-Path -LiteralPath $propertiesPath -PathType Leaf
 if ($propertiesFileExists) {
-    git -C $repositoryRoot ls-files --error-unmatch -- android/keystore.properties *> $null
-    if ($LASTEXITCODE -eq 0) {
+    if (Test-RepositoryPathTracked -RepositoryRoot $repositoryRoot -RelativePath 'android/keystore.properties') {
         Write-Host 'Refusing to release: android\keystore.properties is tracked by Git. Remove it from version control before retrying.'
         exit 11
     }
@@ -78,8 +106,7 @@ if ($SimulateMissingKeystore -or -not (Test-Path -LiteralPath $keystorePath -Pat
 $repositoryPrefix = [System.IO.Path]::GetFullPath($repositoryRoot).TrimEnd('\') + '\'
 if ($keystorePath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     $relativeKeystorePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $keystorePath).Replace('\', '/')
-    git -C $repositoryRoot ls-files --error-unmatch -- $relativeKeystorePath *> $null
-    if ($LASTEXITCODE -eq 0) {
+    if (Test-RepositoryPathTracked -RepositoryRoot $repositoryRoot -RelativePath $relativeKeystorePath) {
         Write-Host 'Refusing to release: the Android release keystore is tracked by Git.'
         exit 11
     }
