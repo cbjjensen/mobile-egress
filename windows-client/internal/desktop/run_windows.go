@@ -749,7 +749,7 @@ func decodeNodeReleaseManifest(raw []byte) (cloud.NodeRelease, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || manifest.Version != 1 || manifest.Client.Validate() != nil {
+	if decoder.Decode(&manifest) != nil || manifest.Version != 2 || manifest.Client.Validate() != nil {
 		return cloud.NodeRelease{}, errors.New("release manifest is invalid")
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {

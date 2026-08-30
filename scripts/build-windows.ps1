@@ -119,6 +119,40 @@ function Write-ReleaseUtf8NoBomFile {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function New-NodeReleaseManifestJson {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ReleaseVersion,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+        [string]$ClientSHA256,
+        [Parameter(Mandatory)]
+        [pscustomobject]$Identity
+    )
+
+    $certificateBase64 = [Convert]::ToBase64String($Identity.PublicCertificate.RawData)
+    $certificateSha256 = (Get-CertificateSha256 -Certificate $Identity.PublicCertificate).ToLowerInvariant()
+    if ($certificateBase64 -cne $Identity.CertificateBase64 -or $certificateSha256 -cne $Identity.CertificateSha256.ToLowerInvariant()) {
+        throw 'The node-release manifest certificate does not exactly match the tracked publisher CER.'
+    }
+    if ($Identity.PublicCertificate.RawData.Length -gt 16384) {
+        throw 'The tracked publisher CER exceeds the node-release validation bound.'
+    }
+
+    $manifest = [ordered]@{
+        version = 2
+        client = [ordered]@{
+            version = $ReleaseVersion
+            url = "https://github.com/cbjjensen/mobile-egress/releases/download/v$ReleaseVersion/mobile-egress-client.exe"
+            sha256 = $ClientSHA256.ToLowerInvariant()
+            signerThumbprint = $Identity.Thumbprint.ToLowerInvariant()
+            signerCertificateSha256 = $certificateSha256
+            signerCertificateBase64 = $certificateBase64
+        }
+    }
+    return ($manifest | ConvertTo-Json -Compress -Depth 4)
+}
+
 if ($MyInvocation.InvocationName -eq '.') {
     return
 }
@@ -153,16 +187,7 @@ try {
 
     $clientPath = Join-Path $serviceBinRoot 'mobile-egress-client.exe'
     $clientDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $clientPath).Hash.ToLowerInvariant()
-    $manifest = [ordered]@{
-        version = 1
-        client = [ordered]@{
-            version = $ReleaseVersion
-            url = "https://github.com/cbjjensen/mobile-egress/releases/download/v$ReleaseVersion/mobile-egress-client.exe"
-            sha256 = $clientDigest
-            signerThumbprint = $identity.Thumbprint.ToLowerInvariant()
-        }
-    }
-    $manifestJSON = $manifest | ConvertTo-Json -Compress -Depth 4
+    $manifestJSON = New-NodeReleaseManifestJson -ReleaseVersion $ReleaseVersion -ClientSHA256 $clientDigest -Identity $identity
     $manifestBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifestJSON))
 
     Push-Location $windowsRoot

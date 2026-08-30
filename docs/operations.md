@@ -8,8 +8,8 @@ An EC2 application opts in with its node-specific `socks5://<user>:<password>@12
 
 ## Controller actions
 
-- **Install Client** verifies the GitHub URL metadata, SHA-256, and Authenticode signature before installing a LocalSystem service and provisioning a node identity.
-- **Update** replaces the executable with the current signed release while retaining node keys, certificate, and SOCKS credentials.
+- **Install Client** validates signed manifest v2 and its embedded publisher certificate, then verifies the GitHub artifact SHA-256 and exact Authenticode signer before installing a LocalSystem service and provisioning a node identity.
+- **Update** repeats the same release/trust checks and replaces the executable while retaining node keys, certificate, and SOCKS credentials.
 - **Repair** performs the signed update and sends a fresh sealed copy of the existing configuration.
 - **Copy credentials** is the only normal action that reveals SOCKS authentication.
 - **Rotate endpoint safely** appears when the Tailscale Funnel origin differs from the encrypted Owner origin. Connect AWS first whenever managed nodes exist.
@@ -18,6 +18,14 @@ An EC2 application opts in with its node-specific `socks5://<user>:<password>@12
 Client installation reserves one of the ten encrypted controller slots before provisioning. The controller writes a recoverable `configuring` record before sending the sealed configuration and commits it to `installed` only after the node service restarts successfully. Endpoint rotation uses the same write-before-apply rule for its desired URL and generation. If either action times out and the node appears in the managed list, use **Repair**; it safely reapplies that desired generation and credentials. If the controller itself exited before the node appeared, choose **Install Client** for that same instance again to resume its durable reservation. A different instance cannot consume the reserved slot.
 
 Only one controller process may run for a Windows user/machine installation; launching it again activates the existing window. If a reserved EC2 instance was terminated or can no longer be recovered, use **Interrupted install reservations → Cancel reservation**, read the warning, and confirm explicitly. Cancellation releases only the local capacity reservation; it does not terminate an instance, revoke a certificate, or mutate AWS.
+
+## EC2 publisher trust bootstrap
+
+The signed controller is the authority for node-release manifest v2. It validates the embedded public certificate and release metadata locally before sending SSM any command. SSM then performs this fixed order: download the exact GitHub HTTPS artifact; verify its pinned SHA-256; reconstruct and hash the embedded public DER; require the intact pre-trust Authenticode signature to carry those exact certificate bytes; add that certificate to `LocalMachine\Root` and `LocalMachine\TrustedPublisher` only where absent; require post-trust Authenticode `Valid` with the same certificate; then install or update the service.
+
+An already trusted exact certificate is a normal idempotent case. If a later step fails, the command tracks which store entries this attempt added and removes only those exact certificate bytes. It never removes a pre-existing entry or a different certificate. Do not manually import a certificate downloaded beside the release, bypass the checks, or clear either certificate store. Publisher replacement or compromise requires a separately reviewed trust-removal operation on every node.
+
+The public publisher DER/fingerprints and signed-release URL/hash may appear in SSM input or logs. Private signing material, its password, SOCKS credentials, pairing values, private keys, and plaintext sealed configuration must not. Success output remains bounded public bootstrap JSON or fixed update JSON; controller errors remain redacted.
 
 ## Endpoint rotation runbook
 
@@ -40,7 +48,8 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | Agent offline | Android foreground service, cellular availability, battery restrictions | Start from visible UI; restore cellular. Wi-Fi is intentionally not a fallback. |
 | Node missing | Region, running Windows Server 2019 x86-64 image, AWS authorization | Use `us-east-1`; the app intentionally filters other nodes. |
 | SSM offline | SSM Agent/service, outbound HTTPS/DNS, IAM policy propagation | Wait or repair SSM. Do not open inbound ports. |
-| Install/update rejected | GitHub release URL, manifest hash, Authenticode signer | Publish/use the exact signed artifact. Never bypass verification. |
+| Install/update rejected before SSM | Manifest v2 shape; certificate DER bound/parse; self-signature; Code Signing EKU; CA=false; validity; SHA-1/SHA-256 consistency | Rebuild from the established tracked CER and current signing identity. Do not edit the manifest or initialize a replacement identity. |
+| Install/update rejected on node | GitHub artifact hash; pre-trust exact signer; `LocalMachine\Root` and `TrustedPublisher`; post-trust `Valid` | Publish/use the exact signed artifact. Retry after correcting the release or SSM health; rollback is attempt-scoped. Never bypass verification or clear certificate stores. |
 | SOCKS authentication fails | Credentials copied for the same node; Client service running | Copy credentials again or use **Repair**. Do not put credentials in SSM commands. |
 | Stream rejected | Four-stream per-Client or 32-stream aggregate bound, target policy, Agent loss | Reduce concurrency or restore Agent/cellular. Do not increase queues ad hoc. |
 

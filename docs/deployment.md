@@ -11,7 +11,7 @@ Use the Windows computer that controls the signing keys. It needs:
 - the repository checked out on the exact commit to release;
 - Go and Node.js versions accepted by `scripts\preflight.ps1`;
 - JDK 17 or later, Android SDK Platform 35, and Android Build-Tools 35;
-- WebView2 and the Windows SDK signing tools (`signtool.exe`);
+- WebView2;
 - GitHub CLI authenticated to `cbjjensen/mobile-egress`; and
 - the established local Mobile Egress Authenticode publisher identity with an accessible private key.
 
@@ -29,7 +29,7 @@ As an alternative to Android environment variables, the ignored `android\local.p
 
 ### Windows local publisher workflow
 
-Mobile Egress uses one locally generated, self-signed Authenticode publisher identity. Its subject is `CN=Mobile Egress Local Publisher`; it is RSA-4096, SHA-256, Code Signing EKU only, CA=false, and valid for ten years. It belongs in `Cert:\CurrentUser\My` on the publisher workstation and must expose its private key to `signtool`.
+Mobile Egress uses one locally generated, self-signed Authenticode publisher identity. Its subject is `CN=Mobile Egress Local Publisher`; it is RSA-4096, SHA-256, Code Signing EKU only, CA=false, and valid for ten years. It belongs in `Cert:\CurrentUser\My` on the publisher workstation and must expose its private key to PowerShell `Set-AuthenticodeSignature`.
 
 Initialize this identity once, on the publisher workstation:
 
@@ -76,7 +76,7 @@ $certificateSha256
 
 Double-click `MobileEgressSetup.exe` after any desired Windows signature inspection. The initial Windows dialog can identify setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**; self-signing does not create SmartScreen reputation. Setup displays the tracked fingerprint, requires explicit **Yes**, locks its own exact executable against write/delete/replacement, verifies its exact signer, hashes it after confirmation, and holds the lock through elevated-child completion. The child independently checks the request-bound digest and signature before trust. The parent reads the bound redacted result after every completed child and launches only when child exit is zero and that result reports success.
 
-The signed controller carries the same public publisher certificate. Before an EC2 Client accepts its normal Authenticode validation, the controller establishes that exact public certificate as the EC2 trust anchor through its guided SSM flow. EC2 nodes receive only the public certificate and signed artifacts; they never receive the PFX, its password, or another private signing value.
+The signed controller carries node-release manifest v2 with that same public publisher certificate DER, its SHA-1 thumbprint and SHA-256 fingerprint, and the exact Client URL/artifact SHA-256. Go validates the bounded X.509 DER, cryptographic self-signature, Code Signing EKU, CA=false constraint, current validity, fingerprints, and release metadata before constructing SSM commands. The SSM flow verifies artifact hash and the exact untrusted signer bytes before importing the embedded DER into EC2 `LocalMachine\Root` and `LocalMachine\TrustedPublisher`, then requires `Valid` with the same signer. EC2 nodes receive only public certificate/release material; they never receive the PFX, its password, or another private signing value.
 
 Back up the PFX and its password together in an encrypted location separate from the publisher workstation. Test a restore before relying on that backup. A loss or compromise of the publisher identity is a release-path incident: stop distributing affected releases, preserve restricted evidence, tell recipients not to trust new artifacts under that identity, and perform a reviewed publisher replacement with a new out-of-band fingerprint and explicit old-trust removal.
 
@@ -144,7 +144,7 @@ $codeSigningThumbprint = '<40-hex-thumbprint>'
 if ($LASTEXITCODE -ne 0) { throw 'The signed Windows build failed.' }
 ```
 
-The script builds and verifies the setup application and four executables, embeds the exact headless Client URL/hash/signer and publisher certificate in the controller, and creates:
+The script builds and verifies the setup application and four executables, reads the tracked CER, emits node-release manifest v2, embeds that manifest in the controller before signing it, and creates:
 
 ```text
 windows-client\build\release\mobile-egress-windows-<version>.zip
@@ -187,7 +187,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $windowsZip, $clientExecutable
 Get-Content -Raw '.\windows-client\build\bin\release-manifest.json'
 ```
 
-Every executable should report `Valid` and the same expected signer thumbprint. The manifest's Client SHA-256 must match `Get-FileHash`. It is safe to record artifact hashes and the release-signing subject/thumbprint; do not record any Mobile Egress relay or device certificate.
+Every executable should report `Valid` and the same expected signer thumbprint. The manifest must report version `2`; its Client SHA-256 must match `Get-FileHash`; `signerCertificateBase64` must decode byte-for-byte to `windows-signing\mobile-egress-code-signing.cer`; and `signerCertificateSha256` must match the tracked public record in lowercase. It is safe to record artifact hashes and the release-signing subject/thumbprint; do not record any Mobile Egress relay or device certificate.
 
 ## Part 4: Create and protect the Android signing key
 
@@ -340,7 +340,7 @@ The only relay listener must be `127.0.0.1:8443`.
 2. Refresh **EC2 Nodes** and confirm only the intended supported `us-east-1` instances appear.
 3. For a profile-less node, choose **Prepare SSM** and allow the dedicated role/profile creation.
 4. For an existing non-SSM role, read the displayed role name and explicitly approve adding only `AmazonSSMManagedInstanceCore`. Never approve profile replacement.
-5. Wait for each node to show **SSM online**, then choose **Install Client** on both.
+5. Wait for each node to show **SSM online**, then choose **Install Client** on both. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
 6. Require distinct Client serials and credentials. Do not paste credentials into SSM, tickets, chat, or the acceptance record.
 
 On each EC2 node, confirm the service and listener through an interactive administrative PowerShell session:
@@ -426,7 +426,7 @@ Tailscale documents that editing a machine name changes its MagicDNS domain: [Ma
 
 Before signing off:
 
-- inspect SSM command history and require only signed-release metadata, public bootstrap CSR/key output, sealed ciphertext, and fixed success/error output;
+- inspect SSM command history and require only signed-release metadata, public publisher DER/fingerprints, public bootstrap CSR/key output, sealed ciphertext, and fixed success/error output;
 - confirm no raw SOCKS password, private key, pairing capability, or plaintext node configuration appears;
 - confirm no EC2 instance, Elastic IP, public IP, or inbound rule was created/changed by Mobile Egress;
 - confirm Windows relay/node state directories remain ACL-restricted to SYSTEM and local Administrators; and

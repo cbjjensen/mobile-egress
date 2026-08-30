@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +15,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/nodeservice"
@@ -20,10 +24,12 @@ import (
 )
 
 type NodeRelease struct {
-	Version          string `json:"version"`
-	URL              string `json:"url"`
-	SHA256           string `json:"sha256"`
-	SignerThumbprint string `json:"signerThumbprint"`
+	Version                 string `json:"version"`
+	URL                     string `json:"url"`
+	SHA256                  string `json:"sha256"`
+	SignerThumbprint        string `json:"signerThumbprint"`
+	SignerCertificateSHA256 string `json:"signerCertificateSha256"`
+	SignerCertificateBase64 string `json:"signerCertificateBase64"`
 }
 
 type ManagedNode struct {
@@ -255,24 +261,57 @@ func (release NodeRelease) Validate() error {
 	if strings.ContainsAny(release.Version+release.URL, "'\"\r\n") {
 		return errors.New("Client release metadata is invalid")
 	}
+	if len(release.SignerCertificateSHA256) != 64 || release.SignerCertificateSHA256 != strings.ToLower(release.SignerCertificateSHA256) {
+		return errors.New("Client release signer certificate SHA-256 is invalid")
+	}
+	if _, err := hex.DecodeString(release.SignerCertificateSHA256); err != nil {
+		return errors.New("Client release signer certificate SHA-256 is invalid")
+	}
+	const maxSignerCertificateDERBytes = 16 << 10
+	if len(release.SignerCertificateBase64) == 0 || len(release.SignerCertificateBase64) > base64.StdEncoding.EncodedLen(maxSignerCertificateDERBytes) {
+		return errors.New("Client release signer certificate is invalid")
+	}
+	certificateDER, err := base64.StdEncoding.DecodeString(release.SignerCertificateBase64)
+	if err != nil || len(certificateDER) == 0 || len(certificateDER) > maxSignerCertificateDERBytes || base64.StdEncoding.EncodeToString(certificateDER) != release.SignerCertificateBase64 {
+		return errors.New("Client release signer certificate is invalid")
+	}
+	certificate, err := x509.ParseCertificate(certificateDER)
+	if err != nil || len(certificate.UnhandledCriticalExtensions) != 0 {
+		return errors.New("Client release signer certificate is invalid")
+	}
+	certificateSHA256 := sha256.Sum256(certificateDER)
+	if hex.EncodeToString(certificateSHA256[:]) != release.SignerCertificateSHA256 {
+		return errors.New("Client release signer certificate SHA-256 does not match")
+	}
+	certificateSHA1 := sha1.Sum(certificateDER)
+	if !strings.EqualFold(hex.EncodeToString(certificateSHA1[:]), release.SignerThumbprint) {
+		return errors.New("Client release signer thumbprint does not match")
+	}
+	if err := certificate.CheckSignature(certificate.SignatureAlgorithm, certificate.RawTBSCertificate, certificate.Signature); err != nil {
+		return errors.New("Client release signer certificate is not self-signed")
+	}
+	if !certificate.BasicConstraintsValid || certificate.IsCA {
+		return errors.New("Client release signer certificate must enforce CA=false")
+	}
+	codeSigning := false
+	for _, usage := range certificate.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageCodeSigning {
+			codeSigning = true
+			break
+		}
+	}
+	if !codeSigning {
+		return errors.New("Client release signer certificate does not permit code signing")
+	}
+	now := time.Now()
+	if now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
+		return errors.New("Client release signer certificate is not currently valid")
+	}
 	return nil
 }
 
 func updateScript(release NodeRelease) string {
-	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
-$installDir = 'C:\Program Files\MobileEgress'
-$stateDir = 'C:\ProgramData\MobileEgress\Client'
-$download = Join-Path $env:TEMP 'mobile-egress-client.update.exe'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
-$digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
-if ($digest -ne '%s') { throw 'release digest verification failed' }
-$signature = Get-AuthenticodeSignature -LiteralPath $download
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne '%s') { throw 'release signature verification failed' }
-$null = New-Item -ItemType Directory -Force -Path $installDir
-$null = New-Item -ItemType Directory -Force -Path $stateDir
-$null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
-$service = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
+	return trustedReleaseScript(release, `$service = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
 if ($null -ne $service -and $service.Status -ne 'Stopped') { Stop-Service -Name 'MobileEgressClient' -Force }
 $executable = Join-Path $installDir 'mobile-egress-client.exe'
 Move-Item -Force -LiteralPath $download -Destination $executable
@@ -282,24 +321,11 @@ if ($null -eq $service) {
   $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
 }
 Start-Service -Name 'MobileEgressClient'
-Write-Output '{"updated":true}'`, release.URL, strings.ToLower(release.SHA256), strings.ToUpper(release.SignerThumbprint))
+Write-Output '{"updated":true}'`)
 }
 
 func installScript(release NodeRelease) string {
-	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
-$installDir = 'C:\Program Files\MobileEgress'
-$stateDir = 'C:\ProgramData\MobileEgress\Client'
-$download = Join-Path $env:TEMP 'mobile-egress-client.download.exe'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
-$digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
-if ($digest -ne '%s') { throw 'release digest verification failed' }
-$signature = Get-AuthenticodeSignature -LiteralPath $download
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne '%s') { throw 'release signature verification failed' }
-$null = New-Item -ItemType Directory -Force -Path $installDir
-$null = New-Item -ItemType Directory -Force -Path $stateDir
-$null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
-$executable = Join-Path $installDir 'mobile-egress-client.exe'
+	return trustedReleaseScript(release, `$executable = Join-Path $installDir 'mobile-egress-client.exe'
 Move-Item -Force -LiteralPath $download -Destination $executable
 $existing = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
 if ($null -eq $existing) {
@@ -307,7 +333,109 @@ if ($null -eq $existing) {
 } else {
   $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
 }
-& $executable bootstrap --state-dir $stateDir`, release.URL, strings.ToLower(release.SHA256), strings.ToUpper(release.SignerThumbprint))
+$bootstrapOutput = (& $executable bootstrap --state-dir $stateDir 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Client bootstrap failed' }
+if ([Text.Encoding]::UTF8.GetByteCount($bootstrapOutput) -gt 524288) { throw 'Client bootstrap output exceeded its public bound' }
+Write-Output $bootstrapOutput`)
+}
+
+func trustedReleaseScript(release NodeRelease, operation string) string {
+	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$installDir = 'C:\Program Files\MobileEgress'
+$stateDir = 'C:\ProgramData\MobileEgress\Client'
+$attemptID = [Guid]::NewGuid().ToString('N')
+$download = Join-Path $env:TEMP ("mobile-egress-client-$attemptID.exe")
+$certificatePath = Join-Path $env:TEMP ("mobile-egress-publisher-$attemptID.cer")
+$certificateBase64 = '%s'
+$certificateSha256 = '%s'
+$certificateThumbprint = '%s'
+$addedStores = [Collections.Generic.List[string]]::new()
+
+function Get-ExactTrustCertificate {
+  param([Parameter(Mandatory)][string]$StoreName)
+  $storePath = "Cert:\LocalMachine\$StoreName"
+  $thumbprintMatches = @(Get-ChildItem -LiteralPath $storePath | Where-Object { $_.Thumbprint.ToUpperInvariant() -eq $certificateThumbprint })
+  foreach ($candidate in $thumbprintMatches) {
+    if ([Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64) { return $candidate }
+  }
+  if ($thumbprintMatches.Count -ne 0) { throw 'publisher trust store contains a non-exact thumbprint collision' }
+  return $null
+}
+
+function Ensure-ExactTrust {
+  param([Parameter(Mandatory)][string]$StoreName)
+  if ($null -ne (Get-ExactTrustCertificate -StoreName $StoreName)) { return }
+  $null = $addedStores.Add($StoreName)
+  $null = Import-Certificate -FilePath $certificatePath -CertStoreLocation "Cert:\LocalMachine\$StoreName"
+  if ($null -eq (Get-ExactTrustCertificate -StoreName $StoreName)) { throw 'exact publisher trust import failed' }
+}
+
+function Remove-AttemptTrust {
+  param([Parameter(Mandatory)][string]$StoreName)
+  $store = [Security.Cryptography.X509Certificates.X509Store]::new($StoreName, [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+  try {
+    $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    foreach ($candidate in @($store.Certificates)) {
+      if ($candidate.Thumbprint.ToUpperInvariant() -eq $certificateThumbprint -and [Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64) {
+        $store.Remove($candidate)
+      }
+    }
+  } finally {
+    $store.Close()
+    $store.Dispose()
+  }
+}
+
+try {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
+  $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+  if ($digest -ne '%s') { throw 'release digest verification failed' }
+
+  [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($certificateBase64))
+  $certificateDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $certificatePath).Hash.ToLowerInvariant()
+  if ($certificateDigest -ne $certificateSha256) { throw 'publisher certificate digest verification failed' }
+  $embeddedCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
+  try {
+    if ($embeddedCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint -or [Convert]::ToBase64String($embeddedCertificate.RawData) -cne $certificateBase64) {
+      throw 'publisher certificate identity verification failed'
+    }
+  } finally {
+    $embeddedCertificate.Dispose()
+  }
+
+  $untrustedSignature = Get-AuthenticodeSignature -LiteralPath $download
+  if ($untrustedSignature.Status.ToString() -notin @('NotTrusted', 'Valid')) { throw 'release signature is not intact before trust' }
+  if ($null -eq $untrustedSignature.SignerCertificate -or [Convert]::ToBase64String($untrustedSignature.SignerCertificate.RawData) -cne $certificateBase64) {
+    throw 'release signer certificate does not match before trust'
+  }
+  if ($untrustedSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint) { throw 'release signer thumbprint does not match before trust' }
+
+  Ensure-ExactTrust -StoreName 'Root'
+  Ensure-ExactTrust -StoreName 'TrustedPublisher'
+
+  $trustedSignature = Get-AuthenticodeSignature -LiteralPath $download
+  if ($trustedSignature.Status.ToString() -ne 'Valid' -or $null -eq $trustedSignature.SignerCertificate) { throw 'release signature is not valid after trust' }
+  if ($trustedSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint -or [Convert]::ToBase64String($trustedSignature.SignerCertificate.RawData) -cne $certificateBase64) {
+    throw 'release signer certificate does not match after trust'
+  }
+
+  $null = New-Item -ItemType Directory -Force -Path $installDir
+  $null = New-Item -ItemType Directory -Force -Path $stateDir
+  $null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
+%s
+} catch {
+  $rollbackFailed = $false
+  foreach ($storeName in @($addedStores)) {
+    try { Remove-AttemptTrust -StoreName $storeName } catch { $rollbackFailed = $true }
+  }
+  if ($rollbackFailed) { throw 'Client release failed and exact publisher trust rollback failed' }
+  throw 'Client release operation failed'
+} finally {
+  Remove-Item -Force -LiteralPath $certificatePath -ErrorAction SilentlyContinue
+  Remove-Item -Force -LiteralPath $download -ErrorAction SilentlyContinue
+}`, release.SignerCertificateBase64, release.SignerCertificateSHA256, strings.ToUpper(release.SignerThumbprint), release.URL, strings.ToLower(release.SHA256), operation)
 }
 
 func applyScript(envelopeJSON []byte) string {

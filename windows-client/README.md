@@ -44,7 +44,9 @@ ProgramData state ACLs are reduced to SYSTEM and local Administrators. The eleva
 
 ## Node bootstrap and sealed configuration
 
-The app invokes SSM to download the exact GitHub Client release, verify SHA-256 and Authenticode, install the service, and run `bootstrap`. Bootstrap is idempotent and returns only the Client CSR and durable X25519 public configuration key.
+The signed controller embeds node-release manifest v2. Before invoking SSM it parses the bounded public certificate DER and validates its exact SHA-1/SHA-256 identity, cryptographic self-signature, Code Signing EKU, CA=false constraint, current validity, and the GitHub release metadata. SSM downloads the exact artifact, verifies SHA-256, requires the untrusted Authenticode signature to carry the exact embedded certificate bytes, imports only that DER into LocalMachine Root and TrustedPublisher when absent, and then requires Authenticode `Valid` with the same signer before installation. A failed attempt removes only exact trust entries it added; an already trusted exact certificate is idempotent.
+
+After trust and artifact validation, the app installs the service and runs `bootstrap`. Bootstrap is idempotent and returns only the Client CSR and durable X25519 public configuration key. The public publisher certificate may appear in SSM input/logs; private signing material, SOCKS credentials, pairing values, and plaintext configuration may not.
 
 The Owner signs the CSR directly. SOCKS credentials and the resulting endpoint/certificates are encrypted to the node key with ephemeral X25519 + HKDF-SHA256 + AES-256-GCM. Only the sealed envelope crosses SSM. An authenticated monotonic generation rejects old envelopes even after newer updates. A bounded fingerprint window rejects recent exact replays; any older valid envelope for the current generation is accepted only as an idempotent no-op when it decrypts to the exact persisted configuration. Same-generation content changes always fail closed.
 

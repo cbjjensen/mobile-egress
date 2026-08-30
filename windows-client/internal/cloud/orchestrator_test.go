@@ -2,9 +2,19 @@ package cloud
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"mobile-egress/windows-client/internal/relayclient"
 )
@@ -23,10 +33,7 @@ func TestInstallNodeUsesPublicBootstrapAndSealedConfigurationOnly(t *testing.T) 
 	}}
 	metadata := &memoryNodeStore{}
 	orchestrator := NewOrchestrator(runner, issuer, metadata)
-	node, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", NodeRelease{
-		Version: "1.2.3", URL: "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe",
-		SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", SignerThumbprint: "0123456789abcdef0123456789abcdef01234567",
-	})
+	node, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", testNodeRelease(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +67,7 @@ func TestInstallNodeRedactsRunnerErrors(t *testing.T) {
 
 	runner := &fakeCommandRunner{err: sensitiveError("private-output-marker")}
 	orchestrator := NewOrchestrator(runner, &fakeIssuer{}, &memoryNodeStore{})
-	_, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", NodeRelease{
-		Version: "1.2.3", URL: "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe",
-		SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", SignerThumbprint: "0123456789abcdef0123456789abcdef01234567",
-	})
+	_, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", testNodeRelease(t))
 	if err == nil || strings.Contains(err.Error(), "private-output-marker") {
 		t.Fatalf("Install() error was not redacted: %v", err)
 	}
@@ -123,10 +127,9 @@ func TestRepairCompletesEndpointUpdateAfterTheRemoteApplySucceedsButFinalSaveFai
 		t.Fatalf("recoverable endpoint metadata = %#v", store.saved)
 	}
 	store.failAt = 0
-	release := NodeRelease{
-		Version: "1.2.4", URL: "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.4/mobile-egress-client.exe",
-		SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", SignerThumbprint: "0123456789abcdef0123456789abcdef01234567",
-	}
+	release := testNodeRelease(t)
+	release.Version = "1.2.4"
+	release.URL = "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.4/mobile-egress-client.exe"
 	repairRunner := &fakeCommandRunner{outputs: []string{`{"updated":true}`, `{"configured":true}`}}
 	updated, err := NewOrchestrator(repairRunner, nil, store).Repair(context.Background(), store.saved, release)
 	if err != nil {
@@ -144,10 +147,7 @@ func TestRepairCompletesAnInstallAfterItsFinalMetadataSaveFails(t *testing.T) {
 		"csrPem":                 "-----BEGIN CERTIFICATE REQUEST-----\nPUBLIC-CSR\n-----END CERTIFICATE REQUEST-----\n",
 		"configurationPublicKey": "uwCX-1JULdTd8a14hBKNL8CyZdmKf6w_X0tnQkEMaV0",
 	})
-	release := NodeRelease{
-		Version: "1.2.3", URL: "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe",
-		SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", SignerThumbprint: "0123456789abcdef0123456789abcdef01234567",
-	}
+	release := testNodeRelease(t)
 	installRunner := &fakeCommandRunner{outputs: []string{string(bootstrapJSON), `{"configured":true}`}}
 	issuer := &fakeIssuer{result: relayclient.ProvisionedIdentity{
 		RelayURL: "https://bridge.tail123.ts.net:8443", Role: "client", Serial: "A1B2",
@@ -180,10 +180,9 @@ func TestSignedNodeUpdateAndRepairNeverExposeConfiguration(t *testing.T) {
 		ServiceVersion: "1.2.3", Health: "healthy", SOCKSUsername: "user-secret", SOCKSPassword: "password-secret", SOCKSPort: 1080,
 		RelayURL: "https://bridge.tail123.ts.net:8443", CertificatePEM: "certificate-secret", CACertificatePEM: "ca-secret",
 	}
-	release := NodeRelease{
-		Version: "1.2.4", URL: "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.4/mobile-egress-client.exe",
-		SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", SignerThumbprint: "0123456789abcdef0123456789abcdef01234567",
-	}
+	release := testNodeRelease(t)
+	release.Version = "1.2.4"
+	release.URL = "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.4/mobile-egress-client.exe"
 	runner := &fakeCommandRunner{outputs: []string{`{"updated":true}`, `{"configured":true}`}}
 	store := &memoryNodeStore{}
 	orchestrator := NewOrchestrator(runner, &fakeIssuer{}, store)
@@ -205,6 +204,208 @@ func TestSignedNodeUpdateAndRepairNeverExposeConfiguration(t *testing.T) {
 			t.Fatalf("repair SSM input exposed %q", secret)
 		}
 	}
+}
+
+func TestNodeReleaseRequiresCurrentExactSelfSignedCodeSigningCertificate(t *testing.T) {
+	t.Parallel()
+
+	valid := testNodeRelease(t)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid release rejected: %v", err)
+	}
+
+	corruptSignatureDER := testCodeSigningCertificate(t, nil)
+	corruptSignatureDER[len(corruptSignatureDER)-1] ^= 0xff
+	corruptSignatureCertificate, err := x509.ParseCertificate(corruptSignatureDER)
+	if err != nil {
+		t.Fatalf("corrupt-signature fixture no longer parses as X.509: %v", err)
+	}
+	if err := corruptSignatureCertificate.CheckSignature(corruptSignatureCertificate.SignatureAlgorithm, corruptSignatureCertificate.RawTBSCertificate, corruptSignatureCertificate.Signature); err == nil {
+		t.Fatal("corrupt-signature fixture still has a valid cryptographic self-signature")
+	}
+	notCodeSigningDER := testCodeSigningCertificate(t, func(template *x509.Certificate) {
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	})
+	caDER := testCodeSigningCertificate(t, func(template *x509.Certificate) {
+		template.IsCA = true
+		template.KeyUsage |= x509.KeyUsageCertSign
+	})
+	missingConstraintsDER := testCodeSigningCertificate(t, func(template *x509.Certificate) {
+		template.BasicConstraintsValid = false
+	})
+	expiredDER := testCodeSigningCertificate(t, func(template *x509.Certificate) {
+		template.NotBefore = time.Now().Add(-2 * time.Hour)
+		template.NotAfter = time.Now().Add(-time.Hour)
+	})
+	futureDER := testCodeSigningCertificate(t, func(template *x509.Certificate) {
+		template.NotBefore = time.Now().Add(time.Hour)
+		template.NotAfter = time.Now().Add(2 * time.Hour)
+	})
+
+	tests := map[string]NodeRelease{
+		"non-lowercase certificate SHA-256": func() NodeRelease {
+			release := valid
+			release.SignerCertificateSHA256 = strings.ToUpper(release.SignerCertificateSHA256)
+			return release
+		}(),
+		"mismatched certificate SHA-256": func() NodeRelease {
+			release := valid
+			release.SignerCertificateSHA256 = strings.Repeat("0", 64)
+			return release
+		}(),
+		"mismatched SHA-1 thumbprint": func() NodeRelease {
+			release := valid
+			release.SignerThumbprint = strings.Repeat("0", 40)
+			return release
+		}(),
+		"malformed DER base64": func() NodeRelease {
+			release := valid
+			release.SignerCertificateBase64 = "not-base64"
+			return release
+		}(),
+		"non-canonical DER base64": func() NodeRelease {
+			release := valid
+			release.SignerCertificateBase64 = release.SignerCertificateBase64[:20] + "\n" + release.SignerCertificateBase64[20:]
+			return release
+		}(),
+		"oversized DER": func() NodeRelease {
+			release := valid
+			release.SignerCertificateBase64 = base64.StdEncoding.EncodeToString(make([]byte, 64<<10))
+			return release
+		}(),
+		"malformed DER":               releaseForTestCertificate([]byte("not a certificate")),
+		"invalid self-signature":      releaseForTestCertificate(corruptSignatureDER),
+		"missing Code Signing EKU":    releaseForTestCertificate(notCodeSigningDER),
+		"CA certificate":              releaseForTestCertificate(caDER),
+		"missing CA=false constraint": releaseForTestCertificate(missingConstraintsDER),
+		"expired certificate":         releaseForTestCertificate(expiredDER),
+		"not-yet-valid certificate":   releaseForTestCertificate(futureDER),
+	}
+	for name, release := range tests {
+		release := release
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := release.Validate(); err == nil {
+				t.Fatal("invalid release certificate was accepted")
+			}
+		})
+	}
+}
+
+func TestInstallAndUpdateRejectInvalidReleaseBeforeSendingSSM(t *testing.T) {
+	t.Parallel()
+
+	release := testNodeRelease(t)
+	release.SignerCertificateSHA256 = strings.Repeat("0", 64)
+	runner := &fakeCommandRunner{}
+	orchestrator := NewOrchestrator(runner, &fakeIssuer{}, &memoryNodeStore{})
+	if _, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", release); err == nil {
+		t.Fatal("Install() accepted invalid certificate metadata")
+	}
+	if _, err := orchestrator.Update(context.Background(), testManagedNode("i-0123456789abcdef0"), release); err == nil {
+		t.Fatal("Update() accepted invalid certificate metadata")
+	}
+	if len(runner.scripts) != 0 {
+		t.Fatalf("invalid release constructed/sent %d SSM scripts", len(runner.scripts))
+	}
+}
+
+func TestNodeTrustBootstrapVerifiesExactUntrustedSignerBeforeTrustAndRollsBackOnlyAttemptAdditions(t *testing.T) {
+	t.Parallel()
+
+	release := testNodeRelease(t)
+	for name, script := range map[string]string{"install": installScript(release), "update": updateScript(release)} {
+		script := script
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ordered := []string{
+				"Invoke-WebRequest",
+				"Get-FileHash -Algorithm SHA256 -LiteralPath $download",
+				"[IO.File]::WriteAllBytes($certificatePath",
+				"Get-FileHash -Algorithm SHA256 -LiteralPath $certificatePath",
+				"$untrustedSignature = Get-AuthenticodeSignature -LiteralPath $download",
+				"Ensure-ExactTrust -StoreName 'Root'",
+				"Ensure-ExactTrust -StoreName 'TrustedPublisher'",
+				"$trustedSignature = Get-AuthenticodeSignature -LiteralPath $download",
+			}
+			last := -1
+			for _, token := range ordered {
+				index := strings.Index(script, token)
+				if index <= last {
+					t.Fatalf("trust bootstrap token %q missing or out of order", token)
+				}
+				last = index
+			}
+			for _, required := range []string{
+				release.SignerCertificateBase64,
+				release.SignerCertificateSHA256,
+				strings.ToUpper(release.SignerThumbprint),
+				"@('NotTrusted', 'Valid')",
+				"[Convert]::ToBase64String($untrustedSignature.SignerCertificate.RawData) -cne $certificateBase64",
+				"$addedStores.Add($StoreName)",
+				"function Remove-AttemptTrust",
+				"[Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64",
+				"$store.Remove($candidate)",
+				"finally",
+			} {
+				if !strings.Contains(script, required) {
+					t.Fatalf("trust bootstrap is missing %q", required)
+				}
+			}
+			markAdded := strings.Index(script, "$addedStores.Add($StoreName)")
+			importCertificate := strings.Index(script, "Import-Certificate")
+			if markAdded < 0 || importCertificate < 0 || markAdded > importCertificate {
+				t.Fatal("trust addition is not tracked before the possibly partial import")
+			}
+			if strings.Contains(script, "Remove-Item -LiteralPath $candidate.PSPath") || strings.Contains(script, "Remove-Item -LiteralPath (Join-Path $storePath") {
+				t.Fatal("trust rollback can remove by path/thumbprint instead of exact certificate bytes")
+			}
+		})
+	}
+}
+
+func testNodeRelease(t *testing.T) NodeRelease {
+	t.Helper()
+	return releaseForTestCertificate(testCodeSigningCertificate(t, nil))
+}
+
+func releaseForTestCertificate(der []byte) NodeRelease {
+	sha1Digest := sha1.Sum(der)
+	sha256Digest := sha256.Sum256(der)
+	return NodeRelease{
+		Version:                 "1.2.3",
+		URL:                     "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe",
+		SHA256:                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		SignerThumbprint:        hex.EncodeToString(sha1Digest[:]),
+		SignerCertificateSHA256: hex.EncodeToString(sha256Digest[:]),
+		SignerCertificateBase64: base64.StdEncoding.EncodeToString(der),
+	}
+}
+
+func testCodeSigningCertificate(t *testing.T, mutate func(*x509.Certificate)) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Mobile Egress Test Publisher"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+	if mutate != nil {
+		mutate(template)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
 }
 
 type fakeCommandRunner struct {

@@ -7,12 +7,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -179,15 +185,29 @@ func TestAgentQrViewDoesNotExposeInvitationText(t *testing.T) {
 func TestSignedNodeReleaseManifestIsStrictAndGitHubBound(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","signerThumbprint":"0123456789abcdef0123456789abcdef01234567"}}`)
+	raw, expected := testNodeReleaseManifest(t, 2)
 	release, err := decodeNodeReleaseManifest(raw)
-	if err != nil || release.Version != "1.2.3" || release.SignerThumbprint != "0123456789abcdef0123456789abcdef01234567" {
+	if err != nil || release != expected {
 		t.Fatalf("decodeNodeReleaseManifest() = %#v/%v", release, err)
+	}
+	v1, _ := testNodeReleaseManifest(t, 1)
+	offDomain := expected
+	offDomain.URL = "https://example.com/client.exe"
+	offDomainRaw := marshalNodeReleaseManifest(t, 2, offDomain)
+	var unknownField map[string]any
+	if err := json.Unmarshal(raw, &unknownField); err != nil {
+		t.Fatal(err)
+	}
+	unknownField["publisher"] = "Attacker Selects This"
+	unknownFieldRaw, err := json.Marshal(unknownField)
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, invalid := range [][]byte{
 		append(append([]byte(nil), raw...), []byte(` {}`)...),
-		[]byte(`{"version":1,"client":{"version":"1.2.3","url":"https://example.com/client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`),
-		[]byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","publisher":"Attacker Selects This"}}`),
+		v1,
+		offDomainRaw,
+		unknownFieldRaw,
 	} {
 		if _, err := decodeNodeReleaseManifest(invalid); err == nil {
 			t.Fatalf("decodeNodeReleaseManifest() accepted %s", invalid)
@@ -196,15 +216,46 @@ func TestSignedNodeReleaseManifestIsStrictAndGitHubBound(t *testing.T) {
 }
 
 func TestNodeReleaseTrustLoadsOnlyFromTheSignedControllerEmbedding(t *testing.T) {
-	raw := []byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","signerThumbprint":"0123456789abcdef0123456789abcdef01234567"}}`)
+	raw, expected := testNodeReleaseManifest(t, 2)
 	previous := embeddedReleaseManifestBase64
 	embeddedReleaseManifestBase64 = base64.StdEncoding.EncodeToString(raw)
 	t.Cleanup(func() { embeddedReleaseManifestBase64 = previous })
 
 	release, err := loadNodeRelease()
-	if err != nil || release.Version != "1.2.3" || release.SignerThumbprint == "" {
+	if err != nil || release != expected {
 		t.Fatalf("loadNodeRelease() = %#v/%v", release, err)
 	}
+}
+
+func testNodeReleaseManifest(t *testing.T, manifestVersion int) ([]byte, cloud.NodeRelease) {
+	t.Helper()
+	certificateDER, err := os.ReadFile(filepath.Join("..", "..", "..", "windows-signing", "mobile-egress-code-signing.cer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha1Digest := sha1.Sum(certificateDER)
+	sha256Digest := sha256.Sum256(certificateDER)
+	release := cloud.NodeRelease{
+		Version:                 "1.2.3",
+		URL:                     "https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe",
+		SHA256:                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		SignerThumbprint:        hex.EncodeToString(sha1Digest[:]),
+		SignerCertificateSHA256: hex.EncodeToString(sha256Digest[:]),
+		SignerCertificateBase64: base64.StdEncoding.EncodeToString(certificateDER),
+	}
+	return marshalNodeReleaseManifest(t, manifestVersion, release), release
+}
+
+func marshalNodeReleaseManifest(t *testing.T, manifestVersion int, release cloud.NodeRelease) []byte {
+	t.Helper()
+	raw, err := json.Marshal(struct {
+		Version int               `json:"version"`
+		Client  cloud.NodeRelease `json:"client"`
+	}{Version: manifestVersion, Client: release})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func TestReplaceClientReturnsOnlyAGenericRecoveryError(t *testing.T) {
