@@ -2,9 +2,11 @@ package tailscale
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -75,6 +77,42 @@ func TestExecRunnerStartsBackgroundCommandsWithoutAVisibleConsole(t *testing.T) 
 	}
 	if newConsoleObserved {
 		t.Fatal("ExecRunner displayed a console window for a background command")
+	}
+}
+
+func TestExecRunnerStreamsOutputBeforeTheCommandCompletes(t *testing.T) {
+	helper := filepath.Join(t.TempDir(), "approval-runner.exe")
+	build := exec.Command("go", "build", "-o", helper, "./testdata/approval_runner")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build approval runner: %v: %s", err, output)
+	}
+	release := filepath.Join(t.TempDir(), "release")
+	var observed bytes.Buffer
+	var observedMu sync.Mutex
+	released := false
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, err := (ExecRunner{}).RunStreaming(ctx, helper, func(chunk []byte) {
+		observedMu.Lock()
+		defer observedMu.Unlock()
+		observed.Write(chunk)
+		if released || !bytes.Contains(observed.Bytes(), []byte("https://login.tailscale.com/f/funnel?node=test-node")) {
+			return
+		}
+		if writeErr := os.WriteFile(release, []byte("approved"), 0o600); writeErr == nil {
+			released = true
+		}
+	}, release)
+	if err != nil {
+		observedMu.Lock()
+		defer observedMu.Unlock()
+		t.Fatalf("RunStreaming() error = %v, observed = %q, released = %t", err, observed.String(), released)
+	}
+	if !released {
+		t.Fatal("RunStreaming() did not deliver output before the helper timed out")
+	}
+	if !bytes.Contains(output, []byte("Funnel approved")) {
+		t.Fatalf("RunStreaming() output = %q, want completion output", output)
 	}
 }
 

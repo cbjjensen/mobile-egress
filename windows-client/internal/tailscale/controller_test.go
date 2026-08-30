@@ -28,6 +28,42 @@ func TestControllerInstalledRequiresARegularExecutable(t *testing.T) {
 	}
 }
 
+func TestFindFunnelApprovalURLAcceptsOnlyTheOfficialFunnelEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "official URL",
+			output: "Funnel is not enabled on your tailnet.\nTo enable, visit:\n\n         https://login.tailscale.com/f/funnel?node=niiy8GTvVs11CNTRL\n",
+			want:   "https://login.tailscale.com/f/funnel?node=niiy8GTvVs11CNTRL",
+		},
+		{
+			name:   "lookalike host",
+			output: "https://login.tailscale.com.evil.example/f/funnel?node=niiy8GTvVs11CNTRL",
+		},
+		{
+			name:   "wrong path",
+			output: "https://login.tailscale.com/admin?node=niiy8GTvVs11CNTRL",
+		},
+		{
+			name:   "missing node",
+			output: "https://login.tailscale.com/f/funnel",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := findFunnelApprovalURL([]byte(test.output)); got != test.want {
+				t.Fatalf("findFunnelApprovalURL() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestConnectUsesLoginAndUnattendedSetupWithoutConfiguringFunnel(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +164,34 @@ func TestEnableStartsInteractiveBrowserLoginWhenStatusIsOffline(t *testing.T) {
 	}
 }
 
+func TestEnableOpensFunnelApprovalBeforeTheCLICommandCompletes(t *testing.T) {
+	t.Parallel()
+
+	runner := &approvalStreamingRunner{release: make(chan struct{})}
+	controller := NewController(`C:\Program Files\Tailscale\tailscale.exe`, runner)
+	var openedURL string
+	controller.SetFunnelApprovalHandler(func(approvalURL string) {
+		openedURL = approvalURL
+		close(runner.release)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	status, err := controller.Enable(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := openedURL, "https://login.tailscale.com/f/funnel?node=niiy8GTvVs11CNTRL"; got != want {
+		t.Fatalf("opened URL = %q, want %q", got, want)
+	}
+	if !runner.streamed {
+		t.Fatal("Enable() used the non-streaming runner for Funnel approval")
+	}
+	if !status.FunnelReady {
+		t.Fatal("Enable() did not verify Funnel after approval")
+	}
+}
+
 type fakeRunner struct {
 	outputs   [][]byte
 	errors    []error
@@ -144,4 +208,42 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, arguments ...string) 
 		runner.errors = runner.errors[1:]
 	}
 	return output, err
+}
+
+type approvalStreamingRunner struct {
+	configured bool
+	release    chan struct{}
+	streamed   bool
+}
+
+func (runner *approvalStreamingRunner) Run(_ context.Context, _ string, arguments ...string) ([]byte, error) {
+	if reflect.DeepEqual(arguments, []string{"status", "--json"}) {
+		return []byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`), nil
+	}
+	if reflect.DeepEqual(arguments, []string{"funnel", "status", "--json"}) {
+		if runner.configured {
+			return []byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`), nil
+		}
+		return []byte(`{}`), nil
+	}
+	if reflect.DeepEqual(arguments, []string{"up", "--unattended=true"}) {
+		return nil, nil
+	}
+	return nil, errors.New("unexpected non-streaming command")
+}
+
+func (runner *approvalStreamingRunner) RunStreaming(ctx context.Context, _ string, observe func([]byte), arguments ...string) ([]byte, error) {
+	if !reflect.DeepEqual(arguments, []string{"funnel", "--bg", "--yes", "--tcp=8443", "tcp://127.0.0.1:8443"}) {
+		return nil, errors.New("unexpected streaming command")
+	}
+	runner.streamed = true
+	observe([]byte("Funnel is not enabled on your tailnet.\nTo enable, visit:\nhttps://login.tailscale.com/f/fun"))
+	observe([]byte("nel?node=niiy8GTvVs11CNTRL\n"))
+	select {
+	case <-runner.release:
+		runner.configured = true
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

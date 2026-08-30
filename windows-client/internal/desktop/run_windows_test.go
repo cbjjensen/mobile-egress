@@ -41,6 +41,28 @@ func TestControllerUsesASingleInstanceLock(t *testing.T) {
 	}
 }
 
+func TestFunnelApprovalUsesTheDesktopBrowserWhenRuntimeIsReady(t *testing.T) {
+	t.Parallel()
+
+	var openedURL string
+	app := &DesktopApp{
+		ctx: context.Background(),
+		browserOpenURL: func(_ context.Context, approvalURL string) {
+			openedURL = approvalURL
+		},
+	}
+	app.openFunnelApproval("https://login.tailscale.com/f/funnel?node=test-node")
+	if got, want := openedURL, "https://login.tailscale.com/f/funnel?node=test-node"; got != want {
+		t.Fatalf("opened URL = %q, want %q", got, want)
+	}
+
+	app.ctx = nil
+	app.openFunnelApproval("https://login.tailscale.com/f/funnel?node=other-node")
+	if got, want := openedURL, "https://login.tailscale.com/f/funnel?node=test-node"; got != want {
+		t.Fatalf("URL changed without a runtime context: got %q, want %q", got, want)
+	}
+}
+
 func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
 	app := &DesktopApp{tailscaleInstall: tailscale.Installer{}}
 	err := app.InstallTailscale()

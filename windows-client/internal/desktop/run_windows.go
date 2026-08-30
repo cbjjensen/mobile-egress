@@ -45,6 +45,7 @@ type DesktopApp struct {
 	tailscaleInstall tailscaleInstaller
 	cloudRepository  *cloud.Repository
 	ownerRepository  *client.Repository
+	browserOpenURL   func(context.Context, string)
 
 	mu              sync.RWMutex
 	provisioning    sync.Mutex
@@ -117,8 +118,9 @@ func Run() error {
 	tailscaleController := tailscale.NewController(`C:\Program Files\Tailscale\tailscale.exe`, tailscale.ExecRunner{})
 	application := &DesktopApp{
 		core: core, tailscale: tailscaleController, tailscaleInstall: tailscale.DefaultInstaller(),
-		cloudRepository: cloudRepository, ownerRepository: ownerRepository,
+		cloudRepository: cloudRepository, ownerRepository: ownerRepository, browserOpenURL: runtime.BrowserOpenURL,
 	}
+	tailscaleController.SetFunnelApprovalHandler(application.openFunnelApproval)
 	application.bridge = localbridge.NewManager(tailscaleController, localbridge.UACHelper{
 		AdminExecutable: filepath.Join(binDirectory, "mobile-egress-admin.exe"),
 		RelayExecutable: filepath.Join(binDirectory, "mobile-egress-relay.exe"),
@@ -144,6 +146,15 @@ func Run() error {
 		showFatal(err)
 	}
 	return err
+}
+
+func (app *DesktopApp) openFunnelApproval(approvalURL string) {
+	if app == nil || app.browserOpenURL == nil {
+		return
+	}
+	if runtimeContext := app.runtimeContext(); runtimeContext != nil {
+		app.browserOpenURL(runtimeContext, approvalURL)
+	}
 }
 
 func controllerSingleInstanceLock(app *DesktopApp) *options.SingleInstanceLock {
