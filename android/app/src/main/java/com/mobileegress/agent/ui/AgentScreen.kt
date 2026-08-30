@@ -36,7 +36,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,18 +62,11 @@ fun AgentScreen(
 ) {
     val presentation = presentAgentScreen(state)
     val colorScheme = MaterialTheme.colorScheme
-    val background = Brush.verticalGradient(
-        colors = listOf(
-            colorScheme.background,
-            colorScheme.primaryContainer.copy(alpha = 0.16f),
-            colorScheme.background,
-        ),
-    )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(background),
+            .background(colorScheme.background),
     ) {
         Column(
             modifier = Modifier
@@ -266,7 +258,7 @@ private fun AgentCard(
                 label = "Relay",
                 value = runtime.relay.name.lowercase().replaceFirstChar(Char::uppercase),
                 tone = when (runtime.relay) {
-                    RelayHealth.Connected -> ScreenTone.Success
+                    RelayHealth.Connected -> ScreenTone.Info
                     RelayHealth.Connecting -> ScreenTone.Warning
                     RelayHealth.Disconnected -> ScreenTone.Neutral
                 },
@@ -304,7 +296,7 @@ private fun AgentCard(
                 Text("Stop Agent")
             }
             AgentPrimaryAction.None -> Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(17.dp),
             ) {
                 Text(
@@ -330,8 +322,8 @@ private fun AppCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(
@@ -415,7 +407,7 @@ private fun ConnectionTile(
     val color = toneColor(tone)
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(20.dp),
     ) {
         Column(
@@ -449,7 +441,7 @@ private fun ConnectionTile(
 private fun MetricTile(label: String, value: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(18.dp),
     ) {
         Column(
@@ -497,13 +489,7 @@ private fun AgentMessage(errorClass: ErrorClass) {
 }
 
 @Composable
-private fun toneColor(tone: ScreenTone): Color = when (tone) {
-    ScreenTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
-    ScreenTone.Accent -> MaterialTheme.colorScheme.primary
-    ScreenTone.Success -> MaterialTheme.colorScheme.tertiary
-    ScreenTone.Warning -> MaterialTheme.colorScheme.secondary
-    ScreenTone.Error -> MaterialTheme.colorScheme.error
-}
+private fun toneColor(tone: ScreenTone): Color = oledToneColor(tone)
 
 private fun readableName(value: String): String = value
     .replace(Regex("([a-z])([A-Z])"), "$1 $2")

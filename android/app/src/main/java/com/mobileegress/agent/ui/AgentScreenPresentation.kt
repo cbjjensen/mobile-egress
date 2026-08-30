@@ -8,6 +8,7 @@ import java.util.Locale
 enum class ScreenTone {
     Neutral,
     Accent,
+    Info,
     Success,
     Warning,
     Error,

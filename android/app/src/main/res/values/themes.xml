@@ -1,9 +1,11 @@
 <resources>
-    <style name="Theme.MobileEgress" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.MobileEgress" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#315F97</item>
-        <item name="android:navigationBarColor">#F8F9FF</item>
-        <item name="android:statusBarColor">#F8F9FF</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#7EF2C5</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>
