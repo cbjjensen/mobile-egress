@@ -1,0 +1,12 @@
+# Mobile Egress Android release signing certificate
+
+This is public certificate metadata, not a private key or password. Every release APK must match this identity so installed copies can receive updates.
+
+Key alias: mobile-egress
+Owner: CN=Mobile Egress, O=Mobile Egress, C=US
+Issuer: CN=Mobile Egress, O=Mobile Egress, C=US
+Serial number: 1c7f4aaf7123447
+Valid from: 2026-08-29T23:09:51-06:00
+Valid until: 2054-01-14T22:09:51-07:00
+Algorithm: 4096-bit RSA with SHA256withRSA
+SHA-256 fingerprint: B6:28:AB:4D:80:53:EB:F0:12:E4:E2:70:C0:B9:F2:2A:B1:C1:AB:CE:B2:42:1C:D8:F5:1A:49:38:05:50:9E:B7

@@ -145,13 +145,14 @@ Every executable should report `Valid` and the same expected signer thumbprint. 
 
 ## Part 4: Create and protect the Android signing key
 
-Android updates must always use the same signing key. Losing it means existing installations cannot accept your next APK as an update. Back up the keystore and its recovery information in an encrypted location separate from the build computer.
+Android updates must always use the same signing key. Losing it means existing installations cannot accept your next APK as an update. This publisher workstation keeps the reusable private files at `android\mobile-egress-release.jks` and `android\keystore.properties`; both are ignored. Back up both together in an encrypted location separate from the build computer.
 
-For the first release only, create a keystore outside the repository with the JDK `keytool`. The command prompts for passwords and certificate identity; do not put those values on the command line:
+The repository also tracks only the safe public identity in `android\release-signing-certificate.txt`. The guarded release script rejects an APK signed by any other key. Never replace that record to make a mismatched key pass; recover the original private files instead.
+
+For a first-ever publisher setup only, create the ignored local keystore with the JDK `keytool`. The command prompts for passwords and certificate identity; do not put those values on the command line:
 
 ```powershell
-New-Item -ItemType Directory -Force -Path 'C:\secure' | Out-Null
-keytool -genkeypair -verbose -keystore 'C:\secure\mobile-egress-release.jks' -alias 'mobile-egress' -keyalg RSA -keysize 4096 -validity 10000
+keytool -genkeypair -verbose -keystore '.\android\mobile-egress-release.jks' -alias 'mobile-egress' -keyalg RSA -keysize 4096 -validity 10000
 ```
 
 Copy the ignored template and edit only the local copy:
@@ -161,16 +162,16 @@ Copy-Item -LiteralPath '.\android\keystore.properties.example' -Destination '.\a
 notepad '.\android\keystore.properties'
 ```
 
-Use an absolute `storeFile`, preferably with forward slashes, and the alias/passwords entered during key creation:
+Use the ignored repository-relative `storeFile` and the alias/passwords entered during key creation:
 
 ```properties
-storeFile=C:/secure/mobile-egress-release.jks
+storeFile=mobile-egress-release.jks
 storePassword=<local secret>
 keyAlias=mobile-egress
 keyPassword=<local secret>
 ```
 
-The file must remain ignored and untracked. Validate that guard, then build and verify the release APK:
+Both private files must remain ignored and untracked. After initial creation, record the public SHA-256 signing-certificate fingerprint in `android\release-signing-certificate.txt` and commit only that public record. Future agents should use [the project signing skill](../.agents/skills/mobile-egress-android-signing/SKILL.md). Validate the guards, then build and verify the release APK:
 
 ```powershell
 & .\scripts\release-android.ps1 -ValidateOnly

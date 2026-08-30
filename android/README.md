@@ -29,4 +29,4 @@ cd android
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```
 
-For a distributable APK, configure the ignored `keystore.properties` from the example and use `scripts\release-android.ps1`. Do not distribute a debug or unsigned APK as a production Agent.
+For a distributable APK, the publisher reuses the ignored `mobile-egress-release.jks` and `keystore.properties`, then runs `scripts\release-android.ps1`. The script also matches the APK signer to the tracked public certificate identity. Do not distribute a debug or unsigned APK as a production Agent, regenerate an established release key, or give signing files to friends. Future agents must follow [the Android signing skill](../.agents/skills/mobile-egress-android-signing/SKILL.md).

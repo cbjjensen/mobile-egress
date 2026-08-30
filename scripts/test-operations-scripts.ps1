@@ -73,6 +73,14 @@ Assert-Condition ($releaseScript -match 'Get-MobileEgressAndroidSdkRoot -Reposit
 
 Assert-Condition ($releaseScript -notmatch '(?i)write-(host|output|information).*?(storePassword|keyPassword|keyAlias|storeFile)') 'The release script must not print signing properties.'
 Assert-Condition ($releaseScript -match 'check-ignore -q -- android/keystore.properties') 'The release script must require the signing properties file to remain ignored.'
+$gitIgnore = Get-Content -Raw (Join-Path $repositoryRoot '.gitignore')
+Assert-Condition ($gitIgnore -match '(?m)^android/mobile-egress-release\.jks$') 'The reusable Android release keystore must have an explicit ignore rule.'
+$releaseCertificateRecordPath = Join-Path $repositoryRoot 'android\release-signing-certificate.txt'
+Assert-Condition (Test-Path -LiteralPath $releaseCertificateRecordPath -PathType Leaf) 'The public Android release certificate identity must be tracked for future comparisons.'
+$releaseCertificateRecord = Get-Content -Raw $releaseCertificateRecordPath
+Assert-Condition ($releaseCertificateRecord -match '(?im)^SHA-256 fingerprint:\s*(?:[0-9A-F]{2}:){31}[0-9A-F]{2}\s*$') 'The Android release certificate record must contain a colon-delimited SHA-256 fingerprint.'
+Assert-Condition ($releaseScript -match 'release-signing-certificate\.txt') 'The Android release must compare against the tracked certificate identity.'
+Assert-Condition ($releaseScript -match 'verify --print-certs') 'The Android release must inspect the APK signer certificate.'
 Assert-Condition ($windowsReleaseScript -match 'CodeSigningThumbprint') 'Windows release packaging must require a code-signing certificate.'
 Assert-Condition ($windowsReleaseScript -match 'signtool\.exe') 'Windows release packaging must sign and verify all executables.'
 Assert-Condition ($windowsReleaseScript -match 'release-manifest\.json') 'Windows release packaging must produce the headless Client manifest.'
@@ -83,10 +91,15 @@ Assert-Condition ($windowsReleaseScript -match 'mobile-egress-relay\.exe') 'The 
 Assert-Condition ($windowsReleaseScript -match 'mobile-egress-admin\.exe') 'The controller package must include the elevated helper.'
 Assert-Condition ($windowsReleaseScript -match 'mobile-egress-client\.exe') 'The controller package must include the headless Client release.'
 
-$releaseValidationOutput = & (Join-Path $PSScriptRoot 'release-android.ps1') -ValidateOnly *>&1 | Out-String
+$releaseValidationOutput = & (Join-Path $PSScriptRoot 'release-android.ps1') -ValidateOnly -SimulateMissingSigningInputs *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 10) 'Missing Android signing inputs must exit with code 10.'
 Assert-Condition ($releaseValidationOutput -match 'Missing Android signing inputs') 'Missing Android signing inputs need direct remediation.'
 Assert-Condition ($releaseValidationOutput -notmatch '(?i)storePassword|keyPassword|super-secret') 'Release validation output must not expose signing values.'
+
+$missingKeystoreOutput = & (Join-Path $PSScriptRoot 'release-android.ps1') -ValidateOnly -SimulateMissingKeystore *>&1 | Out-String
+Assert-Condition ($LASTEXITCODE -eq 10) 'A missing configured Android keystore must exit with code 10.'
+Assert-Condition ($missingKeystoreOutput -match 'keystore is missing') 'A missing Android keystore needs recovery-focused remediation.'
+Assert-Condition ($missingKeystoreOutput -notmatch '(?i)storePassword|keyPassword|super-secret') 'Missing-keystore remediation must not expose signing values.'
 
 $testAllScript = Get-Content -Raw (Join-Path $PSScriptRoot 'test-all.ps1')
 Assert-Condition ($testAllScript -match "preflight\.ps1'\) -Components Go, Node\s") 'test-all must run Go and frontend checks before Android without requiring a running Docker daemon.'

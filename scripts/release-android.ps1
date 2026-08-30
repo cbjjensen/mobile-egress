@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    [switch]$SimulateMissingSigningInputs,
+    [switch]$SimulateMissingKeystore
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,47 +10,103 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'operations-common.ps1')
 $androidRoot = Join-Path $repositoryRoot 'android'
 $propertiesPath = Join-Path $androidRoot 'keystore.properties'
+$certificateRecordPath = Join-Path $androidRoot 'release-signing-certificate.txt'
 
-function Get-SigningPropertyNames {
+function Get-SigningProperties {
     param([string]$Path)
 
-    $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $properties = @{}
     foreach ($line in Get-Content -LiteralPath $Path) {
-        if ($line -match '^\s*(storeFile|storePassword|keyAlias|keyPassword)\s*=\s*(.+)\s*$') {
-            [void]$names.Add($matches[1])
+        if ($line -match '^\s*(storeFile|storePassword|keyAlias|keyPassword)\s*=\s*(.+?)\s*$') {
+            $properties[$matches[1]] = $matches[2]
         }
     }
 
-    return $names
+    return $properties
 }
 
-if (-not (Test-Path -LiteralPath $propertiesPath -PathType Leaf)) {
-    Write-Host 'Missing Android signing inputs. Create the ignored android\keystore.properties from android\keystore.properties.example and keep the keystore outside this repository.'
+if ($SimulateMissingSigningInputs) {
+    Write-Host 'Missing Android signing inputs. Restore the reusable ignored keystore and android\keystore.properties, or configure them before the first release.'
     exit 10
 }
 
-git -C $repositoryRoot ls-files --error-unmatch -- android/keystore.properties *> $null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host 'Refusing to release: android\keystore.properties is tracked by Git. Remove it from version control before retrying.'
-    exit 11
+$propertiesFileExists = Test-Path -LiteralPath $propertiesPath -PathType Leaf
+if ($propertiesFileExists) {
+    git -C $repositoryRoot ls-files --error-unmatch -- android/keystore.properties *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host 'Refusing to release: android\keystore.properties is tracked by Git. Remove it from version control before retrying.'
+        exit 11
+    }
+
+    git -C $repositoryRoot check-ignore -q -- android/keystore.properties
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'Refusing to release: android\keystore.properties must remain ignored by Git.'
+        exit 11
+    }
+
+    $signingProperties = Get-SigningProperties -Path $propertiesPath
+} elseif ($SimulateMissingKeystore) {
+    $signingProperties = @{
+        storeFile = 'mobile-egress-release.jks'
+        storePassword = 'test-only'
+        keyAlias = 'mobile-egress'
+        keyPassword = 'test-only'
+    }
+} else {
+    Write-Host 'Missing Android signing inputs. Restore the reusable ignored keystore and android\keystore.properties, or configure them before the first release.'
+    exit 10
 }
 
-git -C $repositoryRoot check-ignore -q -- android/keystore.properties
-if ($LASTEXITCODE -ne 0) {
-    Write-Host 'Refusing to release: android\keystore.properties must remain ignored by Git.'
-    exit 11
-}
-
-$signingPropertyNames = Get-SigningPropertyNames -Path $propertiesPath
 $requiredSigningProperties = @('storeFile', 'storePassword', 'keyAlias', 'keyPassword')
-$missingSigningProperties = $requiredSigningProperties | Where-Object { -not $signingPropertyNames.Contains($_) }
+$missingSigningProperties = $requiredSigningProperties | Where-Object { -not $signingProperties.ContainsKey($_) }
 if ($missingSigningProperties.Count -gt 0) {
     Write-Host 'Android signing inputs are incomplete. Complete the ignored local signing template; values are never printed.'
     exit 10
 }
 
+$configuredStoreFile = $signingProperties.storeFile
+$keystorePath = if ([System.IO.Path]::IsPathRooted($configuredStoreFile)) {
+    [System.IO.Path]::GetFullPath($configuredStoreFile)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $androidRoot $configuredStoreFile))
+}
+if ($SimulateMissingKeystore -or -not (Test-Path -LiteralPath $keystorePath -PathType Leaf)) {
+    Write-Host 'The configured Android release keystore is missing. Recover the original ignored keystore and credentials together; do not generate a replacement for an established release.'
+    exit 10
+}
+
+$repositoryPrefix = [System.IO.Path]::GetFullPath($repositoryRoot).TrimEnd('\') + '\'
+if ($keystorePath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $relativeKeystorePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $keystorePath).Replace('\', '/')
+    git -C $repositoryRoot ls-files --error-unmatch -- $relativeKeystorePath *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host 'Refusing to release: the Android release keystore is tracked by Git.'
+        exit 11
+    }
+    git -C $repositoryRoot check-ignore -q -- $relativeKeystorePath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'Refusing to release: a repository-local Android release keystore must remain ignored by Git.'
+        exit 11
+    }
+}
+
+$certificateRecord = if (Test-Path -LiteralPath $certificateRecordPath -PathType Leaf) {
+    Get-Content -LiteralPath $certificateRecordPath -Raw
+} else {
+    ''
+}
+$expectedFingerprintMatch = [regex]::Match(
+    $certificateRecord,
+    '(?im)^SHA-256 fingerprint:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})\s*$'
+)
+if (-not $expectedFingerprintMatch.Success) {
+    Write-Host 'Android release certificate identity is missing or malformed. Restore android\release-signing-certificate.txt.'
+    exit 10
+}
+$expectedFingerprint = $expectedFingerprintMatch.Groups[1].Value.Replace(':', '').ToLowerInvariant()
+
 if ($ValidateOnly) {
-    Write-Host 'Android signing inputs are present, untracked, and not displayed.'
+    Write-Host 'Android signing inputs and public certificate identity are present; secrets remain untracked and undisplayed.'
     exit 0
 }
 
@@ -78,12 +136,31 @@ try {
         exit $LASTEXITCODE
     }
 
-    & (Join-Path $apksigner 'apksigner.bat') verify --verbose .\app\build\outputs\apk\release\app-release.apk
+    $apksignerCommand = Join-Path $apksigner 'apksigner.bat'
+    $releaseApk = '.\app\build\outputs\apk\release\app-release.apk'
+    & $apksignerCommand verify --verbose $releaseApk
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
+    }
+
+    $certificateOutput = & $apksignerCommand verify --print-certs $releaseApk 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+    $actualFingerprintMatch = [regex]::Match(
+        $certificateOutput,
+        '(?im)^Signer #1 certificate SHA-256 digest:\s*([0-9a-f]{64})\s*$'
+    )
+    if (-not $actualFingerprintMatch.Success) {
+        Write-Host 'Signed APK verification did not return a SHA-256 certificate digest.'
+        exit 11
+    }
+    if ($actualFingerprintMatch.Groups[1].Value.ToLowerInvariant() -ne $expectedFingerprint) {
+        Write-Host 'Refusing to release: the APK signer does not match the recorded Mobile Egress Android release certificate.'
+        exit 11
     }
 } finally {
     Pop-Location
 }
 
-Write-Host 'Signed Android release APK built and verified without printing signing values.'
+Write-Host 'Signed Android release APK built and matched the recorded certificate without printing signing values.'

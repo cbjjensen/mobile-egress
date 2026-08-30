@@ -31,6 +31,7 @@ coverage.out
 android/.gradle/
 android/local.properties
 android/keystore.properties
+android/mobile-egress-release.jks
 android/**/build/
 
 # Desktop frontend
