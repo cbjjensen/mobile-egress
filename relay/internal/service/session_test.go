@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -202,14 +203,17 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 
 	fixture := newRelayFixture(t)
 	defer fixture.Close()
-	_, devices := enrollDevices(t, fixture, "client", "client", "client", "agent")
-	clientOne := mustDialSession(t, fixture, devices[0].client)
-	defer clientOne.Close()
-	clientTwo := mustDialSession(t, fixture, devices[1].client)
-	defer clientTwo.Close()
-	clientThree := mustDialSession(t, fixture, devices[2].client)
-	defer clientThree.Close()
-	agent := mustDialSession(t, fixture, devices[3].client)
+	_, devices := enrollDevices(t, fixture,
+		"client", "client", "client", "client", "client", "client", "client", "client", "client", "agent",
+	)
+	clients := make([]*websocket.Conn, 0, 9)
+	for index := 0; index < 9; index++ {
+		client := mustDialSession(t, fixture, devices[index].client)
+		defer client.Close()
+		clients = append(clients, client)
+	}
+	clientOne := clients[0]
+	agent := mustDialSession(t, fixture, devices[9].client)
 	defer agent.Close()
 
 	for index := 0; index < 4; index++ {
@@ -224,15 +228,17 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 		t.Fatalf("per-client limit response = %#v", rejected)
 	}
 
-	for index := 0; index < 4; index++ {
-		streamID := "client-two-" + string(rune('a'+index))
-		writeEnvelope(t, clientTwo, openEnvelope(streamID, "1.1.1.1", 443))
-		if forwarded := readEnvelope(t, agent); forwarded.StreamID != streamID || forwarded.Type != protocol.TypeOpen {
-			t.Fatalf("agent received wrong open: %#v", forwarded)
+	for clientIndex := 1; clientIndex < 8; clientIndex++ {
+		for streamIndex := 0; streamIndex < 4; streamIndex++ {
+			streamID := fmt.Sprintf("client-%d-%d", clientIndex+1, streamIndex+1)
+			writeEnvelope(t, clients[clientIndex], openEnvelope(streamID, "1.1.1.1", 443))
+			if forwarded := readEnvelope(t, agent); forwarded.StreamID != streamID || forwarded.Type != protocol.TypeOpen {
+				t.Fatalf("agent received wrong open: %#v", forwarded)
+			}
 		}
 	}
-	writeEnvelope(t, clientThree, openEnvelope("agent-over-limit", "1.1.1.1", 443))
-	if rejected := readEnvelope(t, clientThree); rejected.Type != protocol.TypeRejected || decodedErrorCode(t, rejected) != "agent_stream_limit" {
+	writeEnvelope(t, clients[8], openEnvelope("agent-over-limit", "1.1.1.1", 443))
+	if rejected := readEnvelope(t, clients[8]); rejected.Type != protocol.TypeRejected || decodedErrorCode(t, rejected) != "agent_stream_limit" {
 		t.Fatalf("agent-wide limit response = %#v", rejected)
 	}
 }

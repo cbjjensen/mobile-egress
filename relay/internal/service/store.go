@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 var (
 	errCapabilityInvalid = errors.New("invalid enrollment capability")
@@ -75,6 +75,13 @@ func openStore(path string) (*store, error) {
 		state.Close()
 		return nil, fmt.Errorf("read SQLite schema version: %w", err)
 	}
+	if version == 1 {
+		if err := state.migrateFromVersionOne(context.Background()); err != nil {
+			state.Close()
+			return nil, err
+		}
+		version = schemaVersion
+	}
 	if version != schemaVersion {
 		state.Close()
 		return nil, fmt.Errorf("unsupported SQLite schema version %d", version)
@@ -110,12 +117,53 @@ func (state *store) initialize(ctx context.Context) error {
             code TEXT PRIMARY KEY,
             count INTEGER NOT NULL
         ) STRICT`,
+		`CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        ) STRICT`,
+		`CREATE TABLE IF NOT EXISTS endpoint_migrations (
+            capability_hash BLOB PRIMARY KEY,
+            relay_url TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            consumed_at INTEGER
+        ) STRICT`,
 		fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion),
 	}
 	for _, statement := range statements {
 		if _, err := state.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("initialize SQLite state: %w", err)
 		}
+	}
+	return nil
+}
+
+func (state *store) migrateFromVersionOne(ctx context.Context) error {
+	transaction, err := state.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SQLite schema migration: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    ) STRICT`); err != nil {
+		return fmt.Errorf("migrate SQLite settings: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS endpoint_migrations (
+        capability_hash BLOB PRIMARY KEY,
+        relay_url TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER
+    ) STRICT`); err != nil {
+		return fmt.Errorf("migrate SQLite endpoint migrations: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("update SQLite schema version: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit SQLite schema migration: %w", err)
 	}
 	return nil
 }
@@ -144,6 +192,82 @@ func (state *store) capabilityCount(ctx context.Context, role string) (int, erro
 		`SELECT COUNT(*) FROM pairing_capabilities WHERE role = ?`, role,
 	).Scan(&count)
 	return count, err
+}
+
+func (state *store) createIdentity(ctx context.Context, serial string, role enrollment.Role, now time.Time) error {
+	_, err := state.db.ExecContext(ctx,
+		`INSERT INTO identities(serial, role, created_at) VALUES (?, ?, ?)`, serial, string(role), now.Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("persist identity: %w", err)
+	}
+	return nil
+}
+
+func (state *store) setRelayURL(ctx context.Context, relayURL string) error {
+	_, err := state.db.ExecContext(ctx, `
+        INSERT INTO settings(key, value) VALUES ('relay_url', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`, relayURL,
+	)
+	if err != nil {
+		return fmt.Errorf("persist relay URL: %w", err)
+	}
+	return nil
+}
+
+func (state *store) relayURL(ctx context.Context) (string, error) {
+	var relayURL string
+	if err := state.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'relay_url'`).Scan(&relayURL); err != nil {
+		return "", fmt.Errorf("read relay URL: %w", err)
+	}
+	return relayURL, nil
+}
+
+func (state *store) insertEndpointMigration(ctx context.Context, hash [sha256.Size]byte, relayURL string, createdAt, expiresAt time.Time) error {
+	_, err := state.db.ExecContext(ctx,
+		`INSERT INTO endpoint_migrations(capability_hash, relay_url, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		hash[:], relayURL, createdAt.Unix(), expiresAt.Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("persist endpoint migration: %w", err)
+	}
+	return nil
+}
+
+func (state *store) consumeEndpointMigration(ctx context.Context, hash [sha256.Size]byte, now time.Time) (string, error) {
+	transaction, err := state.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin endpoint migration transaction: %w", err)
+	}
+	defer transaction.Rollback()
+	var relayURL string
+	var expiresAt int64
+	var consumedAt sql.NullInt64
+	err = transaction.QueryRowContext(ctx,
+		`SELECT relay_url, expires_at, consumed_at FROM endpoint_migrations WHERE capability_hash = ?`, hash[:],
+	).Scan(&relayURL, &expiresAt, &consumedAt)
+	if errors.Is(err, sql.ErrNoRows) || consumedAt.Valid {
+		return "", errCapabilityInvalid
+	}
+	if err != nil {
+		return "", fmt.Errorf("read endpoint migration: %w", err)
+	}
+	if !now.Before(time.Unix(expiresAt, 0)) {
+		return "", errCapabilityExpired
+	}
+	result, err := transaction.ExecContext(ctx,
+		`UPDATE endpoint_migrations SET consumed_at = ? WHERE capability_hash = ? AND consumed_at IS NULL`, now.Unix(), hash[:],
+	)
+	if err != nil {
+		return "", fmt.Errorf("consume endpoint migration: %w", err)
+	}
+	if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+		return "", errCapabilityInvalid
+	}
+	if err := transaction.Commit(); err != nil {
+		return "", fmt.Errorf("commit endpoint migration: %w", err)
+	}
+	return relayURL, nil
 }
 
 func (state *store) redeemCapabilityAndCreateIdentity(
@@ -297,6 +421,7 @@ func (state *store) incrementError(ctx context.Context, code string) error {
 func (state *store) validSchema(ctx context.Context) error {
 	required := map[string]bool{
 		"identities": false, "pairing_capabilities": false, "metrics": false, "error_metrics": false,
+		"settings": false, "endpoint_migrations": false,
 	}
 	rows, err := state.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
 	if err != nil {

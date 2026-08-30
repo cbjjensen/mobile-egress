@@ -134,7 +134,7 @@ func Open(stateDir string) (*Service, error) {
 		serverCert: serverCert, clientRoots: roots,
 		sessions: make(map[string]*session), streams: make(map[string]*stream),
 		closedStreams:    make(map[string]closedStreamTombstone),
-		maxClientStreams: 4, maxAgentStreams: 8,
+		maxClientStreams: 4, maxAgentStreams: 32,
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
 		lookupNetIP: defaultLookupNetIP,
@@ -173,8 +173,11 @@ func (service *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", service.handleHealth)
 	mux.HandleFunc("POST /v1/enroll", service.handleEnroll)
+	mux.HandleFunc("POST /v1/clients", service.handleProvisionClient)
 	mux.HandleFunc("POST /v1/pairing-codes", service.handlePairing)
 	mux.HandleFunc("POST /v1/revoke", service.handleRevoke)
+	mux.HandleFunc("POST /v1/endpoint-migrations", service.handleIssueEndpointMigration)
+	mux.HandleFunc("POST /v1/endpoint-migrations/consume", service.handleConsumeEndpointMigration)
 	mux.HandleFunc("GET /v1/session", service.handleSession)
 	return mux
 }

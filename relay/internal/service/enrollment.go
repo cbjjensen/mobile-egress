@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -32,11 +33,17 @@ type enrollRequest struct {
 	PublicKeyPEM string          `json:"publicKeyPem,omitempty"`
 }
 
-type enrollResponse struct {
+type EnrollmentResult struct {
 	CertificatePEM   string          `json:"certificatePem"`
 	CACertificatePEM string          `json:"caCertificatePem"`
 	Serial           string          `json:"serial"`
 	Role             enrollment.Role `json:"role"`
+}
+
+type enrollResponse = EnrollmentResult
+
+type clientCSRRequest struct {
+	CSRPEM string `json:"csrPem"`
 }
 
 type pairingRequest struct {
@@ -136,6 +143,36 @@ func (service *Service) handlePairing(writer http.ResponseWriter, request *http.
 	_ = json.NewEncoder(writer).Encode(pairingResponse{Code: code, Role: input.Role, ExpiresAt: expiresAt.Format(time.RFC3339)})
 }
 
+func (service *Service) handleProvisionClient(writer http.ResponseWriter, request *http.Request) {
+	_, role, status := service.authenticateRequest(request)
+	if status != 0 {
+		writeAPIError(writer, status, authErrorCode(status))
+		return
+	}
+	if role != enrollment.RoleOwner {
+		writeAPIError(writer, http.StatusForbidden, "owner_required")
+		return
+	}
+	var input clientCSRRequest
+	if err := decodeControlJSON(request.Body, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	publicKey, err := parseDevicePublicKey(input.CSRPEM, "")
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "invalid_public_key")
+		return
+	}
+	result, err := service.issueIdentity(request.Context(), publicKey, enrollment.RoleClient, time.Now().UTC())
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
 func (service *Service) handleRevoke(writer http.ResponseWriter, request *http.Request) {
 	_, role, status := service.authenticateRequest(request)
 	if status != 0 {
@@ -178,6 +215,10 @@ func (service *Service) authenticateRequest(request *http.Request) (string, enro
 }
 
 func (service *Service) signDeviceCertificate(publicKey crypto.PublicKey, role enrollment.Role, serialNumber *big.Int, serial string, now time.Time) ([]byte, error) {
+	return signDeviceCertificate(service.caCert, service.caKey, publicKey, role, serialNumber, serial, now)
+}
+
+func signDeviceCertificate(caCert *x509.Certificate, caKey crypto.Signer, publicKey crypto.PublicKey, role enrollment.Role, serialNumber *big.Int, serial string, now time.Time) ([]byte, error) {
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject:      pkix.Name{CommonName: fmt.Sprintf("mobile-egress-%s-%s", role, serial[:min(12, len(serial))])},
@@ -186,11 +227,30 @@ func (service *Service) signDeviceCertificate(publicKey crypto.PublicKey, role e
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	certificateDER, err := x509.CreateCertificate(rand.Reader, template, service.caCert, publicKey, service.caKey)
+	certificateDER, err := x509.CreateCertificate(rand.Reader, template, caCert, publicKey, caKey)
 	if err != nil {
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER}), nil
+}
+
+func (service *Service) issueIdentity(ctx context.Context, publicKey crypto.PublicKey, role enrollment.Role, now time.Time) (EnrollmentResult, error) {
+	serialNumber, err := randomSerial()
+	if err != nil {
+		return EnrollmentResult{}, err
+	}
+	serial := strings.ToUpper(serialNumber.Text(16))
+	certificatePEM, err := service.signDeviceCertificate(publicKey, role, serialNumber, serial, now)
+	if err != nil {
+		return EnrollmentResult{}, err
+	}
+	if err := service.store.createIdentity(ctx, serial, role, now); err != nil {
+		return EnrollmentResult{}, err
+	}
+	return EnrollmentResult{
+		CertificatePEM: string(certificatePEM) + string(service.caCertPEM), CACertificatePEM: string(service.caCertPEM),
+		Serial: serial, Role: role,
+	}, nil
 }
 
 func parseDevicePublicKey(csrPEM, publicKeyPEM string) (crypto.PublicKey, error) {
