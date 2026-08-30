@@ -74,7 +74,7 @@ func runParent(platform *setup.WindowsPlatform) error {
 	return setup.RunParent(context.Background(), setup.ParentOptions{
 		Executable:          executable,
 		InstalledController: filepath.Join(setup.InstallRoot, setup.ControllerExecutableName),
-		Fingerprint:         identity.Fingerprint,
+		Identity:            identity,
 		Nonce:               nonce,
 		Exchange:            setup.Exchange{Root: exchangeRoot},
 	}, platform)
@@ -95,12 +95,16 @@ func runElevated(nonce string, platform *setup.WindowsPlatform) error {
 	}
 	exchange := setup.Exchange{Root: exchangeRoot}
 	installErr := setup.RunElevated(setup.ElevatedOptions{
-		Nonce:      nonce,
-		ReleaseDir: filepath.Dir(executable),
-		Exchange:   exchange,
-		Identity:   identity,
+		Nonce:     nonce,
+		SetupPath: executable,
+		Exchange:  exchange,
+		Identity:  identity,
 	}, platform)
-	result := setup.Result{Nonce: nonce, Success: true, Message: "Mobile Egress was installed."}
+	setupDigest, digestErr := setup.FileSHA256(executable)
+	if installErr == nil && digestErr != nil {
+		installErr = digestErr
+	}
+	result := setup.Result{Nonce: nonce, SetupSHA256: setupDigest, Success: true, Message: "Mobile Egress was installed."}
 	if installErr != nil {
 		result = failureResult(nonce, installErr)
 	}
@@ -110,12 +114,18 @@ func runElevated(nonce string, platform *setup.WindowsPlatform) error {
 	return nil
 }
 
-func failureResult(nonce string, _ error) setup.Result {
+func failureResult(nonce string, installErr error) setup.Result {
+	code := "install_failed"
+	message := "Installation did not complete. Verify the Mobile Egress publisher trust before retrying."
+	if errors.Is(installErr, setup.ErrTrustRollback) {
+		code = "trust_rollback_failed"
+		message = "Installation did not complete and publisher trust cleanup failed. Review the Mobile Egress certificate entries before retrying."
+	}
 	return setup.Result{
 		Nonce:   nonce,
 		Success: false,
-		Code:    "install_failed",
-		Message: "Installation did not complete. Verify the Mobile Egress publisher trust before retrying.",
+		Code:    code,
+		Message: message,
 	}
 }
 

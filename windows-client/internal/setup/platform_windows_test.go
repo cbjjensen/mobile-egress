@@ -39,6 +39,36 @@ func TestValidateAuthenticodeResultRequiresExactTimestampedCertificate(t *testin
 	}
 }
 
+func TestPreTrustAuthenticodeAcceptsOnlyValidOrExactUntrustedRoot(t *testing.T) {
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateHash := sha256.Sum256(identity.DER)
+	signer := `{"status":"UnknownError","thumbprint":"` + identity.Thumbprint + `","certificateSha256":"` + strings.ToUpper(hex.EncodeToString(certificateHash[:])) + `","certificateBase64":"` + base64.StdEncoding.EncodeToString(identity.DER) + `","timestamped":true}`
+	if err := validatePreTrustAuthenticodeResult([]byte(signer), certEUntrustedRoot, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePreTrustAuthenticodeResult([]byte(strings.Replace(signer, `"UnknownError"`, `"HashMismatch"`, 1)), trustEBadDigest, identity); err == nil {
+		t.Fatal("accepted an Authenticode hash mismatch before elevation")
+	}
+	if err := validatePreTrustAuthenticodeResult([]byte(strings.Replace(signer, `"UnknownError"`, `"NotSigned"`, 1)), trustENoSignature, identity); err == nil {
+		t.Fatal("accepted an unsigned setup before elevation")
+	}
+	if err := validatePreTrustAuthenticodeResult([]byte(signer), trustESubjectNotTrusted, identity); err == nil {
+		t.Fatal("accepted a non-root trust failure before elevation")
+	}
+}
+
+func TestValidateElevatedChildExitCodeRejectsNonzero(t *testing.T) {
+	if err := validateElevatedChildExitCode(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateElevatedChildExitCode(17); err == nil {
+		t.Fatal("accepted nonzero elevated child exit code")
+	}
+}
+
 func TestCopyInstallFilesIsIdempotent(t *testing.T) {
 	sourceRoot := t.TempDir()
 	destinationRoot := t.TempDir()
@@ -112,6 +142,96 @@ func TestInstallVerifiedFilesLeavesExistingFilesWhenStagedVerificationFails(t *t
 		}
 		if string(got) != "existing signed bytes" {
 			t.Fatalf("existing destination was replaced after failed verification: %s", file.Destination)
+		}
+	}
+}
+
+func TestInstallVerifiedFilesRollsBackEveryFileWhenPromotionFails(t *testing.T) {
+	for _, failedName := range []string{AdminExecutableName, RelayExecutableName} {
+		t.Run(failedName, func(t *testing.T) {
+			sourceRoot := t.TempDir()
+			destinationRoot := t.TempDir()
+			files := transactionTestFiles(t, sourceRoot, destinationRoot)
+			ops := installTransactionOps{
+				rename: func(oldPath, newPath string) error {
+					if strings.Contains(oldPath, ".mobile-egress-staging-") && filepath.Base(newPath) == failedName {
+						return errors.New("injected promotion failure")
+					}
+					return os.Rename(oldPath, newPath)
+				},
+				remove: os.Remove,
+			}
+			err := installVerifiedFiles(files, func(string) error { return nil }, ops)
+			if err == nil {
+				t.Fatal("expected promotion failure")
+			}
+			assertTransactionTestFiles(t, files, "old-")
+		})
+	}
+}
+
+func TestInstallVerifiedFilesRollsBackFilesAndShortcutWhenShortcutFails(t *testing.T) {
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	files := transactionTestFiles(t, sourceRoot, destinationRoot)
+	shortcutPath := filepath.Join(t.TempDir(), "Mobile Egress.lnk")
+	if err := os.WriteFile(shortcutPath, []byte("old-shortcut"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ops := installTransactionOps{
+		rename:         os.Rename,
+		remove:         os.Remove,
+		shortcutPath:   shortcutPath,
+		controllerPath: files[0].Destination,
+		createShortcut: func(string) error {
+			if err := os.WriteFile(shortcutPath, []byte("partial-new-shortcut"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return errors.New("injected shortcut failure")
+		},
+	}
+	if err := installVerifiedFiles(files, func(string) error { return nil }, ops); err == nil {
+		t.Fatal("expected shortcut failure")
+	}
+	assertTransactionTestFiles(t, files, "old-")
+	got, err := os.ReadFile(shortcutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old-shortcut" {
+		t.Fatalf("shortcut = %q, want old-shortcut", got)
+	}
+}
+
+func transactionTestFiles(t *testing.T, sourceRoot, destinationRoot string) []InstallFile {
+	t.Helper()
+	files := []InstallFile{
+		{Source: filepath.Join(sourceRoot, ControllerExecutableName), Destination: filepath.Join(destinationRoot, ControllerExecutableName)},
+		{Source: filepath.Join(sourceRoot, AdminExecutableName), Destination: filepath.Join(destinationRoot, AdminExecutableName)},
+		{Source: filepath.Join(sourceRoot, RelayExecutableName), Destination: filepath.Join(destinationRoot, RelayExecutableName)},
+	}
+	for _, file := range files {
+		name := filepath.Base(file.Source)
+		if err := os.WriteFile(file.Source, []byte("new-"+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file.Destination, []byte("old-"+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return files
+}
+
+func assertTransactionTestFiles(t *testing.T, files []InstallFile, prefix string) {
+	t.Helper()
+	for _, file := range files {
+		got, err := os.ReadFile(file.Destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := prefix + filepath.Base(file.Destination)
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", file.Destination, got, want)
 		}
 	}
 }

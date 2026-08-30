@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -25,15 +26,20 @@ import (
 )
 
 const (
-	messageBoxYesNo       = 0x00000004
-	messageBoxIconWarning = 0x00000030
-	messageBoxIconError   = 0x00000010
-	messageBoxTopmost     = 0x00040000
-	messageBoxYes         = 6
-	seeMaskNoCloseProcess = 0x00000040
-	showNormal            = 1
-	waitTimeout           = 0x00000102
-	commonShortcutPath    = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress.lnk`
+	messageBoxYesNo         = 0x00000004
+	messageBoxIconWarning   = 0x00000030
+	messageBoxIconError     = 0x00000010
+	messageBoxTopmost       = 0x00040000
+	messageBoxYes           = 6
+	seeMaskNoCloseProcess   = 0x00000040
+	showNormal              = 1
+	waitTimeout             = 0x00000102
+	waitObject0             = 0x00000000
+	commonShortcutPath      = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress.lnk`
+	certEUntrustedRoot      = uint32(0x800B0109)
+	trustEBadDigest         = uint32(0x80096010)
+	trustENoSignature       = uint32(0x800B0100)
+	trustESubjectNotTrusted = uint32(0x800B0004)
 )
 
 var (
@@ -41,6 +47,8 @@ var (
 	messageBoxW     = user32.NewProc("MessageBoxW")
 	shell32         = windows.NewLazySystemDLL("shell32.dll")
 	shellExecuteExW = shell32.NewProc("ShellExecuteExW")
+	wintrust        = windows.NewLazySystemDLL("wintrust.dll")
+	winVerifyTrustW = wintrust.NewProc("WinVerifyTrust")
 )
 
 type WindowsPlatform struct{}
@@ -53,8 +61,9 @@ func (platform *WindowsPlatform) IsElevated() (bool, error) {
 
 func (platform *WindowsPlatform) Confirm(fingerprint string) (bool, error) {
 	message := "Mobile Egress Setup will trust and install software signed by this publisher certificate.\n\n" +
-		"SHA-256 publisher fingerprint:\n" + fingerprint + "\n\n" +
-		"Compare this fingerprint with the value shared separately by the publisher. Continue only if every pair matches.\n\nContinue?"
+		"Before continuing, use Windows Properties > Digital Signatures on this exact setup file to inspect and export its signer certificate. Compare that certificate's SHA-256 fingerprint with the value shared separately by the publisher.\n\n" +
+		"Expected SHA-256 fingerprint (reminder only; this setup-displayed value is not identity evidence):\n" + fingerprint + "\n\n" +
+		"Continue only if the fingerprint extracted through Windows matches the separately shared value exactly.\n\nContinue?"
 	result, err := showMessageBox(message, "Mobile Egress Setup", messageBoxYesNo|messageBoxIconWarning|messageBoxTopmost)
 	if err != nil {
 		return false, err
@@ -110,6 +119,20 @@ func (platform *WindowsPlatform) ElevateAndWait(executable, nonce string) error 
 	if event == waitTimeout {
 		return errors.New("elevated setup timed out")
 	}
+	if event != waitObject0 {
+		return errors.New("wait for elevated setup returned an unexpected status")
+	}
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(info.Process, &exitCode); err != nil {
+		return err
+	}
+	return validateElevatedChildExitCode(exitCode)
+}
+
+func validateElevatedChildExitCode(exitCode uint32) error {
+	if exitCode != 0 {
+		return errors.New("elevated setup did not complete successfully")
+	}
 	return nil
 }
 
@@ -121,6 +144,18 @@ func (platform *WindowsPlatform) Launch(executable string) error {
 	return exec.Command(executable).Start()
 }
 
+func (platform *WindowsPlatform) VerifyPreTrustAuthenticode(path string, identity Identity) error {
+	trustStatus, err := winVerifyTrustStatus(path)
+	if err != nil {
+		return err
+	}
+	output, err := inspectAuthenticode(path)
+	if err != nil {
+		return err
+	}
+	return validatePreTrustAuthenticodeResult(output, trustStatus, identity)
+}
+
 func (platform *WindowsPlatform) EnsureTrust(identity Identity) (TrustChanges, error) {
 	changes := TrustChanges{}
 	rootAdded, err := ensureCertificateInMachineStore("Root", identity)
@@ -130,10 +165,7 @@ func (platform *WindowsPlatform) EnsureTrust(identity Identity) (TrustChanges, e
 	changes.RootAdded = rootAdded
 	publisherAdded, err := ensureCertificateInMachineStore("TrustedPublisher", identity)
 	if err != nil {
-		if rootAdded {
-			_ = removeExactCertificateFromMachineStore("Root", identity)
-		}
-		return TrustChanges{}, err
+		return changes, err
 	}
 	changes.TrustedPublisherAdded = publisherAdded
 	return changes, nil
@@ -155,6 +187,18 @@ func (platform *WindowsPlatform) RollbackTrust(identity Identity, changes TrustC
 }
 
 func (platform *WindowsPlatform) VerifyAuthenticode(path string, identity Identity) error {
+	trustStatus, err := winVerifyTrustStatus(path)
+	if err != nil || trustStatus != 0 {
+		return errors.New("Windows Authenticode trust validation failed")
+	}
+	output, err := inspectAuthenticode(path)
+	if err != nil {
+		return err
+	}
+	return validateAuthenticodeResult(output, identity)
+}
+
+func inspectAuthenticode(path string) ([]byte, error) {
 	const script = `$ErrorActionPreference = 'Stop'
 $signature = Get-AuthenticodeSignature -LiteralPath $env:MOBILE_EGRESS_SIGNATURE_PATH
 $certificate = $signature.SignerCertificate
@@ -172,7 +216,7 @@ $result = [ordered]@{
 [Console]::Out.Write(($result | ConvertTo-Json -Compress))`
 	powershellPath, err := systemPowerShellPath()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -180,9 +224,9 @@ $result = [ordered]@{
 	command.Env = append(os.Environ(), "MOBILE_EGRESS_SIGNATURE_PATH="+path)
 	output, err := command.Output()
 	if err != nil || len(output) == 0 || len(output) > 16<<10 {
-		return errors.New("Windows Authenticode inspection failed")
+		return nil, errors.New("Windows Authenticode inspection failed")
 	}
-	return validateAuthenticodeResult(output, identity)
+	return output, nil
 }
 
 func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity) error {
@@ -197,10 +241,16 @@ func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity)
 	}
 	return installVerifiedFiles(files, func(path string) error {
 		return platform.VerifyAuthenticode(path, identity)
+	}, installTransactionOps{
+		rename:         windows.Rename,
+		remove:         os.Remove,
+		shortcutPath:   commonShortcutPath,
+		controllerPath: filepath.Join(InstallRoot, ControllerExecutableName),
+		createShortcut: platform.writeShortcut,
 	})
 }
 
-func (platform *WindowsPlatform) CreateShortcut(controllerPath string) error {
+func (platform *WindowsPlatform) writeShortcut(controllerPath string) error {
 	want := filepath.Join(InstallRoot, ControllerExecutableName)
 	if !strings.EqualFold(filepath.Clean(controllerPath), filepath.Clean(want)) {
 		return errors.New("shortcut target is invalid")
@@ -262,31 +312,135 @@ type authenticodeResult struct {
 	Timestamped       bool   `json:"timestamped"`
 }
 
+func validatePreTrustAuthenticodeResult(raw []byte, trustStatus uint32, identity Identity) error {
+	result, err := parseAuthenticodeResult(raw)
+	if err != nil {
+		return err
+	}
+	switch trustStatus {
+	case 0:
+		if result.Status != "Valid" {
+			return errors.New("Windows Authenticode status does not match valid trust")
+		}
+	case certEUntrustedRoot:
+		if result.Status != "NotTrusted" && result.Status != "UnknownError" {
+			return errors.New("Windows Authenticode status is not the precise untrusted-root condition")
+		}
+	default:
+		return errors.New("Windows Authenticode signature is invalid before trust")
+	}
+	return validateSignerIdentity(result, identity)
+}
+
 func validateAuthenticodeResult(raw []byte, identity Identity) error {
+	result, err := parseAuthenticodeResult(raw)
+	if err != nil {
+		return err
+	}
+	if result.Status != "Valid" {
+		return errors.New("Windows Authenticode status is not Valid")
+	}
+	return validateSignerIdentity(result, identity)
+}
+
+func parseAuthenticodeResult(raw []byte) (authenticodeResult, error) {
 	var result authenticodeResult
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&result); err != nil {
-		return errors.New("Windows Authenticode result is invalid")
+		return authenticodeResult{}, errors.New("Windows Authenticode result is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("Windows Authenticode result is invalid")
+		return authenticodeResult{}, errors.New("Windows Authenticode result is invalid")
 	}
+	return result, nil
+}
+
+func validateSignerIdentity(result authenticodeResult, identity Identity) error {
 	certificateDER, err := base64.StdEncoding.DecodeString(result.CertificateBase64)
 	if err != nil || !bytes.Equal(certificateDER, identity.DER) {
 		return errors.New("Windows Authenticode signer certificate does not match")
 	}
 	certificateHash := sha256.Sum256(certificateDER)
-	if result.Status != "Valid" || !strings.EqualFold(result.Thumbprint, identity.Thumbprint) ||
+	if !strings.EqualFold(result.Thumbprint, identity.Thumbprint) ||
 		!strings.EqualFold(result.CertificateSHA256, hex.EncodeToString(certificateHash[:])) || !result.Timestamped {
 		return errors.New("Windows Authenticode signature is not valid, exact, and timestamped")
 	}
 	return nil
 }
 
-func installVerifiedFiles(files []InstallFile, verify func(string) error) error {
+type winTrustFileInfo struct {
+	Size         uint32
+	FilePath     *uint16
+	File         windows.Handle
+	KnownSubject *windows.GUID
+}
+
+type winTrustData struct {
+	Size               uint32
+	PolicyCallbackData unsafe.Pointer
+	SIPClientData      unsafe.Pointer
+	UIChoice           uint32
+	RevocationChecks   uint32
+	UnionChoice        uint32
+	File               *winTrustFileInfo
+	StateAction        uint32
+	StateData          windows.Handle
+	URLReference       *uint16
+	ProviderFlags      uint32
+	UIContext          uint32
+	SignatureSettings  unsafe.Pointer
+}
+
+func winVerifyTrustStatus(path string) (uint32, error) {
+	if err := winVerifyTrustW.Find(); err != nil {
+		return 0, err
+	}
+	pathPointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	fileInfo := winTrustFileInfo{FilePath: pathPointer}
+	fileInfo.Size = uint32(unsafe.Sizeof(fileInfo))
+	data := winTrustData{UIChoice: 2, UnionChoice: 1, File: &fileInfo}
+	data.Size = uint32(unsafe.Sizeof(data))
+	action := windows.GUID{Data1: 0x00AAC56B, Data2: 0xCD44, Data3: 0x11D0, Data4: [8]byte{0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE}}
+	status, _, _ := winVerifyTrustW.Call(0, uintptr(unsafe.Pointer(&action)), uintptr(unsafe.Pointer(&data)))
+	runtime.KeepAlive(pathPointer)
+	runtime.KeepAlive(fileInfo)
+	runtime.KeepAlive(data)
+	return uint32(status), nil
+}
+
+type installTransactionOps struct {
+	rename         func(oldPath, newPath string) error
+	remove         func(path string) error
+	shortcutPath   string
+	controllerPath string
+	createShortcut func(controllerPath string) error
+}
+
+type installFileBackup struct {
+	destination string
+	backup      string
+	existed     bool
+}
+
+func installVerifiedFiles(files []InstallFile, verify func(string) error, operationOptions ...installTransactionOps) error {
 	if len(files) == 0 || verify == nil {
 		return errors.New("verified install file set is invalid")
+	}
+	if len(operationOptions) > 1 {
+		return errors.New("verified install operations are invalid")
+	}
+	operations := installTransactionOps{rename: windows.Rename, remove: os.Remove}
+	if len(operationOptions) == 1 {
+		operations = operationOptions[0]
+	}
+	if operations.rename == nil || operations.remove == nil ||
+		((operations.shortcutPath == "") != (operations.controllerPath == "")) ||
+		((operations.shortcutPath == "") != (operations.createShortcut == nil)) {
+		return errors.New("verified install operations are invalid")
 	}
 	destinationRoot := filepath.Dir(files[0].Destination)
 	for _, file := range files {
@@ -345,12 +499,116 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error) error 
 			return err
 		}
 	}
+
+	backupRoot, err := os.MkdirTemp(destinationRoot, ".mobile-egress-backup-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(backupRoot)
+	backups := make([]installFileBackup, 0, len(staged))
 	for _, file := range staged {
-		if err := windows.Rename(file.path, file.destination); err != nil {
-			return err
+		backup := installFileBackup{destination: file.destination, backup: filepath.Join(backupRoot, filepath.Base(file.destination))}
+		info, statErr := os.Lstat(file.destination)
+		switch {
+		case statErr == nil:
+			if !info.Mode().IsRegular() {
+				return rollbackInstall(errors.New("installed destination is not a regular file"), operations, backups, nil, "", false, false)
+			}
+			if err := operations.rename(file.destination, backup.backup); err != nil {
+				return rollbackInstall(err, operations, backups, nil, "", false, false)
+			}
+			backup.existed = true
+		case !os.IsNotExist(statErr):
+			return rollbackInstall(statErr, operations, backups, nil, "", false, false)
+		}
+		backups = append(backups, backup)
+	}
+
+	shortcutBackup := ""
+	shortcutExisted := false
+	if operations.createShortcut != nil {
+		info, statErr := os.Lstat(operations.shortcutPath)
+		switch {
+		case statErr == nil:
+			if !info.Mode().IsRegular() {
+				return rollbackInstall(errors.New("Start Menu shortcut is not a regular file"), operations, backups, nil, "", false, false)
+			}
+			shortcutBackup, err = unusedSiblingPath(operations.shortcutPath)
+			if err != nil {
+				return rollbackInstall(err, operations, backups, nil, "", false, false)
+			}
+			if err := operations.rename(operations.shortcutPath, shortcutBackup); err != nil {
+				return rollbackInstall(err, operations, backups, nil, "", false, false)
+			}
+			shortcutExisted = true
+		case !os.IsNotExist(statErr):
+			return rollbackInstall(statErr, operations, backups, nil, "", false, false)
+		}
+	}
+
+	promoted := make([]string, 0, len(staged))
+	for _, file := range staged {
+		if err := operations.rename(file.path, file.destination); err != nil {
+			return rollbackInstall(err, operations, backups, promoted, shortcutBackup, shortcutExisted, false)
+		}
+		promoted = append(promoted, file.destination)
+	}
+	if operations.createShortcut != nil {
+		if err := operations.createShortcut(operations.controllerPath); err != nil {
+			return rollbackInstall(err, operations, backups, promoted, shortcutBackup, shortcutExisted, true)
+		}
+		if shortcutExisted {
+			_ = operations.remove(shortcutBackup)
 		}
 	}
 	return nil
+}
+
+func unusedSiblingPath(path string) (string, error) {
+	file, err := os.CreateTemp(filepath.Dir(path), ".mobile-egress-shortcut-backup-")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Remove(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func rollbackInstall(cause error, operations installTransactionOps, backups []installFileBackup, promoted []string, shortcutBackup string, shortcutExisted, shortcutAttempted bool) error {
+	var rollbackErrors []error
+	if operations.createShortcut != nil {
+		if shortcutAttempted {
+			if err := operations.remove(operations.shortcutPath); err != nil && !os.IsNotExist(err) {
+				rollbackErrors = append(rollbackErrors, err)
+			}
+		}
+		if shortcutExisted {
+			if err := operations.rename(shortcutBackup, operations.shortcutPath); err != nil {
+				rollbackErrors = append(rollbackErrors, err)
+			}
+		}
+	}
+	for index := len(promoted) - 1; index >= 0; index-- {
+		if err := operations.remove(promoted[index]); err != nil && !os.IsNotExist(err) {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+	}
+	for index := len(backups) - 1; index >= 0; index-- {
+		if backups[index].existed {
+			if err := operations.rename(backups[index].backup, backups[index].destination); err != nil {
+				rollbackErrors = append(rollbackErrors, err)
+			}
+		}
+	}
+	if len(rollbackErrors) > 0 {
+		return errors.Join(cause, fmt.Errorf("roll back installation: %w", errors.Join(rollbackErrors...)))
+	}
+	return cause
 }
 
 func ensureCertificateInMachineStore(storeName string, identity Identity) (bool, error) {

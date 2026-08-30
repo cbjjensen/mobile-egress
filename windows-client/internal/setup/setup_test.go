@@ -45,15 +45,17 @@ func TestExchangeConsumesOnlyNonceBoundFixedInstallRequest(t *testing.T) {
 	root := t.TempDir()
 	nonceBytes := sha256.Sum256([]byte("request nonce"))
 	nonce := hex.EncodeToString(nonceBytes[:])
+	setupDigestBytes := sha256.Sum256([]byte("signed setup"))
+	setupDigest := hex.EncodeToString(setupDigestBytes[:])
 	exchange := Exchange{Root: root}
-	if err := exchange.CreateRequest(nonce); err != nil {
+	if err := exchange.CreateRequest(nonce, setupDigest); err != nil {
 		t.Fatal(err)
 	}
 	request, err := exchange.ConsumeRequest(nonce)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Operation != InstallOperation || request.Nonce != nonce {
+	if request.Operation != InstallOperation || request.Nonce != nonce || request.SetupSHA256 != setupDigest {
 		t.Fatalf("request = %#v", request)
 	}
 	if _, err := os.Stat(exchange.RequestPath(nonce)); !errors.Is(err, os.ErrNotExist) {
@@ -63,7 +65,7 @@ func TestExchangeConsumesOnlyNonceBoundFixedInstallRequest(t *testing.T) {
 	badNonceBytes := sha256.Sum256([]byte("bad request nonce"))
 	badNonce := hex.EncodeToString(badNonceBytes[:])
 	badPath := exchange.RequestPath(badNonce)
-	if err := os.WriteFile(badPath, []byte(`{"operation":"uninstall","nonce":"`+badNonce+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(badPath, []byte(`{"operation":"uninstall","nonce":"`+badNonce+`","setupSha256":"`+setupDigest+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := exchange.ConsumeRequest(badNonce); err == nil || !strings.Contains(err.Error(), "operation") {
@@ -72,7 +74,7 @@ func TestExchangeConsumesOnlyNonceBoundFixedInstallRequest(t *testing.T) {
 
 	unknownNonceBytes := sha256.Sum256([]byte("unknown request field"))
 	unknownNonce := hex.EncodeToString(unknownNonceBytes[:])
-	if err := os.WriteFile(exchange.RequestPath(unknownNonce), []byte(`{"operation":"install","nonce":"`+unknownNonce+`","destination":"C:\\elsewhere"}`), 0o600); err != nil {
+	if err := os.WriteFile(exchange.RequestPath(unknownNonce), []byte(`{"operation":"install","nonce":"`+unknownNonce+`","setupSha256":"`+setupDigest+`","destination":"C:\\elsewhere"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := exchange.ConsumeRequest(unknownNonce); err == nil {
@@ -81,22 +83,113 @@ func TestExchangeConsumesOnlyNonceBoundFixedInstallRequest(t *testing.T) {
 }
 
 type parentPlatformFake struct {
-	elevated    bool
-	confirmed   bool
-	elevatedExe string
-	launched    string
-	exchange    Exchange
+	elevated        bool
+	confirmed       bool
+	setupPath       string
+	elevatedExe     string
+	launched        string
+	exchange        Exchange
+	preTrustChecked bool
+	tamperOnConfirm []byte
+	elevationErr    error
+	forgeResult     bool
+	resultDigest    string
 }
 
-func (fake *parentPlatformFake) IsElevated() (bool, error)    { return fake.elevated, nil }
-func (fake *parentPlatformFake) Confirm(string) (bool, error) { return fake.confirmed, nil }
+func (fake *parentPlatformFake) IsElevated() (bool, error) { return fake.elevated, nil }
+func (fake *parentPlatformFake) VerifyPreTrustAuthenticode(_ string, _ Identity) error {
+	fake.preTrustChecked = true
+	return nil
+}
+func (fake *parentPlatformFake) Confirm(_ string) (bool, error) {
+	if fake.tamperOnConfirm != nil {
+		if err := os.WriteFile(fake.setupPath, fake.tamperOnConfirm, 0o600); err != nil {
+			return false, err
+		}
+	}
+	return fake.confirmed, nil
+}
 func (fake *parentPlatformFake) ElevateAndWait(executable, nonce string) error {
 	fake.elevatedExe = executable
+	if fake.elevationErr != nil {
+		if fake.forgeResult {
+			var request Request
+			if err := readBoundedJSON(fake.exchange.RequestPath(nonce), &request); err != nil {
+				return err
+			}
+			if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "forged"}); err != nil {
+				return err
+			}
+		}
+		return fake.elevationErr
+	}
 	request, err := fake.exchange.ConsumeRequest(nonce)
 	if err != nil {
 		return err
 	}
-	return fake.exchange.WriteResult(Result{Nonce: request.Nonce, Success: true, Message: "installed"})
+	digest, err := FileSHA256(executable)
+	if err != nil {
+		return err
+	}
+	if request.SetupSHA256 != digest {
+		return errors.New("parent did not hash the confirmed setup file")
+	}
+	resultDigest := request.SetupSHA256
+	if fake.resultDigest != "" {
+		resultDigest = fake.resultDigest
+	}
+	return fake.exchange.WriteResult(Result{Nonce: request.Nonce, SetupSHA256: resultDigest, Success: true, Message: "installed"})
+}
+
+func TestRunParentRejectsForgedSuccessWhenElevatedChildFails(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), SetupExecutableName)
+	if err := os.WriteFile(executable, []byte("signed setup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonceBytes := sha256.Sum256([]byte("forged child result"))
+	exchange := Exchange{Root: t.TempDir()}
+	fake := &parentPlatformFake{
+		confirmed:    true,
+		setupPath:    executable,
+		exchange:     exchange,
+		elevationErr: errors.New("child exit 17"),
+		forgeResult:  true,
+	}
+	err = RunParent(context.Background(), ParentOptions{
+		Executable: executable, InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
+		Identity: identity, Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
+	}, fake)
+	if err == nil || fake.launched != "" {
+		t.Fatalf("forged result launched controller: err=%v launch=%q", err, fake.launched)
+	}
+}
+
+func TestRunParentRejectsResultForDifferentSetupDigest(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), SetupExecutableName)
+	if err := os.WriteFile(executable, []byte("signed setup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonceBytes := sha256.Sum256([]byte("wrong result digest"))
+	exchange := Exchange{Root: t.TempDir()}
+	fake := &parentPlatformFake{
+		confirmed: true, setupPath: executable, exchange: exchange,
+		resultDigest: strings.Repeat("0", 64),
+	}
+	err = RunParent(context.Background(), ParentOptions{
+		Executable: executable, InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
+		Identity: identity, Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
+	}, fake)
+	if err == nil || !strings.Contains(err.Error(), "does not match") || fake.launched != "" {
+		t.Fatalf("wrong-digest result was accepted: err=%v launch=%q", err, fake.launched)
+	}
 }
 func (fake *parentPlatformFake) Launch(executable string) error {
 	fake.launched = executable
@@ -107,11 +200,19 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 	nonceBytes := sha256.Sum256([]byte("parent request"))
 	nonce := hex.EncodeToString(nonceBytes[:])
 	exchange := Exchange{Root: t.TempDir()}
-	fake := &parentPlatformFake{exchange: exchange}
+	executable := filepath.Join(t.TempDir(), SetupExecutableName)
+	if err := os.WriteFile(executable, []byte("initial signed setup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &parentPlatformFake{exchange: exchange, setupPath: executable}
 	options := ParentOptions{
-		Executable:          `C:\release\MobileEgressSetup.exe`,
+		Executable:          executable,
 		InstalledController: `C:\Program Files\MobileEgress\Controller\mobile-egress-windows.exe`,
-		Fingerprint:         trackedFingerprint,
+		Identity:            identity,
 		Nonce:               nonce,
 		Exchange:            exchange,
 	}
@@ -121,8 +222,12 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 	if fake.elevatedExe != "" || fake.launched != "" {
 		t.Fatal("declined setup performed a privileged or launch action")
 	}
+	if !fake.preTrustChecked {
+		t.Fatal("setup did not inspect its Authenticode signer before confirmation")
+	}
 
 	fake.confirmed = true
+	fake.tamperOnConfirm = []byte("confirmed replacement setup")
 	if err := RunParent(context.Background(), options, fake); err != nil {
 		t.Fatal(err)
 	}
@@ -135,22 +240,28 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 }
 
 type elevatedPlatformFake struct {
-	elevated  bool
-	verified  []string
-	installed []InstallFile
-	shortcut  string
-	changes   TrustChanges
-	rollback  TrustChanges
-	verifyErr error
+	elevated    bool
+	verified    []string
+	installed   []InstallFile
+	changes     TrustChanges
+	rollback    TrustChanges
+	ensureErr   error
+	rollbackErr error
+	preTrustErr error
+	verifyErr   error
 }
 
 func (fake *elevatedPlatformFake) IsElevated() (bool, error) { return fake.elevated, nil }
+func (fake *elevatedPlatformFake) VerifyPreTrustAuthenticode(path string, _ Identity) error {
+	fake.verified = append(fake.verified, "pretrust:"+filepath.Base(path))
+	return fake.preTrustErr
+}
 func (fake *elevatedPlatformFake) EnsureTrust(Identity) (TrustChanges, error) {
-	return fake.changes, nil
+	return fake.changes, fake.ensureErr
 }
 func (fake *elevatedPlatformFake) RollbackTrust(_ Identity, changes TrustChanges) error {
 	fake.rollback = changes
-	return nil
+	return fake.rollbackErr
 }
 func (fake *elevatedPlatformFake) VerifyAuthenticode(path string, _ Identity) error {
 	fake.verified = append(fake.verified, filepath.Base(path))
@@ -160,11 +271,6 @@ func (fake *elevatedPlatformFake) Install(files []InstallFile, _ Identity) error
 	fake.installed = append([]InstallFile(nil), files...)
 	return nil
 }
-func (fake *elevatedPlatformFake) CreateShortcut(controllerPath string) error {
-	fake.shortcut = controllerPath
-	return nil
-}
-
 func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 	releaseDir := t.TempDir()
 	for _, name := range verifiedReleaseExecutables {
@@ -180,7 +286,12 @@ func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 	nonceBytes := sha256.Sum256([]byte("elevated request"))
 	nonce := hex.EncodeToString(nonceBytes[:])
 	exchange := Exchange{Root: root}
-	if err := exchange.CreateRequest(nonce); err != nil {
+	setupPath := filepath.Join(releaseDir, SetupExecutableName)
+	setupDigest, err := FileSHA256(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exchange.CreateRequest(nonce, setupDigest); err != nil {
 		t.Fatal(err)
 	}
 	fake := &elevatedPlatformFake{
@@ -188,10 +299,10 @@ func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 		changes:   TrustChanges{RootAdded: true, TrustedPublisherAdded: false},
 		verifyErr: errors.New("invalid signature"),
 	}
-	if err := RunElevated(ElevatedOptions{Nonce: nonce, ReleaseDir: releaseDir, Exchange: exchange, Identity: identity}, fake); err == nil {
+	if err := RunElevated(ElevatedOptions{Nonce: nonce, SetupPath: setupPath, Exchange: exchange, Identity: identity}, fake); err == nil {
 		t.Fatal("expected verification failure")
 	}
-	if !reflect.DeepEqual(fake.verified, []string{SetupExecutableName}) {
+	if !reflect.DeepEqual(fake.verified, []string{"pretrust:" + SetupExecutableName, SetupExecutableName}) {
 		t.Fatalf("verification order = %#v", fake.verified)
 	}
 	if !reflect.DeepEqual(fake.rollback, fake.changes) {
@@ -201,13 +312,14 @@ func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 	fake.verifyErr = nil
 	fake.verified = nil
 	fake.rollback = TrustChanges{}
-	if err := exchange.CreateRequest(nonce); err != nil {
+	if err := exchange.CreateRequest(nonce, setupDigest); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunElevated(ElevatedOptions{Nonce: nonce, ReleaseDir: releaseDir, Exchange: exchange, Identity: identity}, fake); err != nil {
+	if err := RunElevated(ElevatedOptions{Nonce: nonce, SetupPath: setupPath, Exchange: exchange, Identity: identity}, fake); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(fake.verified, verifiedReleaseExecutables[:]) {
+	wantVerified := append([]string{"pretrust:" + SetupExecutableName}, verifiedReleaseExecutables[:]...)
+	if !reflect.DeepEqual(fake.verified, wantVerified) {
 		t.Fatalf("verified = %#v", fake.verified)
 	}
 	wantInstalled := []string{ControllerExecutableName, AdminExecutableName, RelayExecutableName}
@@ -221,4 +333,130 @@ func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 	if fake.rollback != (TrustChanges{}) {
 		t.Fatalf("successful install rolled back trust: %#v", fake.rollback)
 	}
+}
+
+func TestRunElevatedRejectsSetupPathSwapBeforeTrust(t *testing.T) {
+	releaseDir := t.TempDir()
+	for _, name := range verifiedReleaseExecutables {
+		if err := os.WriteFile(filepath.Join(releaseDir, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setupPath := filepath.Join(releaseDir, SetupExecutableName)
+	setupDigest, err := FileSHA256(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonceBytes := sha256.Sum256([]byte("path swap request"))
+	nonce := hex.EncodeToString(nonceBytes[:])
+	exchange := Exchange{Root: t.TempDir()}
+	if err := exchange.CreateRequest(nonce, setupDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(setupPath, []byte("substituted setup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &elevatedPlatformFake{elevated: true}
+	err = RunElevated(ElevatedOptions{Nonce: nonce, SetupPath: setupPath, Exchange: exchange, Identity: identity}, fake)
+	if err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("expected setup digest mismatch, got %v", err)
+	}
+	if fake.changes != (TrustChanges{}) || len(fake.verified) != 0 {
+		t.Fatal("path-swapped setup reached signature or trust mutation")
+	}
+}
+
+func TestRunElevatedRequiresElevationBeforeConsumingRequest(t *testing.T) {
+	releaseDir := t.TempDir()
+	setupPath := filepath.Join(releaseDir, SetupExecutableName)
+	if err := os.WriteFile(setupPath, []byte("signed setup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setupDigest, err := FileSHA256(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonceBytes := sha256.Sum256([]byte("unelevated child"))
+	nonce := hex.EncodeToString(nonceBytes[:])
+	exchange := Exchange{Root: t.TempDir()}
+	if err := exchange.CreateRequest(nonce, setupDigest); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = RunElevated(ElevatedOptions{Nonce: nonce, SetupPath: setupPath, Exchange: exchange, Identity: identity}, &elevatedPlatformFake{})
+	if err == nil || !strings.Contains(err.Error(), "requires elevation") {
+		t.Fatalf("expected unelevated rejection, got %v", err)
+	}
+	if _, statErr := os.Stat(exchange.RequestPath(nonce)); statErr != nil {
+		t.Fatalf("unelevated invocation consumed request: %v", statErr)
+	}
+}
+
+func TestRunElevatedRollsBackExactPartialTrustWhenEnsureTrustFails(t *testing.T) {
+	options, _ := elevatedTestOptions(t, "partial trust")
+	fake := &elevatedPlatformFake{
+		elevated:  true,
+		changes:   TrustChanges{RootAdded: true},
+		ensureErr: errors.New("add TrustedPublisher certificate"),
+	}
+	err := RunElevated(options, fake)
+	if err == nil || !strings.Contains(err.Error(), "install publisher trust") {
+		t.Fatalf("expected trust installation failure, got %v", err)
+	}
+	if !reflect.DeepEqual(fake.rollback, fake.changes) {
+		t.Fatalf("rolled back %#v, want exact partial changes %#v", fake.rollback, fake.changes)
+	}
+}
+
+func TestRunElevatedSurfacesPartialTrustRollbackFailure(t *testing.T) {
+	options, _ := elevatedTestOptions(t, "partial trust rollback failure")
+	fake := &elevatedPlatformFake{
+		elevated:    true,
+		changes:     TrustChanges{RootAdded: true},
+		ensureErr:   errors.New("add TrustedPublisher certificate"),
+		rollbackErr: errors.New("remove exact Root certificate"),
+	}
+	err := RunElevated(options, fake)
+	if !errors.Is(err, ErrTrustRollback) {
+		t.Fatalf("expected trust rollback sentinel, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "remove exact Root certificate") {
+		t.Fatalf("rollback error was not surfaced: %v", err)
+	}
+	if !reflect.DeepEqual(fake.rollback, fake.changes) {
+		t.Fatalf("rolled back %#v, want exact partial changes %#v", fake.rollback, fake.changes)
+	}
+}
+
+func elevatedTestOptions(t *testing.T, nonceSeed string) (ElevatedOptions, Identity) {
+	t.Helper()
+	releaseDir := t.TempDir()
+	for _, name := range verifiedReleaseExecutables {
+		if err := os.WriteFile(filepath.Join(releaseDir, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setupPath := filepath.Join(releaseDir, SetupExecutableName)
+	setupDigest, err := FileSHA256(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonceBytes := sha256.Sum256([]byte(nonceSeed))
+	nonce := hex.EncodeToString(nonceBytes[:])
+	exchange := Exchange{Root: t.TempDir()}
+	if err := exchange.CreateRequest(nonce, setupDigest); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ElevatedOptions{Nonce: nonce, SetupPath: setupPath, Exchange: exchange, Identity: identity}, identity
 }

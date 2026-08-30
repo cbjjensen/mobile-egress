@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"mobile-egress/windows-client/internal/setup"
 )
 
 func TestParseModeAcceptsOnlyFixedInternalOperationAndNonce(t *testing.T) {
@@ -40,5 +42,15 @@ func TestFailureResultIsRedacted(t *testing.T) {
 	}
 	if result.Nonce != strings.Repeat("b", 64) {
 		t.Fatal("result nonce changed")
+	}
+}
+
+func TestFailureResultDistinguishesTrustRollbackFailureWithoutLeakingDetails(t *testing.T) {
+	result := failureResult(strings.Repeat("c", 64), errors.Join(setup.ErrTrustRollback, errors.New(`remove C:\secret\publisher.cer`)))
+	if result.Code != "trust_rollback_failed" {
+		t.Fatalf("result code = %q", result.Code)
+	}
+	if strings.Contains(result.Message, "secret") || strings.Contains(result.Message, "publisher.cer") {
+		t.Fatalf("result leaked internal detail: %q", result.Message)
 	}
 }

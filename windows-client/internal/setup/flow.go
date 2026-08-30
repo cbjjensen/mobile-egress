@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -21,7 +22,9 @@ const (
 )
 
 var (
-	ErrConfirmationDeclined    = errors.New("setup confirmation was declined")
+	ErrConfirmationDeclined = errors.New("setup confirmation was declined")
+	ErrTrustRollback        = errors.New("publisher trust rollback failed")
+
 	verifiedReleaseExecutables = [...]string{
 		SetupExecutableName,
 		ControllerExecutableName,
@@ -33,13 +36,14 @@ var (
 type ParentOptions struct {
 	Executable          string
 	InstalledController string
-	Fingerprint         string
+	Identity            Identity
 	Nonce               string
 	Exchange            Exchange
 }
 
 type ParentPlatform interface {
 	IsElevated() (bool, error)
+	VerifyPreTrustAuthenticode(path string, identity Identity) error
 	Confirm(fingerprint string) (bool, error)
 	ElevateAndWait(executable, nonce string) error
 	Launch(executable string) error
@@ -56,14 +60,21 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if elevated {
 		return errors.New("run Mobile Egress Setup normally, not from an elevated process")
 	}
-	confirmed, err := platform.Confirm(options.Fingerprint)
+	if err := platform.VerifyPreTrustAuthenticode(options.Executable, options.Identity); err != nil {
+		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
+	}
+	confirmed, err := platform.Confirm(options.Identity.Fingerprint)
 	if err != nil {
 		return errors.New("show publisher confirmation")
 	}
 	if !confirmed {
 		return ErrConfirmationDeclined
 	}
-	if err := options.Exchange.CreateRequest(options.Nonce); err != nil {
+	setupSHA256, err := FileSHA256(options.Executable)
+	if err != nil {
+		return errors.New("hash confirmed setup executable")
+	}
+	if err := options.Exchange.CreateRequest(options.Nonce, setupSHA256); err != nil {
 		return err
 	}
 	defer os.Remove(options.Exchange.RequestPath(options.Nonce))
@@ -81,6 +92,9 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if !result.Success {
 		return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
 	}
+	if result.SetupSHA256 != setupSHA256 {
+		return errors.New("elevated setup result does not match the confirmed setup executable")
+	}
 	if err := platform.Launch(options.InstalledController); err != nil {
 		return errors.New("launch installed controller")
 	}
@@ -88,10 +102,10 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 }
 
 type ElevatedOptions struct {
-	Nonce      string
-	ReleaseDir string
-	Exchange   Exchange
-	Identity   Identity
+	Nonce     string
+	SetupPath string
+	Exchange  Exchange
+	Identity  Identity
 }
 
 type TrustChanges struct {
@@ -106,55 +120,70 @@ type InstallFile struct {
 
 type ElevatedPlatform interface {
 	IsElevated() (bool, error)
+	VerifyPreTrustAuthenticode(path string, identity Identity) error
 	EnsureTrust(Identity) (TrustChanges, error)
 	RollbackTrust(Identity, TrustChanges) error
 	VerifyAuthenticode(path string, identity Identity) error
 	Install(files []InstallFile, identity Identity) error
-	CreateShortcut(controllerPath string) error
 }
 
 func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr error) {
-	if _, err := options.Exchange.ConsumeRequest(options.Nonce); err != nil {
-		return err
-	}
 	elevated, err := platform.IsElevated()
 	if err != nil || !elevated {
 		return errors.New("internal setup mode requires elevation")
 	}
-	if filepath.Base(options.ReleaseDir) == "." || !filepath.IsAbs(options.ReleaseDir) {
-		return errors.New("release directory is invalid")
+	request, err := options.Exchange.ConsumeRequest(options.Nonce)
+	if err != nil {
+		return err
 	}
+	if !filepath.IsAbs(options.SetupPath) || !strings.EqualFold(filepath.Base(options.SetupPath), SetupExecutableName) {
+		return errors.New("setup executable path is invalid")
+	}
+	setupSHA256, err := FileSHA256(options.SetupPath)
+	if err != nil || setupSHA256 != request.SetupSHA256 {
+		return errors.New("setup executable digest does not match the confirmed request")
+	}
+	if err := platform.VerifyPreTrustAuthenticode(options.SetupPath, options.Identity); err != nil {
+		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
+	}
+	releaseDir := filepath.Dir(options.SetupPath)
 	for _, name := range verifiedReleaseExecutables {
-		info, err := os.Lstat(filepath.Join(options.ReleaseDir, name))
+		info, err := os.Lstat(filepath.Join(releaseDir, name))
 		if err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("required signed release file is missing: %s", name)
 		}
 	}
 	changes, err := platform.EnsureTrust(options.Identity)
 	if err != nil {
-		return errors.New("install publisher trust")
+		return rollbackTrustAfterFailure(platform, options.Identity, changes, fmt.Errorf("install publisher trust: %w", err))
 	}
 	defer func() {
 		if resultErr != nil && (changes.RootAdded || changes.TrustedPublisherAdded) {
-			resultErr = errors.Join(resultErr, platform.RollbackTrust(options.Identity, changes))
+			resultErr = rollbackTrustAfterFailure(platform, options.Identity, changes, resultErr)
 		}
 	}()
 	for _, name := range verifiedReleaseExecutables {
-		if err := platform.VerifyAuthenticode(filepath.Join(options.ReleaseDir, name), options.Identity); err != nil {
+		if err := platform.VerifyAuthenticode(filepath.Join(releaseDir, name), options.Identity); err != nil {
 			return fmt.Errorf("verify signed release file %s: %w", name, err)
 		}
 	}
 	files := []InstallFile{
-		{Source: filepath.Join(options.ReleaseDir, ControllerExecutableName), Destination: filepath.Join(InstallRoot, ControllerExecutableName)},
-		{Source: filepath.Join(options.ReleaseDir, AdminExecutableName), Destination: filepath.Join(InstallRoot, AdminExecutableName)},
-		{Source: filepath.Join(options.ReleaseDir, RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
+		{Source: filepath.Join(releaseDir, ControllerExecutableName), Destination: filepath.Join(InstallRoot, ControllerExecutableName)},
+		{Source: filepath.Join(releaseDir, AdminExecutableName), Destination: filepath.Join(InstallRoot, AdminExecutableName)},
+		{Source: filepath.Join(releaseDir, RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
 	}
 	if err := platform.Install(files, options.Identity); err != nil {
-		return errors.New("install signed release files")
-	}
-	controllerPath := filepath.Join(InstallRoot, ControllerExecutableName)
-	if err := platform.CreateShortcut(controllerPath); err != nil {
-		return errors.New("create Start Menu shortcut")
+		return errors.New("transactionally install signed release files and Start Menu shortcut")
 	}
 	return nil
+}
+
+func rollbackTrustAfterFailure(platform ElevatedPlatform, identity Identity, changes TrustChanges, cause error) error {
+	if !changes.RootAdded && !changes.TrustedPublisherAdded {
+		return cause
+	}
+	if err := platform.RollbackTrust(identity, changes); err != nil {
+		return errors.Join(cause, ErrTrustRollback, fmt.Errorf("roll back publisher trust: %w", err))
+	}
+	return cause
 }

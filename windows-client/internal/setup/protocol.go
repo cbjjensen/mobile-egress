@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,17 +19,20 @@ const (
 )
 
 var noncePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type Request struct {
-	Operation string `json:"operation"`
-	Nonce     string `json:"nonce"`
+	Operation   string `json:"operation"`
+	Nonce       string `json:"nonce"`
+	SetupSHA256 string `json:"setupSha256"`
 }
 
 type Result struct {
-	Nonce   string `json:"nonce"`
-	Success bool   `json:"success"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message"`
+	Nonce       string `json:"nonce"`
+	SetupSHA256 string `json:"setupSha256,omitempty"`
+	Success     bool   `json:"success"`
+	Code        string `json:"code,omitempty"`
+	Message     string `json:"message"`
 }
 
 type Exchange struct {
@@ -51,8 +55,8 @@ func (exchange Exchange) ResultPath(nonce string) string {
 	return filepath.Join(exchange.Root, nonce+".result.json")
 }
 
-func (exchange Exchange) CreateRequest(nonce string) error {
-	if !noncePattern.MatchString(nonce) {
+func (exchange Exchange) CreateRequest(nonce, setupSHA256 string) error {
+	if !noncePattern.MatchString(nonce) || !sha256Pattern.MatchString(setupSHA256) {
 		return errors.New("setup request nonce is invalid")
 	}
 	if exchange.Root == "" {
@@ -62,7 +66,7 @@ func (exchange Exchange) CreateRequest(nonce string) error {
 		return errors.New("create setup exchange directory")
 	}
 	_ = os.Remove(exchange.ResultPath(nonce))
-	return writeExclusiveJSON(exchange.RequestPath(nonce), Request{Operation: InstallOperation, Nonce: nonce})
+	return writeExclusiveJSON(exchange.RequestPath(nonce), Request{Operation: InstallOperation, Nonce: nonce, SetupSHA256: setupSHA256})
 }
 
 func (exchange Exchange) ConsumeRequest(nonce string) (Request, error) {
@@ -83,11 +87,15 @@ func (exchange Exchange) ConsumeRequest(nonce string) (Request, error) {
 	if request.Nonce != nonce {
 		return Request{}, errors.New("setup request nonce does not match")
 	}
+	if !sha256Pattern.MatchString(request.SetupSHA256) {
+		return Request{}, errors.New("setup request digest is invalid")
+	}
 	return request, nil
 }
 
 func (exchange Exchange) WriteResult(result Result) error {
-	if !noncePattern.MatchString(result.Nonce) || result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 {
+	if !noncePattern.MatchString(result.Nonce) || result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 ||
+		(result.Success && !sha256Pattern.MatchString(result.SetupSHA256)) || (!result.Success && result.SetupSHA256 != "" && !sha256Pattern.MatchString(result.SetupSHA256)) {
 		return errors.New("setup result is invalid")
 	}
 	return writeExclusiveJSON(exchange.ResultPath(result.Nonce), result)
@@ -103,10 +111,29 @@ func (exchange Exchange) ReadResult(nonce string) (Result, error) {
 	if err := readBoundedJSON(path, &result); err != nil {
 		return Result{}, fmt.Errorf("read setup result: %w", err)
 	}
-	if result.Nonce != nonce || result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 {
+	if result.Nonce != nonce || result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 ||
+		(result.Success && !sha256Pattern.MatchString(result.SetupSHA256)) || (!result.Success && result.SetupSHA256 != "" && !sha256Pattern.MatchString(result.SetupSHA256)) {
 		return Result{}, errors.New("setup result is invalid")
 	}
 	return result, nil
+}
+
+func FileSHA256(path string) (string, error) {
+	file, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 512<<20 {
+		return "", errors.New("setup executable size is invalid")
+	}
+	hasher := sha256.New()
+	written, err := io.Copy(hasher, file)
+	if err != nil || written != info.Size() {
+		return "", errors.New("setup executable changed while hashing")
+	}
+	return fmt.Sprintf("%x", hasher.Sum(nil)), nil
 }
 
 func writeExclusiveJSON(path string, value any) error {
