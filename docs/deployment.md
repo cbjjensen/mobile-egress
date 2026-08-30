@@ -54,9 +54,21 @@ For a consistent backup:
 2. Stop the `relay` Compose service so SQLite and key state are quiescent.
 3. Use the host's approved protected backup mechanism to copy the complete `deploy/data` directory with its access controls. Do not print or inspect secret file contents.
 4. Record the backup timestamp, deployment source commit, public origin, and backup identifier in the private operations record. Keep the backup under access controls equivalent to the live host.
-5. Start the same `relay` service and confirm readiness, Agent reconnection, and selected-application egress.
+5. Start the same `relay` service and confirm `/healthz` reports `readiness: true`.
+6. Open Android and tap **Start**.
+7. Start the Windows loopback proxy.
+8. Wait for Windows to show **Agent ready**.
+9. Verify the selected application uses carrier egress and an unconfigured application's route remains unchanged.
 
-Restoring a known-good backup is a relay-administrator operation: stop the relay, preserve the current state as a restricted incident copy, restore the complete matching `deploy/data` set, retain its protections, and then perform the same readiness and device checks. A stale state restore can reverse revocations or capability consumption, so it is not an application-code rollback mechanism.
+Restoring a known-good backup is a relay-administrator operation: stop the relay, preserve the current state as a restricted incident copy, restore the complete matching `deploy/data` set, and retain its protections. Then verify the restore in this order:
+
+1. Start the `relay` service and confirm `/healthz` reports `readiness: true`.
+2. Open Android and tap **Start**.
+3. Start the Windows loopback proxy.
+4. Wait for Windows to show **Agent ready**.
+5. Verify the selected application uses carrier egress and an unconfigured application's route remains unchanged.
+
+A stale state restore can reverse revocations or capability consumption, so it is not an application-code rollback mechanism.
 
 Do not improvise a state/CA cutover. If state is lost, the CA key is unavailable, the CA or database may be compromised, or a sole Owner identity is lost, revoked, or expired, the UI cannot recover the trust root. Keep the relay stopped when compromise is suspected, preserve a restricted forensic copy, and escalate to the relay administrator and maintainer. A reviewed cutover must create an empty state/CA, bootstrap a new Owner, and re-enroll every identity; no shipped command safely merges or rotates the old trust state in place.
 
