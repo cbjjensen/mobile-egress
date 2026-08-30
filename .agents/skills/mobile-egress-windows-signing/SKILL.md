@@ -17,7 +17,7 @@ Its ignored private recovery pair is:
 - `windows-signing\mobile-egress-code-signing.pfx`
 - `windows-signing\signing.properties`
 
-Never regenerate the identity, replace either tracked public file, or run `setup-windows-signing.ps1 -Initialize` to fix missing state, a build failure, expiry, or a mismatch. Never print, commit, upload, attach, copy into logs, or distribute the PFX, password, or properties contents. Friends and EC2 nodes receive only signed artifacts and public certificate data.
+Never regenerate the identity, replace either tracked public file, or run `setup-windows-signing.ps1 -Initialize` to fix missing state, a build failure, expiry, or a mismatch. Never print, commit, upload, attach, copy into logs, or distribute the PFX, password, or properties contents.
 
 ## Publisher workstation
 
@@ -30,7 +30,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows publisher validation failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Signed Windows release failed.' }
 ```
 
-The build must produce a self-contained `windows-client\build\release\mobile-egress-windows-<version>.zip`, require valid timestamped Authenticode on all five executables, and bind node-release manifest v2 to the tracked certificate and `mobile-egress-client.exe` hash. `-CodeSigningThumbprint` is only an optional equality assertion, not a way to select another signer.
+The build must produce a self-contained `windows-client\build\release\mobile-egress-windows-<version>.zip`, require valid timestamped Authenticode on all five executables, and bind node-release manifest v2 to the tracked certificate and `mobile-egress-client.exe` hash. `-CodeSigningThumbprint` is only an optional equality assertion, not a way to select another signer. Any missing/invalid signature or signer mismatch makes the entire archive unusable: stop, do not distribute it, and tell anyone who received it not to run it.
 
 On a replacement workstation, first restore both original ignored files to their exact paths through the secure backup process; do not display their contents. Then run:
 
@@ -45,21 +45,21 @@ If restore rejects the PFX, password, ACL, private key, certificate match, or tr
 
 ## Friend setup
 
-Give a friend the signed ZIP and the SHA-256 certificate fingerprint from `windows-signing\release-signing-certificate.txt` through a separate trusted channel. Never send private recovery material.
+Give a friend only the signed ZIP/setup and the SHA-256 certificate fingerprint from `windows-signing\release-signing-certificate.txt` through a separate trusted channel. Never separately send a CER/DER, recovery file, or verifier bundle.
 
-After extracting it, they may double-click `MobileEgressSetup.exe` directly. Inspecting **Properties → Digital Signatures** or using trusted system Windows PowerShell is useful but optional; never require a verifier script from the ZIP as the launcher. On the first run, **Unknown publisher** and SmartScreen **More info → Run anyway** may still appear because self-signing does not create SmartScreen reputation. This fingerprint-gated first-run action is supported; disabling SmartScreen or signature checks is not.
+After extracting it, they may double-click `MobileEgressSetup.exe` directly. Inspecting **Properties → Digital Signatures** or using trusted system Windows PowerShell is useful but optional; never require a verifier script from the ZIP as the launcher. An optional PowerShell check may report `NotTrusted` on a fresh PC before setup and must report `Valid` after trust is installed, always with the exact tracked signer. On the first run, **Unknown publisher** and SmartScreen **More info → Run anyway** may still appear because self-signing does not create SmartScreen reputation; these are acceptable only when setup carries that exact signer. Disabling SmartScreen or signature checks is not supported.
 
 Setup displays the fingerprint, requires explicit **Yes**, verifies and locks its exact signed executable through elevation, installs trust and signed siblings, and launches the controller unelevated only after bound success.
 
 ## EC2 trust failures
 
-Use the controller's **Install Client**, **Update**, or **Repair** flow. For rejection before SSM, check manifest v2, the tracked CER, certificate validity/self-signature/EKU/CA=false, both fingerprints, and release metadata; rebuild with the established identity. For rejection on a node, check SSM/outbound HTTPS, the pinned artifact hash, exact pre-trust signer, `LocalMachine\Root` and `LocalMachine\TrustedPublisher`, and post-trust `Valid` status; correct the release or SSM health and retry.
+Use the controller's **Install Client**, **Update**, or **Repair** flow. Controller/SSM bootstrap uses only signed manifest-v2 embedded public DER, its certificate fingerprints, and the pinned artifact hash. For rejection before SSM, check manifest v2, the tracked CER, certificate validity/self-signature/EKU/CA=false, both fingerprints, and release metadata; rebuild with the established identity. For rejection on a node, check SSM/outbound HTTPS, the pinned artifact hash, exact pre-trust signer, `LocalMachine\Root` and `LocalMachine\TrustedPublisher`, and post-trust `Valid` status; correct the release or SSM health and retry.
 
-Do not manually import a separately downloaded certificate, edit the manifest, clear certificate stores, bypass Authenticode, run overlapping installers, or place private signing material in SSM. The bootstrap is mutex-serialized and attempt-scoped rollback removes only exact trust it added.
+Never transmit or import a separately sourced CER/DER or private value through SSM. Do not edit the manifest, clear certificate stores, bypass Authenticode, or run overlapping installers. The bootstrap is mutex-serialized and attempt-scoped rollback removes only exact trust it added.
 
 ## Loss, compromise, and expiry
 
-Back up the PFX and password pair together in encrypted storage separate from the workstation, and test restore before relying on it. If the key is lost, compromised, or expired, stop affected releases; preserve restricted evidence; warn recipients not to trust new artifacts under that identity; and require a separately reviewed publisher replacement, a new out-of-band fingerprint, and explicit old-trust removal on every friend PC and EC2 node. A self-signed certificate has no public-CA revocation service, and timestamps do not authorize new releases after expiry.
+Back up the original `windows-signing\mobile-egress-code-signing.pfx` and original `windows-signing\signing.properties` together in encrypted storage separate from the workstation, without displaying or extracting their contents; test restore before relying on the backup. If the key is lost, compromised, or expired, stop affected releases; preserve restricted evidence; warn recipients not to trust new artifacts under that identity; and require a separately reviewed publisher replacement, a new out-of-band fingerprint, and explicit old-trust removal on every friend PC and EC2 node. A self-signed certificate has no public-CA revocation service, and timestamps do not authorize new releases after expiry.
 
 ## Common mistakes
 
