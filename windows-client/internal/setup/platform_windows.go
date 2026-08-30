@@ -144,7 +144,7 @@ func (platform *WindowsPlatform) IsElevated() (bool, error) {
 
 func (platform *WindowsPlatform) Confirm(fingerprint string) (bool, error) {
 	message := "Mobile Egress Setup will trust and install software signed by this publisher certificate.\n\n" +
-		"Before launch, use trusted Windows PowerShell from the Start menu to run Get-AuthenticodeSignature on this exact setup file. Require Status NotTrusted or Valid and signer thumbprint 85F220C1BF05A5D3A86B5DD408787EC1B122ECB7. Reject every other status. Windows Properties alone is not sufficient. Compare the OS-extracted certificate's SHA-256 fingerprint with the value shared separately by the publisher.\n\n" +
+		"Before continuing, compare the signer certificate Windows shows for this exact setup with the SHA-256 fingerprint shared separately by the publisher. You can inspect Properties > Digital Signatures or use Get-AuthenticodeSignature from trusted system Windows PowerShell.\n\n" +
 		"Expected SHA-256 fingerprint (reminder only; this setup-displayed value is not identity evidence):\n" + fingerprint + "\n\n" +
 		"Continue only if the fingerprint extracted through Windows matches the separately shared value exactly.\n\nContinue?"
 	result, err := showMessageBox(message, "Mobile Egress Setup", messageBoxYesNo|messageBoxIconWarning|messageBoxTopmost)

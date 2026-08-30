@@ -58,35 +58,23 @@ if ($LASTEXITCODE -ne 0) { throw 'Restored Windows publisher validation failed.'
 
 The SHA-256 certificate fingerprint in `windows-signing\release-signing-certificate.txt` is the pre-trust identity check. Share that exact value separately with each friend through a trusted out-of-band channel. A fingerprint shown on the GitHub release, inside the ZIP, or by an executable being installed is not an independent identity check and does not replace the separately shared value.
 
-Friends extract the release ZIP, open the system **Windows PowerShell** from the Start menu (never a shell/script from the ZIP), and run the exact pre-launch check below from the extracted directory. The signer thumbprint must be exactly `85F220C1BF05A5D3A86B5DD408787EC1B122ECB7`; Status must be exactly `NotTrusted` on a fresh PC or `Valid` on an already-trusted PC. `HashMismatch`, `NotSigned`, `UnknownError`, and every other status are hard failures. They compare the OS-extracted certificate SHA-256 printed by the check with the out-of-band value. Windows Properties can help view the certificate but is not sufficient alone, and setup/ZIP-displayed values are not identity evidence.
+Friends can inspect the exact setup signer through **Properties → Digital Signatures** or by opening the system **Windows PowerShell** from the Start menu (never a shell/script from the ZIP). The optional check below requires signer thumbprint `85F220C1BF05A5D3A86B5DD408787EC1B122ECB7`, Status exactly `NotTrusted` on a fresh PC or `Valid` on an already-trusted PC, and the tracked certificate SHA-256. `HashMismatch`, `NotSigned`, `UnknownError`, and every other status are hard failures. Compare the certificate identity Windows reports with the value received through the separate channel.
 
 ```powershell
 $setupPath = (Resolve-Path '.\MobileEgressSetup.exe').Path
 $expectedThumbprint = '85F220C1BF05A5D3A86B5DD408787EC1B122ECB7'
 $expectedCertificateSha256 = '9FE214C350D7CE04C8EE7F71E169281B50FF0B2A7C5669A348AC10616FB7061F'
-$expectedSetupSha256 = (Read-Host 'Enter the separately shared 64-lowercase-hex setup SHA-256').Trim()
-if ($expectedSetupSha256 -notmatch '^[0-9a-f]{64}$') { throw 'Reject setup: separately shared setup SHA-256 is invalid.' }
-$stream = [IO.File]::Open($setupPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-try {
-  $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
-  $status = [string]$signature.Status
-  if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
-  if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
-  $certificateHasher = [Security.Cryptography.SHA256]::Create()
-  try { $certificateSha256 = ([BitConverter]::ToString($certificateHasher.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $certificateHasher.Dispose() }
-  if ($certificateSha256 -ne $expectedCertificateSha256) { throw 'Reject setup: signer certificate SHA-256 differs.' }
-  $stream.Position = 0
-  $sha256 = [Security.Cryptography.SHA256]::Create()
-  try { $setupDigest = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $sha256.Dispose() }
-  if ($setupDigest -ne $expectedSetupSha256) { throw 'Reject setup: setup artifact SHA-256 differs.' }
-  Write-Host "Verified setup SHA-256: $setupDigest"
-  Start-Process -FilePath $setupPath -ArgumentList @('--verified-setup-sha256', $setupDigest) -Wait
-} finally {
-  $stream.Dispose()
-}
+$signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+$status = [string]$signature.Status
+if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
+if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try { $certificateSha256 = ([BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $sha256.Dispose() }
+if ($certificateSha256 -ne $expectedCertificateSha256) { throw 'Reject setup: signer certificate SHA-256 differs.' }
+$certificateSha256
 ```
 
-The initial Windows dialog can identify setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**. Self-signing does not solve SmartScreen reputation. The trusted command holds one mutation-denying handle across Authenticode verification, hashing that same handle, `Start-Process` on the exact path with the computed lowercase digest, and process wait. Direct/double-click setup is rejected. Genuine setup acquires its own lock, requires its locked digest to equal `--verified-setup-sha256`, and holds it through child completion; the child independently verifies its digest/signature as defense in depth. Genuine-code self-checks do not authenticate substituted malicious code; the separately shared trusted command is authority. Only child exit zero plus a bound success result permits controller launch.
+Double-click `MobileEgressSetup.exe` after any desired Windows signature inspection. The initial Windows dialog can identify setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**; self-signing does not create SmartScreen reputation. Setup displays the tracked fingerprint, requires explicit **Yes**, locks its own exact executable against write/delete/replacement, verifies its exact signer, hashes it after confirmation, and holds the lock through elevated-child completion. The child independently checks the request-bound digest and signature before trust. The parent reads the bound redacted result after every completed child and launches only when child exit is zero and that result reports success.
 
 The signed controller carries the same public publisher certificate. Before an EC2 Client accepts its normal Authenticode validation, the controller establishes that exact public certificate as the EC2 trust anchor through its guided SSM flow. EC2 nodes receive only the public certificate and signed artifacts; they never receive the PFX, its password, or another private signing value.
 
@@ -321,7 +309,7 @@ On the controller PC:
 1. Verify the ZIP hash against the release record.
 2. Obtain the publisher's SHA-256 certificate fingerprint from the separately shared trusted channel; do not treat a value in the release itself as that identity check.
 3. Extract it into one directory; do not separate the setup application or sibling executables.
-4. Copy the trusted Windows PowerShell command above from the separately shared instructions; do not run a mutable script from the ZIP. Enter the separately shared per-release `Setup SHA-256` printed by the release build. The command verifies exact Status/SHA-1/certificate SHA-256, compares the held setup hash, and starts the exact setup with `--verified-setup-sha256`. Direct/double-click launch is rejected. Answer **Yes** and approve the one UAC prompt. **Unknown publisher** and **More info → Run anyway** may appear; self-signing does not suppress SmartScreen.
+4. Optionally inspect the exact setup's Windows signature through **Properties → Digital Signatures** or the trusted system PowerShell check above, and compare it with the separately shared publisher identity. Then double-click setup, answer **Yes** after comparing its fingerprint reminder, and approve the one UAC prompt. **Unknown publisher** and **More info → Run anyway** may appear; self-signing does not suppress SmartScreen.
 5. Run `Get-AuthenticodeSignature` on every extracted `.exe` and require `Valid` with the recorded signer thumbprint after setup established the trusted publisher.
 
 On Android:

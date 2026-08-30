@@ -4,37 +4,25 @@ The signed Windows release has two roles: the Wails desktop controller on the op
 
 ## Friend quick start
 
-Download and extract `mobile-egress-windows-<version>.zip`; do not start an individual controller, relay, admin, or Client executable. Before opening `MobileEgressSetup.exe`, open the system **Windows PowerShell** from the Start menu—not a program or script from the ZIP—change to the extracted directory, and run this check on the exact setup file:
+Download and extract `mobile-egress-windows-<version>.zip`; do not start an individual controller, relay, admin, or Client executable. Obtain the publisher SHA-256 certificate fingerprint through a separate trusted channel. Before the first run, inspect the exact `MobileEgressSetup.exe` signer through **Properties → Digital Signatures** or trusted system **Windows PowerShell** and compare it with that separately shared identity. This optional PowerShell inspection rejects a damaged, unsigned, or differently signed setup and prints the certificate SHA-256 for comparison:
 
 ```powershell
 $setupPath = (Resolve-Path '.\MobileEgressSetup.exe').Path
 $expectedThumbprint = '85F220C1BF05A5D3A86B5DD408787EC1B122ECB7'
 $expectedCertificateSha256 = '9FE214C350D7CE04C8EE7F71E169281B50FF0B2A7C5669A348AC10616FB7061F'
-$expectedSetupSha256 = (Read-Host 'Enter the separately shared 64-lowercase-hex setup SHA-256').Trim()
-if ($expectedSetupSha256 -notmatch '^[0-9a-f]{64}$') { throw 'Reject setup: separately shared setup SHA-256 is invalid.' }
-$stream = [IO.File]::Open($setupPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-try {
-  $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
-  $status = [string]$signature.Status
-  if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
-  if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
-  $certificateHasher = [Security.Cryptography.SHA256]::Create()
-  try { $certificateSha256 = ([BitConverter]::ToString($certificateHasher.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $certificateHasher.Dispose() }
-  if ($certificateSha256 -ne $expectedCertificateSha256) { throw 'Reject setup: signer certificate SHA-256 differs.' }
-  $stream.Position = 0
-  $sha256 = [Security.Cryptography.SHA256]::Create()
-  try { $setupDigest = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $sha256.Dispose() }
-  if ($setupDigest -ne $expectedSetupSha256) { throw 'Reject setup: setup artifact SHA-256 differs.' }
-  Write-Host "Verified setup SHA-256: $setupDigest"
-  Start-Process -FilePath $setupPath -ArgumentList @('--verified-setup-sha256', $setupDigest) -Wait
-} finally {
-  $stream.Dispose()
-}
+$signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+$status = [string]$signature.Status
+if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
+if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try { $certificateSha256 = ([BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $sha256.Dispose() }
+if ($certificateSha256 -ne $expectedCertificateSha256) { throw 'Reject setup: signer certificate SHA-256 differs.' }
+$certificateSha256
 ```
 
-Status must be exactly `NotTrusted` on a fresh PC or `Valid` if this publisher is already trusted. Reject `HashMismatch`, `NotSigned`, `UnknownError`, or any other status. The expected SHA-1/certificate SHA-256 in the trusted instructions and the per-release setup SHA-256 entered at the prompt must arrive separately from the ZIP; do not run a verifier script from the ZIP. The open stream permits only other readers, so it denies content writes, deletion, and path replacement from verification through `Start-Process` and the setup process wait. **Properties → Digital Signatures** can help view/export the certificate but is not sufficient. A value displayed by the untrusted setup or shipped inside the ZIP is only a reminder, not pre-trust authority.
+For the PowerShell inspection, Status must be exactly `NotTrusted` on a fresh PC or `Valid` if this publisher is already trusted; reject `HashMismatch`, `NotSigned`, `UnknownError`, or any other status. Do not run a verifier script from the ZIP. The expected SHA-1 and certificate SHA-256 must come from separately shared instructions. A value displayed by setup or shipped inside the ZIP is a reminder, not the separate identity check.
 
-The first setup launch can show **Unknown publisher** and may require **More info → Run anyway** in SmartScreen. Self-signing does not establish SmartScreen reputation. Direct/double-click launch is rejected: use the trusted command above, answer **Yes** to setup's reminder, and approve its UAC prompt. Genuine setup acquires its own mutation-denying handle, requires that handle's digest to equal `--verified-setup-sha256`, and holds it through elevated-child completion; the child's own digest/signature check remains defense in depth. These self-checks do not authenticate malicious substituted code—the atomic trusted OS verification/handle/`Start-Process` command above is the authority. Setup launches the installed controller unelevated only after child exit zero and a bound success result.
+Double-click `MobileEgressSetup.exe`. The first launch can show **Unknown publisher** and may require **More info → Run anyway** in SmartScreen; self-signing does not establish SmartScreen reputation. Setup displays the tracked fingerprint and requires explicit **Yes**, then asks for one UAC approval. It holds its own exact executable against write/delete/replacement while checking its Authenticode signer, confirming, hashing, and waiting for the elevated child. The child repeats digest/signature checks before trust. Setup launches the installed controller unelevated only after child exit zero and a nonce/digest-bound success result.
 
 ## Controller UI
 
@@ -73,10 +61,12 @@ npm run check --prefix windows-client/frontend
 npm run build --prefix windows-client/frontend
 ```
 
-Production packaging requires Windows SDK `signtool` and a code-signing certificate:
+Production packaging uses the established tracked code-signing certificate through PowerShell `Set-AuthenticodeSignature`; it does not require the Windows SDK or `signtool`:
 
 ```powershell
-& .\scripts\build-windows.ps1 -ReleaseVersion 1.2.3 -CodeSigningThumbprint <thumbprint>
+& .\scripts\build-windows.ps1 -ReleaseVersion 1.2.3
 ```
+
+`-CodeSigningThumbprint` remains an optional compatibility assertion and must equal the tracked publisher thumbprint if supplied.
 
 Unsigned builds can run unit tests and foreground developer commands, but production relay/Client setup intentionally rejects them.

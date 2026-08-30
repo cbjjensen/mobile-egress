@@ -14,13 +14,9 @@ import (
 )
 
 func TestParseModeAcceptsOnlyFixedInternalOperationAndNonce(t *testing.T) {
-	if _, _, err := parseMode(nil); err == nil || !strings.Contains(err.Error(), "trusted Windows PowerShell") {
-		t.Fatalf("direct launch was not rejected with safe verifier instructions: %v", err)
-	}
-	verifiedDigest := strings.Repeat("1", 64)
-	mode, value, err := parseMode([]string{"--verified-setup-sha256", verifiedDigest})
-	if err != nil || mode != parentMode || value != verifiedDigest {
-		t.Fatalf("verified parent parse = %q, %q, %v", mode, value, err)
+	mode, value, err := parseMode(nil)
+	if err != nil || mode != parentMode || value != "" {
+		t.Fatalf("normal parent parse = %q, %q, %v", mode, value, err)
 	}
 	validNonce := strings.Repeat("a", 64)
 	mode, value, err = parseMode([]string{"--internal-elevated-install", validNonce})
@@ -32,8 +28,7 @@ func TestParseModeAcceptsOnlyFixedInternalOperationAndNonce(t *testing.T) {
 		{"--internal-elevated-install", validNonce, "--destination", `C:\elsewhere`},
 		{"--internal-elevated-uninstall", validNonce},
 		{"--internal-elevated-install", "short"},
-		{"--verified-setup-sha256", strings.Repeat("A", 64)},
-		{"--verified-setup-sha256", "short"},
+		{"--verified-setup-sha256", strings.Repeat("1", 64)},
 	} {
 		if _, _, err := parseMode(arguments); err == nil {
 			t.Fatalf("accepted arguments %#v", arguments)
@@ -162,18 +157,9 @@ func TestParentCannotLaunchWhenBoundSuccessReplacesFailureAfterNonzeroChild(t *t
 	fake := &commandFlowParentPlatform{setupPath: executable, exchange: exchange, t: t}
 	err := setup.RunParent(context.Background(), setup.ParentOptions{
 		Executable: executable, InstalledController: filepath.Join(setup.InstallRoot, setup.ControllerExecutableName),
-		Identity: setup.Identity{Fingerprint: strings.Repeat("F", 95)}, VerifiedSetupSHA256: mustSetupDigest(t, executable), Nonce: strings.Repeat("f", 64), Exchange: exchange,
+		Identity: setup.Identity{Fingerprint: strings.Repeat("F", 95)}, Nonce: strings.Repeat("f", 64), Exchange: exchange,
 	}, fake)
 	if err == nil || fake.launched {
 		t.Fatalf("nonzero child authorized launch: err=%v launched=%v", err, fake.launched)
 	}
-}
-
-func mustSetupDigest(t *testing.T, path string) string {
-	t.Helper()
-	digest, err := setup.FileSHA256(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return digest
 }
