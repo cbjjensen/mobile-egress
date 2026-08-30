@@ -26,7 +26,7 @@ Double-click `MobileEgressSetup.exe`. The first launch can show **Unknown publis
 
 ## Controller UI
 
-- **Bridge** verifies/installs official Tailscale, completes browser login, enables unattended raw TCP Funnel, and installs `MobileEgressRelay` as a loopback-only LocalSystem service. The installer passes its private staging path through an isolated process environment instead of PowerShell command text, tolerates spaces in the Windows profile path, and reports the safe failing stage when setup cannot continue.
+- **Bridge** verifies/installs official Tailscale, completes browser login, enables unattended raw TCP Funnel, and installs `MobileEgressRelay` as a loopback-only LocalSystem service. The installer passes its private staging path through an isolated process environment instead of PowerShell command text, tolerates spaces in the Windows profile path, and reports the safe failing stage when setup cannot continue. Recurring background Tailscale status and Funnel commands use Windows' no-console process policy so controller polling never flashes command windows.
 - **Phone** issues an in-memory, expiring Agent enrollment QR. After a Funnel name change it displays a distinct one-use migration QR.
 - **AWS Login** supports IAM Identity Center device/browser login and DPAPI-encrypted access-key fallback.
 - **EC2 Nodes** inventories supported `us-east-1` instances, safely prepares SSM IAM, installs/updates/repairs signed Clients, shows redacted node metadata, and reveals SOCKS credentials only on copy.

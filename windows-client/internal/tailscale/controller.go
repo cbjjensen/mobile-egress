@@ -14,7 +14,9 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, executable string, arguments ...string) ([]byte, error) {
-	output, err := exec.CommandContext(ctx, executable, arguments...).Output()
+	command := exec.CommandContext(ctx, executable, arguments...)
+	configureBackgroundCommand(command)
+	output, err := command.Output()
 	if err != nil {
 		return nil, errors.New("Tailscale command failed")
 	}
