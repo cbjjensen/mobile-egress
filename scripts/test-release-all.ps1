@@ -44,9 +44,9 @@ Assert-Condition ($androidEntryPointContent -match "release-all\.ps1.*-Component
 $gateFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-gate-env-test-" + [guid]::NewGuid().ToString('N') + '.ps1')
 $originalGateValue = $env:MOBILE_EGRESS_GATE_ENV_TEST
 try {
-    Set-Content -LiteralPath $gateFixture -Value '$env:MOBILE_EGRESS_GATE_ENV_TEST = ''resolved-by-gate'''
-    Invoke-MobileEgressComponentGate -Path $gateFixture
-    Assert-Condition ($env:MOBILE_EGRESS_GATE_ENV_TEST -eq 'resolved-by-gate') 'The component gate must run in-process so its resolved toolchain environment reaches the signed build.'
+    Set-Content -LiteralPath $gateFixture -Value 'param([string[]]$Components) $env:MOBILE_EGRESS_GATE_ENV_TEST = ''resolved-by-gate:'' + ($Components -join '','')'
+    Invoke-MobileEgressComponentGate -Path $gateFixture -Components 'Windows'
+    Assert-Condition ($env:MOBILE_EGRESS_GATE_ENV_TEST -eq 'resolved-by-gate:Windows') 'The component gate must run in-process with its typed component scope so its resolved toolchain environment reaches the signed build.'
 } finally {
     $env:MOBILE_EGRESS_GATE_ENV_TEST = $originalGateValue
     Remove-Item -LiteralPath $gateFixture -Force -ErrorAction SilentlyContinue
