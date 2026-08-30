@@ -1,6 +1,11 @@
 # Documentation Completeness Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Date:** 2026-08-29
+**Status:** Implemented — historical record
+
+> **Historical implementation record:** This plan has been implemented and is retained without rewriting its original task history. Its unchecked boxes are historical; they are not current work status or actionable instructions. Use the [current status ledger](../../status.md) for present validation and limitations, the [plan-scoped progress ledger](../../../.superpowers/sdd/2026-08-29-documentation-completeness/progress.md) for execution history, and the current [`relay`](../../../relay/), [`windows-client`](../../../windows-client/), [`android`](../../../android/), and [`scripts`](../../../scripts/) source for implemented behavior.
+>
+> The original execution instruction is retained for history only: “For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.”
 
 **Goal:** Make the mobile-egress documentation accurate, navigable, safe, and explicit about current implementation limits.
 

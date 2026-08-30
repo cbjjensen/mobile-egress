@@ -50,7 +50,7 @@ See [Contributing](CONTRIBUTING.md) for the reproducible frontend bootstrap, env
 - Go 1.26+
 - Docker Engine for relay deployment
 - Node.js 22+ and WebView2 for the Windows Wails application
-- JDK 17+ and Android SDK Platform 35+ for the Android app
+- JDK 17 or later, Android SDK Platform 35, and Android Build-Tools 35 for the Android app
 
 Run the read-only prerequisite detector before building. It does not install software or inspect signing values:
 
