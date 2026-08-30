@@ -70,7 +70,7 @@ The script does not publish or install the APK. Transfer it through an owner-con
 
 ## Physical-device smoke checklist
 
-These remain device-only or maintained-harness acceptance—not automated verification:
+Signed installation, camera and notification permission UI, carrier egress, Wi-Fi-present cellular loss, foreground/task lifecycle, and stream fairness all require physical-device acceptance; none is automated verification. A maintained stream-load harness may assist only with generating concurrent connections, but it cannot substitute for physical-device acceptance or establish the device result by itself.
 
 - [ ] Install the recorded signed APK and exercise the visible **Scan QR** camera permission and **Start** notification permission paths.
 - [ ] Confirm carrier egress while the phone's default route and unrelated traffic remain unchanged; then remove cellular with Wi-Fi still present and confirm fail-closed behavior with no Wi-Fi fallback.

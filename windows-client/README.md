@@ -33,7 +33,7 @@ If initial Owner enrollment succeeds but automatic Client enrollment does not, *
 
 The **Owner** view exposes only the current local Client certificate serial. It does not reveal the Owner serial or an Android Agent serial. **Replace Client** is an Owner-authenticated action for an existing local Client: it issues and consumes a fresh Client invitation in memory, commits the replacement only after enrollment and protected-state storage succeed, then stops the previous proxy resources. Use the complete revoke-and-replace sequence in [operations](../docs/operations.md#local-windows-client-recovery); a failed replacement leaves the prior stored Client selected.
 
-Closing the window hides Mobile Egress to the notification tray and leaves the running proxy and relay streams active. The tray can show the window or start/stop the proxy. Only tray **Quit** stops the proxy, closes active relay streams, and exits the application.
+Closing the window hides Mobile Egress to the notification tray and leaves the running proxy and relay streams active. Tray **Start proxy** starts the local listener when the Client is ready. Tray **Stop proxy** stops the local listener, closes its Client session and active streams, and leaves the application running in the tray. Tray **Quit** performs full proxy/session teardown and exits the application.
 
 ## Development
 
