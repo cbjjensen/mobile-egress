@@ -41,6 +41,17 @@ Assert-Condition ($windowsEntryPointContent -match "release-all\.ps1.*-Component
 $androidEntryPointContent = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'release-android.ps1')
 Assert-Condition ($androidEntryPointContent -match "release-all\.ps1.*-Components\s+'Android'") 'The public Android release entry point must route versioned publication through the deterministic orchestrator with Android scope.'
 
+$gateFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-gate-env-test-" + [guid]::NewGuid().ToString('N') + '.ps1')
+$originalGateValue = $env:MOBILE_EGRESS_GATE_ENV_TEST
+try {
+    Set-Content -LiteralPath $gateFixture -Value '$env:MOBILE_EGRESS_GATE_ENV_TEST = ''resolved-by-gate'''
+    Invoke-MobileEgressComponentGate -Path $gateFixture
+    Assert-Condition ($env:MOBILE_EGRESS_GATE_ENV_TEST -eq 'resolved-by-gate') 'The component gate must run in-process so its resolved toolchain environment reaches the signed build.'
+} finally {
+    $env:MOBILE_EGRESS_GATE_ENV_TEST = $originalGateValue
+    Remove-Item -LiteralPath $gateFixture -Force -ErrorAction SilentlyContinue
+}
+
 $originalJavaHome = $env:JAVA_HOME
 $originalAndroidHome = $env:ANDROID_HOME
 $originalAndroidSdkRoot = $env:ANDROID_SDK_ROOT

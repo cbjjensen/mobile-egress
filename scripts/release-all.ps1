@@ -89,6 +89,20 @@ function Invoke-MobileEgressRequiredPowerShellScript {
     }
 }
 
+function Invoke-MobileEgressComponentGate {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [string[]]$Arguments = @()
+    )
+
+    $global:LASTEXITCODE = 0
+    & $Path @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Component repository gate failed with exit code $LASTEXITCODE."
+    }
+}
+
 function Import-MobileEgressReleaseEnvironment {
     param(
         [scriptblock]$ReadPersistentValue = {
@@ -612,7 +626,7 @@ function Invoke-MobileEgressRelease {
         Invoke-MobileEgressRequiredPowerShellScript -Path $androidReleaseScript -Arguments @('-ValidateOnly') -Description 'Android signing validation'
     }
     $gateArguments = if ($resolvedComponents.Count -eq 1) { @('-Components', $resolvedComponents[0]) } else { @() }
-    Invoke-MobileEgressRequiredPowerShellScript -Path (Join-Path $PSScriptRoot 'test-all.ps1') -Arguments $gateArguments -Description 'Component repository gate'
+    Invoke-MobileEgressComponentGate -Path (Join-Path $PSScriptRoot 'test-all.ps1') -Arguments $gateArguments
 
     if (-not $resumeArtifacts) {
         if ($includesWindows) {
