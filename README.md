@@ -72,3 +72,10 @@ It runs Go test/vet/build, frontend typecheck/build, and Compose configuration v
 This project is for devices and servers you administer. It allows TCP connections only to public Internet addresses. It rejects loopback, private, link-local, multicast, unspecified, and reserved destinations, and must not be repurposed as a public proxy service.
 
 See [architecture](docs/architecture.md) for components and data flow, [security model](docs/security-model.md) for trust boundaries, and [status](docs/status.md) for the current validation and unsupported workflows. Follow the deployment and operations runbooks for procedures; do not infer an unsupported workflow from this overview.
+
+
+```
+EC2 app → 127.0.0.1 SOCKS → headless Client service ─┐
+                                                      ├─ Tailscale Funnel ─ local Windows Relay ─ Android Agent ─ cellular internet
+EC2 app → 127.0.0.1 SOCKS → headless Client service ─┘
+```
