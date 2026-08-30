@@ -54,7 +54,7 @@ class AgentSession(
         perStreamDataCapacity = OUTBOUND_PER_STREAM_DATA_QUEUE_CAPACITY,
     )
     private val streams = java.util.concurrent.ConcurrentHashMap<String, TargetStream>()
-    private val admission = StreamAdmission(MAX_AGENT_STREAMS)
+    private val admission = StreamAdmission(AgentCapacity.MAX_STREAMS)
     private val closed = AtomicBoolean(false)
     private val tombstoneLock = Any()
     private val tombstones = ArrayDeque<String>()
@@ -437,7 +437,6 @@ class AgentSession(
     private enum class StreamTerminalState { Open, GracefulPending, ForcedPending, Released }
 
     companion object {
-        private const val MAX_AGENT_STREAMS = 8
         private const val MAX_TOMBSTONES = 32
         private const val OUTBOUND_CONTROL_QUEUE_CAPACITY = 32
         private const val OUTBOUND_DATA_QUEUE_CAPACITY = 64
@@ -449,4 +448,8 @@ class AgentSession(
         private const val POLICY_VIOLATION_CLOSE = 1008
         private const val BACKPRESSURE_CLOSE_CODE = "agent_unavailable"
     }
+}
+
+object AgentCapacity {
+    const val MAX_STREAMS = 32
 }

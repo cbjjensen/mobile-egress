@@ -4,6 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobileegress.agent.network.CellularNetworkAcquirer
+import com.mobileegress.agent.migration.CellularEndpointMigrationPerformer
+import com.mobileegress.agent.migration.EndpointMigrationClient
+import com.mobileegress.agent.migration.EndpointMigrationParser
+import com.mobileegress.agent.migration.EndpointMigrationRepository
 import com.mobileegress.agent.pairing.EnrollmentClient
 import com.mobileegress.agent.pairing.CellularEnrollmentPerformer
 import com.mobileegress.agent.pairing.EnrollmentRepository
@@ -30,13 +34,25 @@ data class MainUiState(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val identityStore = SecureIdentityStore(application)
+    private val deviceKeyStore = DeviceKeyStore()
+    private val cellularNetworkAcquirer = CellularNetworkAcquirer(application)
     private val enrollmentRepository = EnrollmentRepository(
         decoder = PairingBundleParser(),
-        credentialKeys = DeviceKeyStore(),
+        credentialKeys = deviceKeyStore,
         identityPersistence = identityStore,
         enrollmentPerformer = CellularEnrollmentPerformer(
-            CellularNetworkAcquirer(application),
+            cellularNetworkAcquirer,
             EnrollmentClient(),
+        ),
+    )
+    private val migrationParser = EndpointMigrationParser()
+    private val migrationRepository = EndpointMigrationRepository(
+        decoder = migrationParser,
+        identityPersistence = identityStore,
+        performer = CellularEndpointMigrationPerformer(
+            cellularNetworkAcquirer,
+            deviceKeyStore,
+            EndpointMigrationClient(),
         ),
     )
     private val initialUiState = initialState()
@@ -90,7 +106,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         syncPairingState()
         viewModelScope.launch {
-            pairingCoordinator.enrollAcceptedScan()
+            if (migrationParser.recognizes(scannedBundle) && mutableState.value.paired) {
+                pairingCoordinator.migrateAcceptedScan { migrationRepository.migrate(it) }
+            } else {
+                pairingCoordinator.enrollAcceptedScan()
+            }
             syncPairingState()
         }
     }

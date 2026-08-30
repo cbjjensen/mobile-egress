@@ -125,9 +125,9 @@ private fun AgentScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("Pair", style = MaterialTheme.typography.titleMedium)
+                    Text("Pair or migrate", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Scan the Agent QR code supplied by the enrolled owner. The invitation is sent directly for pairing and is never displayed or retained.",
+                        "Scan an enrollment QR for first setup, or a one-use endpoint-migration QR after the owner's Funnel name changes.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

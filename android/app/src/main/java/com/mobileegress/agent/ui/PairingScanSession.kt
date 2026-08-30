@@ -1,6 +1,7 @@
 package com.mobileegress.agent.ui
 
 import com.mobileegress.agent.network.CellularUnavailable
+import com.mobileegress.agent.migration.EndpointMigrationException
 import com.mobileegress.agent.pairing.EnrollmentException
 import com.mobileegress.agent.pairing.PairingBundleException
 import com.mobileegress.agent.security.CredentialStoreException
@@ -80,6 +81,7 @@ class PairingScanSession {
 object PairingFailureStatus {
     fun forError(error: Throwable): String = when (error) {
         is PairingBundleException -> "Pairing bundle rejected"
+        is EndpointMigrationException -> "Endpoint migration rejected"
         is CellularUnavailable -> "Cellular unavailable"
         is EnrollmentException -> "Relay enrollment rejected"
         is CredentialStoreException -> "Credential storage unavailable"

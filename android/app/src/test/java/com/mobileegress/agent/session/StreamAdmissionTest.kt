@@ -7,14 +7,14 @@ import org.junit.Test
 
 class StreamAdmissionTest {
     @Test
-    fun `admits at most eight unique agent streams`() {
-        val admission = StreamAdmission(8)
+    fun `admits at most thirty two unique agent streams`() {
+        val admission = StreamAdmission(AgentCapacity.MAX_STREAMS)
 
-        repeat(8) { index -> assertTrue(admission.tryReserve("stream-$index")) }
+        repeat(32) { index -> assertTrue(admission.tryReserve("stream-$index")) }
 
-        assertFalse(admission.tryReserve("stream-8"))
+        assertFalse(admission.tryReserve("stream-32"))
         assertFalse(admission.tryReserve("stream-0"))
-        assertEquals(8, admission.size)
+        assertEquals(32, admission.size)
     }
 
     @Test

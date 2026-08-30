@@ -81,10 +81,21 @@ class ScanPairingCoordinator(
     }
 
     suspend fun enrollAcceptedScan() {
+        processAcceptedScan("Paired") { enrollmentRepository.pair(it) }
+    }
+
+    suspend fun migrateAcceptedScan(migrate: suspend (String) -> Unit) {
+        processAcceptedScan("Endpoint updated", migrate)
+    }
+
+    private suspend fun processAcceptedScan(
+        successStatus: String,
+        process: suspend (String) -> Unit,
+    ) {
         if (!state.pairingInProgress || state.pairingScanState != PairingScanState.Pairing) return
         val scannedBundle = acceptedScannedBundle ?: return
         acceptedScannedBundle = null
-        val result = runCatching { enrollmentRepository.pair(scannedBundle) }
+        val result = runCatching { process(scannedBundle) }
         val pairingState = pairingController.reduce(
             if (result.isSuccess) PairingEvent.PairSucceeded else PairingEvent.PairFailed,
         )
@@ -92,7 +103,7 @@ class ScanPairingCoordinator(
             state.copy(
                 pairingInProgress = false,
                 paired = pairingState == PairingState.Paired,
-                pairingStatus = "Paired",
+                pairingStatus = successStatus,
             )
         } else {
             state.copy(
