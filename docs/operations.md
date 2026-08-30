@@ -42,7 +42,10 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 
 | Symptom | Check | Safe response |
 |---|---|---|
-| Bridge setup required | Read the Tailscale installation stage shown by the controller; then check Tailscale service/login, Funnel approval, WebView2, and signed sibling binaries | Correct the reported download, checksum, Authenticode, or UAC/MSI stage and retry. Do not manually expose port 8443. |
+| Tailscale not installed | The controller cannot find the fixed official CLI path | Choose **Install Tailscale**, approve UAC, then use **Connect Tailscale** if sign-in is still required. |
+| Tailscale installed but not connected | The controller found Tailscale but its CLI did not report an online `*.ts.net` identity | Choose **Connect Tailscale**. Complete browser sign-in and check internet/service health if it remains offline. Do not rerun the MSI. |
+| Windows Installer code 1603 while installing Tailscale | First confirm whether `C:\Program Files\Tailscale\tailscale.exe` already exists | If it is already installed, use **Connect Tailscale**; current controllers suppress duplicate MSI installation. Investigate MSI/UAC only when Tailscale is genuinely absent. |
+| Bridge setup required after Tailscale is online | Check Funnel approval, WebView2, and signed sibling binaries | Repair or complete the reported relay/Funnel stage. Do not manually expose port 8443. |
 | Tailscale reports Windows Installer code 1632 | Verify the user/System temp directories and `%windir%\Installer` exist and are writable; preserve the MSI verbose log | Treat a missing Windows Installer cache as an operating-system repair issue. Do not have Mobile Egress silently recreate or repopulate it; cached packages are machine-specific and require supported recovery or system-state restoration. |
 | Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes; Repair reuses the persisted desired endpoint/generation. Scan the migration QR. |
 | Interrupted reservation | Controller exited before recoverable node metadata was committed | Retry Install on the same instance, or explicitly cancel the reservation only if that instance is gone/unrecoverable. |

@@ -52,7 +52,7 @@ Admission is capped at 32 streams. Inbound and outbound queues are bounded; outb
 
 ## Provisioning sequence
 
-1. The controller verifies/installs Tailscale and obtains the stable Funnel FQDN.
+1. The controller independently models Tailscale as absent, installed/offline, or online. It offers verified MSI installation only when absent, uses a connect-only browser/unattended flow when installed/offline, and obtains the stable Funnel FQDN after it is online.
 2. It generates an Owner key/CSR. The elevated helper installs the signed relay, initializes state with that CSR and public origin, ACLs state, and installs the relay service.
 3. For each EC2 node, the controller verifies or safely prepares SSM IAM access. It never replaces an existing instance profile.
 4. The controller durably reserves one of its ten managed-node slots before remote provisioning begins.

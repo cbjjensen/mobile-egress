@@ -3,9 +3,69 @@ package tailscale
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestControllerInstalledRequiresARegularExecutable(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "tailscale.exe")
+	if err := os.WriteFile(executable, []byte("test executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !NewController(executable, &fakeRunner{}).Installed() {
+		t.Fatal("Installed() = false for an existing executable")
+	}
+	if NewController(filepath.Join(directory, "missing.exe"), &fakeRunner{}).Installed() {
+		t.Fatal("Installed() = true for a missing executable")
+	}
+	if NewController(directory, &fakeRunner{}).Installed() {
+		t.Fatal("Installed() = true for a directory")
+	}
+}
+
+func TestConnectUsesLoginAndUnattendedSetupWithoutConfiguringFunnel(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(t.TempDir(), "tailscale.exe")
+	if err := os.WriteFile(executable, []byte("test executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{
+		outputs: [][]byte{
+			nil,
+			nil,
+			nil,
+			[]byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`),
+			[]byte(`{}`),
+		},
+		errors: []error{errors.New("offline"), nil, nil, nil, nil},
+	}
+	controller := NewController(executable, runner)
+	status, err := controller.Connect(context.Background())
+	if err != nil || !status.Online {
+		t.Fatalf("Connect() = %#v/%v, want online", status, err)
+	}
+	want := [][]string{
+		{"status", "--json"},
+		{"login"},
+		{"up", "--unattended=true"},
+		{"status", "--json"},
+		{"funnel", "status", "--json"},
+	}
+	if !reflect.DeepEqual(runner.arguments, want) {
+		t.Fatalf("CLI calls = %#v, want %#v", runner.arguments, want)
+	}
+	for _, arguments := range runner.arguments {
+		if len(arguments) > 0 && arguments[0] == "funnel" && (len(arguments) < 2 || arguments[1] != "status") {
+			t.Fatalf("Connect() configured Funnel with arguments %#v", arguments)
+		}
+	}
+}
 
 func TestControllerStatusAndEnableUseExactCLICommands(t *testing.T) {
 	t.Parallel()

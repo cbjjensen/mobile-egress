@@ -4,7 +4,7 @@
 
 - Loopback-only Windows relay service, direct CSR Owner bootstrap, Owner-authorized Client CSR provisioning, endpoint leaf rotation, one-use Agent migration, revocation, and multi-Client routing.
 - Four-stream per-Client and 32-stream aggregate enforcement with bounded session state.
-- Self-contained Windows controller flow for verified Tailscale MSI installation, browser login, unattended raw TCP Funnel, UAC relay lifecycle, DPAPI Owner/AWS/node state, IAM Identity Center, EC2 inventory, guarded SSM IAM preparation, signed node install/update/repair, and SOCKS credential display.
+- Self-contained Windows controller flow with distinct absent, installed/offline, and online Tailscale states; duplicate-MSI suppression; connect-only browser/unattended setup; raw TCP Funnel; UAC relay lifecycle; DPAPI Owner/AWS/node state; IAM Identity Center; EC2 inventory; guarded SSM IAM preparation; signed node install/update/repair; and SOCKS credential display.
 - Headless Windows Client service with on-node P-256/X25519 keys, sealed/replay-protected configuration, loopback authenticated SOCKS5, outbound reconnect, and Windows SCM support.
 - Android cellular-only foreground Agent, strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, and 32-stream admission.
 - Signed release packaging script and app-first friend documentation.

@@ -42,7 +42,7 @@ type DesktopApp struct {
 	core             *client.Core
 	bridge           *localbridge.Manager
 	tailscale        *tailscale.Controller
-	tailscaleInstall tailscale.Installer
+	tailscaleInstall tailscaleInstaller
 	cloudRepository  *cloud.Repository
 	ownerRepository  *client.Repository
 
@@ -55,6 +55,10 @@ type DesktopApp struct {
 	awsInventory    []cloud.Instance
 	quitting        atomic.Bool
 	shutdown        sync.Once
+}
+
+type tailscaleInstaller interface {
+	Install(context.Context) (tailscale.Release, error)
 }
 
 // embeddedReleaseManifestBase64 is injected before the controller executable is
@@ -75,14 +79,15 @@ type EndpointMigrationView struct {
 }
 
 type BridgeView struct {
-	TailscaleOnline bool   `json:"tailscaleOnline"`
-	FunnelReady     bool   `json:"funnelReady"`
-	RelayReady      bool   `json:"relayReady"`
-	FQDN            string `json:"fqdn,omitempty"`
-	PublicURL       string `json:"publicUrl,omitempty"`
-	OwnerReady      bool   `json:"ownerReady"`
-	Ready           bool   `json:"ready"`
-	NeedsRotation   bool   `json:"needsRotation"`
+	TailscaleInstalled bool   `json:"tailscaleInstalled"`
+	TailscaleOnline    bool   `json:"tailscaleOnline"`
+	FunnelReady        bool   `json:"funnelReady"`
+	RelayReady         bool   `json:"relayReady"`
+	FQDN               string `json:"fqdn,omitempty"`
+	PublicURL          string `json:"publicUrl,omitempty"`
+	OwnerReady         bool   `json:"ownerReady"`
+	Ready              bool   `json:"ready"`
+	NeedsRotation      bool   `json:"needsRotation"`
 }
 
 func Run() error {
@@ -186,6 +191,7 @@ func (app *DesktopApp) GetBridgeStatus() BridgeView {
 		}
 	}
 	if app.tailscale != nil {
+		view.TailscaleInstalled = app.tailscale.Installed()
 		if status, err := app.tailscale.Status(ctx); err == nil {
 			view.TailscaleOnline = status.Online
 			view.FunnelReady = status.FunnelReady
@@ -255,12 +261,30 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 }
 
 func (app *DesktopApp) InstallTailscale() error {
+	if app.tailscale != nil && app.tailscale.Installed() {
+		return errors.New("Tailscale is already installed. Use Connect Tailscale instead.")
+	}
+	if app.tailscaleInstall == nil {
+		return errors.New("Unable to install Tailscale in this build.")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if _, err := app.tailscaleInstall.Install(ctx); err != nil {
 		return fmt.Errorf("Unable to install the verified Tailscale package: %w", err)
 	}
 	return nil
+}
+
+func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
+	if app.tailscale == nil || !app.tailscale.Installed() {
+		return BridgeView{}, errors.New("Install Tailscale before connecting it.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if _, err := app.tailscale.Connect(ctx); err != nil {
+		return BridgeView{}, errors.New("Unable to connect Tailscale. Complete browser sign-in and verify internet access, then try again.")
+	}
+	return app.GetBridgeStatus(), nil
 }
 
 func (app *DesktopApp) SetupLocalBridge() (BridgeView, error) {

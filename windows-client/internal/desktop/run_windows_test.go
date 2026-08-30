@@ -49,6 +49,52 @@ func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
 	}
 }
 
+func TestGetBridgeStatusDistinguishesInstalledTailscaleFromOnlineTailscale(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(t.TempDir(), "tailscale.exe")
+	if err := os.WriteFile(executable, []byte("test executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := securestore.NewMemoryStore()
+	core, err := client.NewCore(context.Background(), store, desktopGateway{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &DesktopApp{
+		core:            core,
+		ownerRepository: client.NewRepository(store),
+		tailscale:       tailscale.NewController(executable, offlineTailscaleRunner{}),
+	}
+
+	status := app.GetBridgeStatus()
+	if !status.TailscaleInstalled || status.TailscaleOnline {
+		t.Fatalf("GetBridgeStatus() = %#v, want installed and offline", status)
+	}
+}
+
+func TestInstallTailscaleRejectsDuplicateInstallationBeforeCallingInstaller(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(t.TempDir(), "tailscale.exe")
+	if err := os.WriteFile(executable, []byte("test executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installer := &recordingTailscaleInstaller{}
+	app := &DesktopApp{
+		tailscale:        tailscale.NewController(executable, offlineTailscaleRunner{}),
+		tailscaleInstall: installer,
+	}
+
+	err := app.InstallTailscale()
+	if err == nil || !strings.Contains(err.Error(), "already installed") {
+		t.Fatalf("InstallTailscale() error = %v, want already-installed guidance", err)
+	}
+	if installer.calls != 0 {
+		t.Fatalf("installer calls = %d, want 0", installer.calls)
+	}
+}
+
 func TestReservationCancellationRequiresExplicitConfirmation(t *testing.T) {
 	t.Parallel()
 
@@ -323,6 +369,19 @@ func TestRevokeReturnsOnlyAGenericOwnerControlError(t *testing.T) {
 type desktopGateway struct {
 	enrollErr error
 	revokeErr error
+}
+
+type offlineTailscaleRunner struct{}
+
+func (offlineTailscaleRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, errors.New("offline")
+}
+
+type recordingTailscaleInstaller struct{ calls int }
+
+func (installer *recordingTailscaleInstaller) Install(context.Context) (tailscale.Release, error) {
+	installer.calls++
+	return tailscale.Release{}, nil
 }
 
 func (gateway desktopGateway) Enroll(context.Context, pairing.Bundle) (relayclient.Identity, error) {

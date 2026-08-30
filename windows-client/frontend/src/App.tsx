@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode } from './api'
 
-const emptyBridge: BridgeStatus = { tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
+const emptyBridge: BridgeStatus = { tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
 
 export default function App() {
   const [tab, setTab] = useState<'bridge' | 'phone' | 'nodes' | 'settings'>('bridge')
@@ -56,7 +56,11 @@ export default function App() {
   }
 
   async function installTailscale() {
-    await action('tailscale', async () => { await api().InstallTailscale() })
+    await action('tailscale-install', async () => { await api().InstallTailscale() })
+  }
+
+  async function connectTailscale() {
+    await action('tailscale-connect', async () => { setBridge(await api().ConnectTailscale()) })
   }
 
   async function setupBridge() {
@@ -164,12 +168,12 @@ export default function App() {
   }
 
   return <main className="shell">
-    <header><div><p className="eyebrow">Personal cellular bridge</p><h1>Mobile Egress</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : 'Setup needed'}</div></header>
+    <header><div><p className="eyebrow">Personal cellular bridge</p><h1>Mobile Egress</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
     <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Phone</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>EC2 Nodes</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS Login</button></nav>
     {error && <div className="error" role="alert">{error}</div>}
 
     {tab === 'bridge' && <section className="stack">
-      <article className="card hero-card"><p className="step-label">Step 1</p><h2>Install and connect Tailscale</h2><p>The app downloads the official amd64 MSI, verifies its checksum and Tailscale Authenticode signature, then asks for UAC. Browser approval may be required.</p><div className="row actions"><span className={`pill ${bridge.tailscaleOnline ? 'on' : ''}`}>{bridge.tailscaleOnline ? 'Online' : 'Not connected'}</span><button onClick={() => void installTailscale()} disabled={!!busy}>{busy === 'tailscale' ? 'Waiting for UAC…' : 'Install Tailscale'}</button></div></article>
+      <article className="card hero-card"><p className="step-label">Step 1</p><h2>Install and connect Tailscale</h2><p>{bridge.tailscaleInstalled ? 'Tailscale is installed. Connect it here; browser approval may be required.' : 'The app downloads the official amd64 MSI, verifies its checksum and Tailscale Authenticode signature, then asks for UAC.'}</p><div className="row actions"><span className={`pill ${bridge.tailscaleOnline ? 'on' : ''}`}>{bridge.tailscaleOnline ? 'Online' : bridge.tailscaleInstalled ? 'Installed · not connected' : 'Not installed'}</span>{bridge.tailscaleOnline ? null : bridge.tailscaleInstalled ? <button onClick={() => void connectTailscale()} disabled={!!busy}>{busy === 'tailscale-connect' ? 'Opening Tailscale…' : 'Connect Tailscale'}</button> : <button onClick={() => void installTailscale()} disabled={!!busy}>{busy === 'tailscale-install' ? 'Waiting for UAC…' : 'Install Tailscale'}</button>}</div></article>
       <article className="card"><p className="step-label">Step 2</p><h2>Create this PC’s relay</h2><p>This installs <code>MobileEgressRelay</code> as LocalSystem, binds it to <code>127.0.0.1:8443</code>, and publishes raw TLS through Funnel. No router or firewall port is opened.</p>{bridge.publicUrl && <div className="serialline"><span>Public Funnel origin</span><code>{bridge.publicUrl}</code></div>}<div className="row actions"><span className={`pill ${bridge.funnelReady ? 'on' : ''}`}>{bridge.funnelReady ? 'Funnel active' : 'Funnel not ready'}</span><span className={`pill ${bridge.relayReady ? 'on' : ''}`}>{bridge.relayReady ? 'Relay healthy' : 'Relay not ready'}</span></div>{bridge.needsRotation ? <><p className="note">Tailscale now reports a different Funnel name. Connect AWS first if nodes are managed, then rotate and scan the migration QR on Android.</p><button className="primary" onClick={() => void rotateBridge()} disabled={!!busy}>{busy === 'rotate' ? 'Updating relay and nodes…' : 'Rotate endpoint safely'}</button></> : bridge.ownerReady && (!bridge.relayReady || !bridge.funnelReady) ? <button className="primary" onClick={() => void repairBridge()} disabled={!!busy}>{busy === 'relay-repair' ? 'Repairing through UAC…' : 'Repair Funnel and local relay'}</button> : <button className="primary" onClick={() => void setupBridge()} disabled={!!busy || bridge.ownerReady}>{bridge.ready ? 'Local bridge ready' : busy === 'bridge' ? 'Waiting for browser / UAC…' : 'Set up local bridge'}</button>}</article>
       <article className="note"><strong>Availability</strong><p>Your PC and phone must stay powered on and connected. Funnel is intended here for light, interruption-tolerant personal traffic.</p></article>
     </section>}

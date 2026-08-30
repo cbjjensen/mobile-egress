@@ -349,8 +349,8 @@ On Android:
 
 ### 6.2 Set up the local bridge and phone
 
-1. In **Bridge**, choose **Install Tailscale**, approve UAC, and finish browser login.
-2. Choose **Set up local bridge** and approve UAC. Require Tailscale online, Funnel active, relay healthy, and a `https://<machine>.<tailnet>.ts.net:8443` public origin.
+1. In **Bridge**, choose **Install Tailscale** only when the status is **Not installed**, then approve UAC. If Tailscale is already present, the controller shows **Installed · not connected** instead of offering another MSI installation.
+2. Choose **Connect Tailscale** while installed/offline and finish browser login. This starts login and unattended mode without rerunning the installer. Once the status is **Online**, choose **Set up local bridge** and approve UAC. Require Funnel active, relay healthy, and a `https://<machine>.<tailnet>.ts.net:8443` public origin.
 3. Confirm Windows Defender Firewall/router settings were not manually opened for port 8443.
 4. In **Phone**, generate the Agent QR. Scan it in Android and tap **Start**.
 5. Keep Wi-Fi enabled on the phone while cellular data is also enabled. Require the Android UI/notification to show cellular available and relay connected.

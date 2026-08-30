@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -32,6 +33,14 @@ func NewController(executable string, runner CommandRunner) *Controller {
 	return &Controller{executable: executable, runner: runner}
 }
 
+func (controller *Controller) Installed() bool {
+	if controller == nil || strings.TrimSpace(controller.executable) == "" {
+		return false
+	}
+	info, err := os.Stat(controller.executable)
+	return err == nil && info.Mode().IsRegular()
+}
+
 func (controller *Controller) Status(ctx context.Context) (Status, error) {
 	if controller == nil || controller.runner == nil || strings.TrimSpace(controller.executable) == "" {
 		return Status{}, errors.New("Tailscale executable is unavailable")
@@ -51,6 +60,25 @@ func (controller *Controller) Status(ctx context.Context) (Status, error) {
 	status.FunnelReady, err = ParseFunnelStatus(funnelOutput, status.FQDN)
 	if err != nil {
 		return Status{}, err
+	}
+	return status, nil
+}
+
+func (controller *Controller) Connect(ctx context.Context) (Status, error) {
+	if controller == nil || controller.runner == nil || !controller.Installed() {
+		return Status{}, errors.New("Tailscale executable is unavailable")
+	}
+	if _, err := controller.Status(ctx); err != nil {
+		if _, loginErr := controller.runner.Run(ctx, controller.executable, "login"); loginErr != nil {
+			return Status{}, errors.New("Tailscale browser login failed or was cancelled")
+		}
+	}
+	if _, err := controller.runner.Run(ctx, controller.executable, UnattendedArguments()...); err != nil {
+		return Status{}, errors.New("Tailscale login or unattended setup failed")
+	}
+	status, err := controller.Status(ctx)
+	if err != nil || !status.Online {
+		return Status{}, errors.New("Tailscale did not become online")
 	}
 	return status, nil
 }

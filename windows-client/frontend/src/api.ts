@@ -18,6 +18,7 @@ export type AgentQr = { imageDataUrl: string; expiresAt: string }
 export type EndpointMigration = AgentQr & { updatedNodes: string[]; failedNodes: string[] }
 
 export type BridgeStatus = {
+  tailscaleInstalled: boolean
   tailscaleOnline: boolean
   funnelReady: boolean
   relayReady: boolean
@@ -54,6 +55,7 @@ type DesktopAPI = {
   GetStatus(): Promise<Status>
   GetBridgeStatus(): Promise<BridgeStatus>
   InstallTailscale(): Promise<void>
+  ConnectTailscale(): Promise<BridgeStatus>
   SetupLocalBridge(): Promise<BridgeStatus>
   RepairLocalBridge(): Promise<BridgeStatus>
   RotateLocalBridge(): Promise<EndpointMigration>
