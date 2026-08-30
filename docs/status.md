@@ -1,6 +1,6 @@
 # Current status
 
-This is the current validation and limitations ledger. It does not turn a missing workflow into a supported procedure. Read [deployment](deployment.md), [operations](operations.md), and the component guides before acting on a relay or device.
+This is the current validation and limitations ledger. It does not turn a missing workflow into a supported procedure. Read [deployment](deployment.md), [operations](operations.md), and the component guides before acting on a relay or device. Use the [contributor guide](../CONTRIBUTING.md) for reproducible local setup and command scope.
 
 ## Current validation
 
@@ -23,4 +23,4 @@ Automated checks do not prove physical relay ingress, Windows runtime behavior, 
 | Stream capacity | One Windows Client has a four-stream local limit. Eight streams is the Agent and relay-wide capacity, not a promise that one shipped Windows Client can create eight streams. | [Windows client](../windows-client/README.md) and [Android limits](../android/README.md#local-build) |
 | CI and publishing | There is no CI, automated publishing, Android instrumentation run, Wails runtime test, or end-to-end physical-device proof of a release. | [Current validation](#current-validation), [Android release guidance](../android/README.md#release-signing-and-sideloading), and [Windows development](../windows-client/README.md#development) |
 
-Related documents: [architecture](architecture.md), [security model](security-model.md), [protocol](protocol.md), [deployment](deployment.md), and [operations](operations.md).
+Related documents: [project overview](../README.md), [contributor guide](../CONTRIBUTING.md), [architecture](architecture.md), [security model](security-model.md), [protocol](protocol.md), [deployment](deployment.md), and [operations](operations.md).

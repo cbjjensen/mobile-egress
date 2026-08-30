@@ -111,7 +111,7 @@ Neither release script publishes an artifact. Transfer accepted artifacts only t
 2. On the first Windows installation, paste the confidential Owner invitation. Confirm **Setup** reports both Owner and local Windows Client ready.
 3. In **Phone**, generate one short-lived Agent QR. Keep it on the trusted local display and scan it with Android **Scan QR**. Android has no invitation paste flow.
 4. Tap Android **Start**, grant notification permission when requested, and wait for cellular available / relay connected.
-5. Start the Windows loopback proxy and copy its generated `socks5://username:password@127.0.0.1:port` line only into the selected application. Do not set a Windows system proxy or change either device's default route.
+5. Start the Windows loopback proxy and copy its generated `socks5://<username>:<password>@127.0.0.1:<port>` line only into the selected application. Do not set a Windows system proxy or change either device's default route.
 
 **Replace QR code** replaces only the QR shown in the Windows UI. It does not revoke a previously issued unexpired code. Treat every displayed code as secret until it is consumed or expires; generating another code can leave both codes valid during their respective lifetimes.
 

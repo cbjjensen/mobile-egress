@@ -32,7 +32,7 @@ Successful `relay init` intentionally writes the one-time Owner invitation to st
 - [Develop Windows](windows-client/README.md)
 - [Develop Android](android/README.md)
 - [Contribute](CONTRIBUTING.md)
-- [Review current validation and known limitations](docs/status.md)
+- [Current validation and limitations](docs/status.md)
 
 ## Repository map
 
@@ -44,6 +44,8 @@ Successful `relay init` intentionally writes the one-time Owner invitation to st
 - `scripts/` — local build and release checks.
 
 ## Development prerequisites
+
+See [Contributing](CONTRIBUTING.md) for the reproducible frontend bootstrap, environment-variable precedence, validation matrix, generated-file rules, and documentation ownership.
 
 - Go 1.26+
 - Docker Engine for relay deployment
