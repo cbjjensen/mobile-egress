@@ -63,6 +63,44 @@ final class AgentSessionRuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.connectionState, .stopped)
         XCTAssertEqual(snapshot.errorClass, .relayTLS)
     }
+
+    func testRuntimeFailedSendAfterInFlightStreamCloseCancelsRelayAndTargetsOnce() async throws {
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let firstTarget = RecordingTargetConnection()
+        let secondTarget = RecordingTargetConnection()
+        let factory = SequencedTargetConnectionFactory(targets: [firstTarget, secondTarget])
+        let runtime = AgentSessionRuntime(relay: relay, targetFactory: factory)
+        await runtime.start()
+        await relay.emit(.connected)
+
+        for (streamID, target) in [("first", firstTarget), ("second", secondTarget)] {
+            let payload = Data(#"{"ip":"8.8.8.8","port":443}"#.utf8)
+            let open = try WireProtocol.encode(type: .open, streamID: streamID, payload: payload)
+            await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+            await target.emit(.ready)
+            await relay.completeNextSend(.success(()))
+        }
+
+        await firstTarget.emit(.data(Data([0x41])))
+        let close = try WireProtocol.encode(
+            type: .close,
+            streamID: "first",
+            payload: Data("client_closed".utf8)
+        )
+        await relay.emit(.message(.init(opcode: .binary, payload: close, isComplete: true)))
+
+        XCTAssertEqual(firstTarget.cancelCount, 1)
+        XCTAssertEqual(secondTarget.cancelCount, 0)
+        await relay.completeNextSend(.failure(.unavailable))
+
+        XCTAssertEqual(relay.cancelCount, 1)
+        XCTAssertEqual(firstTarget.cancelCount, 1)
+        XCTAssertEqual(secondTarget.cancelCount, 1)
+        let snapshot = await runtime.snapshot()
+        XCTAssertEqual(snapshot.connectionState, .stopped)
+        XCTAssertEqual(snapshot.activeStreamCount, 0)
+        XCTAssertEqual(snapshot.errorClass, .relayUnavailable)
+    }
 }
 
 private final class RecordingRelayWebSocket: RelayWebSocketIO, @unchecked Sendable {
@@ -76,6 +114,12 @@ private final class RecordingRelayWebSocket: RelayWebSocketIO, @unchecked Sendab
     private var binary: [Data] = []
     private var closes: [CloseCall] = []
     private var cancellations = 0
+    private var sendCompletions: [RelayWebSocketSendCompletion] = []
+    private let automaticallyCompletesSends: Bool
+
+    init(automaticallyCompletesSends: Bool = true) {
+        self.automaticallyCompletesSends = automaticallyCompletesSends
+    }
 
     var sentBinary: [Data] { lock.withLock { binary } }
     var closeCalls: [CloseCall] { lock.withLock { closes } }
@@ -89,8 +133,15 @@ private final class RecordingRelayWebSocket: RelayWebSocketIO, @unchecked Sendab
         _ data: Data,
         completion: @escaping RelayWebSocketSendCompletion
     ) -> Bool {
-        lock.withLock { binary.append(data) }
-        Task { await completion(.success(())) }
+        lock.withLock {
+            binary.append(data)
+            if !automaticallyCompletesSends {
+                sendCompletions.append(completion)
+            }
+        }
+        if automaticallyCompletesSends {
+            Task { await completion(.success(())) }
+        }
         return true
     }
 
@@ -108,6 +159,36 @@ private final class RecordingRelayWebSocket: RelayWebSocketIO, @unchecked Sendab
             return
         }
         await handler(event)
+    }
+
+    func completeNextSend(_ result: Result<Void, RelayConnectionFailure>) async {
+        let completion = lock.withLock {
+            sendCompletions.isEmpty ? nil : sendCompletions.removeFirst()
+        }
+        guard let completion else {
+            XCTFail("No relay send completion is pending")
+            return
+        }
+        await completion(result)
+    }
+}
+
+private enum RuntimeTestError: Error {
+    case noTargetAvailable
+}
+
+private final class SequencedTargetConnectionFactory: TargetConnectionFactory, @unchecked Sendable {
+    private let lock = NSLock()
+    private var targets: [RecordingTargetConnection]
+
+    init(targets: [RecordingTargetConnection]) {
+        self.targets = targets
+    }
+
+    func makeConnection(configuration: TargetConnectionConfiguration) throws -> any TargetConnectionIO {
+        let target = lock.withLock { targets.isEmpty ? nil : targets.removeFirst() }
+        guard let target else { throw RuntimeTestError.noTargetAvailable }
+        return target
     }
 }
 

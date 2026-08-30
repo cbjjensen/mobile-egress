@@ -19,9 +19,10 @@ struct AgentSessionStateMachine {
         var hasTarget: Bool
         var inboundQueue: [Data] = []
         var writeInFlight: TargetWrite?
+        var writeFailed = false
 
         var canWrite: Bool {
-            phase == .open || phase == .gracefulPending
+            !writeFailed && (phase == .open || phase == .gracefulPending)
         }
     }
 
@@ -171,6 +172,16 @@ struct AgentSessionStateMachine {
               let write = stream.writeInFlight, write.id == writeID
         else { return [] }
         if !succeeded {
+            stream.writeInFlight = nil
+            if stream.phase == .gracefulPending {
+                stream.inboundQueue.removeAll(keepingCapacity: false)
+                stream.writeFailed = true
+                let shouldCancelTarget = stream.hasTarget
+                stream.hasTarget = false
+                streams[streamID] = stream
+                return shouldCancelTarget ? [.cancelTarget(streamID: streamID, token: token)] : []
+            }
+            streams[streamID] = stream
             return failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect)
         }
         bytesUploaded = adding(bytesUploaded, write.data.count)
@@ -200,7 +211,11 @@ struct AgentSessionStateMachine {
 
     mutating func completeOutbound(_ frame: OutboundFrame, accepted: Bool) -> [AgentRuntimeEffect] {
         guard !terminal else { return [] }
-        switch outbound.emit(frame, sender: { _ in accepted }) {
+        let emission = outbound.emit(frame, sender: { _ in accepted })
+        guard accepted else {
+            return terminate(error: .relayUnavailable, relay: .cancel)
+        }
+        switch emission {
         case .canceled:
             return []
         case .failed:
@@ -274,6 +289,9 @@ struct AgentSessionStateMachine {
     private mutating func routeData(_ envelope: WireEnvelope) -> [AgentRuntimeEffect] {
         guard let stream = streams[envelope.streamID] else { return protocolFailure() }
         guard let payload = try? envelope.decodedPayload() else { return protocolFailure() }
+        if stream.phase == .gracefulPending, stream.writeFailed {
+            return []
+        }
         if stream.canWrite, stream.writeInFlight == nil {
             return beginTargetWrite(streamID: envelope.streamID, token: stream.token, data: payload)
         }

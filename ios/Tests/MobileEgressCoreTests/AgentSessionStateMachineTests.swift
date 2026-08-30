@@ -76,6 +76,84 @@ final class AgentSessionStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.snapshot.connectionState, .connected)
     }
 
+    func testSuccessfulTargetWritesContinueWhileReadEOFIsGracefullyClosing() throws {
+        var machine = connectedMachine()
+        let opened = try openReadyTarget(&machine, streamID: "stream")
+        let first = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x41])
+        )).singleTargetWrite)
+        XCTAssertTrue(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x42])
+        )).isEmpty)
+        XCTAssertTrue(machine.targetEnded(streamID: "stream", token: opened.token).isEmpty)
+
+        let next = try XCTUnwrap(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: opened.token,
+            writeID: first.writeID,
+            succeeded: true
+        ).singleTargetWrite)
+
+        XCTAssertEqual(next.data, Data([0x42]))
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: opened.token,
+            writeID: next.writeID,
+            succeeded: true
+        ).isEmpty)
+        XCTAssertEqual(machine.snapshot.bytesUploaded, 2)
+        let terminal = try popOutbound(
+            &machine,
+            type: .close,
+            streamID: "stream",
+            payload: Data("target_closed".utf8)
+        )
+        XCTAssertEqual(
+            machine.completeOutbound(terminal, accepted: true),
+            [.cancelTarget(streamID: "stream", token: opened.token)]
+        )
+    }
+
+    func testFailedTargetWriteAfterReadEOFDisablesLateWritesAndCancelsTargetOnce() throws {
+        var machine = connectedMachine()
+        let opened = try openReadyTarget(&machine, streamID: "stream")
+        let inFlight = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x41])
+        )).singleTargetWrite)
+        XCTAssertTrue(machine.targetEnded(streamID: "stream", token: opened.token).isEmpty)
+
+        XCTAssertEqual(
+            machine.targetWriteCompleted(
+                streamID: "stream",
+                token: opened.token,
+                writeID: inFlight.writeID,
+                succeeded: false
+            ),
+            [.cancelTarget(streamID: "stream", token: opened.token)]
+        )
+        XCTAssertTrue(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x42])
+        )).isEmpty)
+
+        let terminal = try popOutbound(
+            &machine,
+            type: .close,
+            streamID: "stream",
+            payload: Data("target_closed".utf8)
+        )
+        XCTAssertTrue(machine.completeOutbound(terminal, accepted: true).isEmpty)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
+        XCTAssertEqual(machine.snapshot.bytesUploaded, 0)
+    }
+
     func testStrictOpenPolicyRejectsBeforeTargetCreation() throws {
         let cases: [(Data, String, AgentRuntimeErrorClass)] = [
             (Data(#"{"ip":"8.8.8.8","port":443.0}"#.utf8), "invalid_target", .none),
@@ -271,6 +349,70 @@ final class AgentSessionStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.snapshot.connectionState, .stopping)
         XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
         XCTAssertEqual(machine.snapshot.errorClass, .relayUnavailable)
+    }
+
+    func testFailedRelaySendTerminatesAfterItsStreamWasClosedWhileInFlight() throws {
+        var machine = connectedMachine()
+        let first = try openReadyTarget(&machine, streamID: "first")
+        let second = try openReadyTarget(&machine, streamID: "second")
+        XCTAssertTrue(machine.targetReceived(
+            streamID: "first",
+            token: first.token,
+            data: Data([0x41])
+        ).isEmpty)
+        let inFlight = try popOutbound(
+            &machine,
+            type: .data,
+            streamID: "first",
+            payload: Data([0x41])
+        )
+
+        let closeEffects = machine.receiveRelay(try binary(
+            type: .close,
+            streamID: "first",
+            payload: Data("client_closed".utf8)
+        ))
+        let failureEffects = machine.completeOutbound(inFlight, accepted: false)
+
+        XCTAssertEqual(closeEffects, [.cancelTarget(streamID: "first", token: first.token)])
+        XCTAssertEqual(failureEffects, [
+            .cancelRelay,
+            .cancelTarget(streamID: "second", token: second.token),
+        ])
+        XCTAssertEqual(machine.snapshot.connectionState, .stopping)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
+        XCTAssertEqual(machine.snapshot.errorClass, .relayUnavailable)
+    }
+
+    func testSuccessfulRelaySendCompletionForCanceledFrameIsIgnored() throws {
+        var machine = connectedMachine()
+        let opened = try openReadyTarget(&machine, streamID: "stream")
+        XCTAssertTrue(machine.targetReceived(
+            streamID: "stream",
+            token: opened.token,
+            data: Data([0x42])
+        ).isEmpty)
+        let inFlight = try popOutbound(
+            &machine,
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x42])
+        )
+
+        XCTAssertEqual(
+            machine.receiveRelay(try binary(
+                type: .close,
+                streamID: "stream",
+                payload: Data("client_closed".utf8)
+            )),
+            [.cancelTarget(streamID: "stream", token: opened.token)]
+        )
+
+        XCTAssertTrue(machine.completeOutbound(inFlight, accepted: true).isEmpty)
+        XCTAssertEqual(machine.snapshot.connectionState, .connected)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
+        XCTAssertEqual(machine.snapshot.errorClass, .none)
+        XCTAssertNil(machine.nextOutbound())
     }
 
     func testStopClearsQueuesAdmissionAndCancelsRelayAndTargetsExactlyOnce() throws {

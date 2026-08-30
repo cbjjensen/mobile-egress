@@ -91,7 +91,9 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
     private let queue = DispatchQueue(label: "com.mobileegress.agent.relay-websocket")
     private var connection: NWConnection?
     private var eventHandler: RelayWebSocketEventHandler?
-    private var deliveryTask: Task<Void, Never>?
+    private var receiveGate = ReceiveDeliveryGate()
+    private var receiveGeneration: ReceiveDeliveryGate.Generation?
+    private var pendingTerminalEvent: RelayWebSocketEvent?
     private var pingTimer: DispatchSourceTimer?
     private var ready = false
     private var started = false
@@ -113,6 +115,7 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
             guard !self.started, !self.cleanedUp else { return }
             self.started = true
             self.eventHandler = eventHandler
+            self.receiveGeneration = self.receiveGate.beginGeneration()
             do {
                 let parameters = try self.builder.makeParameters(configuration: self.configuration)
                 let connection = NWConnection(
@@ -170,6 +173,10 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
             self.protocolPingOutstanding = false
             self.pingTimer?.cancel()
             self.pingTimer = nil
+            if let generation = self.receiveGeneration {
+                self.receiveGate.invalidate(generation)
+            }
+            self.pendingTerminalEvent = nil
             guard let connection = self.connection else { return }
             connection.stateUpdateHandler = nil
             let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
@@ -205,6 +212,10 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
             self.protocolPingOutstanding = false
             self.pingTimer?.cancel()
             self.pingTimer = nil
+            if let generation = self.receiveGeneration {
+                self.receiveGate.invalidate(generation)
+            }
+            self.pendingTerminalEvent = nil
             self.connection?.stateUpdateHandler = nil
             self.cancelUnderlyingConnection()
         }
@@ -214,11 +225,26 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
         guard !finished else { return }
         switch state {
         case .ready:
-            guard !ready else { return }
+            guard !ready,
+                  let generation = receiveGeneration,
+                  let connection
+            else { return }
             ready = true
-            emit(.connected)
             startPingTimer()
-            receiveNext()
+            guard let delivery = receiveGate.beginDelivery(
+                generation,
+                resumeReceiving: true
+            ) else {
+                finish(with: .failed(.unavailable))
+                return
+            }
+            deliver(
+                [.connected],
+                generation: generation,
+                delivery: delivery,
+                invalidateAfterDelivery: false,
+                sourceConnectionID: ObjectIdentifier(connection)
+            )
         case let .failed(error):
             finish(with: .failed(Self.classify(error)))
         case .cancelled:
@@ -228,11 +254,21 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
         }
     }
 
-    private func receiveNext() {
-        guard ready, !finished, let connection else { return }
+    private func receiveNext(_ generation: ReceiveDeliveryGate.Generation) {
+        guard ready, !finished,
+              receiveGeneration == generation,
+              let connection,
+              receiveGate.beginReceive(generation)
+        else { return }
+        let connectionID = ObjectIdentifier(connection)
         connection.receiveMessage { [weak self] content, context, isComplete, error in
-            guard let self, !self.finished else { return }
+            guard let self,
+                  !self.finished,
+                  self.receiveGeneration == generation,
+                  self.connection.map({ ObjectIdentifier($0) }) == connectionID
+            else { return }
             if let error {
+                self.receiveGate.abandonReceive(generation)
                 self.finish(with: .failed(Self.classify(error)))
                 return
             }
@@ -258,9 +294,19 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
                 self.pingTimer?.cancel()
                 self.pingTimer = nil
                 self.connection?.stateUpdateHandler = nil
+                self.receiveGate.stopReceiving(generation)
             }
-            self.emit(.message(.init(opcode: opcode, payload: payload, isComplete: isComplete)))
-            if opcode != .close { self.receiveNext() }
+            guard let delivery = self.receiveGate.completeReceive(
+                generation,
+                resumeReceiving: opcode != .close
+            ) else { return }
+            self.deliver(
+                [.message(.init(opcode: opcode, payload: payload, isComplete: isComplete))],
+                generation: generation,
+                delivery: delivery,
+                invalidateAfterDelivery: opcode == .close,
+                sourceConnectionID: connectionID
+            )
         }
     }
 
@@ -312,7 +358,11 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
         pingTimer?.cancel()
         pingTimer = nil
         connection?.stateUpdateHandler = nil
-        emit(event)
+        if let generation = receiveGeneration {
+            receiveGate.stopReceiving(generation)
+            receiveGate.abandonReceive(generation)
+        }
+        queueTerminal(event)
     }
 
     private func cancelUnderlyingConnection() {
@@ -322,12 +372,84 @@ public final class NetworkRelayWebSocket: RelayWebSocketIO, @unchecked Sendable 
         connection.cancel()
     }
 
-    private func emit(_ event: RelayWebSocketEvent) {
-        guard let eventHandler else { return }
-        let preceding = deliveryTask
-        deliveryTask = Task {
-            await preceding?.value
-            await eventHandler(event)
+    private func queueTerminal(_ event: RelayWebSocketEvent) {
+        guard let generation = receiveGeneration else { return }
+        if receiveGate.hasDeliveryOutstanding {
+            pendingTerminalEvent = event
+            return
+        }
+        guard let delivery = receiveGate.beginDelivery(
+            generation,
+            resumeReceiving: false
+        ) else { return }
+        deliver(
+            [event],
+            generation: generation,
+            delivery: delivery,
+            invalidateAfterDelivery: true,
+            sourceConnectionID: nil
+        )
+    }
+
+    private func deliver(
+        _ events: [RelayWebSocketEvent],
+        generation: ReceiveDeliveryGate.Generation,
+        delivery: ReceiveDeliveryGate.Delivery,
+        invalidateAfterDelivery: Bool,
+        sourceConnectionID: ObjectIdentifier?
+    ) {
+        guard let eventHandler else {
+            deliveryCompleted(
+                generation: generation,
+                delivery: delivery,
+                invalidateAfterDelivery: invalidateAfterDelivery,
+                sourceConnectionID: sourceConnectionID
+            )
+            return
+        }
+        Task { [weak self] in
+            for event in events {
+                await eventHandler(event)
+            }
+            self?.queue.async { [weak self] in
+                self?.deliveryCompleted(
+                    generation: generation,
+                    delivery: delivery,
+                    invalidateAfterDelivery: invalidateAfterDelivery,
+                    sourceConnectionID: sourceConnectionID
+                )
+            }
+        }
+    }
+
+    private func deliveryCompleted(
+        generation: ReceiveDeliveryGate.Generation,
+        delivery: ReceiveDeliveryGate.Delivery,
+        invalidateAfterDelivery: Bool,
+        sourceConnectionID: ObjectIdentifier?
+    ) {
+        let shouldResume = receiveGate.completeDelivery(delivery)
+        if invalidateAfterDelivery {
+            receiveGate.invalidate(generation)
+            pendingTerminalEvent = nil
+            if !cleanedUp {
+                cleanedUp = true
+                cancelUnderlyingConnection()
+            }
+            return
+        }
+        if let terminal = pendingTerminalEvent {
+            pendingTerminalEvent = nil
+            queueTerminal(terminal)
+            return
+        }
+        if shouldResume,
+           let sourceConnectionID,
+           connection.map({ ObjectIdentifier($0) }) == sourceConnectionID,
+           ready,
+           !finished,
+           receiveGeneration == generation {
+            receiveNext(generation)
         }
     }
 
