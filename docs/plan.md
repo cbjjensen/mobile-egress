@@ -1,5 +1,7 @@
 # Delivery plan
 
+> Historical planning record. Its unchecked boxes are not current work status; see [current status](status.md) and the current source instead.
+
 1. Establish repository documentation and build configuration before application code.
 2. Implement and test the relay policy, enrollment state, certificate authority, and protocol primitives.
 3. Implement the relay service and portable Docker deployment.

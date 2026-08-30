@@ -1,5 +1,7 @@
 # App-First Onboarding Implementation Plan
 
+> Historical completed plan. Its unchecked boxes are not current work status; see [current status](../../status.md) and the current source instead.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let one Windows application own a manually installed relay, pair an Android agent by QR code, and proxy selected Windows applications without normal-use scripts.

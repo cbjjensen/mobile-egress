@@ -1,5 +1,7 @@
 # Mobile Egress Implementation Plan
 
+> Historical completed plan. Its unchecked boxes are not current work status; see [current status](../../status.md) and the current source instead.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a portable relay, Windows tray SOCKS client, and Android cellular egress agent for selective personal mobile proxying.
