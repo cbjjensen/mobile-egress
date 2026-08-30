@@ -699,6 +699,7 @@ func winVerifyTrustStatus(path string) (uint32, error) {
 type installTransactionOps struct {
 	rename          func(oldPath, newPath string) error
 	remove          func(path string) error
+	removeAll       func(path string) error
 	protectRecovery func(path string) error
 	shortcutPath    string
 	controllerPath  string
@@ -718,7 +719,7 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 	if len(operationOptions) > 1 {
 		return errors.New("verified install operations are invalid")
 	}
-	operations := installTransactionOps{rename: windows.Rename, remove: os.Remove}
+	operations := installTransactionOps{rename: windows.Rename, remove: os.Remove, removeAll: os.RemoveAll}
 	if len(operationOptions) == 1 {
 		operations = operationOptions[0]
 	}
@@ -729,6 +730,9 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 	}
 	if operations.protectRecovery == nil {
 		operations.protectRecovery = func(string) error { return nil }
+	}
+	if operations.removeAll == nil {
+		operations.removeAll = os.RemoveAll
 	}
 	destinationRoot := filepath.Dir(files[0].Destination)
 	for _, file := range files {
@@ -793,7 +797,7 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 		return err
 	}
 	if err := operations.protectRecovery(backupRoot); err != nil {
-		_ = os.RemoveAll(backupRoot)
+		_ = operations.removeAll(backupRoot)
 		return err
 	}
 	backups := make([]installFileBackup, 0, len(staged))
@@ -849,9 +853,7 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 			return rollback(err, promoted, shortcutBackup, shortcutExisted, true)
 		}
 	}
-	if err := os.RemoveAll(backupRoot); err != nil {
-		return rollback(err, promoted, shortcutBackup, shortcutExisted, operations.createShortcut != nil)
-	}
+	_ = operations.removeAll(backupRoot)
 	return nil
 }
 
@@ -884,7 +886,7 @@ func rollbackInstall(cause error, operations installTransactionOps, backups []in
 	if len(rollbackErrors) > 0 {
 		return errors.Join(cause, ErrInstallRollback, fmt.Errorf("roll back installation: %w", errors.Join(rollbackErrors...)))
 	}
-	if err := os.RemoveAll(backupRoot); err != nil {
+	if err := operations.removeAll(backupRoot); err != nil {
 		return errors.Join(cause, errors.New("remove restored installation backup"))
 	}
 	return cause

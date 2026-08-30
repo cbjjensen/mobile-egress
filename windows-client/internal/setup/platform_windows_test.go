@@ -413,6 +413,42 @@ func TestInstallRollbackFailurePreservesRestrictedRecoveryBackup(t *testing.T) {
 	}
 }
 
+func TestInstallVerifiedFilesKeepsPromotedReleaseWhenCommittedBackupCleanupPartiallyFails(t *testing.T) {
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	files := transactionTestFiles(t, sourceRoot, destinationRoot)
+	backupRoot := ""
+	cleanupCalls := 0
+	ops := installTransactionOps{
+		rename: os.Rename,
+		remove: os.Remove,
+		removeAll: func(path string) error {
+			cleanupCalls++
+			if path != backupRoot {
+				t.Fatalf("cleanup path = %q, want %q", path, backupRoot)
+			}
+			if err := os.Remove(filepath.Join(path, ControllerExecutableName)); err != nil {
+				t.Fatal(err)
+			}
+			return errors.New("injected partial committed-backup cleanup failure")
+		},
+		protectRecovery: func(path string) error {
+			backupRoot = path
+			return nil
+		},
+	}
+	if err := installVerifiedFiles(files, func(string) error { return nil }, ops); err != nil {
+		t.Fatalf("committed install failed because backup cleanup was partial: %v", err)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("backup cleanup calls = %d, want 1", cleanupCalls)
+	}
+	assertTransactionTestFiles(t, files, "new-")
+	if _, err := os.Stat(filepath.Join(backupRoot, AdminExecutableName)); err != nil {
+		t.Fatalf("test did not leave an incomplete rollback set: %v", err)
+	}
+}
+
 func TestRestrictRecoveryDirectoryUsesOnlySystemAndAdministratorsACL(t *testing.T) {
 	icaclsPath := `C:\Windows\System32\icacls.exe`
 	recoveryPath := `C:\Program Files\MobileEgress\Controller\.mobile-egress-backup-test`
