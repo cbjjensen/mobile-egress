@@ -134,7 +134,10 @@ func ParseSHA256(raw []byte, expectedFilename string) (string, error) {
 		return "", errors.New("invalid Tailscale checksum response")
 	}
 	fields := strings.Fields(string(raw))
-	if len(fields) != 2 || !sha256Pattern.MatchString(strings.ToLower(fields[0])) || strings.TrimPrefix(fields[1], "*") != expectedFilename {
+	if (len(fields) != 1 && len(fields) != 2) || !sha256Pattern.MatchString(strings.ToLower(fields[0])) {
+		return "", errors.New("invalid Tailscale checksum response")
+	}
+	if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") != expectedFilename {
 		return "", errors.New("invalid Tailscale checksum response")
 	}
 	return strings.ToLower(fields[0]), nil

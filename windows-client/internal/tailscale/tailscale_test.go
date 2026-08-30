@@ -93,3 +93,13 @@ func TestParseSHA256RequiresExpectedFilenameAndDigest(t *testing.T) {
 		t.Fatal("ParseSHA256() accepted a checksum for another file")
 	}
 }
+
+func TestParseSHA256AcceptsDigestOnlyResponse(t *testing.T) {
+	t.Parallel()
+
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	got, err := ParseSHA256([]byte(digest+"\n"), "tailscale-setup-1.102.3-amd64.msi")
+	if err != nil || got != digest {
+		t.Fatalf("ParseSHA256() = %q/%v", got, err)
+	}
+}
