@@ -13,6 +13,16 @@ It deliberately has no public SOCKS listener. Authenticated Agent and Client ses
 - **Agent QR code** — a displayed, short-lived Agent invitation for Android scanning. Treat it as secret material while valid; the Android application has no text fallback.
 - **Local SOCKS5 proxy** — the authenticated Windows loopback listener, not an Internet-facing relay service.
 
+## Security at a glance
+
+- The public relay provides TLS-protected enrollment and read-only aggregate health, plus role-authenticated control and tunnel sessions. It is not a public SOCKS endpoint.
+- **Owner** and **Client** are separate certificate identities. Owner controls enrollment and known-serial revocation; Client alone authenticates the Windows tunnel session.
+- A visible Agent QR is a bearer secret. Do not screen-share or screenshot it while valid. Generating another QR does not revoke an earlier unexpired code.
+- Windows identity and SOCKS state use current-user DPAPI, which is not a guarantee against same-user malware, a compromised interactive session, or an administrator. Relay CA/private-key and SQLite state, including backups, depend on filesystem and administrator protections.
+- Android binds its own enrollment, relay, DNS, and target sockets to a selected cellular network. It is not a VPN, does not change the phone's default route, and does not control unrelated phone traffic.
+
+Successful `relay init` intentionally writes the one-time Owner invitation to stdout. Treat that output as a secret and keep it out of logs, screenshots, transcripts, tickets, and documentation. See the [security model](docs/security-model.md) for enrollment, storage, local-adversary, and revocation boundaries.
+
 ## Start with the task you need
 
 - [Deploy the relay](docs/deployment.md)
