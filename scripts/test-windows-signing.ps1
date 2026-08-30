@@ -163,6 +163,7 @@ try {
         & git check-ignore -q -- $privateRelativePath
         Assert-Condition ($LASTEXITCODE -eq 0) "$privateRelativePath must remain ignored."
         $trackedPath = & git ls-files -- $privateRelativePath
+        Assert-Condition ($LASTEXITCODE -eq 0) "git ls-files failed while checking $privateRelativePath."
         Assert-Condition ([string]::IsNullOrWhiteSpace($trackedPath)) "$privateRelativePath must never be tracked."
     }
 } finally {

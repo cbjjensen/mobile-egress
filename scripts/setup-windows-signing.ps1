@@ -20,6 +20,29 @@ $privateRelativePaths = @(
     'windows-signing/signing.properties'
 )
 
+if (-not ('MobileEgressCertificateSignature' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class MobileEgressCertificateSignature
+{
+    [DllImport("crypt32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CryptVerifyCertificateSignatureEx(
+        IntPtr cryptProvider,
+        uint encodingType,
+        uint subjectType,
+        IntPtr subject,
+        uint issuerType,
+        IntPtr issuer,
+        uint flags,
+        IntPtr extra
+    );
+}
+'@
+}
+
 function Stop-SigningSetup {
     param([string]$Message)
 
@@ -79,11 +102,16 @@ function Get-RecoveryPassword {
 function Get-PfxIdentityCertificate {
     param([securestring]$Password)
 
-    [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
         $pfxPath,
         $Password,
         [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet
     )
+    if (-not $certificate.HasPrivateKey) {
+        $certificate.Dispose()
+        Stop-SigningSetup 'The Windows publisher recovery PFX does not contain a private key.'
+    }
+    return $certificate
 }
 
 function Set-PrivateFileAcl {
@@ -109,6 +137,91 @@ function Set-PrivateFileAcl {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Assert-PrivateDirectoryAcl {
+    param([string]$Path)
+
+    $acl = Get-Acl -LiteralPath $Path
+    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $allowedSids = @($currentUserSid, 'S-1-5-18', 'S-1-5-32-544')
+    if (-not $acl.AreAccessRulesProtected -or
+        $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $currentUserSid) {
+        Stop-SigningSetup "Private signing directory owner or ACL protection is incorrect: $Path"
+    }
+
+    $accessRules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    if ($accessRules.Count -ne 3) {
+        Stop-SigningSetup "Private signing directory ACL must contain exactly three access rules: $Path"
+    }
+    $actualSids = [System.Collections.Generic.List[string]]::new()
+    $expectedInheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($rule in $accessRules) {
+        $sid = $rule.IdentityReference.Value
+        if ($allowedSids -notcontains $sid -or $actualSids.Contains($sid)) {
+            Stop-SigningSetup "Private signing directory ACL contains an unexpected or duplicate principal: $Path"
+        }
+        $actualSids.Add($sid)
+        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+            $rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or
+            $rule.IsInherited -or
+            $rule.InheritanceFlags -ne $expectedInheritance -or
+            $rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
+            Stop-SigningSetup "Private signing directory ACL rule semantics are incorrect: $Path"
+        }
+    }
+    foreach ($requiredSid in $allowedSids) {
+        if ($actualSids -notcontains $requiredSid) {
+            Stop-SigningSetup "Private signing directory ACL is missing a required principal: $Path"
+        }
+    }
+}
+
+function Set-PrivateDirectoryAcl {
+    param([string]$Path)
+
+    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetOwner($currentUserSid)
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @(
+        $currentUserSid,
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    )) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        $null = $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Initialize-PrivateSigningDirectory {
+    param([string]$Path)
+
+    if (Test-Path -LiteralPath $Path) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            Stop-SigningSetup "The Windows signing path exists but is not a directory: $Path"
+        }
+        try {
+            Assert-PrivateDirectoryAcl -Path $Path
+            return
+        } catch {
+            Set-PrivateDirectoryAcl -Path $Path
+        }
+    } else {
+        $null = New-Item -ItemType Directory -Path $Path
+        Set-PrivateDirectoryAcl -Path $Path
+    }
+    Assert-PrivateDirectoryAcl -Path $Path
+}
+
 function Assert-PrivateFileAcl {
     param([string]$Path)
 
@@ -119,17 +232,41 @@ function Assert-PrivateFileAcl {
 
     $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $allowedSids = @($currentUserSid, 'S-1-5-18', 'S-1-5-32-544')
-    $actualSids = @($acl.Access | ForEach-Object {
-        $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-    } | Sort-Object -Unique)
+    $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSid -ne $currentUserSid) {
+        Stop-SigningSetup "Private signing file ACL owner is not the current user: $Path"
+    }
+
+    $accessRules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    if ($accessRules.Count -ne 3) {
+        Stop-SigningSetup "Private signing file ACL must contain exactly three non-conflicting access rules: $Path"
+    }
+
+    $actualSids = [System.Collections.Generic.List[string]]::new()
+    foreach ($rule in $accessRules) {
+        $sid = $rule.IdentityReference.Value
+        if ($allowedSids -notcontains $sid) {
+            Stop-SigningSetup "Private signing file ACL grants an unexpected principal: $Path"
+        }
+        if ($actualSids.Contains($sid)) {
+            Stop-SigningSetup "Private signing file ACL contains a duplicate principal: $Path"
+        }
+        $actualSids.Add($sid)
+        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
+            Stop-SigningSetup "Private signing file ACL contains a deny rule: $Path"
+        }
+        if ($rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
+            Stop-SigningSetup "Private signing file ACL does not grant exact FullControl rights: $Path"
+        }
+        if ($rule.IsInherited -or
+            $rule.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None -or
+            $rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
+            Stop-SigningSetup "Private signing file ACL contains inherited or propagating access: $Path"
+        }
+    }
     foreach ($requiredSid in $allowedSids) {
         if ($actualSids -notcontains $requiredSid) {
             Stop-SigningSetup "Private signing file ACL is missing a required principal: $Path"
-        }
-    }
-    foreach ($actualSid in $actualSids) {
-        if ($allowedSids -notcontains $actualSid) {
-            Stop-SigningSetup "Private signing file ACL grants an unexpected principal: $Path"
         }
     }
 }
@@ -139,11 +276,18 @@ function Assert-GitSecretSafety {
     try {
         foreach ($relativePath in $privateRelativePaths) {
             & git check-ignore -q -- $relativePath
-            if ($LASTEXITCODE -ne 0) {
+            $ignoreExitCode = $LASTEXITCODE
+            if ($ignoreExitCode -gt 1) {
+                Stop-SigningSetup "Git check-ignore failed while validating private signing material: $relativePath"
+            }
+            if ($ignoreExitCode -eq 1) {
                 Stop-SigningSetup "Private signing file is not ignored by Git: $relativePath"
             }
 
             $trackedPath = & git ls-files -- $relativePath
+            if ($LASTEXITCODE -ne 0) {
+                Stop-SigningSetup "Git ls-files failed while validating private signing material: $relativePath"
+            }
             if (-not [string]::IsNullOrWhiteSpace($trackedPath)) {
                 Stop-SigningSetup "Private signing file is tracked by Git: $relativePath"
             }
@@ -159,11 +303,29 @@ function Assert-CertificateShape {
     if ($Certificate.Subject -ne $expectedSubject -or $Certificate.Issuer -ne $expectedSubject) {
         Stop-SigningSetup 'The Windows publisher certificate subject or issuer does not match the established identity.'
     }
+    $selfSignatureIsValid = [MobileEgressCertificateSignature]::CryptVerifyCertificateSignatureEx(
+        [IntPtr]::Zero,
+        0x00000001,
+        2,
+        $Certificate.Handle,
+        2,
+        $Certificate.Handle,
+        0,
+        [IntPtr]::Zero
+    )
+    if (-not $selfSignatureIsValid) {
+        Stop-SigningSetup 'The Windows publisher certificate self-signature is invalid.'
+    }
     if ($Certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow) {
         Stop-SigningSetup 'The Windows publisher certificate is expired. Stop releases and perform a reviewed publisher replacement.'
     }
     if ($Certificate.NotBefore.ToUniversalTime() -gt [DateTime]::UtcNow) {
         Stop-SigningSetup 'The Windows publisher certificate is not yet valid.'
+    }
+    $tenYearExpiry = $Certificate.NotBefore.ToUniversalTime().AddYears(10)
+    $validityDrift = ($Certificate.NotAfter.ToUniversalTime() - $tenYearExpiry).Duration()
+    if ($validityDrift -gt [TimeSpan]::FromMinutes(15)) {
+        Stop-SigningSetup 'The Windows publisher certificate does not satisfy the ten-year validity policy.'
     }
     if ($Certificate.SignatureAlgorithm.Value -ne '1.2.840.113549.1.1.11') {
         Stop-SigningSetup 'The Windows publisher certificate is not signed with SHA-256 and RSA.'
@@ -240,6 +402,10 @@ function Import-PublisherTrust {
 
 function Assert-CompleteIdentity {
     Assert-GitSecretSafety
+    if (-not (Test-Path -LiteralPath $signingRoot -PathType Container)) {
+        Stop-SigningSetup 'The protected Windows signing directory is missing.'
+    }
+    Assert-PrivateDirectoryAcl -Path $signingRoot
     foreach ($privatePath in @($pfxPath, $propertiesPath)) {
         if (-not (Test-Path -LiteralPath $privatePath -PathType Leaf)) {
             Stop-SigningSetup 'Private Windows publisher recovery files are incomplete. Restore both original restricted files.'
@@ -309,7 +475,7 @@ function Invoke-Initialize {
         Stop-SigningSetup 'The Mobile Egress Windows publisher identity already exists or is partially present. Reuse it with -ValidateOnly, or recover the established private files with -Restore; initialization will not replace it.'
     }
 
-    $null = New-Item -ItemType Directory -Path $signingRoot -Force
+    Initialize-PrivateSigningDirectory -Path $signingRoot
     $notAfter = (Get-Date).AddYears(10)
     $certificate = New-SelfSignedCertificate `
         -Type Custom `
@@ -381,6 +547,7 @@ function Invoke-Restore {
         }
     }
 
+    Initialize-PrivateSigningDirectory -Path $signingRoot
     foreach ($privatePath in @($pfxPath, $propertiesPath)) {
         try {
             Assert-PrivateFileAcl -Path $privatePath
@@ -436,6 +603,10 @@ function Invoke-Restore {
     } finally {
         $validatedCertificate.Dispose()
     }
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
 }
 
 $modeCount = @($Initialize.IsPresent, $ValidateOnly.IsPresent, $Restore.IsPresent).Where({ $_ }).Count
