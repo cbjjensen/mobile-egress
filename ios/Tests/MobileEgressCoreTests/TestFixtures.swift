@@ -69,6 +69,14 @@ enum TestFixtures {
     }
 
     static func replacingVersionLiteral(in encodedQR: String, with version: String) throws -> String {
+        try replacingVersionField(in: encodedQR, with: "\"version\":\(version)")
+    }
+
+    static func duplicatingVersionLiteral(in encodedQR: String, first: String, second: String) throws -> String {
+        try replacingVersionField(in: encodedQR, with: "\"version\":\(first),\"version\":\(second)")
+    }
+
+    private static func replacingVersionField(in encodedQR: String, with replacement: String) throws -> String {
         let standard = encodedQR
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
@@ -79,7 +87,7 @@ enum TestFixtures {
         else {
             throw FixtureError.invalidQRCode
         }
-        let raw = json.replacingOccurrences(of: "\"version\":1", with: "\"version\":\(version)")
+        let raw = json.replacingOccurrences(of: "\"version\":1", with: replacement)
         return raw.data(using: .utf8)!.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")

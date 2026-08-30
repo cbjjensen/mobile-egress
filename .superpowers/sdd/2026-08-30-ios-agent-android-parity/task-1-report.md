@@ -89,3 +89,43 @@ docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-
 ```
 
 Output: exit 0; all 23 XCTest cases passed with 0 failures. This includes the new public-address, pairing, migration, wire-protocol, whitespace-capability, and portable certificate-authority regressions.
+
+## Fix Round 2
+
+The raw `version` lexer previously returned on its first matching key, while Foundation accepted duplicate keys. Top-level object validation now rejects duplicate keys before strict parsing or migration recognition; escaped top-level field names are rejected as part of that lexical strictness, so they cannot encode a semantic duplicate key.
+
+### RED
+
+Full duplicate-version regression command:
+
+```powershell
+docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-ios-agent,target=/workspace" -w /workspace/ios swift:6.0 swift test
+```
+
+Output: exit 1; 26 XCTest cases executed with 4 failures. The `1` then `1.0` ordering was accepted by pairing, migration recognition, migration parse, and wire parsing. The reverse ordering was already rejected by the first-token literal check.
+
+Focused all-duplicates regression command:
+
+```powershell
+docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-ios-agent,target=/workspace" -w /workspace/ios swift:6.0 swift test --filter WireProtocolTests
+```
+
+Output: exit 1; 7 selected XCTest cases executed with 2 failures. Both duplicate-version keys and duplicate non-version `type` keys were accepted before the uniqueness gate.
+
+### GREEN
+
+Focused command:
+
+```powershell
+docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-ios-agent,target=/workspace" -w /workspace/ios swift:6.0 swift test --filter WireProtocolTests
+```
+
+Output: exit 0; all 7 selected XCTest cases passed with 0 failures.
+
+Full command:
+
+```powershell
+docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-ios-agent,target=/workspace" -w /workspace/ios swift:6.0 swift test
+```
+
+Output: exit 0; all 27 XCTest cases passed with 0 failures, including pairing, migration recognition/full-parse, wire duplicate-version orderings, and duplicate non-version top-level keys.

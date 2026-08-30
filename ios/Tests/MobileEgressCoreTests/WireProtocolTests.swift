@@ -37,4 +37,18 @@ final class WireProtocolTests: XCTestCase {
             XCTAssertThrowsError(try WireProtocol.parseAgentInbound(raw))
         }
     }
+
+    func testWireProtocolRejectsDuplicateVersionKeysInEitherOrder() throws {
+        for versions in [("1", "1.0"), ("1.0", "1")] {
+            let raw = Data("{\"version\":\(versions.0),\"version\":\(versions.1),\"type\":\"data\",\"streamId\":\"stream-1\",\"payload\":\"\"}".utf8)
+
+            XCTAssertThrowsError(try WireProtocol.parseAgentInbound(raw))
+        }
+    }
+
+    func testWireProtocolRejectsDuplicateNonVersionKeys() throws {
+        let raw = Data("{\"version\":1,\"type\":\"data\",\"type\":\"data\",\"streamId\":\"stream-1\",\"payload\":\"\"}".utf8)
+
+        XCTAssertThrowsError(try WireProtocol.parseAgentInbound(raw))
+    }
 }

@@ -38,10 +38,16 @@ struct StrictQRCodeDecoder {
 struct StrictJSONObject {
     static func exactKeys(in data: Data, expected: Set<String>) throws {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == expected
+              Set(object.keys) == expected,
+              hasUniqueTopLevelKeys(in: data)
         else {
             throw CoreValidationError.invalidJSON
         }
+    }
+
+    static func hasUniqueTopLevelKeys(in data: Data) -> Bool {
+        var lexer = JSONObjectLexer(bytes: Array(data))
+        return lexer.hasUniqueTopLevelKeys()
     }
 
     static func hasIntegerLiteral(_ expected: Int, forKey key: String, in data: Data) -> Bool {
@@ -77,6 +83,32 @@ private struct JSONObjectLexer {
             skipWhitespace()
             if consume(0x7D) { return nil }
             guard consume(0x2C) else { return nil }
+            skipWhitespace()
+        }
+    }
+
+    mutating func hasUniqueTopLevelKeys() -> Bool {
+        skipWhitespace()
+        guard consume(0x7B) else { return false }
+        skipWhitespace()
+        if consume(0x7D) {
+            skipWhitespace()
+            return index == bytes.count
+        }
+
+        var keys = Set<[UInt8]>()
+        while true {
+            guard let key = readString(), !key.contains(0x5C), keys.insert(key).inserted else { return false }
+            skipWhitespace()
+            guard consume(0x3A) else { return false }
+            skipWhitespace()
+            guard skipValue() else { return false }
+            skipWhitespace()
+            if consume(0x7D) {
+                skipWhitespace()
+                return index == bytes.count
+            }
+            guard consume(0x2C) else { return false }
             skipWhitespace()
         }
     }

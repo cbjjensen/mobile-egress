@@ -22,6 +22,7 @@ public final class EndpointMigrationParser {
 
     public func recognizes(_ input: String) -> Bool {
         guard let data = try? StrictQRCodeDecoder.decode(input),
+              StrictJSONObject.hasUniqueTopLevelKeys(in: data),
               StrictJSONObject.hasIntegerLiteral(1, forKey: "version", in: data),
               let recognition = try? JSONDecoder().decode(MigrationRecognitionWire.self, from: data)
         else {

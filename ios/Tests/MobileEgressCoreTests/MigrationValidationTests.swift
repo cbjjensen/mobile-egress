@@ -29,6 +29,17 @@ final class MigrationValidationTests: XCTestCase {
         XCTAssertThrowsError(try parser.parse(TestFixtures.replacingVersionLiteral(in: migration, with: "1e0")))
     }
 
+    func testMigrationRejectsDuplicateVersionKeysInEitherOrder() throws {
+        let parser = EndpointMigrationParser(now: { TestFixtures.now }, certificateValidator: FixtureCertificateValidator())
+        let migration = try TestFixtures.migrationQR()
+
+        for versions in [("1", "1.0"), ("1.0", "1")] {
+            let payload = try TestFixtures.duplicatingVersionLiteral(in: migration, first: versions.0, second: versions.1)
+            XCTAssertFalse(parser.recognizes(payload))
+            XCTAssertThrowsError(try parser.parse(payload))
+        }
+    }
+
     func testMigrationRejectsWhitespaceOnlyCapability() throws {
         let parser = EndpointMigrationParser(now: { TestFixtures.now }, certificateValidator: FixtureCertificateValidator())
 

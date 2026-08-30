@@ -50,6 +50,15 @@ final class PairingValidationTests: XCTestCase {
         XCTAssertThrowsError(try parser.parse(TestFixtures.replacingVersionLiteral(in: pairing, with: "1e0")))
     }
 
+    func testPairingRejectsDuplicateVersionKeysInEitherOrder() throws {
+        let parser = PairingBundleParser(now: { TestFixtures.now }, certificateValidator: AcceptingCertificateValidator())
+        let pairing = try TestFixtures.pairingQR()
+
+        for versions in [("1", "1.0"), ("1.0", "1")] {
+            XCTAssertThrowsError(try parser.parse(TestFixtures.duplicatingVersionLiteral(in: pairing, first: versions.0, second: versions.1)))
+        }
+    }
+
     func testPairingRejectsWhitespaceOnlyCapability() throws {
         let parser = PairingBundleParser(now: { TestFixtures.now }, certificateValidator: AcceptingCertificateValidator())
 
