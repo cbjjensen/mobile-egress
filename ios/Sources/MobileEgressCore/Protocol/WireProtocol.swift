@@ -27,6 +27,7 @@ public enum WireProtocol {
     public static let maximumPayloadBytes = 1024 * 1024
 
     private static let agentInboundTypes: Set<WireMessageType> = [.open, .data, .close, .ping, .pong]
+    private static let agentOutboundTypes: Set<WireMessageType> = [.opened, .rejected, .data, .close, .pong]
     private static let errorCodes: Set<String> = [
         "agent_stream_limit", "agent_unavailable", "client_closed", "client_stream_limit", "dns_failure",
         "idle_timeout", "invalid_target", "opening_timeout", "policy_denied", "protocol_error", "revoked",
@@ -51,6 +52,14 @@ public enum WireProtocol {
     }
 
     public static func parseAgentInbound(_ raw: Data) throws -> WireEnvelope {
+        try parse(raw, allowing: agentInboundTypes)
+    }
+
+    public static func parseAgentOutbound(_ raw: Data) throws -> WireEnvelope {
+        try parse(raw, allowing: agentOutboundTypes)
+    }
+
+    private static func parse(_ raw: Data, allowing types: Set<WireMessageType>) throws -> WireEnvelope {
         guard raw.count <= maximumWebSocketMessageBytes else { throw CoreValidationError.invalidJSON }
         try StrictJSONObject.exactKeys(in: raw, expected: ["version", "type", "streamId", "payload"])
         guard StrictJSONObject.hasIntegerLiteral(1, forKey: "version", in: raw) else {
@@ -58,7 +67,7 @@ public enum WireProtocol {
         }
         let wire = try JSONDecoder().decode(WireEnvelopeWire.self, from: raw)
         try validate(version: wire.version, type: wire.type, streamID: wire.streamID, payload: wire.payload)
-        guard agentInboundTypes.contains(wire.type) else { throw CoreValidationError.invalidJSON }
+        guard types.contains(wire.type) else { throw CoreValidationError.invalidJSON }
         return WireEnvelope(version: wire.version, type: wire.type, streamID: wire.streamID, payload: wire.payload)
     }
 

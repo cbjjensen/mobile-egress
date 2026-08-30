@@ -54,6 +54,27 @@ struct StrictJSONObject {
         var lexer = JSONObjectLexer(bytes: Array(data))
         return lexer.valueLiteral(forKey: Array(key.utf8)) == Array(String(expected).utf8)
     }
+
+    static func integerLiteral(forKey key: String, in data: Data) -> Int? {
+        var lexer = JSONObjectLexer(bytes: Array(data))
+        guard let literal = lexer.valueLiteral(forKey: Array(key.utf8)), !literal.isEmpty else { return nil }
+        var index = 0
+        if literal[index] == 0x2D {
+            index += 1
+            guard index < literal.count else { return nil }
+        }
+        if literal[index] == 0x30 {
+            guard index + 1 == literal.count else { return nil }
+        } else {
+            guard (0x31 ... 0x39).contains(literal[index]) else { return nil }
+            index += 1
+            while index < literal.count {
+                guard (0x30 ... 0x39).contains(literal[index]) else { return nil }
+                index += 1
+            }
+        }
+        return Int(String(decoding: literal, as: UTF8.self))
+    }
 }
 
 private struct JSONObjectLexer {

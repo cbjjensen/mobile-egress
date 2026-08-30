@@ -58,6 +58,69 @@ final class AppleProductionAdaptersTests: XCTestCase {
         }
     }
 
+    func testRelayWebSocketBuilderPinsMTLSAndUsesExactCellularWebSocketEndpoint() throws {
+        let authority = try CertificateAuthorityValidator().validate(TestFixtures.validCAPEM, at: TestFixtures.now)
+        let base = Task2Fixtures.identity(keyTag: "mobile-egress.agent.key.websocket")
+        let identity = AgentIdentity(
+            relayOrigin: base.relayOrigin,
+            role: base.role,
+            serial: base.serial,
+            keyTag: base.keyTag,
+            certificatePEM: base.certificatePEM,
+            caCertificatePEM: TestFixtures.validCAPEM,
+            caCertificateDER: authority.der
+        )
+        let configuration = try RelayWebSocketConfiguration(identity: identity)
+        let builder = AppleRelayWebSocketParameterBuilder(
+            identityResolver: ThrowingIdentityResolver(),
+            timeout: 10
+        )
+
+        let trustPolicy = try builder.makeTrustPolicy(configuration: configuration)
+        let endpoint = builder.makeEndpoint(configuration: configuration)
+        let tls = NWProtocolTLS.Options()
+        let parameters = builder.makePathConstrainedParameters(configuration: configuration, tls: tls)
+        let webSocket = try XCTUnwrap(
+            parameters.defaultProtocolStack.applicationProtocols.first as? NWProtocolWebSocket.Options
+        )
+        let expectedURL = try XCTUnwrap(URL(string: "wss://relay.example:8443/v1/session"))
+
+        XCTAssertEqual(trustPolicy.hostname, "relay.example")
+        XCTAssertEqual(trustPolicy.authorityDER, authority.der)
+        XCTAssertTrue(trustPolicy.validatesHostname)
+        XCTAssertFalse(trustPolicy.allowsSystemTrustFallback)
+        XCTAssertEqual(endpoint, .url(expectedURL))
+        XCTAssertEqual(parameters.requiredInterfaceType, .cellular)
+        XCTAssertEqual(parameters.prohibitedInterfaceTypes, [.wifi, .wiredEthernet])
+        XCTAssertTrue(webSocket.autoReplyPing)
+        XCTAssertEqual(webSocket.maximumMessageSize, WireProtocol.maximumWebSocketMessageBytes)
+        XCTAssertThrowsError(try builder.makeParameters(configuration: configuration)) { error in
+            XCTAssertEqual(error as? ProductionAdapterTestError, .identityRequested(identity.keyTag))
+        }
+        _ = NetworkRelayWebSocket(configuration: configuration, identityResolver: ThrowingIdentityResolver())
+    }
+
+    func testTargetBuilderUsesLiteralEndpointAndCellularOnlyNoProxyTCPParameters() throws {
+        let configuration = try TargetConnectionConfiguration(ipLiteral: "8.8.8.8", port: 443)
+        let builder = AppleTargetConnectionParameterBuilder()
+
+        let endpoint = try builder.makeEndpoint(configuration: configuration)
+        let parameters = builder.makeParameters(configuration: configuration)
+
+        guard case let .hostPort(host, port) = endpoint else {
+            return XCTFail("Target endpoint must be a literal host and port")
+        }
+        guard case .ipv4 = host else {
+            return XCTFail("Target host must stay an IPv4 literal rather than becoming a DNS name")
+        }
+        XCTAssertEqual(port.rawValue, 443)
+        XCTAssertEqual(parameters.requiredInterfaceType, .cellular)
+        XCTAssertEqual(parameters.prohibitedInterfaceTypes, [.wifi, .wiredEthernet])
+        XCTAssertFalse(parameters.includePeerToPeer)
+        XCTAssertFalse(parameters.allowLocalEndpointReuse)
+        _ = NetworkTargetConnectionFactory()
+    }
+
     func testSharedKeychainStoreCanBeProbedWhenAcceptanceIsEnabled() throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["MOBILE_EGRESS_RUN_KEYCHAIN_ACCEPTANCE"] == "1",
