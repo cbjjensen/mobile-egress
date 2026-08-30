@@ -13,7 +13,7 @@ Use the Windows computer that controls the signing keys. It needs:
 - JDK 17 or later, Android SDK Platform 35, and Android Build-Tools 35;
 - WebView2 and the Windows SDK signing tools (`signtool.exe`);
 - GitHub CLI authenticated to `cbjjensen/mobile-egress`; and
-- a trusted Authenticode code-signing certificate with an accessible private key.
+- the established local Mobile Egress Authenticode publisher identity with an accessible private key.
 
 Open PowerShell at the repository root and keep the same session for Parts 1–5. If JDK/Android paths are not already configured for your Windows user, set them to the real installed directories before running preflight or release commands:
 
@@ -27,15 +27,44 @@ if ($LASTEXITCODE -ne 0) { throw 'Release workstation prerequisites are incomple
 
 As an alternative to Android environment variables, the ignored `android\local.properties` may contain an escaped absolute `sdk.dir`. The release scripts intentionally stop with remediation instead of silently skipping Android when no SDK root is configured.
 
-The Windows certificate is a hard prerequisite for a friend-facing build. Obtain an Authenticode certificate from a certificate authority or managed signing provider before release day. Confirm before purchasing that the issued certificate:
+### Windows local publisher workflow
 
-- chains to a root trusted by the friends' Windows computers;
-- has the Code Signing EKU `1.3.6.1.5.5.7.3.3`;
-- appears in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My` on the builder;
-- exposes its private key to `signtool`; and
-- has a subject containing `Mobile Egress`, which the release script enforces.
+Mobile Egress uses one locally generated, self-signed Authenticode publisher identity. Its subject is `CN=Mobile Egress Local Publisher`; it is RSA-4096, SHA-256, Code Signing EKU only, CA=false, and valid for ten years. It belongs in `Cert:\CurrentUser\My` on the publisher workstation and must expose its private key to `signtool`.
 
-A self-signed certificate is not a friend-facing substitute because Windows will not trust it by default. Never put the Authenticode private key, Android keystore, or their passwords in this repository.
+Initialize this identity once, on the publisher workstation:
+
+```powershell
+& .\scripts\setup-windows-signing.ps1 -Initialize
+if ($LASTEXITCODE -ne 0) { throw 'Windows publisher initialization failed.' }
+```
+
+It creates an exportable private key and encrypted local recovery files at `windows-signing\mobile-egress-code-signing.pfx` and `windows-signing\signing.properties`, and creates the public `windows-signing\mobile-egress-code-signing.cer` plus `windows-signing\release-signing-certificate.txt`. The PFX and properties are private, ignored, and untracked; the public certificate and public identity record are safe to distribute. Never commit, attach to a release, paste into logs, or otherwise share private signing material or its password.
+
+The publisher must reuse this exact identity for every release. Before every release, validate it, then use the resulting established thumbprint in Part 3:
+
+```powershell
+& .\scripts\setup-windows-signing.ps1 -ValidateOnly
+if ($LASTEXITCODE -ne 0) { throw 'Windows publisher validation failed.' }
+```
+
+Do not generate a replacement certificate to work around a release error, lost local state, or a failed build. To move to a replacement workstation, restore the established encrypted PFX and its password through the supported restore workflow, validate the restored certificate identity, and only then resume releases:
+
+```powershell
+& .\scripts\setup-windows-signing.ps1 -Restore
+if ($LASTEXITCODE -ne 0) { throw 'Windows publisher restore failed.' }
+& .\scripts\setup-windows-signing.ps1 -ValidateOnly
+if ($LASTEXITCODE -ne 0) { throw 'Restored Windows publisher validation failed.' }
+```
+
+The SHA-256 certificate fingerprint in `windows-signing\release-signing-certificate.txt` is the pre-trust identity check. Share that exact value separately with each friend through a trusted out-of-band channel. A fingerprint shown on the GitHub release, inside the ZIP, or by an executable being installed is not an independent identity check and does not replace the separately shared value.
+
+Friends extract the release ZIP and run `MobileEgressSetup.exe`. Before setup trusts the public certificate, they compare its displayed fingerprint with the out-of-band value. The initial Windows dialog can identify the setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**. Self-signing does not solve SmartScreen or create reputation; neither warning is evidence that the separately shared fingerprint matched. After the exact match, setup requests one UAC elevation to trust the exact public certificate, install the controller, and launch it unelevated.
+
+The signed controller carries the same public publisher certificate. Before an EC2 Client accepts its normal Authenticode validation, the controller establishes that exact public certificate as the EC2 trust anchor through its guided SSM flow. EC2 nodes receive only the public certificate and signed artifacts; they never receive the PFX, its password, or another private signing value.
+
+Back up the PFX and its password together in an encrypted location separate from the publisher workstation. Test a restore before relying on that backup. A loss or compromise of the publisher identity is a release-path incident: stop distributing affected releases, preserve restricted evidence, tell recipients not to trust new artifacts under that identity, and perform a reviewed publisher replacement with a new out-of-band fingerprint and explicit old-trust removal.
+
+Plan a reviewed publisher replacement before expiry. Do not treat an expired self-signed certificate as renewable in place or assume timestamped past artifacts make it safe to keep distributing new ones. Self-signed certificates have no public-CA revocation service: removing trust is a local action on every friend PC and EC2 node, cannot erase already downloaded files, and does not remove SmartScreen warnings or reputation state.
 
 List candidate certificates without displaying private material:
 
@@ -46,7 +75,7 @@ $codeSigningCertificates = Get-ChildItem -Path 'Cert:\CurrentUser\My', 'Cert:\Lo
 $codeSigningCertificates
 ```
 
-The selected thumbprint must be 40 hexadecimal characters. Check that its expiry covers the release date and keep the provider/token unlocked only while signing.
+The selected thumbprint must be 40 hexadecimal characters. Check that its expiry covers the release date and keep the private key accessible only while signing.
 
 ## Part 2: Choose and freeze a version
 
@@ -99,10 +128,11 @@ $codeSigningThumbprint = '<40-hex-thumbprint>'
 if ($LASTEXITCODE -ne 0) { throw 'The signed Windows build failed.' }
 ```
 
-The script builds and verifies four executables, embeds the exact headless Client URL/hash/signer in the controller, and creates:
+The script builds and verifies the setup application and four executables, embeds the exact headless Client URL/hash/signer and publisher certificate in the controller, and creates:
 
 ```text
 windows-client\build\release\mobile-egress-windows-<version>.zip
+windows-client\build\bin\MobileEgressSetup.exe
 windows-client\build\bin\mobile-egress-windows.exe
 windows-client\build\bin\mobile-egress-admin.exe
 windows-client\build\bin\mobile-egress-relay.exe
@@ -110,7 +140,7 @@ windows-client\build\bin\mobile-egress-client.exe
 windows-client\build\bin\release-manifest.json
 ```
 
-The ZIP contains all four sibling executables plus the audit manifest. The same standalone `mobile-egress-client.exe` must be uploaded with that exact filename to the matching GitHub tag because the signed controller embeds this URL:
+The ZIP contains `MobileEgressSetup.exe`, all four sibling executables, the public publisher certificate, and the audit manifest. Friends run only `MobileEgressSetup.exe` after extracting the ZIP. The same standalone `mobile-egress-client.exe` must be uploaded with that exact filename to the matching GitHub tag because the signed controller embeds this URL:
 
 ```text
 https://github.com/cbjjensen/mobile-egress/releases/download/v<version>/mobile-egress-client.exe
@@ -261,9 +291,10 @@ Copy [the acceptance record template](templates/physical-acceptance-record.md) o
 On the controller PC:
 
 1. Verify the ZIP hash against the release record.
-2. Extract it into one directory; do not separate the sibling executables.
-3. Run `Get-AuthenticodeSignature` on every extracted `.exe` and require `Valid` with the recorded signer thumbprint.
-4. Open `mobile-egress-windows.exe`.
+2. Obtain the publisher's SHA-256 certificate fingerprint from the separately shared trusted channel; do not treat a value in the release itself as that identity check.
+3. Extract it into one directory; do not separate the setup application or sibling executables.
+4. Open `MobileEgressSetup.exe`, compare its displayed fingerprint exactly, then approve its one UAC prompt to establish trust and install the controller. **Unknown publisher** and **More info → Run anyway** may be required before trust; self-signing does not suppress SmartScreen.
+5. Run `Get-AuthenticodeSignature` on every extracted `.exe` and require `Valid` with the recorded signer thumbprint after setup established the trusted publisher.
 
 On Android:
 

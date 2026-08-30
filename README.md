@@ -14,12 +14,13 @@ There is no relay EC2 instance, inbound EC2 security-group rule, Elastic IP, rou
 
 Each friend self-hosts a separate bridge:
 
-1. Download the signed `mobile-egress-windows-<version>.zip` and signed Android APK from the project's [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). Extract the Windows ZIP and open `mobile-egress-windows.exe`.
-2. In **Bridge**, choose **Install Tailscale**, approve UAC and browser login, then choose **Set up local bridge**. The app installs `MobileEgressRelay` as LocalSystem and enables raw TCP Funnel on port 8443.
-3. In **Phone**, generate the short-lived Agent QR. Install/open the Android app, scan it, and tap **Start**. Android uses cellular only and does not fall back to Wi-Fi.
-4. In **AWS Login**, use IAM Identity Center browser login (recommended) or the encrypted access-key fallback. The controller is fixed to `us-east-1`.
-5. In **EC2 Nodes**, select up to ten running x86-64 Windows Server 2019 instances. Choose **Prepare SSM** where needed, wait for **SSM online**, then choose **Install Client**.
-6. For a managed node, choose **Copy credentials** and configure only the intended application with the returned authenticated SOCKS5 URL. The listener is `127.0.0.1:1080` on that EC2 instance.
+1. Download the signed `mobile-egress-windows-<version>.zip` and signed Android APK from the project's [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). Get the publisher's SHA-256 certificate fingerprint through a separate trusted channel, extract the Windows ZIP, then open `MobileEgressSetup.exe`.
+2. Before allowing setup to trust the publisher certificate, compare its fingerprint exactly with the separately shared value. On the first launch, Windows may show **Unknown publisher** and SmartScreen may require **More info → Run anyway**; this is expected for a self-signed publisher and is not resolved by trusting the certificate. Approve the one UAC prompt only after the fingerprint matches. Setup trusts that exact public certificate, installs the controller, and launches it normally.
+3. In **Bridge**, choose **Install Tailscale**, approve UAC and browser login, then choose **Set up local bridge**. The app installs `MobileEgressRelay` as LocalSystem and enables raw TCP Funnel on port 8443.
+4. In **Phone**, generate the short-lived Agent QR. Install/open the Android app, scan it, and tap **Start**. Android uses cellular only and does not fall back to Wi-Fi.
+5. In **AWS Login**, use IAM Identity Center browser login (recommended) or the encrypted access-key fallback. The controller is fixed to `us-east-1`.
+6. In **EC2 Nodes**, select up to ten running x86-64 Windows Server 2019 instances. Choose **Prepare SSM** where needed, wait for **SSM online**, then choose **Install Client**.
+7. For a managed node, choose **Copy credentials** and configure only the intended application with the returned authenticated SOCKS5 URL. The listener is `127.0.0.1:1080` on that EC2 instance.
 
 Friends do not clone the repository, run Docker, execute setup scripts, open inbound EC2 ports, or handle Owner invitations. They do need permission to approve Tailscale, use the selected AWS account, and install the Android APK.
 

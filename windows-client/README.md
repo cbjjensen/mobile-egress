@@ -2,6 +2,12 @@
 
 The signed Windows release has two roles: the Wails desktop controller on the operator's Windows 10/11 PC and `MobileEgressClient` services on existing Windows Server 2019 EC2 nodes.
 
+## Friend quick start
+
+Download and extract `mobile-egress-windows-<version>.zip`, then run `MobileEgressSetup.exe`; do not start an individual controller, relay, admin, or Client executable. Before the setup application trusts the local publisher certificate, compare its displayed SHA-256 certificate fingerprint with the one the publisher shared with you through a separate trusted channel. That out-of-band fingerprint is the only identity check before trusting a self-signed certificate.
+
+The first setup launch can show **Unknown publisher** and may require **More info → Run anyway** in SmartScreen. Self-signing does not establish SmartScreen reputation. After the fingerprint matches, approve setup's UAC prompt so it can trust the exact public certificate, install the controller, and launch it unelevated. The normal controller workflow then guides Tailscale, Android, AWS, and EC2 setup.
+
 ## Controller UI
 
 - **Bridge** verifies/installs official Tailscale, completes browser login, enables unattended raw TCP Funnel, and installs `MobileEgressRelay` as a loopback-only LocalSystem service.
