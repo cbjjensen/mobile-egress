@@ -4,6 +4,24 @@ This is the operator runbook for producing the signed artifacts that friends dow
 
 The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
 
+## Routine release command
+
+Commit the intended code and Android `versionName`/increased `versionCode` on clean `main`. From the Windows publisher workstation, build and verify without changing GitHub:
+
+```powershell
+& .\scripts\release-all.ps1 -ReleaseVersion '1.0.4'
+```
+
+After receiving explicit approval to publish, run the same workflow with `-Publish`:
+
+```powershell
+& .\scripts\release-all.ps1 -ReleaseVersion '1.0.4' -Publish
+```
+
+The script reloads persistent JDK/Android SDK paths into its process, runs the full gate, reuses and validates both established signing identities, handles the one known Gradle lint-cache lock retry, verifies signed artifacts, tags the verified commit, creates an empty GitHub draft, uploads assets sequentially, waits for matching remote SHA-256 digests, and publishes only a prerelease. Rerun the same approved command after an interruption; it resumes only when the commit, tag, local artifacts, draft, and hashes agree.
+
+Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them for a routine release when `release-all.ps1` is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
+
 ## Part 1: Prepare the release workstation
 
 Use the Windows computer that controls the signing keys. It needs:

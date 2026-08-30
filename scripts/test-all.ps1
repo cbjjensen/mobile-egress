@@ -24,6 +24,7 @@ try {
     Invoke-RequiredCommand -Name 'Go tests' -Command { go test ./... }
     Invoke-RequiredCommand -Name 'Go vet' -Command { go vet ./... }
     Invoke-RequiredCommand -Name 'Go build' -Command { go build ./... }
+    Invoke-RequiredCommand -Name 'Release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-all.ps1') }
 
     Push-Location (Join-Path $repositoryRoot 'windows-client\frontend')
     try {

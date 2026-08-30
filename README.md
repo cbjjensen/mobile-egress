@@ -47,4 +47,4 @@ Friends do not clone the repository, run Docker, execute setup scripts, open inb
 - [Windows controller and Client](windows-client/README.md)
 - [Android Agent](android/README.md)
 
-Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. Production Windows packages require an Authenticode code-signing certificate and are created with `scripts\build-windows.ps1`; Android release signing is handled by `scripts\release-android.ps1`.
+Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. Routine signed prereleases use `& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Publish`; the deterministic workflow validates and reuses both established signing identities, verifies remote asset digests, and leaves stable promotion to the documented physical-acceptance process.
