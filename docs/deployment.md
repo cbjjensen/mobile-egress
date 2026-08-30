@@ -1,73 +1,425 @@
-# Deployment, release, and acceptance
+# Release, deployment, and physical acceptance
 
-Normal operators use signed release artifacts and the Windows app. The former EC2-relay Docker Compose deployment has been removed and is not part of the supported local-Funnel friend setup.
+This is the operator runbook for producing the signed artifacts that friends download and for proving them on a real Windows PC, Android phone, and EC2 nodes. Normal friends do not perform these steps; they follow the root README after you publish an accepted release.
 
-## Release artifacts
+The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
 
-A Windows release contains these siblings in one signed ZIP:
+## Part 1: Prepare the release workstation
 
-- `mobile-egress-windows.exe` — controller UI;
-- `mobile-egress-admin.exe` — narrow UAC helper;
-- `mobile-egress-relay.exe` — LocalSystem loopback relay;
-- `mobile-egress-client.exe` — signed headless EC2 release; and
-- `release-manifest.json` — audit copy of the exact Client version, GitHub HTTPS URL, SHA-256, and signer-certificate thumbprint embedded in the signed controller.
+Use the Windows computer that controls the signing keys. It needs:
 
-The same signed `mobile-egress-client.exe` must be attached to the matching GitHub release URL in the manifest. Runtime trust uses the manifest embedded inside the Authenticode-signed controller, not the mutable JSON file beside it. EC2 install/update refuses a digest or exact signer-thumbprint mismatch.
+- the repository checked out on the exact commit to release;
+- Go and Node.js versions accepted by `scripts\preflight.ps1`;
+- JDK 17 or later, Android SDK Platform 35, and Android Build-Tools 35;
+- WebView2 and the Windows SDK signing tools (`signtool.exe`);
+- GitHub CLI authenticated to `cbjjensen/mobile-egress`; and
+- a trusted Authenticode code-signing certificate with an accessible private key.
 
-Build from a reviewed tag with a code-signing certificate whose subject contains `Mobile Egress`:
+Open PowerShell at the repository root and keep the same session for Parts 1–5. If JDK/Android paths are not already configured for your Windows user, set them to the real installed directories before running preflight or release commands:
 
 ```powershell
-& .\scripts\build-windows.ps1 -ReleaseVersion 1.2.3 -CodeSigningThumbprint <40-hex-thumbprint>
+$env:JAVA_HOME = '<absolute path to JDK 17 or later>'
+$env:ANDROID_HOME = '<absolute path to the Android SDK>'
+$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+& .\scripts\preflight.ps1 -Components Go, Node, WebView2, Android
+if ($LASTEXITCODE -ne 0) { throw 'Release workstation prerequisites are incomplete.' }
 ```
 
-The script builds all four binaries, signs and verifies each with `signtool`, writes the Client manifest, and creates `windows-client\build\release\mobile-egress-windows-1.2.3.zip`. Publish the ZIP and the standalone Client executable on GitHub Releases. Do not publish signing keys, AWS credentials, relay state, SOCKS credentials, or pairing material.
+As an alternative to Android environment variables, the ignored `android\local.properties` may contain an escaped absolute `sdk.dir`. The release scripts intentionally stop with remediation instead of silently skipping Android when no SDK root is configured.
 
-Build the Android release with the externally backed-up keystore described by `android\keystore.properties.example`:
+The Windows certificate is a hard prerequisite for a friend-facing build. Obtain an Authenticode certificate from a certificate authority or managed signing provider before release day. Confirm before purchasing that the issued certificate:
+
+- chains to a root trusted by the friends' Windows computers;
+- has the Code Signing EKU `1.3.6.1.5.5.7.3.3`;
+- appears in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My` on the builder;
+- exposes its private key to `signtool`; and
+- has a subject containing `Mobile Egress`, which the release script enforces.
+
+A self-signed certificate is not a friend-facing substitute because Windows will not trust it by default. Never put the Authenticode private key, Android keystore, or their passwords in this repository.
+
+List candidate certificates without displaying private material:
+
+```powershell
+$codeSigningCertificates = Get-ChildItem -Path 'Cert:\CurrentUser\My', 'Cert:\LocalMachine\My' |
+    Where-Object { $_.EnhancedKeyUsageList.ObjectId.Value -contains '1.3.6.1.5.5.7.3.3' } |
+    Select-Object Subject, Thumbprint, NotAfter, HasPrivateKey
+$codeSigningCertificates
+```
+
+The selected thumbprint must be 40 hexadecimal characters. Check that its expiry covers the release date and keep the provider/token unlocked only while signing.
+
+## Part 2: Choose and freeze a version
+
+Use one semantic version everywhere. The examples below use `1.0.0`; replace it with the real version.
+
+```powershell
+$releaseVersion = '1.0.0'
+$releaseTag = "v$releaseVersion"
+```
+
+Before committing the release, update `versionCode` and `versionName` in `android\app\build.gradle.kts`. `versionCode` must be higher than every APK previously installed or distributed; `versionName` should equal `$releaseVersion`.
+
+Review and commit that version change, then run the full gate:
+
+```powershell
+git status --short
+& .\scripts\test-all.ps1
+if ($LASTEXITCODE -ne 0) { throw 'The full release gate failed.' }
+```
+
+`git status --short` must print nothing after the release commit. Tag that exact commit and push the tag:
+
+```powershell
+$releaseCommit = git rev-parse HEAD
+git tag -a $releaseTag -m "Mobile Egress $releaseVersion"
+if ($LASTEXITCODE -ne 0) { throw 'Creating the release tag failed.' }
+git push origin $releaseTag
+if ($LASTEXITCODE -ne 0) { throw 'Pushing the release tag failed.' }
+```
+
+Confirm the tag, checkout, and remote all identify the intended commit:
+
+```powershell
+$tagCommit = git rev-list -n 1 $releaseTag
+$remoteTag = (git ls-remote origin "refs/tags/$releaseTag^{}" | ForEach-Object { ($_ -split "`t")[0] })
+if ($releaseCommit -ne $tagCommit -or $releaseCommit -ne $remoteTag) {
+    throw 'The local checkout, annotated tag, and remote tag do not match.'
+}
+```
+
+Do not move or reuse a published tag. If anything needs rebuilding, increment the version.
+
+## Part 3: Build and verify the signed Windows release
+
+Set the exact certificate thumbprint shown in Part 1, then run the guarded build:
+
+```powershell
+$codeSigningThumbprint = '<40-hex-thumbprint>'
+& .\scripts\build-windows.ps1 -ReleaseVersion $releaseVersion -CodeSigningThumbprint $codeSigningThumbprint
+if ($LASTEXITCODE -ne 0) { throw 'The signed Windows build failed.' }
+```
+
+The script builds and verifies four executables, embeds the exact headless Client URL/hash/signer in the controller, and creates:
+
+```text
+windows-client\build\release\mobile-egress-windows-<version>.zip
+windows-client\build\bin\mobile-egress-windows.exe
+windows-client\build\bin\mobile-egress-admin.exe
+windows-client\build\bin\mobile-egress-relay.exe
+windows-client\build\bin\mobile-egress-client.exe
+windows-client\build\bin\release-manifest.json
+```
+
+The ZIP contains all four sibling executables plus the audit manifest. The same standalone `mobile-egress-client.exe` must be uploaded with that exact filename to the matching GitHub tag because the signed controller embeds this URL:
+
+```text
+https://github.com/cbjjensen/mobile-egress/releases/download/v<version>/mobile-egress-client.exe
+```
+
+Verify the output again before upload:
+
+```powershell
+$windowsZip = ".\windows-client\build\release\mobile-egress-windows-$releaseVersion.zip"
+$clientExecutable = '.\windows-client\build\bin\mobile-egress-client.exe'
+$windowsExecutables = Get-ChildItem -LiteralPath '.\windows-client\build\bin' -Filter 'mobile-egress-*.exe'
+
+$signatureResults = foreach ($executable in $windowsExecutables) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $executable.FullName
+    [pscustomobject]@{
+        File = $executable.Name
+        Status = $signature.Status
+        Subject = $signature.SignerCertificate.Subject
+        Thumbprint = $signature.SignerCertificate.Thumbprint
+    }
+}
+$signatureResults
+if ($signatureResults | Where-Object { $_.Status -ne 'Valid' }) {
+    throw 'A Windows release signature is invalid.'
+}
+
+Get-FileHash -Algorithm SHA256 -LiteralPath $windowsZip, $clientExecutable
+Get-Content -Raw '.\windows-client\build\bin\release-manifest.json'
+```
+
+Every executable should report `Valid` and the same expected signer thumbprint. The manifest's Client SHA-256 must match `Get-FileHash`. It is safe to record artifact hashes and the release-signing subject/thumbprint; do not record any Mobile Egress relay or device certificate.
+
+## Part 4: Create and protect the Android signing key
+
+Android updates must always use the same signing key. Losing it means existing installations cannot accept your next APK as an update. Back up the keystore and its recovery information in an encrypted location separate from the build computer.
+
+For the first release only, create a keystore outside the repository with the JDK `keytool`. The command prompts for passwords and certificate identity; do not put those values on the command line:
+
+```powershell
+New-Item -ItemType Directory -Force -Path 'C:\secure' | Out-Null
+keytool -genkeypair -verbose -keystore 'C:\secure\mobile-egress-release.jks' -alias 'mobile-egress' -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Copy the ignored template and edit only the local copy:
+
+```powershell
+Copy-Item -LiteralPath '.\android\keystore.properties.example' -Destination '.\android\keystore.properties'
+notepad '.\android\keystore.properties'
+```
+
+Use an absolute `storeFile`, preferably with forward slashes, and the alias/passwords entered during key creation:
+
+```properties
+storeFile=C:/secure/mobile-egress-release.jks
+storePassword=<local secret>
+keyAlias=mobile-egress
+keyPassword=<local secret>
+```
+
+The file must remain ignored and untracked. Validate that guard, then build and verify the release APK:
 
 ```powershell
 & .\scripts\release-android.ps1 -ValidateOnly
+if ($LASTEXITCODE -ne 0) { throw 'Android signing-input validation failed.' }
 & .\scripts\release-android.ps1
+if ($LASTEXITCODE -ne 0) { throw 'The signed Android release failed.' }
 ```
 
-Record source tag/commit, filenames, hashes, signer identities, Android versionCode/versionName, build time, and acceptance result.
+The output is:
 
-## Operator setup
+```text
+android\app\build\outputs\apk\release\app-release.apk
+```
 
-The operator needs Windows 10/11 with WebView2, an Android 10+ phone with cellular data, a Tailscale account that permits Funnel, and access to existing Windows Server 2019 EC2 instances in `us-east-1`.
+Record its SHA-256. The release script already runs Build-Tools 35 `apksigner verify`; use `--print-certs` when you need the public signer digest for the release record:
 
-1. Extract the signed Windows ZIP and run `mobile-egress-windows.exe`.
-2. In **Bridge**, install/connect Tailscale and set up the local relay. Approve the explicit browser and UAC prompts.
-3. In **Phone**, generate and scan the Agent enrollment QR, then start the Android foreground Agent.
-4. In **AWS Login**, use IAM Identity Center or the access-key fallback.
-5. In **EC2 Nodes**, refresh inventory. For an instance with no profile, **Prepare SSM** creates and attaches a dedicated profile. For an existing non-SSM role, the app shows its name and requires explicit confirmation before attaching only `AmazonSSMManagedInstanceCore`; it never replaces the profile.
-6. Wait until the instance is SSM online, then install the Client. Copy its SOCKS credentials only into the intended workload.
+```powershell
+$androidApk = '.\android\app\build\outputs\apk\release\app-release.apk'
+. '.\scripts\operations-common.ps1'
+$androidSdkRoot = Get-MobileEgressAndroidSdkRoot -RepositoryRoot (Get-Location).Path
+if ([string]::IsNullOrWhiteSpace($androidSdkRoot)) {
+    throw 'Set ANDROID_HOME, ANDROID_SDK_ROOT, or android\local.properties first.'
+}
+$buildTools35 = Get-ChildItem -LiteralPath (Join-Path $androidSdkRoot 'build-tools') -Directory |
+    Where-Object { $_.Name -match '^35(\.|$)' } |
+    Sort-Object Name -Descending |
+    Select-Object -First 1
+& (Join-Path $buildTools35.FullName 'apksigner.bat') verify --verbose --print-certs $androidApk
+Get-FileHash -Algorithm SHA256 -LiteralPath $androidApk
+```
 
-Only SSM reachability and outbound HTTPS are required. Do not add inbound port 8443/1080 rules, a public IP, an Elastic IP, or a system-wide proxy.
+## Part 5: Publish the exact artifacts as a prerelease
+
+Start with a GitHub draft so incomplete uploads are never presented as usable. Authenticate and confirm the repository first:
+
+```powershell
+gh auth status
+if ($LASTEXITCODE -ne 0) { throw 'GitHub CLI authentication is required.' }
+git remote get-url origin
+```
+
+Create the draft from the already-pushed tag and upload the three required assets:
+
+```powershell
+gh release create $releaseTag $windowsZip $clientExecutable $androidApk `
+    --repo 'cbjjensen/mobile-egress' `
+    --verify-tag `
+    --draft `
+    --title "Mobile Egress $releaseVersion" `
+    --generate-notes
+if ($LASTEXITCODE -ne 0) { throw 'Creating the GitHub draft release failed.' }
+
+gh release view $releaseTag --repo 'cbjjensen/mobile-egress' --json tagName,isDraft,isPrerelease,url,assets
+```
+
+Inspect the draft asset names. They must include:
+
+- `mobile-egress-windows-<version>.zip`;
+- `mobile-egress-client.exe`; and
+- `app-release.apk`.
+
+Publish it as a prerelease so the embedded Client URL works during physical acceptance without declaring it stable:
+
+```powershell
+gh release edit $releaseTag --repo 'cbjjensen/mobile-egress' --draft=false --prerelease
+```
+
+Use the GitHub Releases page to download the candidate on the acceptance PC and phone. Test the downloaded artifacts, not files left in the build directory. Never replace assets under a published tag; fix the issue and build a new version.
+
+## Part 6: Required two-node physical acceptance
+
+Use a release candidate with:
+
+- one Windows 10/11 controller PC;
+- one Android 10+ phone with working cellular data;
+- a Tailscale account allowed to enable Funnel;
+- two running x86-64 Windows Server 2019 EC2 instances in `us-east-1`;
+- SSM reachability and outbound HTTPS/DNS from both EC2 instances; and
+- AWS permission to inventory the instances, run SSM commands, and perform the guarded IAM actions described below.
+
+No relay EC2, public EC2 IP, inbound security-group rule, Elastic IP, router change, or local port-forward is required. Private EC2 nodes need NAT or appropriate VPC endpoints for SSM and the signed GitHub Client download.
+
+Copy [the acceptance record template](templates/physical-acceptance-record.md) outside the source tree and fill it in as you go. Do not record QR contents, credentials, relay/device certificates, destinations, carrier/EC2 IP addresses, or traffic payloads.
+
+### 6.1 Verify and install the downloaded artifacts
+
+On the controller PC:
+
+1. Verify the ZIP hash against the release record.
+2. Extract it into one directory; do not separate the sibling executables.
+3. Run `Get-AuthenticodeSignature` on every extracted `.exe` and require `Valid` with the recorded signer thumbprint.
+4. Open `mobile-egress-windows.exe`.
+
+On Android:
+
+1. Verify the APK hash and public signer digest against the release record.
+2. Install the APK through your approved sideloading process.
+3. Confirm Android identifies it as Mobile Egress and does not report a signing mismatch.
+
+### 6.2 Set up the local bridge and phone
+
+1. In **Bridge**, choose **Install Tailscale**, approve UAC, and finish browser login.
+2. Choose **Set up local bridge** and approve UAC. Require Tailscale online, Funnel active, relay healthy, and a `https://<machine>.<tailnet>.ts.net:8443` public origin.
+3. Confirm Windows Defender Firewall/router settings were not manually opened for port 8443.
+4. In **Phone**, generate the Agent QR. Scan it in Android and tap **Start**.
+5. Keep Wi-Fi enabled on the phone while cellular data is also enabled. Require the Android UI/notification to show cellular available and relay connected.
+6. On Windows, confirm the relay is automatic/running and loopback-only:
+
+```powershell
+Get-Service -Name 'MobileEgressRelay' | Select-Object Name, Status, StartType
+Get-NetTCPConnection -State Listen -LocalPort 8443 | Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+The only relay listener must be `127.0.0.1:8443`.
+
+### 6.3 Connect AWS and install two Clients
+
+1. In **AWS Login**, use IAM Identity Center browser login if available. Use DPAPI-encrypted access keys only as fallback.
+2. Refresh **EC2 Nodes** and confirm only the intended supported `us-east-1` instances appear.
+3. For a profile-less node, choose **Prepare SSM** and allow the dedicated role/profile creation.
+4. For an existing non-SSM role, read the displayed role name and explicitly approve adding only `AmazonSSMManagedInstanceCore`. Never approve profile replacement.
+5. Wait for each node to show **SSM online**, then choose **Install Client** on both.
+6. Require distinct Client serials and credentials. Do not paste credentials into SSM, tickets, chat, or the acceptance record.
+
+On each EC2 node, confirm the service and listener through an interactive administrative PowerShell session:
+
+```powershell
+Get-Service -Name 'MobileEgressClient' | Select-Object Name, Status, StartType
+Get-NetTCPConnection -State Listen -LocalPort 1080 | Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+The service must be automatic/running and the only SOCKS listener must be `127.0.0.1:1080`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
+
+### 6.4 Prove opt-in cellular egress on both nodes
+
+In the controller, choose **Copy credentials** for node A. Transfer the value only into that node's intended workload or private RDP clipboard. For a short manual curl test, read it from the clipboard so it is not written into PowerShell history:
+
+```powershell
+$nodeProxy = (Get-Clipboard).Trim() -replace '^socks5://', 'socks5h://'
+$previousAllProxy = $env:ALL_PROXY
+$directAddress = (& curl.exe --fail --silent --show-error --noproxy '*' 'https://checkip.amazonaws.com').Trim()
+if ($LASTEXITCODE -ne 0) { throw 'The direct egress check failed.' }
+try {
+    $env:ALL_PROXY = $nodeProxy
+    $proxiedAddress = (& curl.exe --fail --silent --show-error 'https://checkip.amazonaws.com').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'The proxied egress check failed.' }
+    if ([string]::IsNullOrWhiteSpace($proxiedAddress) -or $directAddress -eq $proxiedAddress) {
+        throw 'The proxy did not demonstrate a different egress address.'
+    }
+    Write-Host 'PASS: direct and proxied egress differ; values intentionally not printed.'
+} finally {
+    if ($null -eq $previousAllProxy) {
+        Remove-Item Env:ALL_PROXY -ErrorAction SilentlyContinue
+    } else {
+        $env:ALL_PROXY = $previousAllProxy
+    }
+    Set-Clipboard -Value ''
+    Remove-Variable nodeProxy, previousAllProxy, directAddress, proxiedAddress -ErrorAction SilentlyContinue
+}
+```
+
+Repeat with node B's own credentials. While both proxied requests work, run a direct request on each node and confirm it still uses its normal EC2 route. This proves per-application opt-in rather than a system-wide proxy.
+
+The two-node run proves simultaneous multi-Client routing, but two Clients can open only eight streams because each is capped at four. The 32-stream aggregate is covered by automated tests. A physical 32-stream capacity run requires at least eight managed Clients, four held-open streams each; treat that as an extended test, not a claim that two nodes can reach 32.
+
+To test the four-stream Client cap physically, use a controlled HTTPS endpoint that deliberately streams slowly. Start four transfers through one node's proxy and hold them open; a fifth concurrent transfer must fail closed. Do not use an uncontrolled third-party large download or record the proxy URL. Stop the four test transfers afterward. Repeat across eight Clients only when performing the optional 32/33 aggregate capacity run.
+
+### 6.5 Prove cellular-only fail-closed behavior
+
+1. Leave phone Wi-Fi connected.
+2. Disable cellular data on the phone without stopping Wi-Fi.
+3. Require the Android Agent to report loss/offline, existing proxied streams to close, and new proxied requests to fail.
+4. Confirm an ordinary direct EC2 request still works; this separates Mobile Egress failure from an EC2 outage.
+5. Re-enable cellular, wait for the Agent to reconnect, and confirm both node proxies recover.
+
+If proxy traffic succeeds over phone Wi-Fi while cellular is disabled, fail the release.
+
+### 6.6 Prove reboot and Repair recovery
+
+Test one dependency at a time so the failed component is unambiguous:
+
+1. Reboot the controller PC. Tailscale unattended mode and `MobileEgressRelay` must return automatically; reopen the controller UI and confirm the bridge becomes ready without new Owner/Agent/Client identities.
+2. Reboot EC2 node A, then node B. `MobileEgressClient` must return automatically and retain the same serial/SOCKS credentials.
+3. Reboot the Android phone. The Agent is intentionally user-started and `START_NOT_STICKY`; open the app and tap **Start**, then confirm the same enrollment reconnects.
+4. Stop `MobileEgressClient` on one test node, choose **Repair** in the controller, and require the signed executable/configuration reapply to restore the service without changing serial or credentials.
+
+To prove **Update**, start the lab from an earlier signed candidate, then open the controller from this candidate and choose **Update**. For a first-ever release, create a lower-version acceptance prerelease from the same reviewed commit before installing the final candidate. Both versions need their own immutable tags/assets; never overwrite one release with the other.
+
+### 6.7 Prove endpoint migration
+
+Tailscale derives the MagicDNS/Funnel FQDN from the device machine name. Use the supported rename control instead of deleting the Tailscale node:
+
+1. Record only the original machine name, not QR/certificate data.
+2. In the Tailscale admin **Machines** page, open the controller PC's menu, choose **Edit machine name**, disable automatic OS-hostname generation if shown, and add a temporary `-migration-test` suffix.
+3. Return to Mobile Egress and wait for **Rotation required**.
+4. Connect AWS, choose **Rotate endpoint safely**, and approve UAC.
+5. Require both EC2 nodes to appear in the updated list. Use **Repair** for a failed node after SSM returns.
+6. Stop the Android Agent, scan the distinct migration QR, and restart the Agent.
+7. Confirm both workloads reconnect with unchanged Client serials, Android identity, and SOCKS credentials.
+8. Rename the Tailscale machine back to its original name and repeat the rotation/migration once more so the accepted release finishes on its intended FQDN.
+
+Tailscale documents that editing a machine name changes its MagicDNS domain: [Machine names](https://tailscale.com/kb/1098/machine-names) and [MagicDNS](https://tailscale.com/docs/features/magicdns). Do not regenerate the tailnet DNS name or delete/re-enroll the node merely to test migration.
+
+### 6.8 Review redaction and cloud/network boundaries
+
+Before signing off:
+
+- inspect SSM command history and require only signed-release metadata, public bootstrap CSR/key output, sealed ciphertext, and fixed success/error output;
+- confirm no raw SOCKS password, private key, pairing capability, or plaintext node configuration appears;
+- confirm no EC2 instance, Elastic IP, public IP, or inbound rule was created/changed by Mobile Egress;
+- confirm Windows relay/node state directories remain ACL-restricted to SYSTEM and local Administrators; and
+- save only aggregate pass/fail results in the acceptance record.
+
+Inspect ACL entries without printing state contents. Run the relay command on the controller PC and the Client command on each EC2 node:
+
+```powershell
+(Get-Acl -LiteralPath 'C:\ProgramData\MobileEgress\Relay').Access |
+    Select-Object IdentityReference, FileSystemRights, AccessControlType, IsInherited
+(Get-Acl -LiteralPath 'C:\ProgramData\MobileEgress\Client').Access |
+    Select-Object IdentityReference, FileSystemRights, AccessControlType, IsInherited
+```
+
+Each applicable directory must have inheritance disabled and grant access only to SYSTEM and local Administrators. The relay directory is expected only on the controller; the Client directory is expected only on an EC2 node.
+
+## Part 7: Promote or reject the release
+
+If every required item passes, attach the completed sanitized record to your private release evidence and promote the exact tested prerelease without replacing its assets:
+
+```powershell
+gh release edit $releaseTag --repo 'cbjjensen/mobile-egress' --prerelease=false --latest
+gh release view $releaseTag --repo 'cbjjensen/mobile-egress' --json tagName,isDraft,isPrerelease,url,assets
+```
+
+If a required item fails, do not promote it. Record the finite failure class, fix the source, increment `versionCode`/version, create a new tag, rebuild, and repeat. Never reuse the failed tag or replace its published assets.
 
 ## Minimum AWS permissions
 
-The selected identity needs read access for EC2 images/instances and SSM inventory; SSM SendCommand/GetCommandInvocation for selected instances; and, when preparing IAM, narrowly scoped instance-profile/role operations. It also needs `iam:PassRole` and EC2 profile association only for a previously profile-less selected instance. Use account policy and resource constraints appropriate to the operator; the application itself filters to `us-east-1`, supported instances, and the SSM managed policy.
+The selected identity needs these read/command actions, scoped to the account, region, and selected nodes where AWS supports resource constraints:
 
-## Physical acceptance record
+- `ec2:DescribeInstances` and `ec2:DescribeImages`;
+- `ssm:DescribeInstanceInformation`, `ssm:SendCommand`, and `ssm:GetCommandInvocation`; and
+- `iam:GetInstanceProfile`, `iam:GetRole`, `iam:ListAttachedRolePolicies`, and `iam:ListRolePolicies`.
 
-Automated tests do not replace this run. Use one local PC, one Android phone, and at least two SSM-managed Windows Server 2019 EC2 nodes.
+If the app must prepare SSM for a profile-less instance, the identity also needs the narrowly scoped create/tag/add/associate actions used for the deterministic dedicated role/profile: `iam:CreateRole`, `iam:TagRole`, `iam:CreateInstanceProfile`, `iam:TagInstanceProfile`, `iam:AddRoleToInstanceProfile`, `iam:AttachRolePolicy`, `iam:PassRole`, and `ec2:AssociateIamInstanceProfile`. If an instance already has a non-SSM role, only the explicitly confirmed `iam:AttachRolePolicy` change is used; the app never replaces the profile.
 
-- [ ] Verify the Windows ZIP, each executable signature, Client release SHA-256, and Android APK signature.
-- [ ] Complete app-only Tailscale/relay setup without Docker, router changes, or relay EC2 infrastructure.
-- [ ] Pair Android, start the Agent, and confirm cellular available / relay connected with Wi-Fi still enabled.
-- [ ] Install two EC2 Clients. Confirm each listens only on `127.0.0.1:1080` and uses different credentials/Client serials.
-- [ ] Configure one workload per node and confirm both report the phone carrier egress while unconfigured traffic retains its original route.
-- [ ] Exercise four streams on one Client and confirm its fifth is rejected; exercise aggregate load up to 32 across Clients and confirm the 33rd is rejected without starvation.
-- [ ] Disable cellular while Wi-Fi remains available. Existing streams must close and new requests must fail without Wi-Fi fallback.
-- [ ] Reboot the PC, phone, and both EC2 nodes separately. Confirm Windows services recover and applications reconnect after dependencies return.
-- [ ] Publish/install a newer signed Client with **Update**; use **Repair** to reapply service and sealed configuration.
-- [ ] Perform a controlled Funnel-name change. Connect AWS, choose endpoint rotation, verify sealed node updates, scan the Android migration QR, and confirm all existing serials/keys and SOCKS credentials are retained.
-- [ ] Review logs/SSM history for secret redaction and confirm no inbound EC2 networking changed.
-
-Record only aggregate outcomes and finite error classes. Do not capture QR payloads, capabilities, credentials, keys, certificates, destinations, or traffic.
+Have the AWS account administrator translate this action list into the organization's resource ARNs, permission boundaries, SCPs, and session policy. The app itself is fixed to `us-east-1`, supported Windows instances, and `AmazonSSMManagedInstanceCore`.
 
 ## Rollback and state recovery
 
 Normal code rollback preserves `C:\ProgramData\MobileEgress\Relay` and the relay CA. Install a previously accepted signed controller bundle and relay binary only after confirming protocol/schema compatibility. Never restore stale SQLite state as a code rollback because it can reverse revocation or capability consumption.
 
-Back up the entire relay state directory while the relay service is stopped, preserving ACLs. A backup contains the CA private key and is as sensitive as live state. If the CA/state or sole Owner identity is lost or compromised, stop the service and perform a reviewed full trust reset with re-enrollment; endpoint rotation does not replace the CA and is not compromise recovery.
+Back up the entire relay state directory as one unit while `MobileEgressRelay` is stopped, preserving ACLs. The backup contains the CA private key and is as sensitive as live state. If the CA/state, sole Owner identity, Android signing key, or Windows signing key is lost or compromised, stop the affected release/service path and perform a reviewed trust or signing-key recovery. Endpoint rotation is not compromise recovery.

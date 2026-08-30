@@ -37,7 +37,8 @@ Friends do not clone the repository, run Docker, execute setup scripts, open inb
 ## Documentation
 
 - [Architecture](docs/architecture.md)
-- [Deployment and acceptance](docs/deployment.md)
+- [Release, deployment, and step-by-step physical acceptance](docs/deployment.md)
+- [Physical acceptance record template](docs/templates/physical-acceptance-record.md)
 - [Operations](docs/operations.md)
 - [Security model](docs/security-model.md)
 - [Protocol](docs/protocol.md)

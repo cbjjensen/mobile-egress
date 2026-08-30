@@ -17,7 +17,7 @@ Go's race detector is not available in the current Windows environment unless CG
 
 ## Required external acceptance
 
-The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android radio behavior on physical hardware, or carrier egress. Complete and record the physical checklist in [deployment](deployment.md) before calling a release accepted.
+The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android radio behavior on physical hardware, or carrier egress. Follow the [signed-release and physical-acceptance runbook](deployment.md) and save a sanitized copy of the [acceptance record](templates/physical-acceptance-record.md) before promoting a prerelease to stable.
 
 ## Known limits
 
