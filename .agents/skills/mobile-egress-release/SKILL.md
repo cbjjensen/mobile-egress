@@ -7,7 +7,11 @@ description: Use when preparing, resuming, publishing, or verifying a Mobile Egr
 
 ## Core rule
 
-Routine releases go through `scripts\release-all.ps1`. Do not reconstruct the signing, tagging, upload, or verification sequence manually.
+Choose the smallest compatible guarded entry point. Do not reconstruct signing, tagging, upload, or verification manually:
+
+- `scripts\release-windows.ps1` for controller, setup, relay, or EC2 Client changes. The Windows bundle and Client stay together because the controller embeds the signed Client version/hash/URL.
+- `scripts\release-android.ps1 -ReleaseVersion ...` for Android-only changes.
+- `scripts\release-all.ps1` only for protocol, shared compatibility, or coordinated Windows/Android changes.
 
 **REQUIRED SUB-SKILLS:** Use `mobile-egress-windows-signing` and `mobile-egress-android-signing` for identity recovery or signer failures. Never regenerate an established key to unblock a release.
 
@@ -16,29 +20,39 @@ Routine releases go through `scripts\release-all.ps1`. Do not reconstruct the si
 Require:
 
 - explicit user approval before `-Publish`;
-- the intended code and Android `versionName`/increased `versionCode` committed on clean `main`;
-- the established ignored signing inputs on the publisher workstation; and
+- the intended code committed on clean `main`;
+- Android `versionName` matching the release and an increased `versionCode` only when Android is selected;
+- the established ignored signing inputs for each selected component on the publisher workstation; and
 - origin `cbjjensen/mobile-egress`.
 
-The script imports persistent user or machine JDK/SDK paths into its process, validates both signing identities, runs the full gate, signs both platforms, and verifies the resulting identities and hashes.
+The orchestrator resolves and validates only the selected component toolchains, runs the matching gate, signs only the selected component artifacts, and verifies their identities and hashes.
 
 ## Commands
 
-Build and verify locally without GitHub mutation:
+Windows-only build/verification and approved publication:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.4'
+& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7'
+& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7' -Publish
 ```
 
-After explicit publication approval, publish a prerelease:
+Android-only build/verification and approved publication:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.4' -Publish
+& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8'
+& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8' -Publish
+```
+
+Coordinated build/verification and approved publication:
+
+```powershell
+& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9'
+& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9' -Publish
 ```
 
 The publish path tags only verified artifacts, creates an empty draft, uploads each asset sequentially, waits for GitHub's `uploaded` state and matching SHA-256 digest, and only then exposes the prerelease.
 
-If an approved run is interrupted, rerun the same `-Publish` command. It may resume only when the exact tag, commit, local signed artifacts, draft names, and remote digests agree.
+If an approved run is interrupted, rerun the same entry point and `-Publish` command. It may resume only when the exact component scope, tag, commit, local signed artifacts, draft names, and remote digests agree.
 
 ## Stop conditions
 

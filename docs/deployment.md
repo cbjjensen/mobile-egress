@@ -4,23 +4,34 @@ This is the operator runbook for producing the signed artifacts that friends dow
 
 The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
 
-## Routine release command
+## Routine release commands
 
-Commit the intended code and Android `versionName`/increased `versionCode` on clean `main`. From the Windows publisher workstation, build and verify without changing GitHub:
+Commit the intended code on clean `main`, choose the smallest compatible component path, and first omit `-Publish` to build, sign, and verify locally without changing GitHub.
 
-```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.4'
-```
-
-After receiving explicit approval to publish, run the same workflow with `-Publish`:
+For Windows controller, setup, relay, or EC2 Client changes, use the Windows path. The controller embeds the signed Client version/hash/URL, so these Windows artifacts are intentionally released together; Android is not built or uploaded:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.4' -Publish
+& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7'
+& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7' -Publish
 ```
 
-The script reloads persistent JDK/Android SDK paths into its process, runs the full gate, reuses and validates both established signing identities, handles the one known Gradle lint-cache lock retry, verifies signed artifacts, tags the verified commit, creates an empty GitHub draft, uploads assets sequentially, waits for matching remote SHA-256 digests, and publishes only a prerelease. Rerun the same approved command after an interruption; it resumes only when the commit, tag, local artifacts, draft, and hashes agree.
+For an Android-only change, first set Android `versionName` to the release version and increase `versionCode`, then use the Android path. Go, the Windows frontend, and Authenticode packaging are not run:
 
-Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them for a routine release when `release-all.ps1` is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
+```powershell
+& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8'
+& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8' -Publish
+```
+
+Use the full path only when a protocol, shared compatibility boundary, or coordinated Windows/Android change requires all three artifacts:
+
+```powershell
+& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9'
+& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9' -Publish
+```
+
+All three paths use the same deterministic orchestrator. It resolves only the selected component's tools, runs the matching gate, reuses and validates only the required established signing identity, verifies signed artifacts, tags the verified commit, creates an empty GitHub draft, uploads only the expected assets sequentially, waits for matching remote SHA-256 digests, and publishes only a prerelease. `-Publish` always requires explicit approval. Rerun the same command and component scope after an interruption; resume is allowed only when the commit, tag, local artifacts, draft asset set, and hashes agree.
+
+Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them when a component release entry point is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
 
 ## Part 1: Prepare the release workstation
 

@@ -1,5 +1,8 @@
 [CmdletBinding()]
 param(
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string]$ReleaseVersion,
+    [switch]$Publish,
     [switch]$ValidateOnly,
     [switch]$SimulateMissingSigningInputs,
     [switch]$SimulateMissingKeystore
@@ -7,6 +10,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+    if ($ValidateOnly -or $SimulateMissingSigningInputs -or $SimulateMissingKeystore) {
+        throw 'Versioned Android publication cannot be combined with low-level signing validation switches.'
+    }
+    & (Join-Path $PSScriptRoot 'release-all.ps1') -ReleaseVersion $ReleaseVersion -Components 'Android' -Publish:$Publish
+    return
+}
+if ($Publish) {
+    throw 'Publish requires ReleaseVersion for the guarded Android release workflow.'
+}
+
 . (Join-Path $PSScriptRoot 'operations-common.ps1')
 $androidRoot = Join-Path $repositoryRoot 'android'
 $propertiesPath = Join-Path $androidRoot 'keystore.properties'

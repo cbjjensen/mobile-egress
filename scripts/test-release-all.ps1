@@ -15,6 +15,32 @@ $releaseScript = Join-Path $PSScriptRoot 'release-all.ps1'
 Assert-Condition (Test-Path -LiteralPath $releaseScript -PathType Leaf) 'The deterministic release script must exist.'
 . $releaseScript
 
+$allComponents = @(Resolve-MobileEgressReleaseComponents -Components @())
+Assert-Condition (($allComponents -join ',') -eq 'Windows,Android') 'An unspecified component set must preserve the full release workflow.'
+$canonicalComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Windows', 'Android'))
+Assert-Condition (($canonicalComponents -join ',') -eq 'Windows,Android') 'Release components must be deduplicated into deterministic order.'
+$invalidComponentRejected = $false
+try {
+    $null = Resolve-MobileEgressReleaseComponents -Components @('Relay')
+} catch {
+    $invalidComponentRejected = $_.Exception.Message -match 'Unsupported release component'
+}
+Assert-Condition $invalidComponentRejected 'Unknown release components must stop before build or publication.'
+
+$windowsDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows'))
+Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe') 'A Windows release must publish the controller bundle and its coupled EC2 Client, but not Android.'
+$androidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Android'))
+Assert-Condition (($androidDefinitions.Name -join ',') -eq 'app-release.apk') 'An Android release must publish only the signed APK.'
+$allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
+Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,app-release.apk') 'The full release must retain the established three-artifact set.'
+
+$windowsEntryPoint = Join-Path $PSScriptRoot 'release-windows.ps1'
+Assert-Condition (Test-Path -LiteralPath $windowsEntryPoint -PathType Leaf) 'The fast Windows release entry point must exist.'
+$windowsEntryPointContent = Get-Content -Raw -LiteralPath $windowsEntryPoint
+Assert-Condition ($windowsEntryPointContent -match "release-all\.ps1.*-Components\s+'Windows'") 'The Windows entry point must route through the deterministic orchestrator with Windows scope.'
+$androidEntryPointContent = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'release-android.ps1')
+Assert-Condition ($androidEntryPointContent -match "release-all\.ps1.*-Components\s+'Android'") 'The public Android release entry point must route versioned publication through the deterministic orchestrator with Android scope.'
+
 $originalJavaHome = $env:JAVA_HOME
 $originalAndroidHome = $env:ANDROID_HOME
 $originalAndroidSdkRoot = $env:ANDROID_SDK_ROOT

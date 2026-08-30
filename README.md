@@ -47,4 +47,4 @@ Friends do not clone the repository, run Docker, execute setup scripts, open inb
 - [Windows controller and Client](windows-client/README.md)
 - [Android Agent](android/README.md)
 
-Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. Routine signed prereleases use `& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Publish`; the deterministic workflow validates and reuses both established signing identities, verifies remote asset digests, and leaves stable promotion to the documented physical-acceptance process.
+Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. Use `release-windows.ps1` for controller/setup/relay/EC2 Client changes, `release-android.ps1 -ReleaseVersion ...` for Android-only changes, and `release-all.ps1` only for cross-component or protocol changes. Each deterministic path runs its component gate, reuses the established signer, verifies remote asset digests, and leaves stable promotion to the documented physical-acceptance process.
