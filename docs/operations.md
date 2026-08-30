@@ -17,7 +17,7 @@ An EC2 application opts in with its node-specific `socks5://<user>:<password>@12
 
 ## Endpoint rotation runbook
 
-1. Restore Tailscale login and make sure Funnel reports the intended `*.ts.net:8443` origin.
+1. Restore Tailscale login. The controller verifies that Funnel has an enabled `*.ts.net:8443` raw-TCP mapping to `127.0.0.1:8443`; use **Repair Funnel and local relay** if that mapping was reset.
 2. Connect AWS in the controller if any nodes are managed.
 3. Choose **Rotate endpoint safely** and approve UAC. The helper rotates the relay leaf certificate under the existing CA and restarts `MobileEgressRelay`.
 4. Review the returned updated/failed node list. Use **Repair** for failures after SSM is online.

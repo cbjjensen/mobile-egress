@@ -12,14 +12,17 @@ func TestControllerStatusAndEnableUseExactCLICommands(t *testing.T) {
 
 	runner := &fakeRunner{outputs: [][]byte{
 		[]byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`),
+		[]byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`),
 		[]byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`),
+		[]byte(`{}`),
 		nil,
 		nil,
 		[]byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`),
+		[]byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`),
 	}}
 	controller := NewController(`C:\Program Files\Tailscale\tailscale.exe`, runner)
 	status, err := controller.Status(context.Background())
-	if err != nil || status.FQDN != "bridge.tail123.ts.net" {
+	if err != nil || status.FQDN != "bridge.tail123.ts.net" || !status.FunnelReady {
 		t.Fatalf("Status() = %#v/%v", status, err)
 	}
 	status, err = controller.Enable(context.Background())
@@ -28,10 +31,13 @@ func TestControllerStatusAndEnableUseExactCLICommands(t *testing.T) {
 	}
 	want := [][]string{
 		{"status", "--json"},
+		{"funnel", "status", "--json"},
 		{"status", "--json"},
+		{"funnel", "status", "--json"},
 		{"up", "--unattended=true"},
 		{"funnel", "--bg", "--yes", "--tcp=8443", "tcp://127.0.0.1:8443"},
 		{"status", "--json"},
+		{"funnel", "status", "--json"},
 	}
 	if !reflect.DeepEqual(runner.arguments, want) {
 		t.Fatalf("CLI calls = %#v, want %#v", runner.arguments, want)
@@ -42,8 +48,8 @@ func TestEnableStartsInteractiveBrowserLoginWhenStatusIsOffline(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{
-		outputs: [][]byte{nil, nil, nil, nil, []byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`)},
-		errors:  []error{errors.New("offline"), nil, nil, nil, nil},
+		outputs: [][]byte{nil, nil, nil, nil, []byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`), []byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`)},
+		errors:  []error{errors.New("offline"), nil, nil, nil, nil, nil},
 	}
 	controller := NewController(`C:\Program Files\Tailscale\tailscale.exe`, runner)
 	if _, err := controller.Enable(context.Background()); err != nil {
@@ -55,6 +61,7 @@ func TestEnableStartsInteractiveBrowserLoginWhenStatusIsOffline(t *testing.T) {
 		{"up", "--unattended=true"},
 		{"funnel", "--bg", "--yes", "--tcp=8443", "tcp://127.0.0.1:8443"},
 		{"status", "--json"},
+		{"funnel", "status", "--json"},
 	}
 	if !reflect.DeepEqual(runner.arguments, want) {
 		t.Fatalf("CLI calls = %#v, want %#v", runner.arguments, want)

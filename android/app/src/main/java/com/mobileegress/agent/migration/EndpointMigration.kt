@@ -17,6 +17,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 data class EndpointMigration(
     val version: Int,
@@ -38,29 +42,11 @@ class EndpointMigrationParser(private val now: () -> Instant = Instant::now) : E
     private val json = Json {
         ignoreUnknownKeys = false
         isLenient = false
-        explicitNulls = true
         coerceInputValues = false
-        allowTrailingComma = false
     }
 
     override fun parse(input: String): EndpointMigration {
-        val encoded = input.trim()
-        if (encoded.isEmpty() || encoded.length > MAX_ENCODED_BYTES || !BASE64URL.matches(encoded)) {
-            throw EndpointMigrationException("Migration QR is not unpadded base64url")
-        }
-        val decoded = try {
-            Base64.getUrlDecoder().decode(encoded)
-        } catch (error: IllegalArgumentException) {
-            throw EndpointMigrationException("Migration QR is not valid base64url", error)
-        }
-        val raw = try {
-            StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(decoded)).toString()
-        } catch (error: Exception) {
-            throw EndpointMigrationException("Migration QR is not UTF-8", error)
-        }
+        val raw = decodeRaw(input)
         val wire = try {
             json.decodeFromString<EndpointMigrationWire>(raw)
         } catch (error: SerializationException) {
@@ -91,7 +77,31 @@ class EndpointMigrationParser(private val now: () -> Instant = Instant::now) : E
         )
     }
 
-    fun recognizes(input: String): Boolean = runCatching { parse(input) }.isSuccess
+    fun recognizes(input: String): Boolean = runCatching {
+        val element = json.parseToJsonElement(decodeRaw(input)).jsonObject
+        element["version"]?.jsonPrimitive?.intOrNull == VERSION &&
+            element["type"]?.jsonPrimitive?.contentOrNull == TYPE
+    }.getOrDefault(false)
+
+    private fun decodeRaw(input: String): String {
+        val encoded = input.trim()
+        if (encoded.isEmpty() || encoded.length > MAX_ENCODED_BYTES || !BASE64URL.matches(encoded)) {
+            throw EndpointMigrationException("Migration QR is not unpadded base64url")
+        }
+        val decoded = try {
+            Base64.getUrlDecoder().decode(encoded)
+        } catch (error: IllegalArgumentException) {
+            throw EndpointMigrationException("Migration QR is not valid base64url", error)
+        }
+        return try {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(decoded)).toString()
+        } catch (error: Exception) {
+            throw EndpointMigrationException("Migration QR is not UTF-8", error)
+        }
+    }
 
     private fun relayOrigin(value: String): String {
         val uri = try {

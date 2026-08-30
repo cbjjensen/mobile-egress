@@ -19,6 +19,7 @@ export type EndpointMigration = AgentQr & { updatedNodes: string[]; failedNodes:
 
 export type BridgeStatus = {
   tailscaleOnline: boolean
+  funnelReady: boolean
   relayReady: boolean
   fqdn?: string
   publicUrl?: string

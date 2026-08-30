@@ -3,8 +3,11 @@
 package awssdk
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/url"
 	"sort"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/smithy-go"
@@ -179,17 +183,25 @@ func (client *Client) CreateAndAttachDedicatedSSMProfile(ctx context.Context, in
 	roleName := "MobileEgressSSM-" + suffix
 	profileName := roleName
 	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
-	if _, err := client.iam.CreateRole(ctx, &iam.CreateRoleInput{RoleName: aws.String(roleName), AssumeRolePolicyDocument: aws.String(trust)}); err != nil && !isAlreadyExists(err) {
+	tags := dedicatedTags(instanceID)
+	if _, err := client.iam.CreateRole(ctx, &iam.CreateRoleInput{RoleName: aws.String(roleName), AssumeRolePolicyDocument: aws.String(trust), Tags: tags}); err != nil && !isAlreadyExists(err) {
 		return "", errors.New("create dedicated SSM IAM role")
+	}
+	roleOutput, err := client.iam.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(roleName)})
+	if err != nil || validateDedicatedRoleResource(roleOutput.Role, roleName, instanceID) != nil {
+		return "", errors.New("existing dedicated SSM role name is not owned by Mobile Egress")
+	}
+	if err := client.ensureDedicatedRolePermissionsSafe(ctx, roleName); err != nil {
+		return "", err
 	}
 	if err := client.AttachManagedPolicy(ctx, roleName, cloud.AmazonSSMManagedInstanceCoreARN); err != nil {
 		return "", err
 	}
-	if _, err := client.iam.CreateInstanceProfile(ctx, &iam.CreateInstanceProfileInput{InstanceProfileName: aws.String(profileName)}); err != nil && !isAlreadyExists(err) {
+	if _, err := client.iam.CreateInstanceProfile(ctx, &iam.CreateInstanceProfileInput{InstanceProfileName: aws.String(profileName), Tags: tags}); err != nil && !isAlreadyExists(err) {
 		return "", errors.New("create dedicated SSM instance profile")
 	}
 	profile, err := client.iam.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{InstanceProfileName: aws.String(profileName)})
-	if err != nil || profile.InstanceProfile == nil {
+	if err != nil || validateDedicatedProfileResource(profile.InstanceProfile, profileName, instanceID) != nil {
 		return "", errors.New("verify dedicated SSM instance profile")
 	}
 	switch len(profile.InstanceProfile.Roles) {
@@ -212,6 +224,87 @@ func (client *Client) CreateAndAttachDedicatedSSMProfile(ctx context.Context, in
 		return "", errors.New("attach dedicated SSM instance profile")
 	}
 	return roleName, nil
+}
+
+func dedicatedTags(instanceID string) []iamtypes.Tag {
+	return []iamtypes.Tag{
+		{Key: aws.String("MobileEgressManaged"), Value: aws.String("true")},
+		{Key: aws.String("MobileEgressInstance"), Value: aws.String(instanceID)},
+	}
+}
+
+func validateDedicatedRoleResource(role *iamtypes.Role, expectedName, instanceID string) error {
+	if role == nil || aws.ToString(role.RoleName) != expectedName || aws.ToString(role.Path) != "/" || !hasDedicatedTags(role.Tags, instanceID) {
+		return errors.New("dedicated role identity does not match")
+	}
+	policyDocument, err := url.QueryUnescape(aws.ToString(role.AssumeRolePolicyDocument))
+	if err != nil {
+		return errors.New("dedicated role trust policy is invalid")
+	}
+	var policy struct {
+		Version   string `json:"Version"`
+		Statement []struct {
+			Effect    string `json:"Effect"`
+			Action    string `json:"Action"`
+			Principal struct {
+				Service string `json:"Service"`
+			} `json:"Principal"`
+		} `json:"Statement"`
+	}
+	decoder := json.NewDecoder(bytes.NewBufferString(policyDocument))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&policy) != nil || decoder.Decode(&struct{}{}) != io.EOF || policy.Version != "2012-10-17" || len(policy.Statement) != 1 {
+		return errors.New("dedicated role trust policy is invalid")
+	}
+	statement := policy.Statement[0]
+	if statement.Effect != "Allow" || statement.Action != "sts:AssumeRole" || statement.Principal.Service != "ec2.amazonaws.com" {
+		return errors.New("dedicated role trust policy is invalid")
+	}
+	return nil
+}
+
+func validateDedicatedProfileResource(profile *iamtypes.InstanceProfile, expectedName, instanceID string) error {
+	if profile == nil || aws.ToString(profile.InstanceProfileName) != expectedName || aws.ToString(profile.Path) != "/" || !hasDedicatedTags(profile.Tags, instanceID) {
+		return errors.New("dedicated profile identity does not match")
+	}
+	if len(profile.Roles) > 1 || (len(profile.Roles) == 1 && aws.ToString(profile.Roles[0].RoleName) != expectedName) {
+		return errors.New("dedicated profile contains an unexpected role")
+	}
+	return nil
+}
+
+func hasDedicatedTags(tags []iamtypes.Tag, instanceID string) bool {
+	values := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		values[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	return values["MobileEgressManaged"] == "true" && values["MobileEgressInstance"] == instanceID
+}
+
+func (client *Client) ensureDedicatedRolePermissionsSafe(ctx context.Context, roleName string) error {
+	attached := iam.NewListAttachedRolePoliciesPaginator(client.iam, &iam.ListAttachedRolePoliciesInput{RoleName: aws.String(roleName)})
+	for attached.HasMorePages() {
+		page, err := attached.NextPage(ctx)
+		if err != nil {
+			return errors.New("inspect dedicated SSM role policies")
+		}
+		for _, policy := range page.AttachedPolicies {
+			if aws.ToString(policy.PolicyArn) != cloud.AmazonSSMManagedInstanceCoreARN {
+				return errors.New("dedicated SSM role has unexpected managed policies and was not changed")
+			}
+		}
+	}
+	inline := iam.NewListRolePoliciesPaginator(client.iam, &iam.ListRolePoliciesInput{RoleName: aws.String(roleName)})
+	for inline.HasMorePages() {
+		page, err := inline.NextPage(ctx)
+		if err != nil {
+			return errors.New("inspect dedicated SSM role inline policies")
+		}
+		if len(page.PolicyNames) != 0 {
+			return errors.New("dedicated SSM role has unexpected inline policies and was not changed")
+		}
+	}
+	return nil
 }
 
 func (client *Client) RoleHasManagedPolicy(ctx context.Context, roleName, policyARN string) (bool, error) {

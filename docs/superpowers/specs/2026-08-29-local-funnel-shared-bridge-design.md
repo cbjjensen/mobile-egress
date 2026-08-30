@@ -34,7 +34,7 @@ The controller supports IAM Identity Center browser authentication and DPAPI-pro
 
 When no instance profile exists, the app may create and attach its dedicated SSM profile. When an existing role lacks Systems Manager access, the app displays the exact role and requires explicit confirmation before adding `AmazonSSMManagedInstanceCore`; it never replaces an existing profile.
 
-SSM installs a signed `MobileEgressClient` release as a LocalSystem service. The node generates its own ECDSA Client key/CSR, SOCKS credentials, and durable X25519 configuration key. SSM returns only the CSR and X25519 public key. The Owner provisions the CSR directly, seals the resulting public identity, relay origin, and SOCKS credentials with ephemeral X25519 + HKDF-SHA256 + AES-256-GCM, and sends only ciphertext through SSM. The node rejects malformed, tampered, replayed, or wrong-key envelopes and stores its secrets under System/Administrators-only ACLs.
+SSM installs a signed `MobileEgressClient` release as a LocalSystem service. The node generates its own ECDSA Client key/CSR and durable X25519 configuration key; SSM returns only the CSR and X25519 public key. The controller generates unique SOCKS credentials so it can display them once on explicit request, provisions the CSR directly, seals the resulting public identity, relay origin, and credentials with ephemeral X25519 + HKDF-SHA256 + AES-256-GCM, and sends only ciphertext through SSM. The node retains the decrypted credentials, rejects malformed, tampered, stale, replayed, or wrong-key envelopes, and stores its secrets under System/Administrators-only ACLs.
 
 Each node has a distinct Client serial and revocation boundary. The controller retains DPAPI-protected node metadata and credentials so it can display a copy-on-demand proxy line, repair configuration, update the service, and revoke or replace the node identity.
 
@@ -63,7 +63,7 @@ If the Funnel FQDN changes, the controller rotates the relay endpoint, pushes se
 - Funnel exposes only Mobile Egress TLS on port 8443; it never exposes SOCKS.
 - SOCKS remains authenticated and IPv4 loopback-only on every Client node.
 - Owner authority remains only on the local controller; EC2 nodes receive Client identities only.
-- Private keys, SOCKS credentials, capabilities, payloads, destinations, and raw sealed configuration are excluded from logs and diagnostics.
+- Private keys, plaintext SOCKS credentials/configuration, capabilities, payloads, and destinations are excluded from logs and diagnostics. SSM command history can retain the opaque sealed envelope but not its plaintext.
 - DPAPI protects controller secrets from other ordinary Windows users, not same-user malware or administrators.
 - ProgramData ACLs protect LocalSystem service state, not a compromised EC2 or local administrator.
 - Tailscale and AWS are control/connectivity dependencies; Mobile Egress mTLS remains the application authentication boundary.

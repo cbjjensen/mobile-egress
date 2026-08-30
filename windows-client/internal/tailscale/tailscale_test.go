@@ -43,6 +43,27 @@ func TestRawTCPFunnelAndUnattendedCommandsAreExact(t *testing.T) {
 	}
 }
 
+func TestParseFunnelStatusRequiresExactRawTCPMapping(t *testing.T) {
+	t.Parallel()
+
+	valid := []byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`)
+	if ready, err := ParseFunnelStatus(valid, "bridge.tail123.ts.net"); err != nil || !ready {
+		t.Fatalf("ParseFunnelStatus(valid) = %v/%v", ready, err)
+	}
+	for name, raw := range map[string]string{
+		"reset":              `{}`,
+		"wrong target":       `{"TCP":{"8443":{"TCPForward":"127.0.0.1:9443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`,
+		"TLS terminated":     `{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443","TerminateTLS":"bridge.tail123.ts.net"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`,
+		"Funnel not allowed": `{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if ready, err := ParseFunnelStatus([]byte(raw), "bridge.tail123.ts.net"); err != nil || ready {
+				t.Fatalf("ParseFunnelStatus(%s) = %v/%v, want not ready", name, ready, err)
+			}
+		})
+	}
+}
+
 func TestParseStablePackagePageSelectsNewestAMD64MSI(t *testing.T) {
 	t.Parallel()
 

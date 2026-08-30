@@ -58,5 +58,6 @@
 
 - [x] Add signed Windows relay/node/admin-helper release manifest generation and verification tests.
 - [x] Update README, architecture, protocol, security, deployment, operations, status, and component READMEs for the local Funnel topology and friend quick start.
-- [ ] Run `scripts/test-all.ps1`, Windows artifact builds, Android validation, `git diff --check`, and the documented physical acceptance checklist when devices/accounts are available.
-- [ ] Review the final diff for secret material, unsupported claims, and destructive AWS/Tailscale behavior before committing.
+- [x] Run `scripts/test-all.ps1`, Windows artifact builds, Android validation, PowerShell operations checks, and `git diff --check`.
+- [x] Review the final diff for secret material, unsupported claims, and destructive AWS/Tailscale behavior before release.
+- [ ] Run the race detector in a CGO-capable environment and complete the documented physical acceptance checklist with release signing credentials, devices, Tailscale authorization, and AWS accounts.

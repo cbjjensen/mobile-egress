@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $windowsRoot = Join-Path $repositoryRoot 'windows-client'
 $binRoot = Join-Path $windowsRoot 'build\bin'
+$serviceBinRoot = Join-Path $windowsRoot 'build\service-bin'
 $packageRoot = Join-Path $windowsRoot "build\release\mobile-egress-windows-$ReleaseVersion"
 $zipPath = "$packageRoot.zip"
 $versionLdflags = "-X main.version=$ReleaseVersion"
@@ -42,19 +43,11 @@ if (-not $signingCertificate.HasPrivateKey) {
     throw 'The selected code-signing certificate does not have an accessible private key.'
 }
 if ($signingCertificate.Subject -notlike '*Mobile Egress*') {
-    throw "The selected certificate subject must contain 'Mobile Egress' because runtime publisher verification enforces that identity."
+    throw "The selected certificate subject must contain 'Mobile Egress' because release identity policy enforces that name."
 }
 $codeSigningEku = $signingCertificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }
 if ($null -eq $codeSigningEku) {
     throw 'The selected certificate is not valid for code signing.'
-}
-
-Push-Location $windowsRoot
-try {
-    go run github.com/wailsapp/wails/v2/cmd/wails@v2.14.0 build -clean
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
 }
 
 $artifacts = @(
@@ -62,26 +55,26 @@ $artifacts = @(
     @{ Name = 'mobile-egress-admin.exe'; Package = './windows-client/cmd/mobile-egress-admin' },
     @{ Name = 'mobile-egress-client.exe'; Package = './windows-client/cmd/mobile-egress-client' }
 )
+New-Item -ItemType Directory -Force -Path $serviceBinRoot | Out-Null
 foreach ($artifact in $artifacts) {
-    $output = Join-Path $binRoot $artifact.Name
+    $output = Join-Path $serviceBinRoot $artifact.Name
     go build -trimpath -ldflags $versionLdflags -o $output $artifact.Package
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-$executables = @(
-    (Join-Path $binRoot 'mobile-egress-windows.exe'),
-    (Join-Path $binRoot 'mobile-egress-relay.exe'),
-    (Join-Path $binRoot 'mobile-egress-admin.exe'),
-    (Join-Path $binRoot 'mobile-egress-client.exe')
+$stagedExecutables = @(
+    (Join-Path $serviceBinRoot 'mobile-egress-relay.exe'),
+    (Join-Path $serviceBinRoot 'mobile-egress-admin.exe'),
+    (Join-Path $serviceBinRoot 'mobile-egress-client.exe')
 )
-foreach ($executable in $executables) {
+foreach ($executable in $stagedExecutables) {
     & $signTool.FullName sign /sha1 $CodeSigningThumbprint /fd SHA256 /tr 'http://timestamp.digicert.com' /td SHA256 $executable
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $signTool.FullName verify /pa /all $executable
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-$clientPath = Join-Path $binRoot 'mobile-egress-client.exe'
+$clientPath = Join-Path $serviceBinRoot 'mobile-egress-client.exe'
 $clientDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $clientPath).Hash.ToLowerInvariant()
 $manifest = [ordered]@{
     version = 1
@@ -89,11 +82,40 @@ $manifest = [ordered]@{
         version = $ReleaseVersion
         url = "https://github.com/cbjjensen/mobile-egress/releases/download/v$ReleaseVersion/mobile-egress-client.exe"
         sha256 = $clientDigest
-        publisher = 'Mobile Egress'
+        signerThumbprint = $normalizedThumbprint.ToLowerInvariant()
     }
 }
+$manifestJSON = $manifest | ConvertTo-Json -Compress -Depth 4
+$manifestBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifestJSON))
+
+Push-Location $windowsRoot
+try {
+    $controllerLdflags = "-X mobile-egress/windows-client/internal/desktop.embeddedReleaseManifestBase64=$manifestBase64"
+    go run github.com/wailsapp/wails/v2/cmd/wails@v2.14.0 build -clean -ldflags $controllerLdflags
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
+
+foreach ($executable in $stagedExecutables) {
+    Copy-Item -Force -LiteralPath $executable -Destination $binRoot
+}
+$serviceExecutables = @(
+    (Join-Path $binRoot 'mobile-egress-relay.exe'),
+    (Join-Path $binRoot 'mobile-egress-admin.exe'),
+    (Join-Path $binRoot 'mobile-egress-client.exe')
+)
+$clientPath = Join-Path $binRoot 'mobile-egress-client.exe'
 $manifestPath = Join-Path $binRoot 'release-manifest.json'
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+$manifestJSON | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+
+$controllerExecutable = Join-Path $binRoot 'mobile-egress-windows.exe'
+& $signTool.FullName sign /sha1 $CodeSigningThumbprint /fd SHA256 /tr 'http://timestamp.digicert.com' /td SHA256 $controllerExecutable
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $signTool.FullName verify /pa /all $controllerExecutable
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$executables = @($controllerExecutable) + $serviceExecutables
 
 New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
 Copy-Item -Force -LiteralPath ($executables + $manifestPath) -Destination $packageRoot

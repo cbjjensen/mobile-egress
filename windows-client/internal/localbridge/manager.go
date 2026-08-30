@@ -61,8 +61,12 @@ type ElevatedHelper interface {
 }
 
 func (manager *Manager) Repair(ctx context.Context) error {
-	if manager == nil || manager.helper == nil {
+	if manager == nil || manager.tailscale == nil || manager.helper == nil {
 		return errors.New("local bridge repair dependency is required")
+	}
+	status, err := manager.tailscale.Enable(ctx)
+	if err != nil || !status.Online || !status.FunnelReady {
+		return errors.New("Tailscale raw TCP Funnel repair failed")
 	}
 	if err := manager.helper.Repair(ctx); err != nil {
 		return errors.New("elevated local relay repair failed or was cancelled")
@@ -78,7 +82,7 @@ func (manager *Manager) Rotate(ctx context.Context, identity relayclient.Identit
 		return BridgeStatus{}, relayclient.Identity{}, errors.New("existing local Owner identity is incomplete")
 	}
 	status, err := manager.tailscale.Enable(ctx)
-	if err != nil || !status.Online || status.FQDN == "" || status.PublicURL == "" {
+	if err != nil || !status.Online || !status.FunnelReady || status.FQDN == "" || status.PublicURL == "" {
 		return BridgeStatus{}, relayclient.Identity{}, errors.New("Tailscale login or Funnel setup failed")
 	}
 	result, err := manager.helper.Rotate(ctx, RotateRequest{PublicName: status.FQDN, PublicURL: status.PublicURL})
@@ -87,7 +91,7 @@ func (manager *Manager) Rotate(ctx context.Context, identity relayclient.Identit
 	}
 	identity.RelayURL = status.PublicURL
 	identity.DialAddress = "127.0.0.1:8443"
-	if err := manager.owners.SaveOwnerIdentity(ctx, identity); err != nil {
+	if err := manager.owners.UpdateOwnerIdentity(ctx, identity); err != nil {
 		return BridgeStatus{}, relayclient.Identity{}, errors.New("save rotated local Owner endpoint")
 	}
 	return BridgeStatus{
@@ -118,7 +122,7 @@ func (manager *Manager) Setup(ctx context.Context) (BridgeStatus, error) {
 	if err != nil {
 		return BridgeStatus{}, errors.New("Tailscale login or Funnel setup failed")
 	}
-	if !tailscaleStatus.Online || tailscaleStatus.FQDN == "" || tailscaleStatus.PublicURL == "" {
+	if !tailscaleStatus.Online || !tailscaleStatus.FunnelReady || tailscaleStatus.FQDN == "" || tailscaleStatus.PublicURL == "" {
 		return BridgeStatus{}, errors.New("Tailscale did not return an online Funnel endpoint")
 	}
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -153,7 +157,7 @@ func (manager *Manager) Setup(ctx context.Context) (BridgeStatus, error) {
 		PrivateKeyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKeyDER})),
 		CertificatePEM: result.CertificatePEM, CACertificatePEM: result.CACertificatePEM,
 	}
-	if err := manager.owners.UpdateOwnerIdentity(ctx, identity); err != nil {
+	if err := manager.owners.SaveOwnerIdentity(ctx, identity); err != nil {
 		return BridgeStatus{}, errors.New("save encrypted local Owner identity")
 	}
 	return BridgeStatus{

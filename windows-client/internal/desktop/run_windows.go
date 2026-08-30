@@ -56,6 +56,11 @@ type DesktopApp struct {
 	shutdown        sync.Once
 }
 
+// embeddedReleaseManifestBase64 is injected before the controller executable is
+// Authenticode-signed. Node release trust is therefore rooted in the signed
+// controller instead of mutable files beside it.
+var embeddedReleaseManifestBase64 string
+
 type AgentQrView struct {
 	ImageDataURL string `json:"imageDataUrl"`
 	ExpiresAt    string `json:"expiresAt"`
@@ -70,6 +75,7 @@ type EndpointMigrationView struct {
 
 type BridgeView struct {
 	TailscaleOnline bool   `json:"tailscaleOnline"`
+	FunnelReady     bool   `json:"funnelReady"`
 	RelayReady      bool   `json:"relayReady"`
 	FQDN            string `json:"fqdn,omitempty"`
 	PublicURL       string `json:"publicUrl,omitempty"`
@@ -165,6 +171,7 @@ func (app *DesktopApp) GetBridgeStatus() BridgeView {
 	if app.tailscale != nil {
 		if status, err := app.tailscale.Status(ctx); err == nil {
 			view.TailscaleOnline = status.Online
+			view.FunnelReady = status.FunnelReady
 			view.FQDN = status.FQDN
 			view.PublicURL = status.PublicURL
 			if ownerErr == nil && owner.RelayURL != status.PublicURL {
@@ -172,7 +179,7 @@ func (app *DesktopApp) GetBridgeStatus() BridgeView {
 			}
 		}
 	}
-	view.Ready = view.TailscaleOnline && view.RelayReady && view.OwnerReady && !view.NeedsRotation
+	view.Ready = view.TailscaleOnline && view.FunnelReady && view.RelayReady && view.OwnerReady && !view.NeedsRotation
 	return view
 }
 
@@ -414,10 +421,8 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 	if loadErr != nil {
 		return cloud.ManagedNodeView{}, errors.New("Unable to load encrypted managed-node metadata.")
 	}
-	for _, node := range existing {
-		if node.InstanceID == instanceID {
-			return cloud.ManagedNodeView{}, errors.New("That instance is already managed. Use Update or Repair instead.")
-		}
+	if err := cloud.ValidateInstallCandidate(existing, instanceID); err != nil {
+		return cloud.ManagedNodeView{}, errors.New("At most ten unique EC2 Client nodes can be managed. Use Update or Repair for an existing node.")
 	}
 	release, err := loadNodeRelease()
 	if err != nil {
@@ -668,14 +673,14 @@ func (issuer ownerCertificateIssuer) ProvisionClient(ctx context.Context, csrPEM
 }
 
 func loadNodeRelease() (cloud.NodeRelease, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return cloud.NodeRelease{}, err
-	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(executable), "release-manifest.json"))
-	if err != nil || len(raw) == 0 || len(raw) > 64<<10 {
+	if embeddedReleaseManifestBase64 == "" || len(embeddedReleaseManifestBase64) > 128<<10 {
 		return cloud.NodeRelease{}, errors.New("release manifest is unavailable")
 	}
+	raw, err := base64.StdEncoding.DecodeString(embeddedReleaseManifestBase64)
+	if err != nil {
+		return cloud.NodeRelease{}, errors.New("release manifest is unavailable")
+	}
+	defer clear(raw)
 	return decodeNodeReleaseManifest(raw)
 }
 

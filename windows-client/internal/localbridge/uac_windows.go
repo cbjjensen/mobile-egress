@@ -173,11 +173,18 @@ func (helper UACHelper) Repair(ctx context.Context) error {
 }
 
 func verifySignedSibling(path string) error {
-	const script = `$signature = Get-AuthenticodeSignature -LiteralPath $args[0]
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Mobile Egress*') { exit 1 }`
+	controllerPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	const script = `$controller = Get-AuthenticodeSignature -LiteralPath $args[0]
+$sibling = Get-AuthenticodeSignature -LiteralPath $args[1]
+if ($controller.Status -ne 'Valid' -or $sibling.Status -ne 'Valid' -or
+    $null -eq $controller.SignerCertificate -or $null -eq $sibling.SignerCertificate -or
+    $controller.SignerCertificate.Thumbprint -ne $sibling.SignerCertificate.Thumbprint) { exit 1 }`
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, path).Run()
+	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, controllerPath, path).Run()
 }
 
 func shellExecuteElevated(executable string, arguments []string) error {

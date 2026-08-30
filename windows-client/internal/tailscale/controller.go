@@ -38,7 +38,19 @@ func (controller *Controller) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, errors.New("Tailscale status is unavailable")
 	}
-	return ParseStatus(output)
+	status, err := ParseStatus(output)
+	if err != nil {
+		return Status{}, err
+	}
+	funnelOutput, funnelErr := controller.runner.Run(ctx, controller.executable, "funnel", "status", "--json")
+	if funnelErr != nil {
+		return status, nil
+	}
+	status.FunnelReady, err = ParseFunnelStatus(funnelOutput, status.FQDN)
+	if err != nil {
+		return Status{}, err
+	}
+	return status, nil
 }
 
 func (controller *Controller) Enable(ctx context.Context) (Status, error) {
@@ -56,5 +68,9 @@ func (controller *Controller) Enable(ctx context.Context) (Status, error) {
 	if _, err := controller.runner.Run(ctx, controller.executable, FunnelArguments()...); err != nil {
 		return Status{}, errors.New("Tailscale raw TCP Funnel setup failed")
 	}
-	return controller.Status(ctx)
+	status, err := controller.Status(ctx)
+	if err != nil || !status.FunnelReady {
+		return Status{}, errors.New("Tailscale raw TCP Funnel status did not match the loopback relay")
+	}
+	return status, nil
 }

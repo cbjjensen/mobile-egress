@@ -255,11 +255,18 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 }
 
 func verifyMobileEgressSignature(path string) error {
-	const script = `$signature = Get-AuthenticodeSignature -LiteralPath $args[0]
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Mobile Egress*') { exit 1 }`
+	adminPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	const script = `$admin = Get-AuthenticodeSignature -LiteralPath $args[0]
+$target = Get-AuthenticodeSignature -LiteralPath $args[1]
+if ($admin.Status -ne 'Valid' -or $target.Status -ne 'Valid' -or
+    $null -eq $admin.SignerCertificate -or $null -eq $target.SignerCertificate -or
+    $admin.SignerCertificate.Thumbprint -ne $target.SignerCertificate.Thumbprint) { exit 1 }`
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, path).Run()
+	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, adminPath, path).Run()
 }
 
 func copyFile(sourcePath, destinationPath string) error {

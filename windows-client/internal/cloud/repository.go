@@ -180,10 +180,25 @@ func (repository *Repository) save(ctx context.Context, state controllerState) e
 }
 
 func validateManagedNode(node ManagedNode) error {
-	if !validInstanceID(node.InstanceID) || node.ClientSerial == "" || node.ConfigurationPublicKey == "" || node.ServiceVersion == "" ||
+	if !validInstanceID(node.InstanceID) || node.ClientSerial == "" || node.ConfigurationPublicKey == "" || node.ConfigurationGeneration == 0 || node.ServiceVersion == "" ||
 		node.SOCKSUsername == "" || node.SOCKSPassword == "" || node.SOCKSPort != 1080 || node.RelayURL == "" ||
 		node.CertificatePEM == "" || node.CACertificatePEM == "" {
 		return errors.New("managed EC2 node metadata is incomplete")
+	}
+	return nil
+}
+
+func ValidateInstallCandidate(nodes []ManagedNode, instanceID string) error {
+	if !validInstanceID(instanceID) {
+		return errors.New("invalid EC2 instance ID")
+	}
+	for _, node := range nodes {
+		if node.InstanceID == instanceID {
+			return errors.New("EC2 instance is already managed")
+		}
+	}
+	if len(nodes) >= MaximumManagedNodes {
+		return fmt.Errorf("at most %d EC2 Client nodes can be managed", MaximumManagedNodes)
 	}
 	return nil
 }

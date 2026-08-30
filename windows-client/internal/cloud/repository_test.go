@@ -20,7 +20,7 @@ func TestEncryptedRepositoryPersistsAccessKeysAndManagedNodes(t *testing.T) {
 		t.Fatalf("AccessKeys() = %#v/%v", loaded, err)
 	}
 	node := ManagedNode{
-		InstanceID: "i-0123456789abcdef0", ClientSerial: "A1", ConfigurationPublicKey: "public",
+		InstanceID: "i-0123456789abcdef0", ClientSerial: "A1", ConfigurationPublicKey: "public", ConfigurationGeneration: 1,
 		ServiceVersion: "1.2.3", Health: "healthy", SOCKSUsername: "user", SOCKSPassword: "password", SOCKSPort: 1080,
 		RelayURL: "https://bridge.tail123.ts.net:8443", CertificatePEM: "certificate", CACertificatePEM: "ca",
 	}
@@ -34,5 +34,24 @@ func TestEncryptedRepositoryPersistsAccessKeysAndManagedNodes(t *testing.T) {
 	proxy, err := repository.ProxyLine(context.Background(), node.InstanceID)
 	if err != nil || proxy != "socks5://user:password@127.0.0.1:1080" {
 		t.Fatalf("ProxyLine() = %q/%v", proxy, err)
+	}
+}
+
+func TestValidateInstallCandidateRejectsAnEleventhNodeBeforeOrchestration(t *testing.T) {
+	t.Parallel()
+
+	nodes := make([]ManagedNode, MaximumManagedNodes)
+	for index := range nodes {
+		nodes[index].InstanceID = "managed"
+	}
+	if err := ValidateInstallCandidate(nodes, "i-0123456789abcdef0"); err == nil {
+		t.Fatal("ValidateInstallCandidate() accepted an eleventh managed node")
+	}
+	if err := ValidateInstallCandidate(nodes[:MaximumManagedNodes-1], "i-0123456789abcdef0"); err != nil {
+		t.Fatalf("ValidateInstallCandidate() rejected the tenth managed node: %v", err)
+	}
+	nodes[0].InstanceID = "i-0123456789abcdef0"
+	if err := ValidateInstallCandidate(nodes[:1], "i-0123456789abcdef0"); err == nil {
+		t.Fatal("ValidateInstallCandidate() accepted a duplicate managed node")
 	}
 }

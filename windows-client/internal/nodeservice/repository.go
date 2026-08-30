@@ -41,6 +41,7 @@ type BootstrapResponse struct {
 
 type Configuration struct {
 	Version          int    `json:"version"`
+	Generation       uint64 `json:"generation"`
 	RelayURL         string `json:"relayUrl"`
 	Role             string `json:"role"`
 	Serial           string `json:"serial"`
@@ -137,6 +138,13 @@ func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.E
 	}
 	if state.Configuration != nil && !validEndpointOnlyUpdate(*state.Configuration, configuration) {
 		return errors.New("sealed node configuration attempted to replace node secrets")
+	}
+	if state.Configuration == nil {
+		if configuration.Generation != 1 {
+			return errors.New("sealed node configuration has an invalid initial generation")
+		}
+	} else if configuration.Generation != state.Configuration.Generation+1 {
+		return errors.New("sealed node configuration is stale or out of sequence")
 	}
 	state.Configuration = &configuration
 	state.LastConfigurationEnvelope = fingerprint
@@ -263,7 +271,7 @@ func validateBootstrapState(state persistedState) error {
 }
 
 func validateConfiguration(privateKeyPEM string, configuration Configuration) error {
-	if configuration.Version != configurationVersion || configuration.Role != "client" || configuration.SOCKSPort != 1080 {
+	if configuration.Version != configurationVersion || configuration.Generation == 0 || configuration.Role != "client" || configuration.SOCKSPort != 1080 {
 		return errors.New("invalid configuration metadata")
 	}
 	if _, err := pairing.RelayOrigin(configuration.RelayURL); err != nil {
@@ -299,6 +307,8 @@ func validateConfiguration(privateKeyPEM string, configuration Configuration) er
 func validEndpointOnlyUpdate(existing, replacement Configuration) bool {
 	existing.RelayURL = ""
 	replacement.RelayURL = ""
+	existing.Generation = 0
+	replacement.Generation = 0
 	return existing == replacement
 }
 

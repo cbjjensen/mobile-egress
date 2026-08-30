@@ -124,6 +124,7 @@ func TestEndpointUpdateRetainsNodeIdentityKey(t *testing.T) {
 	}
 	second := first
 	second.RelayURL = "https://new.example.ts.net:8443"
+	second.Generation = 2
 	applyNodeConfig(t, repository, bootstrap.ConfigurationPublicKey, second)
 	after, err := repository.Runtime(context.Background())
 	if err != nil {
@@ -134,6 +135,39 @@ func TestEndpointUpdateRetainsNodeIdentityKey(t *testing.T) {
 	}
 	if after.Identity.RelayURL != second.RelayURL {
 		t.Fatalf("endpoint update relay URL = %q", after.Identity.RelayURL)
+	}
+}
+
+func TestApplyRejectsAnOlderEnvelopeAfterANewerEndpointUpdate(t *testing.T) {
+	t.Parallel()
+
+	repository := NewRepository(securestore.NewMemoryStore())
+	bootstrap, err := repository.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := signedNodeConfig(t, bootstrap.CSRPEM, "https://old.example.ts.net:8443", "node-user", "node-password")
+	firstPlaintext, _ := json.Marshal(first)
+	firstEnvelope, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, firstPlaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(context.Background(), firstEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.RelayURL = "https://new.example.ts.net:8443"
+	second.Generation = 2
+	secondPlaintext, _ := json.Marshal(second)
+	secondEnvelope, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, secondPlaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(context.Background(), secondEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(context.Background(), firstEnvelope); err == nil {
+		t.Fatal("Apply() accepted envelope A again after applying envelope B")
 	}
 }
 
@@ -190,7 +224,7 @@ func signedNodeConfig(t *testing.T, csrPEM, relayURL, username, password string)
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 	certificatePEM := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), caPEM...)
 	return Configuration{
-		Version: 1, RelayURL: relayURL, Role: "client", Serial: "2A",
+		Version: 1, Generation: 1, RelayURL: relayURL, Role: "client", Serial: "2A",
 		CertificatePEM: string(certificatePEM), CACertificatePEM: string(caPEM),
 		SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
 	}

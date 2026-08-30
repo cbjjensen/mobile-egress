@@ -22,7 +22,7 @@ func TestSetupGeneratesOwnerLocallyAndUsesDirectCSRBootstrap(t *testing.T) {
 	t.Parallel()
 
 	bridge := &fakeTailscaleBridge{status: tailscale.Status{
-		Online: true, FQDN: "bridge.tail123.ts.net", PublicURL: "https://bridge.tail123.ts.net:8443",
+		Online: true, FunnelReady: true, FQDN: "bridge.tail123.ts.net", PublicURL: "https://bridge.tail123.ts.net:8443",
 	}}
 	helper := &fakeElevatedHelper{t: t}
 	sink := &fakeOwnerSink{}
@@ -43,6 +43,9 @@ func TestSetupGeneratesOwnerLocallyAndUsesDirectCSRBootstrap(t *testing.T) {
 	if sink.identity.Role != "owner" || sink.identity.RelayURL != bridge.status.PublicURL || sink.identity.DialAddress != "127.0.0.1:8443" || sink.identity.PrivateKeyPEM == "" {
 		t.Fatalf("stored Owner identity = %#v", sink.identity)
 	}
+	if sink.saveCalls != 1 || sink.updateCalls != 0 {
+		t.Fatalf("Owner sink calls = save %d/update %d, want initial SaveOwnerIdentity only", sink.saveCalls, sink.updateCalls)
+	}
 	assertIdentityCertificateMatchesPrivateKey(t, sink.identity)
 }
 
@@ -50,7 +53,7 @@ func TestRotateEndpointRetainsOwnerKeysAndUsesNewFunnelName(t *testing.T) {
 	t.Parallel()
 
 	bridge := &fakeTailscaleBridge{status: tailscale.Status{
-		Online: true, FQDN: "new.tail123.ts.net", PublicURL: "https://new.tail123.ts.net:8443",
+		Online: true, FunnelReady: true, FQDN: "new.tail123.ts.net", PublicURL: "https://new.tail123.ts.net:8443",
 	}}
 	helper := &fakeElevatedHelper{t: t}
 	sink := &fakeOwnerSink{}
@@ -71,35 +74,52 @@ func TestRotateEndpointRetainsOwnerKeysAndUsesNewFunnelName(t *testing.T) {
 	if after != want || sink.identity != want || !status.Ready {
 		t.Fatalf("rotated identity/status = %#v / %#v", after, status)
 	}
+	if sink.saveCalls != 0 || sink.updateCalls != 1 {
+		t.Fatalf("Owner sink calls = save %d/update %d, want endpoint UpdateOwnerIdentity only", sink.saveCalls, sink.updateCalls)
+	}
 }
 
 func TestRepairReinstallsTheSignedRelayWithoutChangingIdentity(t *testing.T) {
 	t.Parallel()
 
 	helper := &fakeElevatedHelper{t: t}
-	manager := NewManager(&fakeTailscaleBridge{}, helper, &fakeOwnerSink{})
+	bridge := &fakeTailscaleBridge{status: tailscale.Status{Online: true, FunnelReady: true}}
+	manager := NewManager(bridge, helper, &fakeOwnerSink{})
 	if err := manager.Repair(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if helper.repairs != 1 {
 		t.Fatalf("repair calls = %d, want 1", helper.repairs)
 	}
+	if bridge.enableCalls != 1 {
+		t.Fatalf("Tailscale Funnel repair calls = %d, want 1", bridge.enableCalls)
+	}
 }
 
-type fakeTailscaleBridge struct{ status tailscale.Status }
+type fakeTailscaleBridge struct {
+	status      tailscale.Status
+	enableCalls int
+}
 
 func (bridge *fakeTailscaleBridge) Enable(context.Context) (tailscale.Status, error) {
+	bridge.enableCalls++
 	return bridge.status, nil
 }
 
-type fakeOwnerSink struct{ identity relayclient.Identity }
+type fakeOwnerSink struct {
+	identity    relayclient.Identity
+	saveCalls   int
+	updateCalls int
+}
 
 func (sink *fakeOwnerSink) SaveOwnerIdentity(_ context.Context, identity relayclient.Identity) error {
+	sink.saveCalls++
 	sink.identity = identity
 	return nil
 }
 
 func (sink *fakeOwnerSink) UpdateOwnerIdentity(_ context.Context, identity relayclient.Identity) error {
+	sink.updateCalls++
 	sink.identity = identity
 	return nil
 }

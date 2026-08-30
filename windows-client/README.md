@@ -24,7 +24,7 @@ ProgramData state ACLs are reduced to SYSTEM and local Administrators. The eleva
 
 The app invokes SSM to download the exact GitHub Client release, verify SHA-256 and Authenticode, install the service, and run `bootstrap`. Bootstrap is idempotent and returns only the Client CSR and durable X25519 public configuration key.
 
-The Owner signs the CSR directly. SOCKS credentials and the resulting endpoint/certificates are encrypted to the node key with ephemeral X25519 + HKDF-SHA256 + AES-256-GCM. Only the sealed envelope crosses SSM. The node rejects malformed, tampered, replayed, wrong-key, wrong-identity, or invalid-certificate configurations.
+The Owner signs the CSR directly. SOCKS credentials and the resulting endpoint/certificates are encrypted to the node key with ephemeral X25519 + HKDF-SHA256 + AES-256-GCM. Only the sealed envelope crosses SSM. An authenticated monotonic generation rejects old envelopes even after newer updates; malformed, tampered, skipped, wrong-key, wrong-identity, or invalid-certificate configurations also fail closed.
 
 `Update` replaces only the verified executable. `Repair` also reseals/reapplies the retained configuration. Neither changes keys, certificate serial, or SOCKS credentials. Endpoint migration reseals only the relay URL.
 

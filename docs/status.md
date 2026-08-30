@@ -25,6 +25,6 @@ The repository cannot automatically prove real Tailscale browser/Funnel authoriz
 - At most ten managed EC2 nodes, four streams per Client, and 32 total streams.
 - Windows 10/11 controller and x86-64 Windows Server 2019 nodes in `us-east-1` only.
 - Funnel is beta, requires browser approval, uses public `*.ts.net` names, and has non-configurable bandwidth limits. Personal-plan use must comply with Tailscale terms; commercial/bulk use needs a supported ingress arrangement.
-- No automatic GitHub updater. The operator deliberately downloads a signed controller bundle; node update/repair uses the manifest shipped with it.
+- No automatic GitHub updater. The operator deliberately downloads a signed controller bundle; node update/repair uses release metadata embedded in that signed controller.
 - Endpoint migration preserves the CA and identities; it is not recovery from relay-state/CA compromise.
 - The app does not create/terminate EC2, open inbound rules, guarantee a carrier IP change, or route all OS traffic.

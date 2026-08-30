@@ -58,7 +58,7 @@ The node's durable X25519 public key is returned at bootstrap. The controller cr
 }
 ```
 
-Plaintext contains version, relay URL, Client role/serial/certificate chain/CA, and SOCKS credentials/port. The node rejects unsupported versions, non-canonical sizes/encoding, wrong keys, GCM failure, replayed envelope fingerprints, changed identity material, and invalid certificates. Endpoint-only updates may change only the relay URL while retaining identity and credentials.
+Plaintext contains version, a monotonically increasing configuration generation, relay URL, Client role/serial/certificate chain/CA, and SOCKS credentials/port. The node persists the highest accepted generation and rejects duplicate, stale, skipped, or reordered envelopes in addition to non-canonical encoding, wrong keys, GCM failure, changed identity material, and invalid certificates. Endpoint-only updates may advance the generation and change only the relay URL while retaining identity and credentials.
 
 ## Tunnel session
 

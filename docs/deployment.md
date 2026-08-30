@@ -1,6 +1,6 @@
 # Deployment, release, and acceptance
 
-Normal operators use signed release artifacts and the Windows app. The Docker Compose files remain a developer/legacy relay harness and are not part of the supported local-Funnel friend setup.
+Normal operators use signed release artifacts and the Windows app. The former EC2-relay Docker Compose deployment has been removed and is not part of the supported local-Funnel friend setup.
 
 ## Release artifacts
 
@@ -10,9 +10,9 @@ A Windows release contains these siblings in one signed ZIP:
 - `mobile-egress-admin.exe` — narrow UAC helper;
 - `mobile-egress-relay.exe` — LocalSystem loopback relay;
 - `mobile-egress-client.exe` — signed headless EC2 release; and
-- `release-manifest.json` — exact Client version, GitHub HTTPS URL, SHA-256, and expected publisher.
+- `release-manifest.json` — audit copy of the exact Client version, GitHub HTTPS URL, SHA-256, and signer-certificate thumbprint embedded in the signed controller.
 
-The same signed `mobile-egress-client.exe` must be attached to the matching GitHub release URL in the manifest. The controller refuses a missing or invalid manifest; EC2 install/update refuses a digest or Authenticode mismatch.
+The same signed `mobile-egress-client.exe` must be attached to the matching GitHub release URL in the manifest. Runtime trust uses the manifest embedded inside the Authenticode-signed controller, not the mutable JSON file beside it. EC2 install/update refuses a digest or exact signer-thumbprint mismatch.
 
 Build from a reviewed tag with a code-signing certificate whose subject contains `Mobile Egress`:
 

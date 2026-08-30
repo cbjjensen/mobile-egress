@@ -29,7 +29,7 @@ SSM command text contains signed release metadata or a base64 wrapper around the
 
 The controller is hard-coded to `us-east-1`, inventories only running x86-64 Windows Server 2019, and manages at most ten nodes. It never calls EC2 creation/termination, public-address allocation, or security-group ingress APIs.
 
-It never replaces an existing instance profile. For a profile-less instance it rechecks absence before association. A deterministic dedicated profile with an unexpected role is rejected. For an existing role it requires explicit operator confirmation and attaches only `AmazonSSMManagedInstanceCore`.
+It never replaces an existing instance profile. For a profile-less instance it rechecks absence before association. Deterministic dedicated roles/profiles are tagged to the instance and reused only when their tags, exact EC2 trust policy, role membership, and absence of unexpected managed/inline policies all match. For an existing role it requires explicit operator confirmation and attaches only `AmazonSSMManagedInstanceCore`.
 
 IAM Identity Center uses the browser/device authorization flow; the AWS password is never entered into Mobile Egress. Access keys are a fallback and are encrypted with DPAPI, but short-lived role credentials are preferred.
 
@@ -41,7 +41,7 @@ Android requests a cellular transport and creates relay/target sockets from that
 
 ## Signing and supply chain
 
-The controller downloads Tailscale only from the official stable package origin, checks the companion SHA-256, and requires a valid Tailscale signer before UAC install. Mobile Egress helper/relay/Client binaries require a valid Authenticode signature whose subject contains `Mobile Egress`; node releases also require the exact manifest hash and GitHub HTTPS release URL.
+The controller downloads Tailscale only from the official stable package origin, checks the companion SHA-256, and requires a valid Tailscale signer before UAC install. The signed controller embeds the exact node-release URL, SHA-256, and signer thumbprint. EC2 accepts a Client only when both its digest and Authenticode certificate thumbprint match that embedded record. Local helper and relay siblings must have the same valid signer thumbprint as the running signed controller/admin helper.
 
 Protect the code-signing private key separately from build outputs. A compromised signer is a full update-path incident. Unsigned developer binaries intentionally cannot perform production service setup.
 

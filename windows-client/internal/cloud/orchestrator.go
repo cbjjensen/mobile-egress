@@ -20,24 +20,25 @@ import (
 )
 
 type NodeRelease struct {
-	Version   string `json:"version"`
-	URL       string `json:"url"`
-	SHA256    string `json:"sha256"`
-	Publisher string `json:"publisher,omitempty"`
+	Version          string `json:"version"`
+	URL              string `json:"url"`
+	SHA256           string `json:"sha256"`
+	SignerThumbprint string `json:"signerThumbprint"`
 }
 
 type ManagedNode struct {
-	InstanceID             string `json:"instanceId"`
-	ClientSerial           string `json:"clientSerial"`
-	ConfigurationPublicKey string `json:"configurationPublicKey"`
-	ServiceVersion         string `json:"serviceVersion"`
-	Health                 string `json:"health"`
-	SOCKSUsername          string `json:"socksUsername"`
-	SOCKSPassword          string `json:"socksPassword"`
-	SOCKSPort              uint16 `json:"socksPort"`
-	RelayURL               string `json:"relayUrl"`
-	CertificatePEM         string `json:"certificatePem"`
-	CACertificatePEM       string `json:"caCertificatePem"`
+	InstanceID              string `json:"instanceId"`
+	ClientSerial            string `json:"clientSerial"`
+	ConfigurationPublicKey  string `json:"configurationPublicKey"`
+	ConfigurationGeneration uint64 `json:"configurationGeneration"`
+	ServiceVersion          string `json:"serviceVersion"`
+	Health                  string `json:"health"`
+	SOCKSUsername           string `json:"socksUsername"`
+	SOCKSPassword           string `json:"socksPassword"`
+	SOCKSPort               uint16 `json:"socksPort"`
+	RelayURL                string `json:"relayUrl"`
+	CertificatePEM          string `json:"certificatePem"`
+	CACertificatePEM        string `json:"caCertificatePem"`
 }
 
 type CommandRunner interface {
@@ -96,7 +97,7 @@ func (orchestrator *Orchestrator) Install(ctx context.Context, instanceID string
 		return ManagedNode{}, err
 	}
 	configuration := nodeservice.Configuration{
-		Version: 1, RelayURL: issued.RelayURL, Role: issued.Role, Serial: strings.ToUpper(issued.Serial),
+		Version: 1, Generation: 1, RelayURL: issued.RelayURL, Role: issued.Role, Serial: strings.ToUpper(issued.Serial),
 		CertificatePEM: issued.CertificatePEM, CACertificatePEM: issued.CACertificatePEM,
 		SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
 	}
@@ -123,7 +124,7 @@ func (orchestrator *Orchestrator) Install(ctx context.Context, instanceID string
 	}
 	node := ManagedNode{
 		InstanceID: instanceID, ClientSerial: strings.ToUpper(issued.Serial),
-		ConfigurationPublicKey: bootstrap.ConfigurationPublicKey, ServiceVersion: release.Version,
+		ConfigurationPublicKey: bootstrap.ConfigurationPublicKey, ConfigurationGeneration: 1, ServiceVersion: release.Version,
 		Health: "installed", SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
 		RelayURL: issued.RelayURL, CertificatePEM: issued.CertificatePEM, CACertificatePEM: issued.CACertificatePEM,
 	}
@@ -145,7 +146,7 @@ func (orchestrator *Orchestrator) UpdateEndpoint(ctx context.Context, node Manag
 		return ManagedNode{}, errors.New("new relay endpoint is invalid")
 	}
 	configuration := nodeservice.Configuration{
-		Version: 1, RelayURL: origin.String(), Role: "client", Serial: node.ClientSerial,
+		Version: 1, Generation: node.ConfigurationGeneration + 1, RelayURL: origin.String(), Role: "client", Serial: node.ClientSerial,
 		CertificatePEM: node.CertificatePEM, CACertificatePEM: node.CACertificatePEM,
 		SOCKSUsername: node.SOCKSUsername, SOCKSPassword: node.SOCKSPassword, SOCKSPort: node.SOCKSPort,
 	}
@@ -171,6 +172,7 @@ func (orchestrator *Orchestrator) UpdateEndpoint(ctx context.Context, node Manag
 		return ManagedNode{}, errors.New("Client endpoint update returned invalid redacted output")
 	}
 	node.RelayURL = origin.String()
+	node.ConfigurationGeneration++
 	node.Health = "installed"
 	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
 		return ManagedNode{}, errors.New("save rotated managed-node metadata")
@@ -216,23 +218,22 @@ func (release NodeRelease) Validate() error {
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() != "github.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("Client release must use an HTTPS github.com URL")
 	}
-	if strings.TrimSpace(release.Version) == "" || len(release.Version) > 64 || len(release.SHA256) != 64 {
+	if strings.TrimSpace(release.Version) == "" || len(release.Version) > 64 || len(release.SHA256) != 64 || len(release.SignerThumbprint) != 40 {
 		return errors.New("Client release metadata is invalid")
 	}
 	if _, err := hex.DecodeString(release.SHA256); err != nil {
 		return errors.New("Client release SHA-256 is invalid")
 	}
-	if strings.ContainsAny(release.Version+release.Publisher+release.URL, "'\"\r\n") {
+	if _, err := hex.DecodeString(release.SignerThumbprint); err != nil {
+		return errors.New("Client release signer thumbprint is invalid")
+	}
+	if strings.ContainsAny(release.Version+release.URL, "'\"\r\n") {
 		return errors.New("Client release metadata is invalid")
 	}
 	return nil
 }
 
 func updateScript(release NodeRelease) string {
-	publisher := release.Publisher
-	if publisher == "" {
-		publisher = "Mobile Egress"
-	}
 	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
 $installDir = 'C:\Program Files\MobileEgress'
 $stateDir = 'C:\ProgramData\MobileEgress\Client'
@@ -242,7 +243,7 @@ Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
 $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
 if ($digest -ne '%s') { throw 'release digest verification failed' }
 $signature = Get-AuthenticodeSignature -LiteralPath $download
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*%s*') { throw 'release signature verification failed' }
+if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne '%s') { throw 'release signature verification failed' }
 $null = New-Item -ItemType Directory -Force -Path $installDir
 $null = New-Item -ItemType Directory -Force -Path $stateDir
 $null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
@@ -256,14 +257,10 @@ if ($null -eq $service) {
   $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
 }
 Start-Service -Name 'MobileEgressClient'
-Write-Output '{"updated":true}'`, release.URL, strings.ToLower(release.SHA256), publisher)
+Write-Output '{"updated":true}'`, release.URL, strings.ToLower(release.SHA256), strings.ToUpper(release.SignerThumbprint))
 }
 
 func installScript(release NodeRelease) string {
-	publisher := release.Publisher
-	if publisher == "" {
-		publisher = "Mobile Egress"
-	}
 	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
 $installDir = 'C:\Program Files\MobileEgress'
 $stateDir = 'C:\ProgramData\MobileEgress\Client'
@@ -273,7 +270,7 @@ Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
 $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
 if ($digest -ne '%s') { throw 'release digest verification failed' }
 $signature = Get-AuthenticodeSignature -LiteralPath $download
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*%s*') { throw 'release signature verification failed' }
+if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne '%s') { throw 'release signature verification failed' }
 $null = New-Item -ItemType Directory -Force -Path $installDir
 $null = New-Item -ItemType Directory -Force -Path $stateDir
 $null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
@@ -285,7 +282,7 @@ if ($null -eq $existing) {
 } else {
   $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
 }
-& $executable bootstrap --state-dir $stateDir`, release.URL, strings.ToLower(release.SHA256), publisher)
+& $executable bootstrap --state-dir $stateDir`, release.URL, strings.ToLower(release.SHA256), strings.ToUpper(release.SignerThumbprint))
 }
 
 func applyScript(envelopeJSON []byte) string {
@@ -296,8 +293,16 @@ $stateDir = 'C:\ProgramData\MobileEgress\Client'
 $envelopePath = Join-Path $env:TEMP 'mobile-egress-client.sealed.json'
 try {
   [IO.File]::WriteAllBytes($envelopePath, [Convert]::FromBase64String('%s'))
-  & $executable apply-config --state-dir $stateDir --envelope-file $envelopePath
-  $null = & sc.exe start MobileEgressClient
+  $null = & $executable apply-config --state-dir $stateDir --envelope-file $envelopePath
+  if ($LASTEXITCODE -ne 0) { throw 'sealed configuration was rejected' }
+  $service = Get-Service -Name 'MobileEgressClient' -ErrorAction Stop
+  if ($service.Status -ne 'Stopped') {
+    Stop-Service -Name 'MobileEgressClient' -Force -ErrorAction Stop
+    $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+  }
+  Start-Service -Name 'MobileEgressClient' -ErrorAction Stop
+  (Get-Service -Name 'MobileEgressClient' -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+  Write-Output '{"configured":true}'
 } finally {
   Remove-Item -Force -LiteralPath $envelopePath -ErrorAction SilentlyContinue
 }`, encoded)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"regexp"
@@ -28,8 +29,37 @@ var (
 type Status struct {
 	BackendState string `json:"backendState"`
 	Online       bool   `json:"online"`
+	FunnelReady  bool   `json:"funnelReady"`
 	FQDN         string `json:"fqdn"`
 	PublicURL    string `json:"publicUrl"`
+}
+
+func ParseFunnelStatus(raw []byte, fqdn string) (bool, error) {
+	if len(raw) == 0 || len(raw) > 4<<20 || !validFunnelFQDN(fqdn) {
+		return false, errors.New("Tailscale Funnel status is missing or invalid")
+	}
+	var wire struct {
+		TCP map[string]struct {
+			TCPForward    string `json:"TCPForward"`
+			TerminateTLS  string `json:"TerminateTLS"`
+			HTTPS         bool   `json:"HTTPS"`
+			HTTP          bool   `json:"HTTP"`
+			ProxyProtocol int    `json:"ProxyProtocol"`
+		} `json:"TCP"`
+		AllowFunnel map[string]bool `json:"AllowFunnel"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(&wire); err != nil {
+		return false, errors.New("Tailscale returned invalid Funnel status")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return false, errors.New("Tailscale returned invalid Funnel status")
+	}
+	handler, exists := wire.TCP[strconv.Itoa(PublicPort)]
+	if !exists || handler.TCPForward != "127.0.0.1:8443" || handler.TerminateTLS != "" || handler.HTTPS || handler.HTTP || handler.ProxyProtocol != 0 {
+		return false, nil
+	}
+	return wire.AllowFunnel[fqdn+":"+strconv.Itoa(PublicPort)], nil
 }
 
 type Release struct {

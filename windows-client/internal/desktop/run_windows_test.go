@@ -43,6 +43,31 @@ func TestGetStatusReportsOwnerAndClientReadinessWithoutIdentitySecrets(t *testin
 	}
 }
 
+func TestCoreOwnerSinkAdoptsSetupIdentityThenUpdatesOnlyItsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	store := securestore.NewMemoryStore()
+	core, err := client.NewCore(context.Background(), store, desktopGateway{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := coreOwnerSink{core: core}
+	identity := desktopIdentity("owner", "A11CE")
+	identity.RelayURL = "https://old.tail123.ts.net:8443"
+	identity.DialAddress = "127.0.0.1:8443"
+	if err := sink.SaveOwnerIdentity(context.Background(), identity); err != nil {
+		t.Fatalf("SaveOwnerIdentity() = %v", err)
+	}
+	identity.RelayURL = "https://new.tail123.ts.net:8443"
+	if err := sink.UpdateOwnerIdentity(context.Background(), identity); err != nil {
+		t.Fatalf("UpdateOwnerIdentity() = %v", err)
+	}
+	stored, _, err := client.NewRepository(store).LoadOwnerIdentity(context.Background())
+	if err != nil || stored != identity {
+		t.Fatalf("stored Owner after endpoint update = %#v/%v", stored, err)
+	}
+}
+
 func TestBootstrapOwnerRedactsMalformedInvitationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -118,18 +143,31 @@ func TestAgentQrViewDoesNotExposeInvitationText(t *testing.T) {
 func TestSignedNodeReleaseManifestIsStrictAndGitHubBound(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","publisher":"Mobile Egress"}}`)
+	raw := []byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","signerThumbprint":"0123456789abcdef0123456789abcdef01234567"}}`)
 	release, err := decodeNodeReleaseManifest(raw)
-	if err != nil || release.Version != "1.2.3" || release.Publisher != "Mobile Egress" {
+	if err != nil || release.Version != "1.2.3" || release.SignerThumbprint != "0123456789abcdef0123456789abcdef01234567" {
 		t.Fatalf("decodeNodeReleaseManifest() = %#v/%v", release, err)
 	}
 	for _, invalid := range [][]byte{
 		append(append([]byte(nil), raw...), []byte(` {}`)...),
 		[]byte(`{"version":1,"client":{"version":"1.2.3","url":"https://example.com/client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`),
+		[]byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","publisher":"Attacker Selects This"}}`),
 	} {
 		if _, err := decodeNodeReleaseManifest(invalid); err == nil {
 			t.Fatalf("decodeNodeReleaseManifest() accepted %s", invalid)
 		}
+	}
+}
+
+func TestNodeReleaseTrustLoadsOnlyFromTheSignedControllerEmbedding(t *testing.T) {
+	raw := []byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","signerThumbprint":"0123456789abcdef0123456789abcdef01234567"}}`)
+	previous := embeddedReleaseManifestBase64
+	embeddedReleaseManifestBase64 = base64.StdEncoding.EncodeToString(raw)
+	t.Cleanup(func() { embeddedReleaseManifestBase64 = previous })
+
+	release, err := loadNodeRelease()
+	if err != nil || release.Version != "1.2.3" || release.SignerThumbprint == "" {
+		t.Fatalf("loadNodeRelease() = %#v/%v", release, err)
 	}
 }
 

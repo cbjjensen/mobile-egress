@@ -39,6 +39,13 @@ class EndpointMigrationTest {
     }
 
     @Test
+    fun `recognizes migration type before validating expiry or fields`() {
+        assertEquals(true, parser.recognizes(bundle(expiresAt = "2026-08-29T18:00:00Z")))
+        assertEquals(true, parser.recognizes(rawBundle(extra = true).encode()))
+        assertEquals(false, parser.recognizes(bundle(type = "agent-enrollment")))
+    }
+
+    @Test
     fun `migration retains device identity and changes only verified endpoint`() = runTest {
         val original = identity()
         val identities = FakeIdentities(original)
