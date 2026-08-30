@@ -1,26 +1,30 @@
 # Current status
 
-This is the current validation and limitations ledger. It does not turn a missing workflow into a supported procedure. Read [deployment](deployment.md), [operations](operations.md), and the component guides before acting on a relay or device. Use the [contributor guide](../CONTRIBUTING.md) for reproducible local setup and command scope.
+## Implemented
 
-## Current validation
+- Loopback-only Windows relay service, direct CSR Owner bootstrap, Owner-authorized Client CSR provisioning, endpoint leaf rotation, one-use Agent migration, revocation, and multi-Client routing.
+- Four-stream per-Client and 32-stream aggregate enforcement with bounded session state.
+- Self-contained Windows controller flow for verified Tailscale MSI installation, browser login, unattended raw TCP Funnel, UAC relay lifecycle, DPAPI Owner/AWS/node state, IAM Identity Center, EC2 inventory, guarded SSM IAM preparation, signed node install/update/repair, and SOCKS credential display.
+- Headless Windows Client service with on-node P-256/X25519 keys, sealed/replay-protected configuration, loopback authenticated SOCKS5, outbound reconnect, and Windows SCM support.
+- Android cellular-only foreground Agent, strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, and 32-stream admission.
+- Signed release packaging script and app-first friend documentation.
 
-| Automated coverage | What the check establishes | Manual acceptance still required |
-| --- | --- | --- |
-| `scripts/test-all.ps1` | Requires a valid JDK 17 or later, Android SDK Platform 35, and Android Build-Tools 35. With those prerequisites it runs Go tests, vet, and build; Windows frontend typecheck/build; Compose configuration validation; and Android JVM tests, lint, and debug assembly. If the Android prerequisites are unavailable or invalid, the script exits nonzero with remediation; it does not skip Android and report success. | Run the [required physical-device checklist](deployment.md#required-physical-device-checklist-still-required-not-executed-by-automated-verification) with a relay, Windows device, and Android phone. |
-| Android JVM and debug coverage | Exercises Android pairing parsing, address policy, cellular-only/foreground state, protocol behavior, and the debug build without a physical radio or device lifecycle. | Complete the [Android physical-device smoke checklist](../android/README.md#physical-device-smoke-checklist), including the cellular-loss no-fallback check. |
-| Guarded release scripts | Require explicit release invocation and validate local signing-input handling before Android packaging; they do not publish artifacts. | Install and exercise the signed APK and Windows artifact through the owner-controlled acceptance steps in [deployment](deployment.md#windows-and-android-releases). |
+## Automated validation
 
-Automated checks do not prove physical relay ingress, Windows runtime behavior, Android cellular binding, QR handling on a real device, or release distribution. The linked acceptance work remains required.
+The local gate covers Go unit/integration tests and vet, Windows builds, frontend typecheck/build, Android unit tests/lint/debug APK, PowerShell operation-script tests, strict protocol/crypto cases, AWS/IAM guards, secret redaction, service command construction, stream bounds/fairness, and endpoint migration.
 
-## Known limitations
+Go's race detector is not available in the current Windows environment unless CGO and a supported C compiler are installed. Normal Go tests are still run. See the latest commit/CI output for release evidence.
 
-| Limitation | Current boundary | Relevant guide |
-| --- | --- | --- |
-| Additional Windows Client enrollment | The shipped Windows UI does not create or import an additional Windows Client identity. Multi-Windows deployment is not a supported app-first workflow; it requires maintainership intervention. | [Capacity and additional Windows devices](operations.md#capacity-and-additional-windows-devices) and [Windows pairing identities](../windows-client/README.md#pairing-identities) |
-| Lost-Agent targeted revocation | Android does not display its certificate serial and relay v1 has no identity-list endpoint. Routine Agent re-pairing does not revoke the prior Agent identity; targeted recovery for a lost phone requires maintainership intervention. | [Agent re-pairing, QR exposure, and lost phones](operations.md#agent-re-pairing-qr-exposure-and-lost-phones) and [Android security boundaries](../android/README.md#security-boundaries) |
-| Owner invitation renewal | The initial Owner invitation has no Owner self-service renewal path. Expiry, loss, or failed initial bootstrap requires relay-administrator intervention. | [Relay bootstrap](operations.md#relay-bootstrap) and [secure relay initialization](deployment.md#secure-relay-initialization) |
-| Compose rollback | The supplied Compose setup builds from the current source checkout. Selecting a pinned image tag for rollback is not an implemented workflow. | [Rollback and revocation](deployment.md#rollback-and-revocation) |
-| Stream capacity | One Windows Client has a four-stream local limit. Eight streams is the Agent and relay-wide capacity, not a promise that one shipped Windows Client can create eight streams. | [Windows client](../windows-client/README.md) and [Android limits](../android/README.md#local-build) |
-| CI and publishing | There is no CI, automated publishing, Android instrumentation run, Wails runtime test, or end-to-end physical-device proof of a release. | [Current validation](#current-validation), [Android release guidance](../android/README.md#release-signing-and-sideloading), and [Windows development](../windows-client/README.md#development) |
+## Required external acceptance
 
-Related documents: [project overview](../README.md), [contributor guide](../CONTRIBUTING.md), [architecture](architecture.md), [security model](security-model.md), [protocol](protocol.md), [deployment](deployment.md), and [operations](operations.md).
+The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android radio behavior on physical hardware, or carrier egress. Complete and record the physical checklist in [deployment](deployment.md) before calling a release accepted.
+
+## Known limits
+
+- One operator PC, one relay, and one active Android Agent are availability dependencies.
+- At most ten managed EC2 nodes, four streams per Client, and 32 total streams.
+- Windows 10/11 controller and x86-64 Windows Server 2019 nodes in `us-east-1` only.
+- Funnel is beta, requires browser approval, uses public `*.ts.net` names, and has non-configurable bandwidth limits. Personal-plan use must comply with Tailscale terms; commercial/bulk use needs a supported ingress arrangement.
+- No automatic GitHub updater. The operator deliberately downloads a signed controller bundle; node update/repair uses the manifest shipped with it.
+- Endpoint migration preserves the CA and identities; it is not recovery from relay-state/CA compromise.
+- The app does not create/terminate EC2, open inbound rules, guarantee a carrier IP change, or route all OS traffic.

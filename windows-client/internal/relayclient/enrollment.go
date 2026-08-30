@@ -28,6 +28,7 @@ const maxControlResponseBytes = 256 << 10
 
 type Identity struct {
 	RelayURL         string `json:"relayUrl"`
+	DialAddress      string `json:"dialAddress,omitempty"`
 	Role             string `json:"role"`
 	Serial           string `json:"serial"`
 	PrivateKeyPEM    string `json:"privateKeyPem"`

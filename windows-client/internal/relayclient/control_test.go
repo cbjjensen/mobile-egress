@@ -75,6 +75,53 @@ func TestOwnerProvisionsClientCSRWithoutReceivingPrivateKey(t *testing.T) {
 	}
 }
 
+func TestOwnerIssuesDistinctOneUseAgentEndpointMigration(t *testing.T) {
+	t.Parallel()
+
+	identity, server, requests := newControlFixture(t, "owner")
+	defer server.Close()
+	migration, err := IssueEndpointMigration(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migration.Version != 1 || migration.Type != "agent-endpoint-migration" || migration.Capability == "" || migration.RelayURL != identity.RelayURL {
+		t.Fatalf("IssueEndpointMigration() = %#v", migration)
+	}
+	if got := <-requests; got != "endpoint-migration" {
+		t.Fatalf("request = %q", got)
+	}
+}
+
+func TestRelayHealthReadsOnlyAggregateReadiness(t *testing.T) {
+	t.Parallel()
+
+	identity, server, requests := newControlFixture(t, "owner")
+	defer server.Close()
+	health, err := Health(context.Background(), identity)
+	if err != nil || !health.Readiness || health.ActiveStreams != 2 || health.ConnectedClients != 1 {
+		t.Fatalf("Health() = %#v/%v", health, err)
+	}
+	if got := <-requests; got != "health" {
+		t.Fatalf("request = %q", got)
+	}
+}
+
+func TestIdentityHTTPClientUsesLoopbackDialOverrideWithPublicTLSServerName(t *testing.T) {
+	t.Parallel()
+
+	identity, server, _ := newControlFixture(t, "owner")
+	defer server.Close()
+	identity.RelayURL = "https://bridge.tail123.ts.net:8443"
+	identity.DialAddress = "127.0.0.1:8443"
+	_, transport, err := identityHTTPClient(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport.DialContext == nil || transport.TLSClientConfig.ServerName != "bridge.tail123.ts.net" {
+		t.Fatalf("loopback transport = DialContext %v, ServerName %q", transport.DialContext != nil, transport.TLSClientConfig.ServerName)
+	}
+}
+
 func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, chan string) {
 	t.Helper()
 	ca, caKey, caPEM := newTestCA(t, "control-ca")
@@ -93,13 +140,19 @@ func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, c
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := make(chan string, 3)
+	requests := make(chan string, 4)
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		switch request.URL.Path {
+		case "/healthz":
+			requests <- "health"
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"readiness": true, "agentConnected": true, "connectedClients": 1, "activeStreams": 2,
+				"totalStreams": 3, "byteCount": 4, "errorCounts": map[string]int64{},
+			})
 		case "/v1/pairing-codes":
 			var body struct {
 				Role string `json:"role"`
@@ -140,6 +193,14 @@ func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, c
 				"certificatePem": string(certificate) + string(caPEM), "caCertificatePem": string(caPEM),
 				"serial": "3", "role": "client",
 			})
+		case "/v1/endpoint-migrations":
+			requests <- "endpoint-migration"
+			writer.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"version": 1, "type": "agent-endpoint-migration", "relayUrl": identityURL(request),
+				"caCertificatePem": string(caPEM), "capability": "one-use-migration-capability",
+				"expiresAt": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+			})
 		default:
 			http.NotFound(writer, request)
 		}
@@ -159,6 +220,8 @@ func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, c
 	}
 	return identity, server, requests
 }
+
+func identityURL(request *http.Request) string { return "https://" + request.Host }
 
 func testControlCSR(t *testing.T) (*ecdsa.PrivateKey, string) {
 	t.Helper()

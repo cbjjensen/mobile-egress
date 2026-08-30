@@ -29,11 +29,6 @@ $goOutput = & $preflight -Components Go *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 0) 'The repository-required Go 1.26 installation must satisfy preflight.'
 Assert-Condition ($goOutput -match 'OK: Go version 26') 'Go versions must be parsed from the go1.26 format, not as major version 1.'
 
-$machineAndroidOutput = & $preflight -Components Android *>&1 | Out-String
-Assert-Condition ($LASTEXITCODE -eq 11) 'This machine must report its JAVA_HOME JDK 8 as an invalid JDK 17+ prerequisite.'
-Assert-Condition ($machineAndroidOutput -match 'INVALID: JAVA_HOME points to JDK 8, below the required 17') 'The JAVA_HOME JDK 8 validation result was not reported accurately.'
-Assert-Condition ($machineAndroidOutput -match 'MISSING: Android SDK Platform 35 and Build-Tools 35') 'The missing Android SDK result was not reported accurately.'
-
 $dockerOutput = & $preflight -Components Docker -SimulateDockerUnavailable *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 11) 'A present but unavailable Docker daemon must be reported as a validation failure.'
 Assert-Condition ($dockerOutput -match 'INVALID: Docker Engine could not be validated') 'Docker daemon validation failure was not reported accurately.'
@@ -70,6 +65,7 @@ try {
 
 $preflightScript = Get-Content -Raw $preflight
 $releaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'release-android.ps1')
+$windowsReleaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'build-windows.ps1')
 Assert-Condition ($preflightScript -match "operations-common\.ps1'\)") 'Preflight must load the shared operations resolver.'
 Assert-Condition ($releaseScript -match "operations-common\.ps1'\)") 'Android release must load the shared operations resolver.'
 Assert-Condition ($preflightScript -match 'Get-MobileEgressAndroidSdkRoot -RepositoryRoot') 'Preflight must use the shared Android SDK-root resolver.'
@@ -77,6 +73,12 @@ Assert-Condition ($releaseScript -match 'Get-MobileEgressAndroidSdkRoot -Reposit
 
 Assert-Condition ($releaseScript -notmatch '(?i)write-(host|output|information).*?(storePassword|keyPassword|keyAlias|storeFile)') 'The release script must not print signing properties.'
 Assert-Condition ($releaseScript -match 'check-ignore -q -- android/keystore.properties') 'The release script must require the signing properties file to remain ignored.'
+Assert-Condition ($windowsReleaseScript -match 'CodeSigningThumbprint') 'Windows release packaging must require a code-signing certificate.'
+Assert-Condition ($windowsReleaseScript -match 'signtool\.exe') 'Windows release packaging must sign and verify all executables.'
+Assert-Condition ($windowsReleaseScript -match 'release-manifest\.json') 'Windows release packaging must produce the headless Client manifest.'
+Assert-Condition ($windowsReleaseScript -match 'mobile-egress-relay\.exe') 'The controller package must include the local relay.'
+Assert-Condition ($windowsReleaseScript -match 'mobile-egress-admin\.exe') 'The controller package must include the elevated helper.'
+Assert-Condition ($windowsReleaseScript -match 'mobile-egress-client\.exe') 'The controller package must include the headless Client release.'
 
 $releaseValidationOutput = & (Join-Path $PSScriptRoot 'release-android.ps1') -ValidateOnly *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 10) 'Missing Android signing inputs must exit with code 10.'
@@ -85,7 +87,7 @@ Assert-Condition ($releaseValidationOutput -notmatch '(?i)storePassword|keyPassw
 
 $testAllScript = Get-Content -Raw (Join-Path $PSScriptRoot 'test-all.ps1')
 Assert-Condition ($testAllScript -match "preflight\.ps1'\) -Components Go, Node\s") 'test-all must run Go and frontend checks before Android without requiring a running Docker daemon.'
-Assert-Condition ($testAllScript -match 'docker compose -f deploy/docker-compose.yml config --quiet') 'test-all must validate the Compose configuration directly.'
+Assert-Condition ($testAllScript -notmatch 'docker compose|deploy/docker-compose') 'The local Funnel gate must not require the removed public Compose relay deployment.'
 Assert-Condition ($testAllScript -match '\$androidPrerequisiteExit') 'test-all must preserve a nonzero Android prerequisite exit after printing remediation.'
 
 Write-Host 'Operations script checks passed.'

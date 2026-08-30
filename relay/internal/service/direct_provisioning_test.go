@@ -84,6 +84,16 @@ func TestOwnerCanProvisionClientCSRDirectly(t *testing.T) {
 	if status, _ := postClientCSR(t, ownerClient, fixture.server.URL, "not a CSR"); status != http.StatusBadRequest {
 		t.Fatalf("invalid CSR status = %d, want 400", status)
 	}
+	for index := 1; index < 10; index++ {
+		_, csr := newDeviceCSR(t)
+		if status, _ := postClientCSR(t, ownerClient, fixture.server.URL, csr); status != http.StatusCreated {
+			t.Fatalf("direct Client %d status = %d, want 201", index+1, status)
+		}
+	}
+	_, eleventhCSR := newDeviceCSR(t)
+	if status, _ := postClientCSR(t, ownerClient, fixture.server.URL, eleventhCSR); status != http.StatusConflict {
+		t.Fatalf("eleventh direct Client status = %d, want 409", status)
+	}
 }
 
 func TestRelayDefaultsToThirtyTwoAggregateAgentStreams(t *testing.T) {

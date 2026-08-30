@@ -1,10 +1,13 @@
 package relayclient
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"net/http"
+	"time"
 )
 
 func (identity Identity) tlsConfig() (*tls.Config, error) {
@@ -32,6 +35,21 @@ func identityHTTPClient(identity Identity) (*http.Client, *http.Transport, error
 	if err != nil {
 		return nil, nil, err
 	}
+	baseURL, err := validateRelayURL(identity.RelayURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsConfig.ServerName = baseURL.Hostname()
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
+	if identity.DialAddress != "" {
+		host, port, err := net.SplitHostPort(identity.DialAddress)
+		if err != nil || host != "127.0.0.1" || port != "8443" {
+			return nil, nil, errors.New("stored relay dial override is invalid")
+		}
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", identity.DialAddress)
+		}
+	}
 	return &http.Client{Transport: transport}, transport, nil
 }

@@ -23,40 +23,40 @@
 
 ### Task 1: Relay Bootstrap, Provisioning, Rotation, and Capacity
 
-- [ ] Add failing relay service/CLI tests for direct Owner CSR bootstrap, Owner-authorized Client CSR provisioning, endpoint rotation under the same CA, Windows foreground/service separation, and thirty-two aggregate streams.
-- [ ] Implement the minimal relay service, store, control API, CLI, and Windows SCM changes; retain existing enrollment and revocation behavior.
-- [ ] Run `go test ./relay/...` and `go test -race ./relay/...`.
+- [x] Add failing relay service/CLI tests for direct Owner CSR bootstrap, Owner-authorized Client CSR provisioning, endpoint rotation under the same CA, Windows foreground/service separation, and thirty-two aggregate streams.
+- [x] Implement the minimal relay service, store, control API, CLI, and Windows SCM changes; retain existing enrollment and revocation behavior.
+- [ ] Run `go test ./relay/...` and `go test -race ./relay/...`. Normal tests pass; Windows race testing remains unavailable without CGO and a supported C compiler.
 
 ### Task 2: Sealed Configuration and Headless Client
 
-- [ ] Add failing tests for X25519/HKDF/AES-GCM round trips and malformed, replayed, tampered, and wrong-key envelopes.
-- [ ] Add failing tests for a Windows Client service that owns its key/CSR/credentials, accepts sealed configuration, binds SOCKS to `127.0.0.1:1080`, and connects using only a Client identity.
-- [ ] Implement focused sealed-config and node-service packages plus the `mobile-egress-client` command.
-- [ ] Run targeted Go tests, Windows cross-build, and `go vet ./...`.
+- [x] Add failing tests for X25519/HKDF/AES-GCM round trips and malformed, replayed, tampered, and wrong-key envelopes.
+- [x] Add failing tests for a Windows Client service that owns its key/CSR/credentials, accepts sealed configuration, binds SOCKS to `127.0.0.1:1080`, and connects using only a Client identity.
+- [x] Implement focused sealed-config and node-service packages plus the `mobile-egress-client` command.
+- [x] Run targeted Go tests, Windows cross-build, and `go vet ./...`.
 
 ### Task 3: Local Relay and Tailscale Controller
 
-- [ ] Add failing tests around Tailscale status/Funnel JSON parsing, raw TCP command construction, installer verification policy, relay setup state, and loopback dial override.
-- [ ] Implement the UAC helper boundary, local service setup, Tailscale browser-login/status flow, unattended mode, and raw TCP Funnel configuration.
-- [ ] Extend the Wails API/UI with a first-run local bridge wizard and actionable health/repair states.
-- [ ] Run controller Go tests and frontend typecheck/build.
+- [x] Add failing tests around Tailscale status/Funnel JSON parsing, raw TCP command construction, installer verification policy, relay setup state, and loopback dial override.
+- [x] Implement the UAC helper boundary, local service setup, Tailscale browser-login/status flow, unattended mode, and raw TCP Funnel configuration.
+- [x] Extend the Wails API/UI with a first-run local bridge wizard and actionable health/repair states.
+- [x] Run controller Go tests and frontend typecheck/build.
 
 ### Task 4: AWS/SSM Multi-Node Management
 
-- [ ] Add failing tests with AWS-boundary fakes for Identity Center/access-key authentication, Windows Server filtering, instance-profile safeguards, SSM readiness, node bootstrap, sealed configuration, update, and secret redaction.
-- [ ] Implement AWS SDK adapters and a node orchestrator; persist controller credentials and per-node metadata with DPAPI.
-- [ ] Add node inventory, install/repair/update, copy-proxy, and revoke/replace flows to the desktop UI.
-- [ ] Run targeted controller tests and frontend typecheck/build.
+- [x] Add failing tests with AWS-boundary fakes for Identity Center/access-key authentication, Windows Server filtering, instance-profile safeguards, SSM readiness, node bootstrap, sealed configuration, update, and secret redaction.
+- [x] Implement AWS SDK adapters and a node orchestrator; persist controller credentials and per-node metadata with DPAPI.
+- [x] Add node inventory, install/repair/update, copy-proxy, and endpoint-rotation flows to the desktop UI.
+- [x] Run targeted controller tests and frontend typecheck/build.
 
 ### Task 5: Android Capacity and Endpoint Migration
 
-- [ ] Add failing JVM tests for thirty-two-stream admission, bounded queues, migration QR parsing, CA/origin/expiry validation, one-use consumption, and atomic origin-only persistence.
-- [ ] Implement migration networking/UI and raise Agent limits without changing cellular socket binding or Wi-Fi fail-closed behavior.
-- [ ] Run Android unit tests, lint, and debug assembly.
+- [x] Add failing JVM tests for thirty-two-stream admission, bounded queues, migration QR parsing, CA/origin/expiry validation, one-use consumption, and atomic origin-only persistence.
+- [x] Implement migration networking/UI and raise Agent limits without changing cellular socket binding or Wi-Fi fail-closed behavior.
+- [x] Run Android unit tests, lint, and debug assembly.
 
 ### Task 6: Release, Documentation, and Verification
 
-- [ ] Add signed Windows relay/node/admin-helper release manifest generation and verification tests.
-- [ ] Update README, architecture, protocol, security, deployment, operations, status, and component READMEs for the local Funnel topology and friend quick start.
+- [x] Add signed Windows relay/node/admin-helper release manifest generation and verification tests.
+- [x] Update README, architecture, protocol, security, deployment, operations, status, and component READMEs for the local Funnel topology and friend quick start.
 - [ ] Run `scripts/test-all.ps1`, Windows artifact builds, Android validation, `git diff --check`, and the documented physical acceptance checklist when devices/accounts are available.
 - [ ] Review the final diff for secret material, unsupported claims, and destructive AWS/Tailscale behavior before committing.

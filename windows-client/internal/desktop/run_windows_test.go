@@ -115,6 +115,24 @@ func TestAgentQrViewDoesNotExposeInvitationText(t *testing.T) {
 	}
 }
 
+func TestSignedNodeReleaseManifestIsStrictAndGitHubBound(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"version":1,"client":{"version":"1.2.3","url":"https://github.com/cbjjensen/mobile-egress/releases/download/v1.2.3/mobile-egress-client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","publisher":"Mobile Egress"}}`)
+	release, err := decodeNodeReleaseManifest(raw)
+	if err != nil || release.Version != "1.2.3" || release.Publisher != "Mobile Egress" {
+		t.Fatalf("decodeNodeReleaseManifest() = %#v/%v", release, err)
+	}
+	for _, invalid := range [][]byte{
+		append(append([]byte(nil), raw...), []byte(` {}`)...),
+		[]byte(`{"version":1,"client":{"version":"1.2.3","url":"https://example.com/client.exe","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`),
+	} {
+		if _, err := decodeNodeReleaseManifest(invalid); err == nil {
+			t.Fatalf("decodeNodeReleaseManifest() accepted %s", invalid)
+		}
+	}
+}
+
 func TestReplaceClientReturnsOnlyAGenericRecoveryError(t *testing.T) {
 	t.Parallel()
 

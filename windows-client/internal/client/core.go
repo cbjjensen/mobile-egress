@@ -89,6 +89,66 @@ func (core *Core) Pair(ctx context.Context, bundle pairing.Bundle) error {
 	return core.BootstrapOwner(ctx, bundle)
 }
 
+func (core *Core) AdoptOwnerIdentity(ctx context.Context, identity relayclient.Identity) error {
+	core.operations.Lock()
+	defer core.operations.Unlock()
+	if !validIdentityForRole(identity, "owner") {
+		return errors.New("direct Owner identity is incomplete")
+	}
+	core.mu.RLock()
+	if core.owner != nil {
+		core.mu.RUnlock()
+		return errors.New("owner identity is already enrolled")
+	}
+	var existingClient *relayclient.Identity
+	if core.client != nil {
+		value := *core.client
+		existingClient = &value
+	}
+	core.mu.RUnlock()
+	if existingClient != nil && !sameRelayTrust(
+		existingClient.RelayURL, existingClient.CACertificatePEM, identity.RelayURL, identity.CACertificatePEM,
+	) {
+		return errors.New("direct Owner identity does not match the existing Client relay")
+	}
+	if err := core.repository.SaveOwnerIdentity(ctx, identity); err != nil {
+		return err
+	}
+	core.mu.Lock()
+	core.owner = &identity
+	core.mu.Unlock()
+	return nil
+}
+
+func (core *Core) UpdateOwnerEndpoint(ctx context.Context, identity relayclient.Identity) error {
+	core.operations.Lock()
+	defer core.operations.Unlock()
+	if !validIdentityForRole(identity, "owner") {
+		return errors.New("updated Owner identity is incomplete")
+	}
+	core.mu.RLock()
+	if core.owner == nil {
+		core.mu.RUnlock()
+		return errors.New("Owner identity is not enrolled")
+	}
+	current := *core.owner
+	core.mu.RUnlock()
+	if current.Role != identity.Role || current.Serial != identity.Serial || current.PrivateKeyPEM != identity.PrivateKeyPEM ||
+		current.CertificatePEM != identity.CertificatePEM || current.CACertificatePEM != identity.CACertificatePEM {
+		return errors.New("Owner endpoint update changed identity material")
+	}
+	if err := core.repository.UpdateOwnerEndpoint(ctx, identity); err != nil {
+		return err
+	}
+	core.mu.Lock()
+	core.owner = &identity
+	if core.client != nil && core.client.CACertificatePEM == identity.CACertificatePEM {
+		core.client.RelayURL = identity.RelayURL
+	}
+	core.mu.Unlock()
+	return nil
+}
+
 func (core *Core) BootstrapOwner(ctx context.Context, bundle pairing.Bundle) error {
 	core.operations.Lock()
 	defer core.operations.Unlock()

@@ -1,81 +1,48 @@
 # Mobile Egress
 
-Mobile Egress is a personal, self-hosted system that lets selected applications on a paired Windows computer use a paired Android phone's cellular connection through a local SOCKS5 proxy.
+Mobile Egress lets selected applications on Windows Server 2019 EC2 instances use an Android phone's cellular connection. One Windows 10/11 PC runs the private relay and controller; Tailscale Funnel carries raw Mobile Egress TLS to that loopback-only relay.
 
-It deliberately has no public SOCKS listener. Authenticated Agent and Client sessions use TLS with enrolled identities; enrollment and read-only health are bootstrap and observability surfaces, not public proxy access. The Windows app exposes the proxy solely on `127.0.0.1`.
-
-## Terms
-
-- **Owner** — the privileged relay certificate role held by the Windows owner application.
-- **Client** — the certificate role used by the local Windows SOCKS tunnel, distinct from the Windows application as a whole.
-- **Agent** — the Android certificate role and application that supplies cellular-bound egress.
-- **Relay administrator** — the person with relay-host and relay-state access. This can be the Owner, but it has separate operational authority.
-- **Agent QR code** — a displayed, short-lived Agent invitation for Android scanning. Treat it as secret material while valid; the Android application has no text fallback.
-- **Local SOCKS5 proxy** — the authenticated Windows loopback listener, not an Internet-facing relay service.
-
-## Security at a glance
-
-- The public relay provides TLS-protected enrollment and read-only aggregate health, plus role-authenticated control and tunnel sessions. It is not a public SOCKS endpoint.
-- **Owner** and **Client** are separate certificate identities. Owner controls enrollment and known-serial revocation; Client alone authenticates the Windows tunnel session.
-- A visible Agent QR is a bearer secret. Do not screen-share or screenshot it while valid. Generating another QR does not revoke an earlier unexpired code.
-- Windows identity and SOCKS state use current-user DPAPI, which is not a guarantee against same-user malware, a compromised interactive session, or an administrator. Relay CA/private-key and SQLite state, including backups, depend on filesystem and administrator protections.
-- Android binds its own enrollment, relay, DNS, and target sockets to a selected cellular network. It is not a VPN, does not change the phone's default route, and does not control unrelated phone traffic.
-
-Successful `relay init` intentionally writes the one-time Owner invitation to stdout. Treat that output as a secret and keep it out of logs, screenshots, transcripts, tickets, and documentation. See the [security model](docs/security-model.md) for enrollment, storage, local-adversary, and revocation boundaries.
-
-## Start with the task you need
-
-- [Deploy the relay](docs/deployment.md)
-- [Operate or recover](docs/operations.md)
-- [Understand security](docs/security-model.md)
-- [Implement the protocol](docs/protocol.md)
-- [Develop Windows](windows-client/README.md)
-- [Develop Android](android/README.md)
-- [Contribute](CONTRIBUTING.md)
-- [Current validation and limitations](docs/status.md)
-
-## Repository map
-
-- `docs/` — architecture, security, protocol, operations, analysis, and implementation plan. Read these before changing behavior.
-- `relay/` — Go relay service and its tests.
-- `windows-client/` — Wails desktop and tray application plus local SOCKS5 listener.
-- `android/` — Kotlin/Compose cellular egress agent.
-- `deploy/` — portable Docker deployment assets.
-- `scripts/` — local build and release checks.
-
-## Development prerequisites
-
-See [Contributing](CONTRIBUTING.md) for the reproducible frontend bootstrap, environment-variable precedence, validation matrix, generated-file rules, and documentation ownership.
-
-- Go 1.26+
-- Docker Engine for relay deployment
-- Node.js 22+ and WebView2 for the Windows Wails application
-- JDK 17 or later, Android SDK Platform 35, and Android Build-Tools 35 for the Android app
-
-Run the read-only prerequisite detector before building. It does not install software or inspect signing values:
-
-```powershell
-& .\scripts\preflight.ps1
-& .\scripts\preflight.ps1 -Components Android
+```text
+EC2 application -> authenticated SOCKS5 127.0.0.1:1080 -> MobileEgressClient --+
+                                                                              +-> Tailscale Funnel -> local Windows relay -> Android Agent -> cellular Internet
+EC2 application -> authenticated SOCKS5 127.0.0.1:1080 -> MobileEgressClient --+
 ```
 
-`MISSING:` means a required tool is not installed or configured; `INVALID:` means a discovered tool failed its validation. The full local gate is explicit and never creates a relay image, Wails executable, installer, or release APK:
+There is no relay EC2 instance, inbound EC2 security-group rule, Elastic IP, router change, local port-forward, or public SOCKS listener. The local PC and phone must remain powered on and connected.
 
-```powershell
-& .\scripts\test-all.ps1
-```
+## Friend quick start
 
-It runs Go test/vet/build, frontend typecheck/build, and Compose configuration validation. Android test, lint, and debug assembly run only after JDK 17+ and Android SDK Platform 35/Build-Tools 35 validate. If those Android prerequisites are absent, the command exits nonzero with remediation rather than reporting partial success.
+Each friend self-hosts a separate bridge:
 
-## Safety boundary
+1. Download the signed `mobile-egress-windows-<version>.zip` and signed Android APK from the project's [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). Extract the Windows ZIP and open `mobile-egress-windows.exe`.
+2. In **Bridge**, choose **Install Tailscale**, approve UAC and browser login, then choose **Set up local bridge**. The app installs `MobileEgressRelay` as LocalSystem and enables raw TCP Funnel on port 8443.
+3. In **Phone**, generate the short-lived Agent QR. Install/open the Android app, scan it, and tap **Start**. Android uses cellular only and does not fall back to Wi-Fi.
+4. In **AWS Login**, use IAM Identity Center browser login (recommended) or the encrypted access-key fallback. The controller is fixed to `us-east-1`.
+5. In **EC2 Nodes**, select up to ten running x86-64 Windows Server 2019 instances. Choose **Prepare SSM** where needed, wait for **SSM online**, then choose **Install Client**.
+6. For a managed node, choose **Copy credentials** and configure only the intended application with the returned authenticated SOCKS5 URL. The listener is `127.0.0.1:1080` on that EC2 instance.
 
-This project is for devices and servers you administer. It allows TCP connections only to public Internet addresses. It rejects loopback, private, link-local, multicast, unspecified, and reserved destinations, and must not be repurposed as a public proxy service.
+Friends do not clone the repository, run Docker, execute setup scripts, open inbound EC2 ports, or handle Owner invitations. They do need permission to approve Tailscale, use the selected AWS account, and install the Android APK.
 
-See [architecture](docs/architecture.md) for components and data flow, [security model](docs/security-model.md) for trust boundaries, and [status](docs/status.md) for the current validation and unsupported workflows. Follow the deployment and operations runbooks for procedures; do not infer an unsupported workflow from this overview.
+## Capacity and safety boundaries
 
+- At most ten managed EC2 Clients per controller.
+- At most four active streams per Client and 32 active streams through the one Android Agent.
+- Bounded, fair per-stream and aggregate queues; overload fails individual streams closed.
+- Mobile Egress mTLS authenticates Owner, Client, and Agent identities. Tailscale supplies ingress, not application identity.
+- EC2 Client private keys and configuration private keys are generated on-node and never returned through SSM.
+- SSM receives only signed-install commands, public CSR/bootstrap output, and sealed configuration ciphertext. SOCKS credentials and raw certificate/configuration values are not placed in SSM input, output, or logs.
+- The app never creates or terminates EC2 instances, changes public IPs, or opens security-group ingress.
+- This is for light, personal, interruption-tolerant traffic. Tailscale Funnel availability and bandwidth limits apply.
 
-```
-EC2 app → 127.0.0.1 SOCKS → headless Client service ─┐
-                                                      ├─ Tailscale Funnel ─ local Windows Relay ─ Android Agent ─ cellular internet
-EC2 app → 127.0.0.1 SOCKS → headless Client service ─┘
-```
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Deployment and acceptance](docs/deployment.md)
+- [Operations](docs/operations.md)
+- [Security model](docs/security-model.md)
+- [Protocol](docs/protocol.md)
+- [Current status](docs/status.md)
+- [Windows controller and Client](windows-client/README.md)
+- [Android Agent](android/README.md)
+
+Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. Production Windows packages require an Authenticode code-signing certificate and are created with `scripts\build-windows.ps1`; Android release signing is handled by `scripts\release-android.ps1`.

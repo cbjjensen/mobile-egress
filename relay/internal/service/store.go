@@ -20,6 +20,7 @@ var (
 	errCapabilityExpired = errors.New("expired enrollment capability")
 	errCapabilityRole    = errors.New("enrollment capability role mismatch")
 	errIdentityNotFound  = errors.New("identity not found")
+	errIdentityLimit     = errors.New("identity role limit reached")
 )
 
 type metricsSnapshot struct {
@@ -195,11 +196,30 @@ func (state *store) capabilityCount(ctx context.Context, role string) (int, erro
 }
 
 func (state *store) createIdentity(ctx context.Context, serial string, role enrollment.Role, now time.Time) error {
-	_, err := state.db.ExecContext(ctx,
+	transaction, err := state.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin identity transaction: %w", err)
+	}
+	defer transaction.Rollback()
+	if role == enrollment.RoleClient {
+		var count int
+		if err := transaction.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM identities WHERE role = ? AND revoked_at IS NULL`, string(role),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("count active Client identities: %w", err)
+		}
+		if count >= maximumClientIdentities {
+			return errIdentityLimit
+		}
+	}
+	_, err = transaction.ExecContext(ctx,
 		`INSERT INTO identities(serial, role, created_at) VALUES (?, ?, ?)`, serial, string(role), now.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("persist identity: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit identity: %w", err)
 	}
 	return nil
 }
@@ -300,6 +320,17 @@ func (state *store) redeemCapabilityAndCreateIdentity(
 	}
 	if !now.Before(time.Unix(expiresAt, 0)) {
 		return errCapabilityExpired
+	}
+	if role == enrollment.RoleClient {
+		var count int
+		if err := transaction.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM identities WHERE role = ? AND revoked_at IS NULL`, string(role),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("count active Client identities: %w", err)
+		}
+		if count >= maximumClientIdentities {
+			return errIdentityLimit
+		}
 	}
 
 	result, err := transaction.ExecContext(ctx,

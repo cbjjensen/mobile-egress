@@ -24,7 +24,10 @@ import (
 	"mobile-egress/relay/internal/enrollment"
 )
 
-const maxControlRequestBytes = 256 << 10
+const (
+	maxControlRequestBytes  = 256 << 10
+	maximumClientIdentities = 10
+)
 
 type enrollRequest struct {
 	Code         string          `json:"code"`
@@ -95,6 +98,8 @@ func (service *Service) handleEnroll(writer http.ResponseWriter, request *http.R
 			writeAPIError(writer, http.StatusForbidden, "role_mismatch")
 		case errors.Is(err, errCapabilityInvalid), errors.Is(err, errCapabilityExpired):
 			writeAPIError(writer, http.StatusUnauthorized, "invalid_capability")
+		case errors.Is(err, errIdentityLimit):
+			writeAPIError(writer, http.StatusConflict, "client_limit")
 		default:
 			writeAPIError(writer, http.StatusInternalServerError, "internal_error")
 		}
@@ -165,6 +170,10 @@ func (service *Service) handleProvisionClient(writer http.ResponseWriter, reques
 	}
 	result, err := service.issueIdentity(request.Context(), publicKey, enrollment.RoleClient, time.Now().UTC())
 	if err != nil {
+		if errors.Is(err, errIdentityLimit) {
+			writeAPIError(writer, http.StatusConflict, "client_limit")
+			return
+		}
 		writeAPIError(writer, http.StatusInternalServerError, "internal_error")
 		return
 	}

@@ -1,0 +1,323 @@
+// Package awssdk is the concrete, us-east-1-only AWS adapter for EC2
+// inventory, IAM instance-profile readiness, and SSM Run Command.
+package awssdk
+
+import (
+	"context"
+	"errors"
+	"net/url"
+	"sort"
+	"strings"
+	"time"
+
+	aws "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/smithy-go"
+	"mobile-egress/windows-client/internal/cloud"
+)
+
+type AccessKeyCredentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+type Client struct {
+	ec2 *ec2.Client
+	iam *iam.Client
+	ssm *ssm.Client
+}
+
+func NewAccessKey(ctx context.Context, value AccessKeyCredentials) (*Client, error) {
+	if strings.TrimSpace(value.AccessKeyID) == "" || strings.TrimSpace(value.SecretAccessKey) == "" {
+		return nil, errors.New("AWS access key ID and secret access key are required")
+	}
+	provider := credentials.NewStaticCredentialsProvider(value.AccessKeyID, value.SecretAccessKey, value.SessionToken)
+	configuration, err := config.LoadDefaultConfig(ctx, config.WithRegion(cloud.Region), config.WithCredentialsProvider(provider))
+	if err != nil {
+		return nil, errors.New("load AWS access-key configuration")
+	}
+	return New(configuration), nil
+}
+
+func NewProfile(ctx context.Context, profile string) (*Client, error) {
+	if strings.TrimSpace(profile) == "" {
+		return nil, errors.New("AWS shared configuration profile is required")
+	}
+	configuration, err := config.LoadDefaultConfig(ctx, config.WithRegion(cloud.Region), config.WithSharedConfigProfile(profile))
+	if err != nil {
+		return nil, errors.New("load AWS IAM Identity Center profile")
+	}
+	return New(configuration), nil
+}
+
+func New(configuration aws.Config) *Client {
+	configuration.Region = cloud.Region
+	return &Client{ec2: ec2.NewFromConfig(configuration), iam: iam.NewFromConfig(configuration), ssm: ssm.NewFromConfig(configuration)}
+}
+
+func (client *Client) Instances(ctx context.Context) ([]cloud.Instance, error) {
+	if client == nil || client.ec2 == nil || client.iam == nil || client.ssm == nil {
+		return nil, errors.New("AWS client is unavailable")
+	}
+	paginator := ec2.NewDescribeInstancesPaginator(client.ec2, &ec2.DescribeInstancesInput{Filters: []ec2types.Filter{
+		{Name: aws.String("instance-state-name"), Values: []string{"running"}},
+		{Name: aws.String("platform"), Values: []string{"windows"}},
+	}})
+	rawInstances := make([]ec2types.Instance, 0)
+	imageIDs := make(map[string]struct{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, errors.New("list EC2 Windows instances")
+		}
+		for _, reservation := range page.Reservations {
+			for _, instance := range reservation.Instances {
+				rawInstances = append(rawInstances, instance)
+				if instance.ImageId != nil {
+					imageIDs[*instance.ImageId] = struct{}{}
+				}
+			}
+		}
+	}
+	descriptions, err := client.imageDescriptions(ctx, imageIDs)
+	if err != nil {
+		return nil, err
+	}
+	ssmOnline, err := client.ssmOnline(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]cloud.Instance, 0, len(rawInstances))
+	for _, instance := range rawInstances {
+		item := cloud.Instance{
+			ID: aws.ToString(instance.InstanceId), State: string(instance.State.Name), Platform: string(instance.Platform),
+			Architecture: string(instance.Architecture), ImageDescription: descriptions[aws.ToString(instance.ImageId)],
+			SSMOnline: ssmOnline[aws.ToString(instance.InstanceId)],
+		}
+		for _, tag := range instance.Tags {
+			if aws.ToString(tag.Key) == "Name" {
+				item.Name = aws.ToString(tag.Value)
+				break
+			}
+		}
+		if instance.IamInstanceProfile != nil {
+			item.ProfileARN = aws.ToString(instance.IamInstanceProfile.Arn)
+			item.RoleName, _ = client.roleForProfile(ctx, item.ProfileARN)
+		}
+		result = append(result, item)
+	}
+	result = cloud.FilterSupportedInstances(result)
+	sort.Slice(result, func(left, right int) bool { return result[left].ID < result[right].ID })
+	return result, nil
+}
+
+func (client *Client) imageDescriptions(ctx context.Context, ids map[string]struct{}) (map[string]string, error) {
+	result := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	values := make([]string, 0, len(ids))
+	for id := range ids {
+		values = append(values, id)
+	}
+	output, err := client.ec2.DescribeImages(ctx, &ec2.DescribeImagesInput{ImageIds: values})
+	if err != nil {
+		return nil, errors.New("describe EC2 Windows images")
+	}
+	for _, image := range output.Images {
+		result[aws.ToString(image.ImageId)] = aws.ToString(image.Description)
+	}
+	return result, nil
+}
+
+func (client *Client) ssmOnline(ctx context.Context) (map[string]bool, error) {
+	result := make(map[string]bool)
+	paginator := ssm.NewDescribeInstanceInformationPaginator(client.ssm, &ssm.DescribeInstanceInformationInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, errors.New("list Systems Manager instances")
+		}
+		for _, info := range page.InstanceInformationList {
+			result[aws.ToString(info.InstanceId)] = info.PingStatus == ssmtypes.PingStatusOnline
+		}
+	}
+	return result, nil
+}
+
+func (client *Client) roleForProfile(ctx context.Context, profileARN string) (string, error) {
+	profileName, err := resourceName(profileARN, "instance-profile")
+	if err != nil {
+		return "", err
+	}
+	output, err := client.iam.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{InstanceProfileName: aws.String(profileName)})
+	if err != nil || output.InstanceProfile == nil || len(output.InstanceProfile.Roles) != 1 {
+		return "", errors.New("resolve IAM instance profile role")
+	}
+	return aws.ToString(output.InstanceProfile.Roles[0].RoleName), nil
+}
+
+func (client *Client) CreateAndAttachDedicatedSSMProfile(ctx context.Context, instanceID string) (string, error) {
+	if !validInstanceID(instanceID) {
+		return "", errors.New("invalid EC2 instance ID")
+	}
+	described, err := client.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instanceID}})
+	if err != nil || len(described.Reservations) != 1 || len(described.Reservations[0].Instances) != 1 {
+		return "", errors.New("verify EC2 instance profile absence")
+	}
+	if described.Reservations[0].Instances[0].IamInstanceProfile != nil {
+		return "", errors.New("EC2 instance already has an instance profile; it was not replaced")
+	}
+	suffix := strings.TrimPrefix(instanceID, "i-")
+	roleName := "MobileEgressSSM-" + suffix
+	profileName := roleName
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	if _, err := client.iam.CreateRole(ctx, &iam.CreateRoleInput{RoleName: aws.String(roleName), AssumeRolePolicyDocument: aws.String(trust)}); err != nil && !isAlreadyExists(err) {
+		return "", errors.New("create dedicated SSM IAM role")
+	}
+	if err := client.AttachManagedPolicy(ctx, roleName, cloud.AmazonSSMManagedInstanceCoreARN); err != nil {
+		return "", err
+	}
+	if _, err := client.iam.CreateInstanceProfile(ctx, &iam.CreateInstanceProfileInput{InstanceProfileName: aws.String(profileName)}); err != nil && !isAlreadyExists(err) {
+		return "", errors.New("create dedicated SSM instance profile")
+	}
+	profile, err := client.iam.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{InstanceProfileName: aws.String(profileName)})
+	if err != nil || profile.InstanceProfile == nil {
+		return "", errors.New("verify dedicated SSM instance profile")
+	}
+	switch len(profile.InstanceProfile.Roles) {
+	case 0:
+		if _, err := client.iam.AddRoleToInstanceProfile(ctx, &iam.AddRoleToInstanceProfileInput{
+			InstanceProfileName: aws.String(profileName), RoleName: aws.String(roleName),
+		}); err != nil {
+			return "", errors.New("add dedicated role to SSM instance profile")
+		}
+	case 1:
+		if aws.ToString(profile.InstanceProfile.Roles[0].RoleName) != roleName {
+			return "", errors.New("dedicated SSM instance profile contains an unexpected role and was not changed")
+		}
+	default:
+		return "", errors.New("dedicated SSM instance profile contains unexpected roles and was not changed")
+	}
+	if _, err := client.ec2.AssociateIamInstanceProfile(ctx, &ec2.AssociateIamInstanceProfileInput{
+		InstanceId: aws.String(instanceID), IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(profileName)},
+	}); err != nil {
+		return "", errors.New("attach dedicated SSM instance profile")
+	}
+	return roleName, nil
+}
+
+func (client *Client) RoleHasManagedPolicy(ctx context.Context, roleName, policyARN string) (bool, error) {
+	paginator := iam.NewListAttachedRolePoliciesPaginator(client.iam, &iam.ListAttachedRolePoliciesInput{RoleName: aws.String(roleName)})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return false, errors.New("list IAM role policies")
+		}
+		for _, policy := range page.AttachedPolicies {
+			if aws.ToString(policy.PolicyArn) == policyARN {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (client *Client) AttachManagedPolicy(ctx context.Context, roleName, policyARN string) error {
+	if policyARN != cloud.AmazonSSMManagedInstanceCoreARN {
+		return errors.New("only AmazonSSMManagedInstanceCore may be attached")
+	}
+	if _, err := client.iam.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{RoleName: aws.String(roleName), PolicyArn: aws.String(policyARN)}); err != nil {
+		return errors.New("attach AmazonSSMManagedInstanceCore policy")
+	}
+	return nil
+}
+
+func (client *Client) RunPowerShell(ctx context.Context, instanceID, script string) (string, error) {
+	if !validInstanceID(instanceID) || script == "" || len(script) > 128<<10 {
+		return "", errors.New("invalid SSM PowerShell command")
+	}
+	output, err := client.ssm.SendCommand(ctx, &ssm.SendCommandInput{
+		DocumentName: aws.String("AWS-RunPowerShellScript"), InstanceIds: []string{instanceID},
+		Parameters:     map[string][]string{"commands": {script}, "executionTimeout": {"600"}},
+		TimeoutSeconds: aws.Int32(30),
+	})
+	if err != nil || output.Command == nil || output.Command.CommandId == nil {
+		return "", errors.New("send SSM command")
+	}
+	commandID := aws.ToString(output.Command.CommandId)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		invocation, err := client.ssm.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
+			CommandId: aws.String(commandID), InstanceId: aws.String(instanceID),
+		})
+		if err == nil {
+			switch invocation.Status {
+			case ssmtypes.CommandInvocationStatusSuccess:
+				return aws.ToString(invocation.StandardOutputContent), nil
+			case ssmtypes.CommandInvocationStatusCancelled, ssmtypes.CommandInvocationStatusCancelling,
+				ssmtypes.CommandInvocationStatusFailed, ssmtypes.CommandInvocationStatusTimedOut:
+				return "", errors.New("SSM command failed")
+			}
+		} else if !isInvocationPending(err) {
+			return "", errors.New("read SSM command status")
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func resourceName(rawARN, kind string) (string, error) {
+	parsed, err := url.Parse(rawARN)
+	if err == nil && parsed.Scheme == "arn" {
+		parts := strings.Split(rawARN, ":")
+		if len(parts) == 6 {
+			resource := parts[5]
+			prefix := kind + "/"
+			if strings.HasPrefix(resource, prefix) && len(resource) > len(prefix) {
+				return strings.TrimPrefix(resource, prefix), nil
+			}
+		}
+	}
+	return "", errors.New("invalid IAM resource ARN")
+}
+
+func isAlreadyExists(err error) bool { return apiErrorCode(err) == "EntityAlreadyExists" }
+func isInvocationPending(err error) bool {
+	code := apiErrorCode(err)
+	return code == "InvocationDoesNotExist"
+}
+
+func apiErrorCode(err error) string {
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) {
+		return apiError.ErrorCode()
+	}
+	return ""
+}
+
+func validInstanceID(value string) bool {
+	if !strings.HasPrefix(value, "i-") || len(value) < 10 || len(value) > 32 {
+		return false
+	}
+	for _, character := range value[2:] {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+var _ cloud.IAMProvider = (*Client)(nil)
+var _ cloud.CommandRunner = (*Client)(nil)

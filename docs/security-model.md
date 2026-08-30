@@ -1,90 +1,50 @@
 # Security model
 
-Related documents: [architecture](architecture.md), [protocol](protocol.md), [deployment](deployment.md), [operations](operations.md), and [current status](status.md).
+## Boundaries
 
-## Scope and trust assumptions
+- Tailscale Funnel makes the local relay reachable but does not authorize Mobile Egress roles. Relay-issued mTLS certificates do.
+- The controller user is the Owner. Its private key and AWS fallback credentials are encrypted with Windows DPAPI for that user.
+- The elevated helper receives only public CSR/endpoint/result files and exposes a narrow setup/rotation command surface.
+- Relay CA/state is protected by Windows ACLs for SYSTEM and local Administrators. Local Administrators remain trusted and can access process/service state.
+- Every EC2 node is a separate Client identity. Its private keys remain in ACL-protected node state.
+- Android private keys remain non-exportable in Android Keystore. Enrollment/migration uses a cellular-bound network.
 
-Mobile Egress protects relay bootstrap, control, and tunnel traffic with TLS 1.3 and a private relay CA. Shipped clients pin that CA instead of relying on the public Web PKI. The authorization model then limits enrolled identities to their persisted role and active certificate serial.
+## Secret handling
 
-The design assumes that the relay host and the participating Windows and Android user accounts remain under the administrator's control. It does not claim to contain malware already running as the enrolled Windows user, an administrator with endpoint or relay-state access, or an attacker who has copied relay signing material. It is selective TCP egress, not an anonymity service or a device-compromise recovery system.
+| Material | Created/stored | May cross SSM? |
+|---|---|---|
+| Relay CA/leaf private keys | Relay ProgramData state | No |
+| Owner private key | Controller process / DPAPI store | No |
+| Node Client private key | EC2 node ProgramData | No |
+| Node X25519 private key | EC2 node ProgramData | No |
+| Android private key | Android Keystore | No |
+| SOCKS username/password | Controller encrypted metadata and sealed node config | Ciphertext only |
+| CSR and X25519 public key | Node bootstrap output | Yes; public only |
+| Certificates/CA/endpoint | Controller then sealed config | Ciphertext in SSM by policy, despite being public identity material |
+| Enrollment/migration capability | In-memory QR; hash in relay DB | No |
 
-## Identity and authorization boundaries
+SSM command text contains signed release metadata or a base64 wrapper around the sealed envelope. Command output is constrained to public bootstrap JSON or fixed redacted success JSON. Errors exposed by the controller are finite and do not concatenate SSM stdout/stderr.
 
-The Windows application holds two separate relay identities. They are not interchangeable even though one application manages both:
+## AWS safeguards
 
-| Identity | Permitted authority | Explicit boundary |
-| --- | --- | --- |
-| **Owner** | Issue one-use Agent or Client enrollment capabilities and revoke a known identity by certificate serial | Cannot open a tunnel session and never authenticates the local SOCKS tunnel |
-| **Client** | Open a Client WebSocket session and request streams for the local Windows SOCKS proxy | Cannot issue enrollment capabilities or revoke identities |
-| **Agent** | Open the single Agent WebSocket session and supply cellular-bound target connections | Has no Owner control authority and cannot act as a Client |
-| **Relay administrator** | Access the relay host and persisted state | An operational role, not a certificate role; it remains distinct even when the same person is also the Owner |
+The controller is hard-coded to `us-east-1`, inventories only running x86-64 Windows Server 2019, and manages at most ten nodes. It never calls EC2 creation/termination, public-address allocation, or security-group ingress APIs.
 
-The relay TLS listener requests a client certificate but permits a connection without one so that bootstrap and health can work. This is only a TLS transport boundary:
+It never replaces an existing instance profile. For a profile-less instance it rechecks absence before association. A deterministic dedicated profile with an unexpected role is rejected. For an existing role it requires explicit operator confirmation and attaches only `AmazonSSMManagedInstanceCore`.
 
-- `POST /v1/enroll` is certificate-free but requires a valid capability whose stored role matches the requested identity role.
-- `GET /healthz` is certificate-free and read-only. It returns aggregate readiness, connection, stream, byte, and finite error counters.
-- Owner control endpoints require a verified certificate whose serial is present, active, and persisted as Owner.
-- The tunnel endpoint requires an active Client or Agent identity; Owner is forbidden. Session admission repeats the active-role check, and the relay rechecks identity status before processing every inbound session message.
+IAM Identity Center uses the browser/device authorization flow; the AWS password is never entered into Mobile Egress. Access keys are a fallback and are encrypted with DPAPI, but short-lived role credentials are preferred.
 
-Consequently, completing TLS verification with an enrolled certificate does not by itself grant control or tunnel authority. The application-level serial, revocation state, and role checks remain mandatory.
+## Network safeguards
 
-## Enrollment and CA pinning
+The relay and all SOCKS listeners bind loopback. Only Funnel publishes port 8443, which is TLS relay traffic—not SOCKS. EC2 needs outbound HTTPS/SSM only. Applications opt in individually; the product does not alter the OS default route.
 
-Relay initialization creates the private CA, relay certificate, SQLite state, and one initial Owner capability. An active Owner can later issue Agent or Client capabilities. Each capability is generated from 32 random bytes, is bound to exactly one role, currently expires after ten minutes, and can be redeemed once. SQLite stores its SHA-256 hash, role, creation time, expiry, and consumption state rather than the raw capability. Consumption and identity creation occur in one database transaction.
+Android requests a cellular transport and creates relay/target sockets from that `Network`. Loss/unavailability fails closed. Destination policy is enforced in both relay and Agent. DNS names, target IPs, URLs, headers, payloads, and credentials are excluded from diagnostics.
 
-An invitation contains the exact HTTPS relay origin, relay CA certificate, requested role, expiry, and raw bearer capability. Before sending the capability or CSR, the shipped Windows and Android clients establish TLS using only the invitation CA. They also reject an enrollment response that returns a different CA or a certificate that does not match the locally generated key, requested role, and response serial. The invitation is therefore both the bootstrap trust input and secret enrollment authority; it is not a short numeric PIN.
+## Signing and supply chain
 
-The `relay init` command intentionally writes the initial encoded Owner invitation to stdout once. This is the sole intended secret-output exception: capture it only in an administrator-controlled terminal and do not place it in shared logs, shell transcripts, screenshots, tickets, or documentation. Relay state retains only the capability hash.
+The controller downloads Tailscale only from the official stable package origin, checks the companion SHA-256, and requires a valid Tailscale signer before UAC install. Mobile Egress helper/relay/Client binaries require a valid Authenticode signature whose subject contains `Mobile Egress`; node releases also require the exact manifest hash and GitHub HTTPS release URL.
 
-## QR and invitation handling
+Protect the code-signing private key separately from build outputs. A compromised signer is a full update-path incident. Unsigned developer binaries intentionally cannot perform production service setup.
 
-The Windows UI renders an Agent invitation as an in-memory QR image and its expiry; it does not expose invitation text. The visible QR still contains the complete bearer invitation. Anyone who captures it can attempt Agent enrollment until the capability is redeemed or expires.
+## Explicit non-goals
 
-Do not screen-share, stream, record, or screenshot a valid Agent QR, and keep untrusted cameras out of view. Generating or displaying another QR issues another capability; it does **not** revoke an earlier unexpired QR. Routine Agent re-pairing also does not revoke the previously enrolled Agent identity.
-
-## Stored secrets and local adversaries
-
-### Relay state
-
-The relay state directory includes the CA private key, relay private key, certificates, and SQLite database. The database contains capability hashes plus identity, revocation, last-seen, and aggregate metric state. These files are not application-encrypted at rest. Host filesystem permissions, administrator access control, disk protection, and backup custody are therefore part of the security boundary. Backups and restored copies require protection equivalent to the live state directory.
-
-### Windows state and loopback SOCKS
-
-Windows persists Owner and Client identities and generated SOCKS credentials with DPAPI for the current Windows user. This protects copied state from a different ordinary user context; it is not a guarantee against malware running as the same user, a compromised interactive session, or an administrator. Owner and Client private material must still be treated as secret.
-
-The SOCKS5 listener binds only to IPv4 loopback (`127.0.0.1`), requires the generated username and password, accepts `CONNECT` only, and does not change the Windows default route. Loopback binding prevents network exposure from other hosts; it is not a security boundary against same-user malware or an administrator on the Windows machine.
-
-### Android state and routing
-
-Android generates the Agent signing key in AndroidKeyStore and persists certificate and relay identity material encrypted with a separate AndroidKeyStore key. The invitation capability is not persisted after pairing.
-
-The Agent requests a cellular Android `Network`. Enrollment TLS, relay DNS and TLS/WebSocket connections, and target TCP sockets are individually created through that selected network. This is per-socket cellular binding, **not a VPN**: the application does not install an Android VPN, alter the phone's default route, or control unrelated phone traffic. Loss of the selected cellular network closes the Agent session and streams rather than authorizing Wi-Fi fallback.
-
-## Network exposure and destination policy
-
-The public relay listener serves TLS-protected enrollment, read-only health, Owner control, and authenticated Client/Agent WebSocket sessions. It never accepts SOCKS5 and is not a public proxy endpoint. The Android Agent initiates outbound relay and target connections; it exposes no inbound proxy listener.
-
-The relay resolves Client-requested hostnames and rejects the request if any returned address violates its public-TCP policy. Rejected categories include loopback, unspecified, private, carrier-grade NAT, link-local, multicast, documentation-only, benchmark, and other non-global-unicast ranges. IPv6 literals must fall within the allowed public range after special and tunneling ranges are excluded. The Agent independently validates the relay-supplied literal IP before connecting.
-
-## Revocation scope and compromise boundary
-
-Owner revocation marks one known certificate serial as revoked, rejects its future authenticated requests, and closes its active session and streams if connected. It does not invalidate other identities or unredeemed enrollment capabilities. Creating a replacement identity or QR does not implicitly revoke the prior identity or capability.
-
-Relay v1 has no identity-list endpoint, and Android does not display its certificate serial, so targeted lost-phone revocation is not a shipped app-first workflow. See [current status](status.md#known-limitations) for the explicit limitation; do not infer a recovery command that is not documented.
-
-Certificate revocation cannot remediate exposure of the relay CA/private key or compromise of the relay state directory or its backups. Those events cross the trust boundary and require an administrator-led recovery decision; this document intentionally does not invent a recovery procedure that the current product does not implement.
-
-## Logging and privacy
-
-Application logs, diagnostics, examples, screenshots, and support artifacts must not contain invitation payloads, capability values, SOCKS authentication, private keys, certificates, payload bytes, DNS names, target IPs, URLs, or HTTP headers. The one documented exception is the initial Owner invitation written to stdout by successful `relay init`; treat that output as a secret, not as ordinary logging.
-
-The relay health response and persisted metrics are aggregate only: readiness, connection and stream counts, total streams, byte count, and finite redacted error-code counts. Tunnel payloads remain opaque to the relay routing layer and must never be added to operational logging.
-
-## Implementation anchors
-
-- Relay initialization and capability hashing: [`relay/internal/service/init.go`](../relay/internal/service/init.go) and [`relay/internal/service/store.go`](../relay/internal/service/store.go)
-- Enrollment, Owner authorization, and revocation: [`relay/internal/service/enrollment.go`](../relay/internal/service/enrollment.go) and [`relay/internal/service/session.go`](../relay/internal/service/session.go)
-- TLS listener and read-only health: [`relay/internal/service/service.go`](../relay/internal/service/service.go)
-- Intentional initialization output: [`relay/cmd/relay/main.go`](../relay/cmd/relay/main.go)
-- Windows identity separation, DPAPI, and loopback SOCKS: [`windows-client/internal/client/core.go`](../windows-client/internal/client/core.go), [`windows-client/internal/securestore/dpapi_windows.go`](../windows-client/internal/securestore/dpapi_windows.go), and [`windows-client/internal/socks/server.go`](../windows-client/internal/socks/server.go)
-- Android CA pinning and per-socket cellular binding: [`android/app/src/main/java/com/mobileegress/agent/security/PinnedTls.kt`](../android/app/src/main/java/com/mobileegress/agent/security/PinnedTls.kt), [`android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt`](../android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt), and [`android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt`](../android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt)
+This is not an anonymity service, VPN/default-route replacement, high-availability proxy, bulk traffic platform, endpoint security product, or defense against a compromised local Administrator/root user. Tailscale Funnel is a public ingress with service limits. Carrier IP rotation is not guaranteed.

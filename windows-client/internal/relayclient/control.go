@@ -30,6 +30,25 @@ type ProvisionedIdentity struct {
 	CACertificatePEM string `json:"caCertificatePem"`
 }
 
+type EndpointMigration struct {
+	Version          int       `json:"version"`
+	Type             string    `json:"type"`
+	RelayURL         string    `json:"relayUrl"`
+	CACertificatePEM string    `json:"caCertificatePem"`
+	Capability       string    `json:"capability"`
+	ExpiresAt        time.Time `json:"expiresAt"`
+}
+
+type RelayHealth struct {
+	Readiness        bool             `json:"readiness"`
+	AgentConnected   bool             `json:"agentConnected"`
+	ConnectedClients int              `json:"connectedClients"`
+	ActiveStreams    int              `json:"activeStreams"`
+	TotalStreams     int64            `json:"totalStreams"`
+	ByteCount        int64            `json:"byteCount"`
+	ErrorCounts      map[string]int64 `json:"errorCounts"`
+}
+
 func IssuePairing(ctx context.Context, identity Identity, role string) (PairingCode, error) {
 	if identity.Role != "owner" {
 		return PairingCode{}, errors.New("owner identity required")
@@ -116,6 +135,88 @@ func ProvisionClient(ctx context.Context, identity Identity, csrPEM string) (Pro
 		RelayURL: baseURL.String(), Role: result.Role, Serial: strings.ToUpper(result.Serial),
 		CertificatePEM: result.CertificatePEM, CACertificatePEM: result.CACertificatePEM,
 	}, nil
+}
+
+func IssueEndpointMigration(ctx context.Context, identity Identity) (EndpointMigration, error) {
+	if identity.Role != "owner" {
+		return EndpointMigration{}, errors.New("owner identity required")
+	}
+	response, transport, err := identityRequest(ctx, identity, "/v1/endpoint-migrations", []byte(`{}`))
+	if transport != nil {
+		defer transport.CloseIdleConnections()
+	}
+	if err != nil {
+		return EndpointMigration{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxControlResponseBytes))
+		return EndpointMigration{}, fmt.Errorf("relay rejected endpoint migration with HTTP %d", response.StatusCode)
+	}
+	var wire struct {
+		Version          int    `json:"version"`
+		Type             string `json:"type"`
+		RelayURL         string `json:"relayUrl"`
+		CACertificatePEM string `json:"caCertificatePem"`
+		Capability       string `json:"capability"`
+		ExpiresAt        string `json:"expiresAt"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseBytes+1))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&wire) != nil || requireJSONEOF(decoder) != nil || wire.Version != 1 ||
+		wire.Type != "agent-endpoint-migration" || wire.Capability == "" || wire.CACertificatePEM != identity.CACertificatePEM {
+		return EndpointMigration{}, errors.New("relay returned an invalid endpoint migration")
+	}
+	issuedOrigin, err := validateRelayURL(wire.RelayURL)
+	if err != nil {
+		return EndpointMigration{}, errors.New("relay returned an invalid endpoint migration")
+	}
+	ownerOrigin, err := validateRelayURL(identity.RelayURL)
+	if err != nil || issuedOrigin.String() != ownerOrigin.String() {
+		return EndpointMigration{}, errors.New("relay returned an endpoint migration for a different origin")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, wire.ExpiresAt)
+	if err != nil || !expiresAt.After(time.Now()) {
+		return EndpointMigration{}, errors.New("relay returned an invalid endpoint migration expiry")
+	}
+	return EndpointMigration{
+		Version: wire.Version, Type: wire.Type, RelayURL: issuedOrigin.String(),
+		CACertificatePEM: wire.CACertificatePEM, Capability: wire.Capability, ExpiresAt: expiresAt,
+	}, nil
+}
+
+func Health(ctx context.Context, identity Identity) (RelayHealth, error) {
+	baseURL, err := validateRelayURL(identity.RelayURL)
+	if err != nil {
+		return RelayHealth{}, err
+	}
+	client, transport, err := identityHTTPClient(identity)
+	if err != nil {
+		return RelayHealth{}, err
+	}
+	defer transport.CloseIdleConnections()
+	client.Timeout = 5 * time.Second
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String()+"/healthz", nil)
+	if err != nil {
+		return RelayHealth{}, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return RelayHealth{}, errors.New("relay health is unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxControlResponseBytes))
+		return RelayHealth{}, fmt.Errorf("relay health returned HTTP %d", response.StatusCode)
+	}
+	var result RelayHealth
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseBytes+1))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || requireJSONEOF(decoder) != nil || !result.Readiness ||
+		result.ConnectedClients < 0 || result.ActiveStreams < 0 || result.TotalStreams < 0 || result.ByteCount < 0 || result.ErrorCounts == nil {
+		return RelayHealth{}, errors.New("relay returned invalid aggregate health")
+	}
+	return result, nil
 }
 
 func Revoke(ctx context.Context, identity Identity, serial string) error {

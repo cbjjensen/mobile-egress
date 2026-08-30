@@ -18,6 +18,8 @@ coverage.out
 
 # Explicit local package artifacts (source remains tracked by extension and path)
 /mobile-egress-windows.exe
+/mobile-egress-admin.exe
+/mobile-egress-client.exe
 /relay.exe
 /*.msi
 /*.msix

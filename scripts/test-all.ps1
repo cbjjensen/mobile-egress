@@ -33,8 +33,6 @@ try {
         Pop-Location
     }
 
-    Invoke-RequiredCommand -Name 'Compose configuration validation' -Command { docker compose -f deploy/docker-compose.yml config --quiet }
-
     & (Join-Path $PSScriptRoot 'preflight.ps1') -Components Android
     if ($LASTEXITCODE -ne 0) {
         $androidPrerequisiteExit = $LASTEXITCODE

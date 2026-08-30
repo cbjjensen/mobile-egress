@@ -1,145 +1,73 @@
-# Deployment and release
+# Deployment, release, and acceptance
 
-Related documents: [operations](operations.md), [current status](status.md), [architecture](architecture.md), [security model](security-model.md), [Windows client](../windows-client/README.md), and [Android Agent](../android/README.md).
+Normal operators use signed release artifacts and the Windows app. The Docker Compose files remain a developer/legacy relay harness and are not part of the supported local-Funnel friend setup.
 
-This runbook covers the supplied source-checkout Compose deployment and owner-controlled Windows and Android artifacts. It does not publish a public SOCKS service or provide an automatic update channel. [Current status](status.md) is the canonical record of automated validation and known product limitations.
+## Release artifacts
 
-## Relay host readiness
+A Windows release contains these siblings in one signed ZIP:
 
-Complete these checks before initialization:
+- `mobile-egress-windows.exe` — controller UI;
+- `mobile-egress-admin.exe` — narrow UAC helper;
+- `mobile-egress-relay.exe` — LocalSystem loopback relay;
+- `mobile-egress-client.exe` — signed headless EC2 release; and
+- `release-manifest.json` — exact Client version, GitHub HTTPS URL, SHA-256, and expected publisher.
 
-- Use a maintained host with Docker Engine and the Docker Compose plugin. From the repository root, `& .\scripts\preflight.ps1 -Components Docker` is the supplied read-only prerequisite check; it does not install Docker.
-- Restrict interactive and backup access to the host. The bind-mounted relay state contains a private CA key, relay key, certificates, and SQLite identity/capability state. These are filesystem-protected operational secrets, not encrypted-at-rest application data.
-- Choose the public endpoint before initialization. `RELAY_PUBLIC_NAME` is the DNS name or IP placed in the relay certificate. `RELAY_PUBLIC_URL` is the exact HTTPS origin placed in invitations. Its hostname must equal `RELAY_PUBLIC_NAME`, and its explicit port, when present, must be the port clients actually reach.
-- Make the public name resolve to this relay ingress. Permit the selected TCP TLS port through host and network firewalls. With the supplied environment, public TCP 8443 maps to container TCP 8443.
-- Preserve relay-generated TLS end to end. An ingress may TCP-forward the connection, but substituting a different TLS certificate breaks the invitation-pinned relay CA trust used by Windows and Android.
-- Do not route SOCKS traffic to the relay port. Port 8443 carries the relay's HTTPS and WebSocket TLS protocol. SOCKS5 exists only on the authenticated Windows listener at `127.0.0.1`.
-- Prepare an access-controlled, versioned backup destination for the complete `deploy/data` directory. A backup is as sensitive as the live state and must not be placed in a general sync folder or source control.
+The same signed `mobile-egress-client.exe` must be attached to the matching GitHub release URL in the manifest. The controller refuses a missing or invalid manifest; EC2 install/update refuses a digest or Authenticode mismatch.
 
-The container command listens on `RELAY_LISTEN`, while Compose publishes `${RELAY_PORT}:8443`. The supplied configuration therefore keeps the container listener at `0.0.0.0:8443`; changing only one side of that mapping makes the relay unreachable.
-
-## Secure relay initialization
-
-The supplied Compose file builds both relay services from the current repository checkout. It does not select a pinned relay image or release tag.
-
-1. Run `& .\scripts\preflight.ps1 -Components Docker` from the repository root.
-2. Copy `deploy/.env.example` to the ignored `deploy/.env`. Set the reviewed `RELAY_PUBLIC_NAME` and `RELAY_PUBLIC_URL`; leave the container listener aligned with the Compose mapping. Do not place credentials, pairing bundles, certificates, or relay state in this file.
-3. Confirm DNS, the public TCP port, and the exact external HTTPS origin before creating the CA. Initialization binds the generated relay certificate and every invitation to those values.
-4. Initialize the empty state once:
-
-   ```powershell
-   docker compose -f deploy/docker-compose.yml --profile init run --rm relay-init
-   ```
-
-5. Capture the single printed Owner pairing bundle directly into an owner-controlled password manager. The bundle contains the CA trust anchor and a high-entropy, one-use capability and expires after ten minutes. Do not paste it into shell history, tickets, chat, logs, screenshots, or source control.
-6. Start the relay:
-
-   ```powershell
-   docker compose -f deploy/docker-compose.yml up -d relay
-   ```
-
-7. Confirm the container becomes healthy and the public `GET /healthz` origin returns aggregate JSON with `readiness: true`. `agentConnected: false` is expected before the Android Agent starts. Health does not prove physical ingress, device pairing, or cellular egress; complete the acceptance checklist below.
-
-The Owner invitation is an initialization output, not a renewable UI credential. If the only bundle is lost or expires before the first Owner enrollment, rerunning initialization is not a supported renewal procedure. Recovery requires relay-administrator intervention; the repository does not supply a safe in-place Owner renewal command.
-
-The first Windows installation pastes the Owner invitation and then automatically enrolls a separate local Client identity. The shipped UI does not create or import an additional Windows Client identity, so multi-Windows enrollment is not a supported app-first deployment. Do not invent or manually transfer a Client invitation outside a maintained recovery procedure.
-
-## State and CA custody
-
-Compose mounts `deploy/data` at `/var/lib/mobile-egress`; initialized CA, relay TLS, and SQLite files are under `deploy/data/state` on the host. Protect and back up the complete mounted directory as one unit. Do not copy, restore, or rotate individual CA, key, certificate, or database files independently.
-
-For a consistent backup:
-
-1. Schedule an outage and stop selected-application traffic, the Windows proxy, and the Android foreground Agent.
-2. Stop the `relay` Compose service so SQLite and key state are quiescent.
-3. Use the host's approved protected backup mechanism to copy the complete `deploy/data` directory with its access controls. Do not print or inspect secret file contents.
-4. Record the backup timestamp, deployment source commit, public origin, and backup identifier in the private operations record. Keep the backup under access controls equivalent to the live host.
-5. Start the same `relay` service and confirm `/healthz` reports `readiness: true`.
-6. Open Android and tap **Start**.
-7. Start the Windows loopback proxy.
-8. Wait for Windows to show **Agent ready**.
-9. Verify the selected application uses carrier egress and an unconfigured application's route remains unchanged.
-
-Restoring a known-good backup is a relay-administrator operation: stop the relay, preserve the current state as a restricted incident copy, restore the complete matching `deploy/data` set, and retain its protections. Then verify the restore in this order:
-
-1. Start the `relay` service and confirm `/healthz` reports `readiness: true`.
-2. Open Android and tap **Start**.
-3. Start the Windows loopback proxy.
-4. Wait for Windows to show **Agent ready**.
-5. Verify the selected application uses carrier egress and an unconfigured application's route remains unchanged.
-
-A stale state restore can reverse revocations or capability consumption, so it is not an application-code rollback mechanism.
-
-Do not improvise a state/CA cutover. If state is lost, the CA key is unavailable, the CA or database may be compromised, or a sole Owner identity is lost, revoked, or expired, the UI cannot recover the trust root. Keep the relay stopped when compromise is suspected, preserve a restricted forensic copy, and escalate to the relay administrator and maintainer. A reviewed cutover must create an empty state/CA, bootstrap a new Owner, and re-enroll every identity; no shipped command safely merges or rotates the old trust state in place.
-
-## Windows and Android releases
-
-Build only from a reviewed source commit. For each artifact, the private release record must include the source commit, application/release version, filename, SHA-256 hash, build time, and acceptance result. Do not include signing passwords, certificates, pairing material, SOCKS credentials, or relay state in that record.
-
-### Relay image
-
-`& .\scripts\build-relay-image.ps1` runs the Docker prerequisite check and builds `mobile-egress-relay:local` unless a different tag is supplied. That locally tagged image is not referenced by `deploy/docker-compose.yml`; the supplied Compose deployment has its own source `build` stanza. Record which workflow produced a deployed image rather than assuming the local tag controls Compose.
-
-### Windows installer
-
-Run:
+Build from a reviewed tag with a code-signing certificate whose subject contains `Mobile Egress`:
 
 ```powershell
-& .\scripts\build-windows.ps1 -Installer
+& .\scripts\build-windows.ps1 -ReleaseVersion 1.2.3 -CodeSigningThumbprint <40-hex-thumbprint>
 ```
 
-The script checks Go, Node.js, and WebView2, then asks the pinned Wails CLI to build an NSIS installer under `windows-client\build\bin`. The repository has no Windows code-signing or publishing workflow, and `wails.json` does not declare an application version. Treat the installer as an owner-controlled, manually distributed artifact; use an immutable release label plus the source commit as its version identifier, record its SHA-256, and exercise it on a non-primary Windows profile before acceptance. Do not substitute the frontend package version for an installer version. WebView2 remains a runtime prerequisite.
+The script builds all four binaries, signs and verifies each with `signtool`, writes the Client manifest, and creates `windows-client\build\release\mobile-egress-windows-1.2.3.zip`. Publish the ZIP and the standalone Client executable on GitHub Releases. Do not publish signing keys, AWS credentials, relay state, SOCKS credentials, or pairing material.
 
-### Signed Android APK
-
-Generate and back up a dedicated release keystore outside the checkout. Copy `android\keystore.properties.example` to the ignored `android\keystore.properties`, fill it locally, and confirm it remains untracked. Then use the guarded repository path:
+Build the Android release with the externally backed-up keystore described by `android\keystore.properties.example`:
 
 ```powershell
 & .\scripts\release-android.ps1 -ValidateOnly
 & .\scripts\release-android.ps1
 ```
 
-`-ValidateOnly` checks only that required signing inputs exist and remain ignored. The full script also runs Android preflight, assembles the release APK, and verifies `android\app\build\outputs\apk\release\app-release.apk` with Build-Tools 35 `apksigner` without printing signing values.
+Record source tag/commit, filenames, hashes, signer identities, Android versionCode/versionName, build time, and acceptance result.
 
-Direct `gradlew.bat assembleRelease` is insufficient for a distributable artifact: it does not perform the repository's tracked/ignored signing-input guards, prerequisite flow, or final `apksigner` verification. Record the Android `versionName`/`versionCode`, APK SHA-256, and signing-key identity in the private release record. Losing the key prevents seamless updates; exposing it permits a malicious replacement APK.
+## Operator setup
 
-Neither release script publishes an artifact. Transfer accepted artifacts only through an owner-controlled channel and verify the recorded filename and hash at the receiving device.
+The operator needs Windows 10/11 with WebView2, an Android 10+ phone with cellular data, a Tailscale account that permits Funnel, and access to existing Windows Server 2019 EC2 instances in `us-east-1`.
 
-## Pairing and cross-device acceptance
+1. Extract the signed Windows ZIP and run `mobile-egress-windows.exe`.
+2. In **Bridge**, install/connect Tailscale and set up the local relay. Approve the explicit browser and UAC prompts.
+3. In **Phone**, generate and scan the Agent enrollment QR, then start the Android foreground Agent.
+4. In **AWS Login**, use IAM Identity Center or the access-key fallback.
+5. In **EC2 Nodes**, refresh inventory. For an instance with no profile, **Prepare SSM** creates and attaches a dedicated profile. For an existing non-SSM role, the app shows its name and requires explicit confirmation before attaching only `AmazonSSMManagedInstanceCore`; it never replaces the profile.
+6. Wait until the instance is SSM online, then install the Client. Copy its SOCKS credentials only into the intended workload.
 
-1. Install the recorded Windows NSIS artifact and verified signed Android APK through owner-controlled channels.
-2. On the first Windows installation, paste the confidential Owner invitation. Confirm **Setup** reports both Owner and local Windows Client ready.
-3. In **Phone**, generate one short-lived Agent QR. Keep it on the trusted local display and scan it with Android **Scan QR**. Android has no invitation paste flow.
-4. Tap Android **Start**, grant notification permission when requested, and wait for cellular available / relay connected.
-5. Start the Windows loopback proxy and copy its generated `socks5://<username>:<password>@127.0.0.1:<port>` line only into the selected application. Do not set a Windows system proxy or change either device's default route.
+Only SSM reachability and outbound HTTPS are required. Do not add inbound port 8443/1080 rules, a public IP, an Elastic IP, or a system-wide proxy.
 
-**Replace QR code** replaces only the QR shown in the Windows UI. It does not revoke a previously issued unexpired code. Treat every displayed code as secret until it is consumed or expires; generating another code can leave both codes valid during their respective lifetimes.
+## Minimum AWS permissions
 
-Do not promise IP rotation. Reconnecting the Agent can restore a cellular-bound relay session, but the application cannot reset carrier data or guarantee a different carrier address.
+The selected identity needs read access for EC2 images/instances and SSM inventory; SSM SendCommand/GetCommandInvocation for selected instances; and, when preparing IAM, narrowly scoped instance-profile/role operations. It also needs `iam:PassRole` and EC2 profile association only for a previously profile-less selected instance. Use account policy and resource constraints appropriate to the operator; the application itself filters to `us-east-1`, supported instances, and the SSM managed policy.
 
-## Required physical-device checklist (still required; not executed by automated verification)
+## Physical acceptance record
 
-Use an Android 10+ phone with working cellular data and an owner-controlled Windows 10/11 machine. Link the completed record to the artifact version/hash entry and to the validation boundary in [current status](status.md). Store only aggregate outcomes and redacted finite error classes.
+Automated tests do not replace this run. Use one local PC, one Android phone, and at least two SSM-managed Windows Server 2019 EC2 nodes.
 
-- [ ] Install the recorded Windows installer and signed APK. Confirm the received filenames and SHA-256 hashes match the private release record.
-- [ ] Complete Owner/Client setup, generate one fresh Agent QR, scan it on Android, tap **Start**, and confirm the foreground notification reports cellular available / relay connected.
-- [ ] Keep Wi-Fi connected, configure the SOCKS line in exactly one test application, and compare an external IP check. Only the proxy-configured application must report the phone carrier address; an unconfigured application must retain its normal path.
-- [ ] Disable cellular while Wi-Fi remains available. Active proxy streams must close and new requests must fail; no request may fall back to Wi-Fi. Restore cellular and wait for Agent reconnection before retrying.
-- [ ] Confirm the one-Agent-session rule and the Agent-offline fail-closed state without treating re-pairing as revocation of an earlier Agent identity.
-- [ ] Attempt private, loopback, link-local, multicast, and reserved destinations through SOCKS. Each must be denied without making a target connection.
-- [ ] Record the current local Windows Client serial in **Owner**, revoke that serial with Owner authority, choose **Replace Client**, restart the proxy, and verify selected-application egress.
-- [ ] Use a controlled public TCP destination that returns a response and EOF. Confirm the complete response arrives before the stream closes.
-- [ ] Trigger local-Client and relay/Agent closes nearly together. Confirm close handling is idempotent and unrelated streams continue.
-- [ ] From the single shipped Windows Client, run up to four local streams and confirm a fifth is rejected without starving the active streams. Eight streams is Agent/relay-wide capacity and cannot be exercised by one Windows Client, whose local limit is four.
-- [ ] Stop and start the Android Agent from its visible UI/notification controls, and close and restore the Windows window from the tray. Confirm only tray **Quit** fully exits Windows and stops its proxy.
-- [ ] Review Windows, Android, relay, and container logs. Verify they contain only aggregate state, counts, byte totals, and finite redacted errors—never destinations, payloads, credentials, pairing bundles, capabilities, certificates, or keys.
+- [ ] Verify the Windows ZIP, each executable signature, Client release SHA-256, and Android APK signature.
+- [ ] Complete app-only Tailscale/relay setup without Docker, router changes, or relay EC2 infrastructure.
+- [ ] Pair Android, start the Agent, and confirm cellular available / relay connected with Wi-Fi still enabled.
+- [ ] Install two EC2 Clients. Confirm each listens only on `127.0.0.1:1080` and uses different credentials/Client serials.
+- [ ] Configure one workload per node and confirm both report the phone carrier egress while unconfigured traffic retains its original route.
+- [ ] Exercise four streams on one Client and confirm its fifth is rejected; exercise aggregate load up to 32 across Clients and confirm the 33rd is rejected without starvation.
+- [ ] Disable cellular while Wi-Fi remains available. Existing streams must close and new requests must fail without Wi-Fi fallback.
+- [ ] Reboot the PC, phone, and both EC2 nodes separately. Confirm Windows services recover and applications reconnect after dependencies return.
+- [ ] Publish/install a newer signed Client with **Update**; use **Repair** to reapply service and sealed configuration.
+- [ ] Perform a controlled Funnel-name change. Connect AWS, choose endpoint rotation, verify sealed node updates, scan the Android migration QR, and confirm all existing serials/keys and SOCKS credentials are retained.
+- [ ] Review logs/SSM history for secret redaction and confirm no inbound EC2 networking changed.
 
-Lost-phone targeted revocation is not part of this checklist because it is not supported through the shipped UI: Android does not display its certificate serial and relay v1 has no identity-list endpoint. Routine Agent re-pairing does not revoke the earlier Agent identity. The relay/Agent-wide eight-stream ceiling likewise requires a specialized maintained harness or multiple Client sessions; the shipped UI provides neither additional-Windows Client enrollment nor a one-Client path above four local streams.
+Record only aggregate outcomes and finite error classes. Do not capture QR payloads, capabilities, credentials, keys, certificates, destinations, or traffic.
 
-## Rollback and revocation
+## Rollback and state recovery
 
-Before any relay update, create and verify a protected, quiescent backup as described above. Preserve the same uncompromised state/CA across a normal code update so enrolled devices retain trust.
+Normal code rollback preserves `C:\ProgramData\MobileEgress\Relay` and the relay CA. Install a previously accepted signed controller bundle and relay binary only after confirming protocol/schema compatibility. Never restore stale SQLite state as a code rollback because it can reverse revocation or capability consumption.
 
-The supplied source-checkout Compose file does not implement image-tag rollback. It builds from `..` and has no pinned `image:` reference, and the image built by `scripts/build-relay-image.ps1` is not selected by Compose. Therefore, “deploy the previous image” is not an executable procedure for this deployment. Plan and validate a source/release rollback mechanism outside this runbook before relying on one; do not substitute a stale state restore for a code rollback.
-
-If relay state or its CA private key may have been exposed, do not restart from it, reuse its CA, or rely on revocation inside the compromised state. Stop service, preserve a restricted forensic copy, and invoke the reviewed relay-administrator/maintainer cutover described under [State and CA custody](#state-and-ca-custody). All Windows and Android identities must be re-enrolled under the new CA.
+Back up the entire relay state directory while the relay service is stopped, preserving ACLs. A backup contains the CA private key and is as sensitive as live state. If the CA/state or sole Owner identity is lost or compromised, stop the service and perform a reviewed full trust reset with re-enrollment; endpoint rotation does not replace the CA and is not compromise recovery.

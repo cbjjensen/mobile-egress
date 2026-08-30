@@ -92,6 +92,9 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 	webSocketURL.Scheme = "wss"
 	webSocketURL.Path = "/v1/session"
 	dialer := websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 10 * time.Second}
+	if transport.DialContext != nil {
+		dialer.NetDialContext = transport.DialContext
+	}
 	connection, response, err := dialer.DialContext(ctx, webSocketURL.String(), nil)
 	if response != nil && response.Body != nil {
 		response.Body.Close()

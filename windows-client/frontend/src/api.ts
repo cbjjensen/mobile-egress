@@ -15,9 +15,59 @@ export type Status = {
 }
 
 export type AgentQr = { imageDataUrl: string; expiresAt: string }
+export type EndpointMigration = AgentQr & { updatedNodes: string[]; failedNodes: string[] }
+
+export type BridgeStatus = {
+  tailscaleOnline: boolean
+  relayReady: boolean
+  fqdn?: string
+  publicUrl?: string
+  ownerReady: boolean
+  ready: boolean
+  needsRotation: boolean
+}
+
+export type DeviceAuthorization = { verificationUrl: string; userCode: string; expiresAt: string }
+export type AWSAccount = { id: string; name: string; email: string }
+export type EC2Instance = {
+  id: string
+  name: string
+  state: string
+  platform: string
+  architecture: string
+  imageDescription: string
+  profileArn?: string
+  roleName?: string
+  ssmOnline: boolean
+}
+export type ManagedNode = {
+  instanceId: string
+  clientSerial: string
+  serviceVersion: string
+  health: string
+  proxy: string
+}
+export type SSMProfileResult = { changed: boolean; roleName: string }
 
 type DesktopAPI = {
   GetStatus(): Promise<Status>
+  GetBridgeStatus(): Promise<BridgeStatus>
+  InstallTailscale(): Promise<void>
+  SetupLocalBridge(): Promise<BridgeStatus>
+  RepairLocalBridge(): Promise<BridgeStatus>
+  RotateLocalBridge(): Promise<EndpointMigration>
+  SaveAWSAccessKeys(accessKeyId: string, secretAccessKey: string, sessionToken: string): Promise<void>
+  BeginAWSIdentityCenter(startUrl: string, ssoRegion: string): Promise<DeviceAuthorization>
+  CompleteAWSIdentityCenter(): Promise<AWSAccount[]>
+  AWSIdentityCenterRoles(accountId: string): Promise<string[]>
+  SelectAWSIdentityCenterRole(accountId: string, roleName: string): Promise<void>
+  ListEC2Instances(): Promise<EC2Instance[]>
+  EnsureInstanceSSM(instanceId: string, confirmExistingRoleChange: boolean): Promise<SSMProfileResult>
+  InstallEC2Node(instanceId: string): Promise<ManagedNode>
+  UpdateEC2Node(instanceId: string): Promise<ManagedNode>
+  RepairEC2Node(instanceId: string): Promise<ManagedNode>
+  ManagedNodes(): Promise<ManagedNode[]>
+  NodeProxyLine(instanceId: string): Promise<string>
   BootstrapOwner(encodedBundle: string): Promise<void>
   RetryClientSetup(): Promise<void>
   ReplaceClient(): Promise<void>

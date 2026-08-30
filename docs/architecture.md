@@ -1,86 +1,69 @@
 # Architecture
 
-Related documents: [protocol reference](protocol.md), [security model](security-model.md), [operations runbook](operations.md), and [current status](status.md).
+## Accepted topology
 
-## Product boundary
-
-Mobile Egress provides selective mobile egress. A Windows application exposes an authenticated SOCKS5 `CONNECT` listener on IPv4 loopback. Only applications explicitly configured with that local listener use the Android phone's cellular path; the Windows default route and other application traffic are unchanged.
-
-The public relay is an HTTPS and WebSocket service. It is never a public SOCKS endpoint.
+Every operator has one independent bridge. Their Windows 10/11 PC owns the relay and control plane, up to ten of their Windows Server 2019 EC2 instances are Clients, and one Android phone is the cellular Agent.
 
 ```text
-Selected Windows application
-  -> 127.0.0.1 SOCKS5 listener (Windows application)
-  -> Client-authenticated WebSocket
-  -> relay stream router
-  -> Agent-authenticated WebSocket
-  -> Android socket bound to the selected cellular Network
-  -> public TCP target
+EC2 workload -> loopback SOCKS -> Client service --+
+                                                   +-> public *.ts.net:8443 -> Funnel raw TCP -> 127.0.0.1:8443 relay -> Agent -> cellular target
+EC2 workload -> loopback SOCKS -> Client service --+
 ```
 
-## Identities and authority
+Tailscale passes Mobile Egress TLS bytes without replacing the relay certificate. The public Funnel name is the certificate server name. The local Owner uses `127.0.0.1:8443` as a dial override while still validating the public name.
 
-The Windows application holds two separate relay identities:
+## Components
 
-- **Owner** is the privileged control identity. It may issue one-use Agent or Client pairing capabilities and revoke an identity by certificate serial. It cannot open a tunnel session.
-- **Client** is the tunnel identity used by the local SOCKS proxy. It may establish a Client WebSocket session and request streams. It cannot issue pairing capabilities or revoke identities.
-- **Agent** is the Android identity. It may establish the single Agent WebSocket session and supply cellular-bound target connections. It has no Owner authority.
-- **Relay administrator** is an operational role with access to the relay host and persisted state. It is distinct from certificate roles even when the same person is also the Owner.
+### Windows controller
 
-The relay TLS listener requests a client certificate but permits certificate-free TLS for bootstrap and health. Protected endpoints then check the verified certificate serial, active/revoked state, and permitted role in application code. See the [protocol endpoint matrix](protocol.md#https-endpoints) and [security model](security-model.md) for the authentication and trust boundaries.
+The Wails/React app is the only normal operator interface. It:
 
-## Component responsibilities
+- downloads the official stable Tailscale amd64 MSI, verifies the published SHA-256 and a valid Tailscale Authenticode signer, and requests explicit UAC;
+- enables unattended Tailscale and `tailscale funnel --bg --yes --tcp=8443 tcp://127.0.0.1:8443`;
+- generates the Owner P-256 key in the unelevated process, sends only its CSR to the elevated helper, and stores the resulting Owner identity with Windows DPAPI;
+- supports IAM Identity Center device login and DPAPI-encrypted access-key fallback;
+- inventories only supported `us-east-1` instances and orchestrates installation/update/repair with SSM;
+- stores encrypted node metadata and reveals SOCKS credentials only on an explicit copy action; and
+- coordinates Funnel endpoint rotation, sealed EC2 updates, and a one-use Android migration QR.
 
-| Component | Responsibilities | Explicit boundary |
-| --- | --- | --- |
-| Relay | Terminate TLS 1.3; redeem enrollment capabilities; issue and revoke certificates; authorize active identities; resolve and validate Client targets; match Client and Agent streams; enforce capacity and timeouts; retain aggregate counters | Does not expose SOCKS, originate target traffic, retain payloads, or provide identity-list or destination-history APIs |
-| Windows application — Owner side | Retain the Owner identity; issue Agent/Client pairing capabilities; revoke a known certificate serial | Owner credentials never authenticate the SOCKS tunnel |
-| Windows application — Client side | Retain a separate Client identity; maintain the Client relay session; host an authenticated, `CONNECT`-only SOCKS5 listener on `127.0.0.1`; generate stream IDs | Does not change the Windows system proxy or default route |
-| Android Agent | Retain the Agent identity and AndroidKeyStore private key; acquire a cellular `Network`; keep the Agent session visible in a foreground service; validate relay-supplied target IPs; open and relay target TCP sockets | Does not install a VPN, change the phone's default route, control unrelated phone traffic, accept inbound Internet traffic, or fall back to Wi-Fi |
+### Local relay
 
-## Stream data flow
+`MobileEgressRelay` runs as LocalSystem, listens only on `127.0.0.1:8443`, and stores its CA, server identity, SQLite authorization state, and aggregate metrics under `C:\ProgramData\MobileEgress\Relay`. The directory ACL grants only SYSTEM and local Administrators.
 
-1. An authenticated local SOCKS user sends a `CONNECT` request to the Windows loopback listener.
-2. The Windows Client creates a random stream ID and sends the requested `{host,port}` to the relay.
-3. The relay resolves the host, applies the public-TCP destination policy to every returned address, and forwards the first approved `{ip,port}` to the Agent under the same stream ID.
-4. The Agent applies its own public-address check, creates the target socket from the selected Android cellular `Network`, and reports `opened` only after the TCP connection succeeds.
-5. After the Windows Client receives `opened`, the Windows loopback listener returns SOCKS success to the selected application. Subsequent `data` payloads are opaque TCP bytes routed by stream ID until a terminal `rejected` or `close` transition.
+The Windows SCM execution path is separate from foreground CLI behavior. Public commands are `bootstrap-owner`, `rotate-endpoint`, `serve`, and `--version`. Direct Owner bootstrap signs a locally generated CSR and never creates an Owner invitation.
 
-The wire schemas, directional state rules, limits, timeouts, and backpressure behavior are normative in the [protocol reference](protocol.md). Destination trust decisions are described in the [security model](security-model.md).
+The relay permits multiple simultaneous Clients, one active Agent session, four streams per Client, and 32 streams total. A rejected or revoked identity cannot open new sessions. Destination policy rejects non-public targets after resolution.
 
-## Android cellular boundary
+### Headless EC2 Client
 
-Android obtains a `Network` with cellular transport and Internet capability. Enrollment and Agent-session HTTP/TLS clients use that network's socket factory and DNS resolver. Target TCP sockets are also created from that network's socket factory. Consequently, the Agent's relay DNS, relay connection, enrollment connection, and target connection are individually cellular-bound.
+`MobileEgressClient` is a LocalSystem service installed under `C:\Program Files\MobileEgress`; state is under ACL-protected `C:\ProgramData\MobileEgress\Client`. It generates and retains:
 
-This is per-socket routing, not an Android VPN or device-wide routing change. Losing the selected cellular network tears down the Agent session and streams; it does not authorize Wi-Fi fallback.
+- its P-256 Client private key and CSR;
+- a durable X25519 sealed-configuration private key; and
+- its authenticated SOCKS username and password after decrypting the Owner-supplied configuration.
 
-## Trust and persistence
+Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080`, so an EC2 application must explicitly opt in. It reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
 
-Relay initialization creates a private CA, relay certificate, and SQLite database in the state directory. A device generates its own key pair, submits only a CSR or public key during enrollment, and retains the issued identity locally. Android keeps the private key in AndroidKeyStore. Windows persists Owner and Client state with Windows-current-user DPAPI protection.
+### Android Agent
 
-The relay database retains capability hashes, identity role/status and last-seen state, aggregate byte/stream counters, and finite error counts. Relay CA/key files and SQLite state are filesystem-protected operational secrets. Detailed custody, local-adversary, and revocation assumptions belong to the [security model](security-model.md); deployment, backup, and recovery steps belong to the [operations runbook](operations.md).
+The Android app stores its P-256 identity in Android Keystore and encrypted app storage. A foreground service requests a cellular `Network` and uses that network's socket factory for the relay and every target socket. Loss of cellular closes streams; Wi-Fi is never used as fallback.
 
-## Implemented defaults and runtime inputs
+Admission is capped at 32 streams. Inbound and outbound queues are bounded; outbound data scheduling is round-robin across ready streams so one stream cannot monopolize the Agent.
 
-The following service behavior is hard-coded in the current implementation rather than exposed as runtime tuning knobs:
+## Provisioning sequence
 
-- one active Agent session;
-- at most four active streams for one Client session;
-- at most eight active streams relay-wide through the Agent;
-- a 30-second relay opening deadline and a five-minute stream idle timeout; and
-- public TCP targets only.
+1. The controller verifies/installs Tailscale and obtains the stable Funnel FQDN.
+2. It generates an Owner key/CSR. The elevated helper installs the signed relay, initializes state with that CSR and public origin, ACLs state, and installs the relay service.
+3. For each EC2 node, the controller verifies or safely prepares SSM IAM access. It never replaces an existing instance profile.
+4. SSM installs the signed Client release. The node returns only a CSR and X25519 public key.
+5. The Owner calls the relay's direct Client-CSR endpoint.
+6. The controller generates SOCKS credentials, seals the endpoint/certificates/credentials to the node key using ephemeral X25519, HKDF-SHA256, and AES-256-GCM, and sends only the envelope through SSM.
+7. The node rejects malformed, tampered, replayed, or wrong-key envelopes, persists the configuration, and starts loopback SOCKS.
 
-The relay `serve` command accepts the state directory and TLS listen address. Relay initialization accepts the state directory, `--public-name` DNS name or IP address used as the relay certificate SAN, and `--public-url` exact HTTPS origin placed in the invitation. When `--public-url` is omitted, initialization derives an HTTPS origin on port 8443 from `--public-name`. Compose supplies those command inputs from its deployment environment. Changing stream capacities or timeout constants requires a code change and a new build.
+## Endpoint migration
 
-## Health and observability
+When Tailscale reports a different Funnel FQDN, the controller requires AWS connectivity first if nodes are managed. Under UAC it rotates only the relay leaf key/certificate and stored URL under the existing CA, restarts the service, updates the encrypted Owner endpoint, and pushes newly sealed endpoint-only configurations to nodes. It then displays a versioned `agent-endpoint-migration` QR. The existing Agent authenticates to the new endpoint with its current certificate, consumes the one-use capability, and updates only `relayOrigin`; its key alias and certificate remain unchanged.
 
-`GET /healthz` is anonymous and read-only. It returns one aggregate JSON object containing:
+## Availability and trust
 
-- `readiness`;
-- `agentConnected`;
-- `connectedClients`;
-- `activeStreams`;
-- cumulative `totalStreams` and `byteCount`; and
-- cumulative `errorCounts` keyed by finite protocol error code.
-
-The response contains neither Prometheus exposition text nor per-identity, destination, credential, or payload detail. Readiness is false, and the relay returns HTTP 503, if aggregate metrics cannot be read; otherwise a running service returns HTTP 200 even when no Agent is connected. Operational interpretation and restart procedures are in the [operations runbook](operations.md).
+The operator PC, Tailscale/Funnel, phone, cellular service, relay, and selected EC2 Client must all be available. Failure closes or prevents streams; it does not reroute an application through a different egress. Tailscale controls reachability while the relay CA and mTLS identities remain the Mobile Egress authorization boundary.

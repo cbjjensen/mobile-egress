@@ -1,58 +1,48 @@
-# Windows client
+# Windows controller and headless Client
 
-Related documents: [security model](../docs/security-model.md), [operations](../docs/operations.md), [deployment and release](../docs/deployment.md), and [current status](../docs/status.md).
+The signed Windows release has two roles: the Wails desktop controller on the operator's Windows 10/11 PC and `MobileEgressClient` services on existing Windows Server 2019 EC2 nodes.
 
-This Wails v2 application provides an authenticated SOCKS5 listener for applications explicitly configured to use it. It does not install a system proxy, alter Windows routing, or expose a SOCKS service on the relay.
+## Controller UI
 
-## Pairing identities
+- **Bridge** verifies/installs official Tailscale, completes browser login, enables unattended raw TCP Funnel, and installs `MobileEgressRelay` as a loopback-only LocalSystem service.
+- **Phone** issues an in-memory, expiring Agent enrollment QR. After a Funnel name change it displays a distinct one-use migration QR.
+- **AWS Login** supports IAM Identity Center device/browser login and DPAPI-encrypted access-key fallback.
+- **EC2 Nodes** inventories supported `us-east-1` instances, safely prepares SSM IAM, installs/updates/repairs signed Clients, shows redacted node metadata, and reveals SOCKS credentials only on copy.
 
-The first Windows installation consumes one confidential Owner invitation and enrolls two distinct relay identities:
+The tray reports bridge/Funnel state and reopens the controller. Quitting the controller does not stop relay or Client Windows services.
 
-| Identity | Purpose | Traffic boundary |
-| --- | --- | --- |
-| **Owner** | Issues Agent or Client invitations and revokes a known certificate serial. | Never opens the tunnel session and never carries local SOCKS traffic. |
-| **Client** | Opens the relay tunnel used by this installation's local SOCKS listener. | The Client only—not the Owner—carries traffic from explicitly proxy-configured applications. |
+## Local state and services
 
-Both identities, their private material, and the generated SOCKS credentials are stored in Windows-current-user DPAPI-protected state. DPAPI does not protect them from malware in the same interactive user session or an administrator; see the [security model](../docs/security-model.md#windows-state-and-loopback-socks).
+- Owner/AWS/node controller metadata: Windows-user DPAPI store under the user's configuration directory.
+- Relay service: `MobileEgressRelay`, LocalSystem, auto start, `127.0.0.1:8443`, state `C:\ProgramData\MobileEgress\Relay`.
+- EC2 service: `MobileEgressClient`, LocalSystem, auto start, authenticated `127.0.0.1:1080`, state `C:\ProgramData\MobileEgress\Client`.
+- Installed service binaries: `C:\Program Files\MobileEgress`.
 
-The app automatically uses its new Owner to issue and consume the first local Client invitation. It also creates short-lived Agent invitations as in-memory QR images for Android **Scan QR** pairing; the Windows UI does not display or copy the raw Agent invitation. Follow the [security model's QR rules](../docs/security-model.md#qr-and-invitation-handling) because replacing the displayed image is not a revocation operation.
+ProgramData state ACLs are reduced to SYSTEM and local Administrators. The elevated helper stages only public CSR/result data; the Owner key never crosses UAC.
 
-The shipped app does not create or import a Client identity for another Windows computer. Additional-Windows enrollment and multi-Windows deployment are **not supported as an app-first workflow**; they require a maintainer-owned procedure rather than manual transfer of invitation or identity material.
+## Node bootstrap and sealed configuration
 
-## Local SOCKS behavior
+The app invokes SSM to download the exact GitHub Client release, verify SHA-256 and Authenticode, install the service, and run `bootstrap`. Bootstrap is idempotent and returns only the Client CSR and durable X25519 public configuration key.
 
-- The listener is IPv4 loopback only: TCP `127.0.0.1` on the selected port (default `1080`). It never binds a LAN address.
-- SOCKS5 username/password authentication is mandatory. The UI masks the generated credentials until the user explicitly copies the proxy line.
-- `CONNECT` is the only supported SOCKS command. `BIND` and UDP association are rejected.
-- One Windows Client admits at most **four local streams**. A fifth request fails without raising that limit.
-- Starting the proxy requires the Client identity. The Owner identity cannot substitute when the Client is missing, revoked, or expired.
+The Owner signs the CSR directly. SOCKS credentials and the resulting endpoint/certificates are encrypted to the node key with ephemeral X25519 + HKDF-SHA256 + AES-256-GCM. Only the sealed envelope crosses SSM. The node rejects malformed, tampered, replayed, wrong-key, wrong-identity, or invalid-certificate configurations.
 
-## Setup, recovery, and tray lifecycle
+`Update` replaces only the verified executable. `Repair` also reseals/reapplies the retained configuration. Neither changes keys, certificate serial, or SOCKS credentials. Endpoint migration reseals only the relay URL.
 
-If initial Owner enrollment succeeds but automatic Client enrollment does not, **Setup** shows Owner ready / Client missing. Use **Retry Windows client setup**; it retains the Owner and requests a fresh local Client enrollment.
+## Developer checks
 
-The **Owner** view exposes only the current local Client certificate serial. It does not reveal the Owner serial or an Android Agent serial. **Replace Client** is an Owner-authenticated action for an existing local Client: it issues and consumes a fresh Client invitation in memory, commits the replacement only after enrollment and protected-state storage succeed, then stops the previous proxy resources. Use the complete revoke-and-replace sequence in [operations](../docs/operations.md#local-windows-client-recovery); a failed replacement leaves the prior stored Client selected.
-
-Closing the window hides Mobile Egress to the notification tray and leaves the running proxy and relay streams active. Tray **Start proxy** starts the local listener when the Client is ready. Tray **Stop proxy** stops the local listener, closes its Client session and active streams, and leaves the application running in the tray. Tray **Quit** performs full proxy/session teardown and exits the application.
-
-## Development
-
-Prerequisites are Windows 10/11, Go 1.26+, Node.js 22+, and the [WebView2 Evergreen Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). A global Wails installation is not required.
-
-From the repository root, start development mode:
+From the repository root:
 
 ```powershell
-& .\windows-client\scripts\dev.ps1
+go test ./windows-client/...
+go vet ./windows-client/...
+npm run check --prefix windows-client/frontend
+npm run build --prefix windows-client/frontend
 ```
 
-Build the React bundle and packaged Wails executable:
+Production packaging requires Windows SDK `signtool` and a code-signing certificate:
 
 ```powershell
-& .\windows-client\scripts\build.ps1
+& .\scripts\build-windows.ps1 -ReleaseVersion 1.2.3 -CodeSigningThumbprint <thumbprint>
 ```
 
-The executable is created at `windows-client\build\bin\mobile-egress-windows.exe`. The scripts fetch the pinned Wails v2.14.0 CLI with `go run`; the first invocation therefore needs network access. The UI has no external analytics.
-
-## Device acceptance
-
-Automated Go and frontend checks do not prove the Wails runtime, tray behavior, Client-only tunnel identity, loopback authentication, or four-stream behavior on Windows. Exercise those component checks as part of the canonical [required physical-device checklist](../docs/deployment.md#required-physical-device-checklist-still-required-not-executed-by-automated-verification); do not record them as automated verification.
+Unsigned builds can run unit tests and foreground developer commands, but production relay/Client setup intentionally rejects them.

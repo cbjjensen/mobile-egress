@@ -42,6 +42,7 @@ type persistedSettings struct {
 
 type persistedIdentity struct {
 	RelayURL         string `json:"relayUrl"`
+	DialAddress      string `json:"dialAddress,omitempty"`
 	Role             string `json:"role"`
 	Serial           string `json:"serial"`
 	PrivateKeyPEM    string `json:"privateKeyPem"`
@@ -117,6 +118,35 @@ func (repository *Repository) SaveClientIdentity(ctx context.Context, identity r
 	return repository.saveIdentity(ctx, "client", identity)
 }
 
+func (repository *Repository) UpdateOwnerEndpoint(ctx context.Context, identity relayclient.Identity) error {
+	if !completeIdentity(identity) || identity.Role != "owner" {
+		return errors.New("Owner identity is incomplete")
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	generation, err := repository.loadGeneration(ctx)
+	if err != nil {
+		return err
+	}
+	if generation.Owner == nil {
+		return securestore.ErrNotFound
+	}
+	current := *generation.Owner
+	if current.Role != identity.Role || current.Serial != identity.Serial || current.PrivateKeyPEM != identity.PrivateKeyPEM ||
+		current.CertificatePEM != identity.CertificatePEM || current.CACertificatePEM != identity.CACertificatePEM {
+		return errors.New("Owner endpoint update changed identity material")
+	}
+	updated := persistedIdentityFrom(identity)
+	generation.Owner = &updated
+	if generation.Client != nil && generation.Client.CACertificatePEM == identity.CACertificatePEM {
+		generation.Client.RelayURL = identity.RelayURL
+	}
+	if err := generation.validateDualIdentityTrust(); err != nil {
+		return err
+	}
+	return repository.commitGeneration(ctx, generation)
+}
+
 func (repository *Repository) saveIdentity(ctx context.Context, role string, identity relayclient.Identity) error {
 	if !completeIdentity(identity) || identity.Role != role {
 		return errors.New("identity is incomplete")
@@ -177,7 +207,7 @@ func (repository *Repository) loadIdentity(ctx context.Context, role string) (re
 		return relayclient.Identity{}, 0, securestore.ErrNotFound
 	}
 	identity := relayclient.Identity{
-		RelayURL: stored.RelayURL, Role: stored.Role, Serial: stored.Serial,
+		RelayURL: stored.RelayURL, DialAddress: stored.DialAddress, Role: stored.Role, Serial: stored.Serial,
 		PrivateKeyPEM: stored.PrivateKeyPEM, CertificatePEM: stored.CertificatePEM, CACertificatePEM: stored.CACertificatePEM,
 	}
 	if !completeIdentity(identity) || identity.Role != role {
@@ -284,7 +314,7 @@ func (generation *persistedGeneration) migrateLegacyIdentity() (bool, error) {
 
 func persistedIdentityFrom(identity relayclient.Identity) persistedIdentity {
 	return persistedIdentity{
-		RelayURL: identity.RelayURL, Role: identity.Role, Serial: identity.Serial,
+		RelayURL: identity.RelayURL, DialAddress: identity.DialAddress, Role: identity.Role, Serial: identity.Serial,
 		PrivateKeyPEM: identity.PrivateKeyPEM, CertificatePEM: identity.CertificatePEM, CACertificatePEM: identity.CACertificatePEM,
 	}
 }
