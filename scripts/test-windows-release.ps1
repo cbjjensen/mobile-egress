@@ -14,6 +14,8 @@ function Assert-Condition {
 $buildScript = Join-Path $PSScriptRoot 'build-windows.ps1'
 . $buildScript -ReleaseVersion '0.0.0-test'
 
+Assert-Condition ((Get-Content -Raw -LiteralPath $buildScript).Contains('Setup SHA-256:')) 'Release output must print the final signed setup artifact SHA-256 for separate sharing.'
+
 $identity = Get-WindowsReleaseSigningIdentity
 try {
     Assert-Condition ($identity.Certificate.Thumbprint -eq '85F220C1BF05A5D3A86B5DD408787EC1B122ECB7') 'Release signing must discover the established tracked certificate without a thumbprint argument.'

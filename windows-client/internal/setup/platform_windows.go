@@ -154,25 +154,25 @@ func (platform *WindowsPlatform) Confirm(fingerprint string) (bool, error) {
 	return result == messageBoxYes, nil
 }
 
-func (platform *WindowsPlatform) ElevateAndWait(executable, nonce string) error {
+func (platform *WindowsPlatform) ElevateAndWait(executable, nonce string) (uint32, error) {
 	if !noncePattern.MatchString(nonce) {
-		return errors.New("setup request nonce is invalid")
+		return 0, errors.New("setup request nonce is invalid")
 	}
 	verb, err := windows.UTF16PtrFromString("runas")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	file, err := windows.UTF16PtrFromString(executable)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	parameters, err := windows.UTF16PtrFromString("--internal-elevated-install " + nonce)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	directory, err := windows.UTF16PtrFromString(filepath.Dir(executable))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	info := shellExecuteInfo{
 		Mask:       seeMaskNoCloseProcess,
@@ -187,36 +187,29 @@ func (platform *WindowsPlatform) ElevateAndWait(executable, nonce string) error 
 	runtime.KeepAlive(info)
 	if result == 0 {
 		if callErr != nil && callErr != syscall.Errno(0) {
-			return callErr
+			return 0, callErr
 		}
-		return errors.New("start elevated setup")
+		return 0, errors.New("start elevated setup")
 	}
 	if info.Process == 0 {
-		return errors.New("elevated setup process handle is unavailable")
+		return 0, errors.New("elevated setup process handle is unavailable")
 	}
 	defer windows.CloseHandle(info.Process)
 	event, err := windows.WaitForSingleObject(info.Process, uint32((10*time.Minute)/time.Millisecond))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if event == waitTimeout {
-		return errors.New("elevated setup timed out")
+		return 0, errors.New("elevated setup timed out")
 	}
 	if event != waitObject0 {
-		return errors.New("wait for elevated setup returned an unexpected status")
+		return 0, errors.New("wait for elevated setup returned an unexpected status")
 	}
 	var exitCode uint32
 	if err := windows.GetExitCodeProcess(info.Process, &exitCode); err != nil {
-		return err
+		return 0, err
 	}
-	return validateElevatedChildExitCode(exitCode)
-}
-
-func validateElevatedChildExitCode(exitCode uint32) error {
-	if exitCode != 0 {
-		return errors.New("elevated setup did not complete successfully")
-	}
-	return nil
+	return exitCode, nil
 }
 
 func (platform *WindowsPlatform) Launch(executable string) error {

@@ -93,6 +93,11 @@ type parentPlatformFake struct {
 	elevationErr    error
 	forgeResult     bool
 	resultDigest    string
+	confirmCalls    int
+	childExitCode   uint32
+	resultSuccess   *bool
+	resultCode      string
+	resultMessage   string
 }
 
 func (fake *parentPlatformFake) IsElevated() (bool, error) { return fake.elevated, nil }
@@ -112,44 +117,53 @@ func (lock *parentSetupLockFake) SHA256() (string, error) {
 }
 func (lock *parentSetupLockFake) Close() error { return nil }
 func (fake *parentPlatformFake) Confirm(_ string) (bool, error) {
+	fake.confirmCalls++
 	return fake.confirmed, nil
 }
-func (fake *parentPlatformFake) ElevateAndWait(executable, nonce string) error {
+func (fake *parentPlatformFake) ElevateAndWait(executable, nonce string) (uint32, error) {
 	fake.elevatedExe = executable
 	if fake.elevationErr != nil {
-		if fake.forgeResult {
-			var request Request
-			if err := readBoundedJSON(fake.exchange.RequestPath(nonce), &request); err != nil {
-				return err
-			}
-			if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: false, Code: "install_failed", Message: "failed"}); err != nil {
-				return err
-			}
-			if err := os.Remove(fake.exchange.ResultPath(nonce)); err != nil {
-				return err
-			}
-			if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "forged"}); err != nil {
-				return err
-			}
-		}
-		return fake.elevationErr
+		return 0, fake.elevationErr
 	}
 	request, err := fake.exchange.ConsumeRequest(nonce)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	digest, err := FileSHA256(executable)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if request.SetupSHA256 != digest {
-		return errors.New("parent did not hash the confirmed setup file")
+		return 0, errors.New("parent did not hash the confirmed setup file")
 	}
 	resultDigest := request.SetupSHA256
 	if fake.resultDigest != "" {
 		resultDigest = fake.resultDigest
 	}
-	return fake.exchange.WriteResult(Result{Nonce: request.Nonce, SetupSHA256: resultDigest, Success: true, Message: "installed"})
+	if fake.forgeResult {
+		if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: false, Code: "install_failed", Message: "failed"}); err != nil {
+			return 0, err
+		}
+		if err := os.Remove(fake.exchange.ResultPath(nonce)); err != nil {
+			return 0, err
+		}
+		if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "forged"}); err != nil {
+			return 0, err
+		}
+		return fake.childExitCode, nil
+	}
+	success := true
+	if fake.resultSuccess != nil {
+		success = *fake.resultSuccess
+	}
+	message := fake.resultMessage
+	if message == "" {
+		message = "installed"
+	}
+	if err := fake.exchange.WriteResult(Result{Nonce: request.Nonce, SetupSHA256: resultDigest, Success: success, Code: fake.resultCode, Message: message}); err != nil {
+		return 0, err
+	}
+	return fake.childExitCode, nil
 }
 
 func TestRunParentRejectsBoundSuccessReplacingFailureWhenElevatedChildFails(t *testing.T) {
@@ -164,18 +178,69 @@ func TestRunParentRejectsBoundSuccessReplacingFailureWhenElevatedChildFails(t *t
 	nonceBytes := sha256.Sum256([]byte("forged child result"))
 	exchange := Exchange{Root: t.TempDir()}
 	fake := &parentPlatformFake{
-		confirmed:    true,
-		setupPath:    executable,
-		exchange:     exchange,
-		elevationErr: errors.New("child exit 17"),
-		forgeResult:  true,
+		confirmed: true, setupPath: executable, exchange: exchange,
+		childExitCode: 17, forgeResult: true,
 	}
 	err = RunParent(context.Background(), ParentOptions{
 		Executable: executable, InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
-		Identity: identity, Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
+		Identity: identity, VerifiedSetupSHA256: mustFileSHA256(t, executable), Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
 	}, fake)
 	if err == nil || fake.launched != "" {
 		t.Fatalf("forged result launched controller: err=%v launch=%q", err, fake.launched)
+	}
+}
+
+func TestRunParentRequiresZeroExitAndBoundSuccessMatrix(t *testing.T) {
+	falseValue := false
+	trueValue := true
+	tests := []struct {
+		name          string
+		exitCode      uint32
+		success       *bool
+		code          string
+		message       string
+		wantErrorText string
+		wantMessage   string
+		wantLaunch    bool
+	}{
+		{name: "nonzero valid failure surfaced", exitCode: 17, success: &falseValue, code: "trust_rollback_failed", message: "Installation did not complete and publisher trust cleanup failed.", wantErrorText: "trust_rollback_failed", wantMessage: "publisher trust cleanup failed"},
+		{name: "nonzero forged success rejected", exitCode: 17, success: &trueValue, message: "forged success", wantErrorText: "nonzero"},
+		{name: "zero failure rejected", success: &falseValue, code: "install_failed", message: "Installation did not complete.", wantErrorText: "install_failed", wantMessage: "Installation did not complete"},
+		{name: "zero success launches", success: &trueValue, message: "installed", wantLaunch: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			executable := filepath.Join(t.TempDir(), SetupExecutableName)
+			if err := os.WriteFile(executable, []byte("signed setup"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nonceBytes := sha256.Sum256([]byte(test.name))
+			exchange := Exchange{Root: t.TempDir()}
+			fake := &parentPlatformFake{
+				confirmed: true, setupPath: executable, exchange: exchange, childExitCode: test.exitCode,
+				resultSuccess: test.success, resultCode: test.code, resultMessage: test.message,
+			}
+			err = RunParent(context.Background(), ParentOptions{
+				Executable: executable, InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
+				Identity: identity, VerifiedSetupSHA256: mustFileSHA256(t, executable), Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
+			}, fake)
+			if test.wantErrorText != "" && (err == nil || !strings.Contains(err.Error(), test.wantErrorText)) {
+				t.Fatalf("error = %v, want %q", err, test.wantErrorText)
+			}
+			if test.wantMessage != "" && !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("error = %v, want surfaced message %q", err, test.wantMessage)
+			}
+			if test.wantErrorText == "" && err != nil {
+				t.Fatal(err)
+			}
+			if (fake.launched != "") != test.wantLaunch {
+				t.Fatalf("launched = %q, want launch %v", fake.launched, test.wantLaunch)
+			}
+		})
 	}
 }
 
@@ -196,10 +261,34 @@ func TestRunParentRejectsResultForDifferentSetupDigest(t *testing.T) {
 	}
 	err = RunParent(context.Background(), ParentOptions{
 		Executable: executable, InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
-		Identity: identity, Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
+		Identity: identity, VerifiedSetupSHA256: mustFileSHA256(t, executable), Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
 	}, fake)
 	if err == nil || !strings.Contains(err.Error(), "does not match") || fake.launched != "" {
 		t.Fatalf("wrong-digest result was accepted: err=%v launch=%q", err, fake.launched)
+	}
+}
+
+func TestRunParentRejectsWrongTrustedVerifierDigestBeforeConfirmation(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), SetupExecutableName)
+	if err := os.WriteFile(executable, []byte("signed setup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonceBytes := sha256.Sum256([]byte("wrong trusted verifier digest"))
+	exchange := Exchange{Root: t.TempDir()}
+	fake := &parentPlatformFake{confirmed: true, setupPath: executable, exchange: exchange}
+	err = RunParent(context.Background(), ParentOptions{
+		Executable: executable, InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
+		Identity: identity, VerifiedSetupSHA256: strings.Repeat("0", 64), Nonce: hex.EncodeToString(nonceBytes[:]), Exchange: exchange,
+	}, fake)
+	if err == nil || !strings.Contains(err.Error(), "trusted verifier") {
+		t.Fatalf("expected trusted verifier digest rejection, got %v", err)
+	}
+	if fake.confirmCalls != 0 || fake.elevatedExe != "" || fake.launched != "" {
+		t.Fatal("wrong trusted digest reached confirmation, elevation, or launch")
 	}
 }
 
@@ -250,20 +339,20 @@ func (fake *lifecycleParentPlatformFake) Confirm(string) (bool, error) {
 	fake.events = append(fake.events, "confirm")
 	return true, nil
 }
-func (fake *lifecycleParentPlatformFake) ElevateAndWait(_ string, nonce string) error {
+func (fake *lifecycleParentPlatformFake) ElevateAndWait(_ string, nonce string) (uint32, error) {
 	if !fake.lockHeld {
-		return errors.New("elevation started without setup lock")
+		return 0, errors.New("elevation started without setup lock")
 	}
 	fake.events = append(fake.events, "child-start")
 	request, err := fake.exchange.ConsumeRequest(nonce)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !fake.lockHeld {
-		return errors.New("setup lock was released while child ran")
+		return 0, errors.New("setup lock was released while child ran")
 	}
 	fake.events = append(fake.events, "child-complete")
-	return fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "installed"})
+	return 0, fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "installed"})
 }
 func (fake *lifecycleParentPlatformFake) Launch(string) error {
 	fake.events = append(fake.events, "launch")
@@ -277,12 +366,12 @@ func TestRunParentHoldsSetupLockFromPreTrustThroughChildCompletion(t *testing.T)
 	fake := &lifecycleParentPlatformFake{exchange: exchange, digest: digest}
 	err := RunParent(context.Background(), ParentOptions{
 		Executable: filepath.Join(t.TempDir(), SetupExecutableName), InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
-		Identity: Identity{Fingerprint: trackedFingerprint}, Nonce: nonce, Exchange: exchange,
+		Identity: Identity{Fingerprint: trackedFingerprint}, VerifiedSetupSHA256: digest, Nonce: nonce, Exchange: exchange,
 	}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"lock", "verify", "confirm", "digest", "child-start", "child-complete", "launch", "close"}
+	want := []string{"lock", "verify", "digest", "confirm", "child-start", "child-complete", "launch", "close"}
 	if !reflect.DeepEqual(fake.events, want) {
 		t.Fatalf("events = %#v, want %#v", fake.events, want)
 	}
@@ -310,6 +399,7 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 		Executable:          executable,
 		InstalledController: `C:\Program Files\MobileEgress\Controller\mobile-egress-windows.exe`,
 		Identity:            identity,
+		VerifiedSetupSHA256: mustFileSHA256(t, executable),
 		Nonce:               nonce,
 		Exchange:            exchange,
 	}
@@ -333,6 +423,15 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 	if fake.launched != options.InstalledController {
 		t.Fatalf("launched %q", fake.launched)
 	}
+}
+
+func mustFileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	digest, err := FileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }
 
 type elevatedPlatformFake struct {

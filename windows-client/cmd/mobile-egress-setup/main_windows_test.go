@@ -14,20 +14,26 @@ import (
 )
 
 func TestParseModeAcceptsOnlyFixedInternalOperationAndNonce(t *testing.T) {
-	mode, nonce, err := parseMode(nil)
-	if err != nil || mode != parentMode || nonce != "" {
-		t.Fatalf("parent parse = %q, %q, %v", mode, nonce, err)
+	if _, _, err := parseMode(nil); err == nil || !strings.Contains(err.Error(), "trusted Windows PowerShell") {
+		t.Fatalf("direct launch was not rejected with safe verifier instructions: %v", err)
+	}
+	verifiedDigest := strings.Repeat("1", 64)
+	mode, value, err := parseMode([]string{"--verified-setup-sha256", verifiedDigest})
+	if err != nil || mode != parentMode || value != verifiedDigest {
+		t.Fatalf("verified parent parse = %q, %q, %v", mode, value, err)
 	}
 	validNonce := strings.Repeat("a", 64)
-	mode, nonce, err = parseMode([]string{"--internal-elevated-install", validNonce})
-	if err != nil || mode != elevatedInstallMode || nonce != validNonce {
-		t.Fatalf("child parse = %q, %q, %v", mode, nonce, err)
+	mode, value, err = parseMode([]string{"--internal-elevated-install", validNonce})
+	if err != nil || mode != elevatedInstallMode || value != validNonce {
+		t.Fatalf("child parse = %q, %q, %v", mode, value, err)
 	}
 
 	for _, arguments := range [][]string{
 		{"--internal-elevated-install", validNonce, "--destination", `C:\elsewhere`},
 		{"--internal-elevated-uninstall", validNonce},
 		{"--internal-elevated-install", "short"},
+		{"--verified-setup-sha256", strings.Repeat("A", 64)},
+		{"--verified-setup-sha256", "short"},
 	} {
 		if _, _, err := parseMode(arguments); err == nil {
 			t.Fatalf("accepted arguments %#v", arguments)
@@ -122,7 +128,7 @@ func (fake *commandFlowParentPlatform) AcquireSetupLock(string) (setup.ParentSet
 	return &commandFlowSetupLock{setupPath: fake.setupPath}, nil
 }
 func (fake *commandFlowParentPlatform) Confirm(string) (bool, error) { return true, nil }
-func (fake *commandFlowParentPlatform) ElevateAndWait(_ string, nonce string) error {
+func (fake *commandFlowParentPlatform) ElevateAndWait(_ string, nonce string) (uint32, error) {
 	installErr := errors.New("injected install failure")
 	childErr := completeElevatedRun(nonce, fake.setupPath, fake.exchange, func() error { return installErr })
 	if !errors.Is(childErr, installErr) {
@@ -140,7 +146,7 @@ func (fake *commandFlowParentPlatform) ElevateAndWait(_ string, nonce string) er
 	}); err != nil {
 		fake.t.Fatal(err)
 	}
-	return childErr
+	return 1, nil
 }
 func (fake *commandFlowParentPlatform) Launch(string) error {
 	fake.launched = true
@@ -156,9 +162,18 @@ func TestParentCannotLaunchWhenBoundSuccessReplacesFailureAfterNonzeroChild(t *t
 	fake := &commandFlowParentPlatform{setupPath: executable, exchange: exchange, t: t}
 	err := setup.RunParent(context.Background(), setup.ParentOptions{
 		Executable: executable, InstalledController: filepath.Join(setup.InstallRoot, setup.ControllerExecutableName),
-		Identity: setup.Identity{Fingerprint: strings.Repeat("F", 95)}, Nonce: strings.Repeat("f", 64), Exchange: exchange,
+		Identity: setup.Identity{Fingerprint: strings.Repeat("F", 95)}, VerifiedSetupSHA256: mustSetupDigest(t, executable), Nonce: strings.Repeat("f", 64), Exchange: exchange,
 	}, fake)
 	if err == nil || fake.launched {
 		t.Fatalf("nonzero child authorized launch: err=%v launched=%v", err, fake.launched)
 	}
+}
+
+func mustSetupDigest(t *testing.T, path string) string {
+	t.Helper()
+	digest, err := setup.FileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }

@@ -25,16 +25,16 @@ var commandNoncePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func main() {
 	platform := setup.NewWindowsPlatform()
-	mode, nonce, err := parseMode(os.Args[1:])
+	mode, modeValue, err := parseMode(os.Args[1:])
 	if err == nil {
 		if mode == elevatedInstallMode {
-			err = runElevated(nonce, platform)
+			err = runElevated(modeValue, platform)
 			if err != nil {
 				os.Exit(1)
 			}
 			return
 		}
-		err = runParent(platform)
+		err = runParent(modeValue, platform)
 	}
 	if errors.Is(err, setup.ErrConfirmationDeclined) {
 		return
@@ -44,16 +44,16 @@ func main() {
 }
 
 func parseMode(arguments []string) (string, string, error) {
-	if len(arguments) == 0 {
-		return parentMode, "", nil
-	}
 	if len(arguments) == 2 && arguments[0] == "--internal-elevated-install" && commandNoncePattern.MatchString(arguments[1]) {
 		return elevatedInstallMode, arguments[1], nil
 	}
-	return "", "", errors.New("Mobile Egress Setup accepts no custom operation or destination")
+	if len(arguments) == 2 && arguments[0] == "--verified-setup-sha256" && commandNoncePattern.MatchString(arguments[1]) {
+		return parentMode, arguments[1], nil
+	}
+	return "", "", errors.New("Start Mobile Egress Setup only with the separately shared trusted Windows PowerShell verifier command; direct or double-click launch is rejected")
 }
 
-func runParent(platform *setup.WindowsPlatform) error {
+func runParent(verifiedSetupSHA256 string, platform *setup.WindowsPlatform) error {
 	identity, err := setup.EmbeddedIdentity()
 	if err != nil {
 		return err
@@ -75,6 +75,7 @@ func runParent(platform *setup.WindowsPlatform) error {
 		Executable:          executable,
 		InstalledController: filepath.Join(setup.InstallRoot, setup.ControllerExecutableName),
 		Identity:            identity,
+		VerifiedSetupSHA256: verifiedSetupSHA256,
 		Nonce:               nonce,
 		Exchange:            setup.Exchange{Root: exchangeRoot},
 	}, platform)

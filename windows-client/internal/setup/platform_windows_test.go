@@ -125,15 +125,6 @@ func TestWindowsSetupLockVerifiesSignedArtifactThroughHeldHandle(t *testing.T) {
 	}
 }
 
-func TestValidateElevatedChildExitCodeRejectsNonzero(t *testing.T) {
-	if err := validateElevatedChildExitCode(0); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateElevatedChildExitCode(17); err == nil {
-		t.Fatal("accepted nonzero elevated child exit code")
-	}
-}
-
 func TestCopyInstallFilesIsIdempotent(t *testing.T) {
 	sourceRoot := t.TempDir()
 	destinationRoot := t.TempDir()

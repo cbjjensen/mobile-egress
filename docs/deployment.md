@@ -63,16 +63,30 @@ Friends extract the release ZIP, open the system **Windows PowerShell** from the
 ```powershell
 $setupPath = (Resolve-Path '.\MobileEgressSetup.exe').Path
 $expectedThumbprint = '85F220C1BF05A5D3A86B5DD408787EC1B122ECB7'
-$signature = Get-AuthenticodeSignature -LiteralPath $setupPath
-$status = [string]$signature.Status
-if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
-if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
-$sha256 = [Security.Cryptography.SHA256]::Create()
-try { $certificateFingerprint = ([BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', ':') } finally { $sha256.Dispose() }
-$certificateFingerprint
+$expectedCertificateSha256 = '9FE214C350D7CE04C8EE7F71E169281B50FF0B2A7C5669A348AC10616FB7061F'
+$expectedSetupSha256 = (Read-Host 'Enter the separately shared 64-lowercase-hex setup SHA-256').Trim()
+if ($expectedSetupSha256 -notmatch '^[0-9a-f]{64}$') { throw 'Reject setup: separately shared setup SHA-256 is invalid.' }
+$stream = [IO.File]::Open($setupPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+try {
+  $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+  $status = [string]$signature.Status
+  if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
+  if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
+  $certificateHasher = [Security.Cryptography.SHA256]::Create()
+  try { $certificateSha256 = ([BitConverter]::ToString($certificateHasher.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $certificateHasher.Dispose() }
+  if ($certificateSha256 -ne $expectedCertificateSha256) { throw 'Reject setup: signer certificate SHA-256 differs.' }
+  $stream.Position = 0
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try { $setupDigest = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $sha256.Dispose() }
+  if ($setupDigest -ne $expectedSetupSha256) { throw 'Reject setup: setup artifact SHA-256 differs.' }
+  Write-Host "Verified setup SHA-256: $setupDigest"
+  Start-Process -FilePath $setupPath -ArgumentList @('--verified-setup-sha256', $setupDigest) -Wait
+} finally {
+  $stream.Dispose()
+}
 ```
 
-The initial Windows dialog can identify the setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**. Self-signing does not solve SmartScreen or create reputation. After the trusted check and exact fingerprint match, setup requires explicit **Yes**, locks the exact setup file against write/delete/replacement, verifies and hashes through that handle, and holds the lock through `ShellExecuteEx` process creation and wait. The elevated child independently verifies its own digest/signature before trust as defense in depth. Genuine-code self-checks do not authenticate malicious substituted code; the trusted OS-extracted signature check is the pre-trust authority. Only child exit zero plus a bound success result permits the unelevated parent to launch the transactionally installed controller.
+The initial Windows dialog can identify setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**. Self-signing does not solve SmartScreen reputation. The trusted command holds one mutation-denying handle across Authenticode verification, hashing that same handle, `Start-Process` on the exact path with the computed lowercase digest, and process wait. Direct/double-click setup is rejected. Genuine setup acquires its own lock, requires its locked digest to equal `--verified-setup-sha256`, and holds it through child completion; the child independently verifies its digest/signature as defense in depth. Genuine-code self-checks do not authenticate substituted malicious code; the separately shared trusted command is authority. Only child exit zero plus a bound success result permits controller launch.
 
 The signed controller carries the same public publisher certificate. Before an EC2 Client accepts its normal Authenticode validation, the controller establishes that exact public certificate as the EC2 trust anchor through its guided SSM flow. EC2 nodes receive only the public certificate and signed artifacts; they never receive the PFX, its password, or another private signing value.
 
@@ -307,7 +321,7 @@ On the controller PC:
 1. Verify the ZIP hash against the release record.
 2. Obtain the publisher's SHA-256 certificate fingerprint from the separately shared trusted channel; do not treat a value in the release itself as that identity check.
 3. Extract it into one directory; do not separate the setup application or sibling executables.
-4. Before opening `MobileEgressSetup.exe`, run the trusted Windows PowerShell check above on that exact file. Require exact thumbprint `85F220C1BF05A5D3A86B5DD408787EC1B122ECB7`, Status exactly `NotTrusted` or `Valid`, and an OS-extracted certificate SHA-256 matching the out-of-band value. Reject every other status; Properties alone and setup's reminder are insufficient. Then open setup, answer **Yes**, and approve its one UAC prompt. **Unknown publisher** and **More info → Run anyway** may be required before trust; self-signing does not suppress SmartScreen.
+4. Copy the trusted Windows PowerShell command above from the separately shared instructions; do not run a mutable script from the ZIP. Enter the separately shared per-release `Setup SHA-256` printed by the release build. The command verifies exact Status/SHA-1/certificate SHA-256, compares the held setup hash, and starts the exact setup with `--verified-setup-sha256`. Direct/double-click launch is rejected. Answer **Yes** and approve the one UAC prompt. **Unknown publisher** and **More info → Run anyway** may appear; self-signing does not suppress SmartScreen.
 5. Run `Get-AuthenticodeSignature` on every extracted `.exe` and require `Valid` with the recorded signer thumbprint after setup established the trusted publisher.
 
 On Android:

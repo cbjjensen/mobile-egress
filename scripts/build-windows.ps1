@@ -193,6 +193,7 @@ try {
     foreach ($executable in $executables) {
         Assert-WindowsReleaseSignature -Path $executable -Identity $identity
     }
+    $setupDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $binRoot 'MobileEgressSetup.exe')).Hash.ToLowerInvariant()
 
     $publicCertificatePath = Join-Path $repositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
     $publicRecordPath = Join-Path $repositoryRoot 'windows-signing\release-signing-certificate.txt'
@@ -206,6 +207,7 @@ try {
 
     Write-Host "Signed guided setup package: $zipPath"
     Write-Host "Signed headless Client release: $(Join-Path $binRoot 'mobile-egress-client.exe')"
+    Write-Host "Setup SHA-256: $setupDigest"
     Write-Host "Client SHA-256: $clientDigest"
     Write-Host "Publisher SHA-256 fingerprint: $($identity.Fingerprint)"
 } finally {

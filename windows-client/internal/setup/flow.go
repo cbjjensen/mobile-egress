@@ -37,6 +37,7 @@ type ParentOptions struct {
 	Executable          string
 	InstalledController string
 	Identity            Identity
+	VerifiedSetupSHA256 string
 	Nonce               string
 	Exchange            Exchange
 }
@@ -45,7 +46,7 @@ type ParentPlatform interface {
 	IsElevated() (bool, error)
 	AcquireSetupLock(path string) (ParentSetupLock, error)
 	Confirm(fingerprint string) (bool, error)
-	ElevateAndWait(executable, nonce string) error
+	ElevateAndWait(executable, nonce string) (exitCode uint32, err error)
 	Launch(executable string) error
 }
 
@@ -78,6 +79,13 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if err := setupLock.VerifyPreTrustAuthenticode(options.Identity); err != nil {
 		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
 	}
+	setupSHA256, err := setupLock.SHA256()
+	if err != nil {
+		return errors.New("hash locked setup executable")
+	}
+	if !sha256Pattern.MatchString(options.VerifiedSetupSHA256) || setupSHA256 != options.VerifiedSetupSHA256 {
+		return errors.New("setup digest does not match the trusted verifier launch")
+	}
 	confirmed, err := platform.Confirm(options.Identity.Fingerprint)
 	if err != nil {
 		return errors.New("show publisher confirmation")
@@ -85,16 +93,13 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if !confirmed {
 		return ErrConfirmationDeclined
 	}
-	setupSHA256, err := setupLock.SHA256()
-	if err != nil {
-		return errors.New("hash confirmed setup executable")
-	}
 	if err := options.Exchange.CreateRequest(options.Nonce, setupSHA256); err != nil {
 		return err
 	}
 	defer os.Remove(options.Exchange.RequestPath(options.Nonce))
 	defer os.Remove(options.Exchange.ResultPath(options.Nonce))
-	if err := platform.ElevateAndWait(options.Executable, options.Nonce); err != nil {
+	exitCode, err := platform.ElevateAndWait(options.Executable, options.Nonce)
+	if err != nil {
 		return errors.New("elevated setup was cancelled or failed")
 	}
 	if err := ctx.Err(); err != nil {
@@ -106,6 +111,12 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	}
 	if result.SetupSHA256 != setupSHA256 {
 		return errors.New("elevated setup result does not match the confirmed setup executable")
+	}
+	if exitCode != 0 {
+		if !result.Success {
+			return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
+		}
+		return fmt.Errorf("elevated setup returned nonzero exit code %d but reported success", exitCode)
 	}
 	if !result.Success {
 		return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
