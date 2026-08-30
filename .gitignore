@@ -34,6 +34,10 @@ android/keystore.properties
 android/mobile-egress-release.jks
 android/**/build/
 
+# Windows publisher recovery material (public certificate and identity record remain tracked)
+windows-signing/mobile-egress-code-signing.pfx
+windows-signing/signing.properties
+
 # Desktop frontend
 windows-client/frontend/node_modules/
 windows-client/frontend/wailsjs/
