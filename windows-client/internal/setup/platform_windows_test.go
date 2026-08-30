@@ -45,18 +45,83 @@ func TestPreTrustAuthenticodeAcceptsOnlyValidOrExactUntrustedRoot(t *testing.T) 
 		t.Fatal(err)
 	}
 	certificateHash := sha256.Sum256(identity.DER)
-	signer := `{"status":"UnknownError","thumbprint":"` + identity.Thumbprint + `","certificateSha256":"` + strings.ToUpper(hex.EncodeToString(certificateHash[:])) + `","certificateBase64":"` + base64.StdEncoding.EncodeToString(identity.DER) + `","timestamped":true}`
+	signer := `{"status":"NotTrusted","thumbprint":"` + identity.Thumbprint + `","certificateSha256":"` + strings.ToUpper(hex.EncodeToString(certificateHash[:])) + `","certificateBase64":"` + base64.StdEncoding.EncodeToString(identity.DER) + `","timestamped":true}`
 	if err := validatePreTrustAuthenticodeResult([]byte(signer), certEUntrustedRoot, identity); err != nil {
 		t.Fatal(err)
 	}
-	if err := validatePreTrustAuthenticodeResult([]byte(strings.Replace(signer, `"UnknownError"`, `"HashMismatch"`, 1)), trustEBadDigest, identity); err == nil {
+	valid := strings.Replace(signer, `"NotTrusted"`, `"Valid"`, 1)
+	if err := validatePreTrustAuthenticodeResult([]byte(valid), 0, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePreTrustAuthenticodeResult([]byte(strings.Replace(signer, `"NotTrusted"`, `"HashMismatch"`, 1)), trustEBadDigest, identity); err == nil {
 		t.Fatal("accepted an Authenticode hash mismatch before elevation")
 	}
-	if err := validatePreTrustAuthenticodeResult([]byte(strings.Replace(signer, `"UnknownError"`, `"NotSigned"`, 1)), trustENoSignature, identity); err == nil {
+	if err := validatePreTrustAuthenticodeResult([]byte(strings.Replace(signer, `"NotTrusted"`, `"NotSigned"`, 1)), trustENoSignature, identity); err == nil {
 		t.Fatal("accepted an unsigned setup before elevation")
 	}
 	if err := validatePreTrustAuthenticodeResult([]byte(signer), trustESubjectNotTrusted, identity); err == nil {
 		t.Fatal("accepted a non-root trust failure before elevation")
+	}
+	unknown := strings.Replace(signer, `"NotTrusted"`, `"UnknownError"`, 1)
+	if err := validatePreTrustAuthenticodeResult([]byte(unknown), certEUntrustedRoot, identity); err == nil {
+		t.Fatal("accepted UnknownError before elevation")
+	}
+}
+
+func TestWindowsSetupLockDeniesWriteDeleteAndPathReplacementUntilClosed(t *testing.T) {
+	root := t.TempDir()
+	setupPath := filepath.Join(root, SetupExecutableName)
+	replacementPath := filepath.Join(root, "replacement.exe")
+	if err := os.WriteFile(setupPath, []byte("original signed setup bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacementPath, []byte("replacement bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireWindowsSetupLock(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if _, err := lock.SHA256(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(setupPath, []byte("write while locked"), 0o600); err == nil {
+		t.Fatal("setup contents were writable while elevation lock was held")
+	}
+	if err := os.Remove(setupPath); err == nil {
+		t.Fatal("setup was deletable while elevation lock was held")
+	}
+	if err := os.Rename(setupPath, filepath.Join(root, "displaced.exe")); err == nil {
+		t.Fatal("setup path was replaceable while elevation lock was held")
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(setupPath); err != nil {
+		t.Fatalf("setup remained locked after child completion: %v", err)
+	}
+	if err := os.Rename(replacementPath, setupPath); err != nil {
+		t.Fatalf("setup replacement should succeed after lock close: %v", err)
+	}
+}
+
+func TestWindowsSetupLockVerifiesSignedArtifactThroughHeldHandle(t *testing.T) {
+	setupPath := os.Getenv("MOBILE_EGRESS_SIGNED_SETUP_TEST_PATH")
+	if setupPath == "" {
+		t.Skip("set MOBILE_EGRESS_SIGNED_SETUP_TEST_PATH after a signed release build")
+	}
+	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireWindowsSetupLock(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := lock.VerifyPreTrustAuthenticode(identity); err != nil {
+		t.Fatalf("locked signed artifact verification failed: %v", err)
 	}
 }
 

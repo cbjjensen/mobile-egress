@@ -94,8 +94,8 @@ func (exchange Exchange) ConsumeRequest(nonce string) (Request, error) {
 }
 
 func (exchange Exchange) WriteResult(result Result) error {
-	if !noncePattern.MatchString(result.Nonce) || result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 ||
-		(result.Success && !sha256Pattern.MatchString(result.SetupSHA256)) || (!result.Success && result.SetupSHA256 != "" && !sha256Pattern.MatchString(result.SetupSHA256)) {
+	if !noncePattern.MatchString(result.Nonce) || !sha256Pattern.MatchString(result.SetupSHA256) ||
+		result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 {
 		return errors.New("setup result is invalid")
 	}
 	return writeExclusiveJSON(exchange.ResultPath(result.Nonce), result)
@@ -111,8 +111,8 @@ func (exchange Exchange) ReadResult(nonce string) (Result, error) {
 	if err := readBoundedJSON(path, &result); err != nil {
 		return Result{}, fmt.Errorf("read setup result: %w", err)
 	}
-	if result.Nonce != nonce || result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 ||
-		(result.Success && !sha256Pattern.MatchString(result.SetupSHA256)) || (!result.Success && result.SetupSHA256 != "" && !sha256Pattern.MatchString(result.SetupSHA256)) {
+	if result.Nonce != nonce || !sha256Pattern.MatchString(result.SetupSHA256) ||
+		result.Message == "" || len(result.Message) > 256 || len(result.Code) > 64 {
 		return Result{}, errors.New("setup result is invalid")
 	}
 	return result, nil
@@ -124,6 +124,13 @@ func FileSHA256(path string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
+	return fileSHA256(file)
+}
+
+func fileSHA256(file *os.File) (string, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", errors.New("seek setup executable")
+	}
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 512<<20 {
 		return "", errors.New("setup executable size is invalid")

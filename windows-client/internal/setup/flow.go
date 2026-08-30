@@ -43,13 +43,19 @@ type ParentOptions struct {
 
 type ParentPlatform interface {
 	IsElevated() (bool, error)
-	VerifyPreTrustAuthenticode(path string, identity Identity) error
+	AcquireSetupLock(path string) (ParentSetupLock, error)
 	Confirm(fingerprint string) (bool, error)
 	ElevateAndWait(executable, nonce string) error
 	Launch(executable string) error
 }
 
-func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatform) error {
+type ParentSetupLock interface {
+	VerifyPreTrustAuthenticode(identity Identity) error
+	SHA256() (string, error)
+	Close() error
+}
+
+func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatform) (resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -60,7 +66,16 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if elevated {
 		return errors.New("run Mobile Egress Setup normally, not from an elevated process")
 	}
-	if err := platform.VerifyPreTrustAuthenticode(options.Executable, options.Identity); err != nil {
+	setupLock, err := platform.AcquireSetupLock(options.Executable)
+	if err != nil {
+		return errors.New("lock setup executable for elevation")
+	}
+	defer func() {
+		if err := setupLock.Close(); err != nil {
+			resultErr = errors.Join(resultErr, errors.New("release setup elevation lock"))
+		}
+	}()
+	if err := setupLock.VerifyPreTrustAuthenticode(options.Identity); err != nil {
 		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
 	}
 	confirmed, err := platform.Confirm(options.Identity.Fingerprint)
@@ -70,7 +85,7 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if !confirmed {
 		return ErrConfirmationDeclined
 	}
-	setupSHA256, err := FileSHA256(options.Executable)
+	setupSHA256, err := setupLock.SHA256()
 	if err != nil {
 		return errors.New("hash confirmed setup executable")
 	}
@@ -89,11 +104,11 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if err != nil {
 		return err
 	}
-	if !result.Success {
-		return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
-	}
 	if result.SetupSHA256 != setupSHA256 {
 		return errors.New("elevated setup result does not match the confirmed setup executable")
+	}
+	if !result.Success {
+		return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
 	}
 	if err := platform.Launch(options.InstalledController); err != nil {
 		return errors.New("launch installed controller")

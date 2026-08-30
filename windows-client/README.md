@@ -4,9 +4,23 @@ The signed Windows release has two roles: the Wails desktop controller on the op
 
 ## Friend quick start
 
-Download and extract `mobile-egress-windows-<version>.zip`; do not start an individual controller, relay, admin, or Client executable. Before opening `MobileEgressSetup.exe`, right-click that exact file and choose **Properties → Digital Signatures**, select the Mobile Egress signature, choose **Details → View Certificate → Details → Copy to File**, export the signer as DER, and run `certutil -hashfile <exported-certificate.cer> SHA256`. Stop if the Digital Signatures tab or signer certificate is absent. Compare all 64 OS-extracted hexadecimal digits with the value the publisher shared through a separate trusted channel, ignoring only separator formatting and letter case. The out-of-band value plus the signer certificate extracted by Windows is the pre-trust identity check; a value displayed by the untrusted setup or shipped inside the ZIP is only a reminder.
+Download and extract `mobile-egress-windows-<version>.zip`; do not start an individual controller, relay, admin, or Client executable. Before opening `MobileEgressSetup.exe`, open the system **Windows PowerShell** from the Start menu—not a program or script from the ZIP—change to the extracted directory, and run this check on the exact setup file:
 
-The first setup launch can show **Unknown publisher** and may require **More info → Run anyway** in SmartScreen. Self-signing does not establish SmartScreen reputation. After the Windows-extracted fingerprint matches, run setup, answer **Yes** to its reminder, and approve its UAC prompt. Setup verifies its Authenticode signer before elevation, binds the confirmed setup file's SHA-256 into the one-time request, verifies the elevated child is the same signed file before changing trust, then transactionally installs the controller and shortcut and launches the controller unelevated. The normal controller workflow then guides Tailscale, Android, AWS, and EC2 setup.
+```powershell
+$setupPath = (Resolve-Path '.\MobileEgressSetup.exe').Path
+$expectedThumbprint = '85F220C1BF05A5D3A86B5DD408787EC1B122ECB7'
+$signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+$status = [string]$signature.Status
+if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
+if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try { $certificateFingerprint = ([BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', ':') } finally { $sha256.Dispose() }
+$certificateFingerprint
+```
+
+Status must be exactly `NotTrusted` on a fresh PC or `Valid` if this publisher is already trusted. Reject `HashMismatch`, `NotSigned`, `UnknownError`, or any other status. Compare all 64 hexadecimal digits printed for the OS-extracted certificate with the fingerprint the publisher shared through a separate trusted channel, ignoring only separator formatting and letter case. **Properties → Digital Signatures** can help view/export the certificate but is not sufficient without the trusted PowerShell status/thumbprint check. A value displayed by the untrusted setup or shipped inside the ZIP is only a reminder, not pre-trust authority.
+
+The first setup launch can show **Unknown publisher** and may require **More info → Run anyway** in SmartScreen. Self-signing does not establish SmartScreen reputation. After the trusted PowerShell status/thumbprint check and out-of-band fingerprint comparison pass, run setup, answer **Yes** to its reminder, and approve its UAC prompt. Genuine setup locks its exact executable against writes, deletion, and replacement before rechecking Authenticode; computes the confirmed digest from that locked handle; holds the lock through elevated-child completion; and keeps the child's own digest/signature check as defense in depth. These self-checks do not authenticate malicious substituted code—the trusted OS-extracted check above is the authority. Setup then transactionally installs the controller/shortcut and launches the controller unelevated only after child exit zero and a bound success result.
 
 ## Controller UI
 

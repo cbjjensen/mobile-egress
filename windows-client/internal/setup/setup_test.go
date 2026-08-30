@@ -90,23 +90,28 @@ type parentPlatformFake struct {
 	launched        string
 	exchange        Exchange
 	preTrustChecked bool
-	tamperOnConfirm []byte
 	elevationErr    error
 	forgeResult     bool
 	resultDigest    string
 }
 
 func (fake *parentPlatformFake) IsElevated() (bool, error) { return fake.elevated, nil }
-func (fake *parentPlatformFake) VerifyPreTrustAuthenticode(_ string, _ Identity) error {
+func (fake *parentPlatformFake) AcquireSetupLock(string) (ParentSetupLock, error) {
+	return &parentSetupLockFake{platform: fake}, nil
+}
+
+type parentSetupLockFake struct{ platform *parentPlatformFake }
+
+func (lock *parentSetupLockFake) VerifyPreTrustAuthenticode(Identity) error {
+	fake := lock.platform
 	fake.preTrustChecked = true
 	return nil
 }
+func (lock *parentSetupLockFake) SHA256() (string, error) {
+	return FileSHA256(lock.platform.setupPath)
+}
+func (lock *parentSetupLockFake) Close() error { return nil }
 func (fake *parentPlatformFake) Confirm(_ string) (bool, error) {
-	if fake.tamperOnConfirm != nil {
-		if err := os.WriteFile(fake.setupPath, fake.tamperOnConfirm, 0o600); err != nil {
-			return false, err
-		}
-	}
 	return fake.confirmed, nil
 }
 func (fake *parentPlatformFake) ElevateAndWait(executable, nonce string) error {
@@ -115,6 +120,12 @@ func (fake *parentPlatformFake) ElevateAndWait(executable, nonce string) error {
 		if fake.forgeResult {
 			var request Request
 			if err := readBoundedJSON(fake.exchange.RequestPath(nonce), &request); err != nil {
+				return err
+			}
+			if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: false, Code: "install_failed", Message: "failed"}); err != nil {
+				return err
+			}
+			if err := os.Remove(fake.exchange.ResultPath(nonce)); err != nil {
 				return err
 			}
 			if err := fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "forged"}); err != nil {
@@ -141,7 +152,7 @@ func (fake *parentPlatformFake) ElevateAndWait(executable, nonce string) error {
 	return fake.exchange.WriteResult(Result{Nonce: request.Nonce, SetupSHA256: resultDigest, Success: true, Message: "installed"})
 }
 
-func TestRunParentRejectsForgedSuccessWhenElevatedChildFails(t *testing.T) {
+func TestRunParentRejectsBoundSuccessReplacingFailureWhenElevatedChildFails(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), SetupExecutableName)
 	if err := os.WriteFile(executable, []byte("signed setup"), 0o600); err != nil {
 		t.Fatal(err)
@@ -191,6 +202,92 @@ func TestRunParentRejectsResultForDifferentSetupDigest(t *testing.T) {
 		t.Fatalf("wrong-digest result was accepted: err=%v launch=%q", err, fake.launched)
 	}
 }
+
+type lifecycleSetupLockFake struct {
+	platform *lifecycleParentPlatformFake
+	digest   string
+}
+
+func (lock *lifecycleSetupLockFake) VerifyPreTrustAuthenticode(Identity) error {
+	if !lock.platform.lockHeld {
+		return errors.New("signature verification ran without setup lock")
+	}
+	lock.platform.events = append(lock.platform.events, "verify")
+	return nil
+}
+
+func (lock *lifecycleSetupLockFake) SHA256() (string, error) {
+	if !lock.platform.lockHeld {
+		return "", errors.New("digest ran without setup lock")
+	}
+	lock.platform.events = append(lock.platform.events, "digest")
+	return lock.digest, nil
+}
+
+func (lock *lifecycleSetupLockFake) Close() error {
+	lock.platform.events = append(lock.platform.events, "close")
+	lock.platform.lockHeld = false
+	return nil
+}
+
+type lifecycleParentPlatformFake struct {
+	exchange Exchange
+	digest   string
+	lockHeld bool
+	events   []string
+}
+
+func (fake *lifecycleParentPlatformFake) IsElevated() (bool, error) { return false, nil }
+func (fake *lifecycleParentPlatformFake) AcquireSetupLock(string) (ParentSetupLock, error) {
+	fake.lockHeld = true
+	fake.events = append(fake.events, "lock")
+	return &lifecycleSetupLockFake{platform: fake, digest: fake.digest}, nil
+}
+func (fake *lifecycleParentPlatformFake) Confirm(string) (bool, error) {
+	if !fake.lockHeld {
+		return false, errors.New("confirmation ran without setup lock")
+	}
+	fake.events = append(fake.events, "confirm")
+	return true, nil
+}
+func (fake *lifecycleParentPlatformFake) ElevateAndWait(_ string, nonce string) error {
+	if !fake.lockHeld {
+		return errors.New("elevation started without setup lock")
+	}
+	fake.events = append(fake.events, "child-start")
+	request, err := fake.exchange.ConsumeRequest(nonce)
+	if err != nil {
+		return err
+	}
+	if !fake.lockHeld {
+		return errors.New("setup lock was released while child ran")
+	}
+	fake.events = append(fake.events, "child-complete")
+	return fake.exchange.WriteResult(Result{Nonce: nonce, SetupSHA256: request.SetupSHA256, Success: true, Message: "installed"})
+}
+func (fake *lifecycleParentPlatformFake) Launch(string) error {
+	fake.events = append(fake.events, "launch")
+	return nil
+}
+
+func TestRunParentHoldsSetupLockFromPreTrustThroughChildCompletion(t *testing.T) {
+	digest := strings.Repeat("d", 64)
+	nonce := strings.Repeat("e", 64)
+	exchange := Exchange{Root: t.TempDir()}
+	fake := &lifecycleParentPlatformFake{exchange: exchange, digest: digest}
+	err := RunParent(context.Background(), ParentOptions{
+		Executable: filepath.Join(t.TempDir(), SetupExecutableName), InstalledController: filepath.Join(InstallRoot, ControllerExecutableName),
+		Identity: Identity{Fingerprint: trackedFingerprint}, Nonce: nonce, Exchange: exchange,
+	}, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"lock", "verify", "confirm", "digest", "child-start", "child-complete", "launch", "close"}
+	if !reflect.DeepEqual(fake.events, want) {
+		t.Fatalf("events = %#v, want %#v", fake.events, want)
+	}
+}
+
 func (fake *parentPlatformFake) Launch(executable string) error {
 	fake.launched = executable
 	return nil
@@ -227,7 +324,6 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 	}
 
 	fake.confirmed = true
-	fake.tamperOnConfirm = []byte("confirmed replacement setup")
 	if err := RunParent(context.Background(), options, fake); err != nil {
 		t.Fatal(err)
 	}

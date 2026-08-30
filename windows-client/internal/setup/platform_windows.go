@@ -49,11 +49,94 @@ var (
 	shellExecuteExW = shell32.NewProc("ShellExecuteExW")
 	wintrust        = windows.NewLazySystemDLL("wintrust.dll")
 	winVerifyTrustW = wintrust.NewProc("WinVerifyTrust")
+	providerData    = wintrust.NewProc("WTHelperProvDataFromStateData")
+	providerSigner  = wintrust.NewProc("WTHelperGetProvSignerFromChain")
 )
 
 type WindowsPlatform struct{}
 
 func NewWindowsPlatform() *WindowsPlatform { return &WindowsPlatform{} }
+
+type windowsSetupLock struct {
+	path string
+	file *os.File
+}
+
+func (platform *WindowsPlatform) AcquireSetupLock(path string) (ParentSetupLock, error) {
+	return acquireWindowsSetupLock(path)
+}
+
+func acquireWindowsSetupLock(path string) (*windowsSetupLock, error) {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Base(path), SetupExecutableName) {
+		return nil, errors.New("setup executable path is invalid")
+	}
+	pathPointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateFile(
+		pathPointer,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	runtime.KeepAlive(pathPointer)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, errors.New("open setup elevation lock")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("setup executable is not a regular file")
+	}
+	return &windowsSetupLock{path: path, file: file}, nil
+}
+
+func (lock *windowsSetupLock) VerifyPreTrustAuthenticode(identity Identity) error {
+	if lock == nil || lock.file == nil {
+		return errors.New("setup elevation lock is unavailable")
+	}
+	status, certificateDER, timestamped, err := inspectLockedAuthenticode(lock.path, windows.Handle(lock.file.Fd()))
+	if err != nil {
+		return err
+	}
+	if status != 0 && status != certEUntrustedRoot {
+		return errors.New("Windows Authenticode signature is invalid before trust")
+	}
+	certificateSHA1 := sha1.Sum(certificateDER)
+	certificateSHA256 := sha256.Sum256(certificateDER)
+	if !bytes.Equal(certificateDER, identity.DER) ||
+		!strings.EqualFold(hex.EncodeToString(certificateSHA1[:]), identity.Thumbprint) ||
+		colonFingerprint(certificateSHA256[:]) != identity.Fingerprint || !timestamped {
+		return errors.New("Windows Authenticode signature is not exact and timestamped")
+	}
+	return nil
+}
+
+func (lock *windowsSetupLock) SHA256() (string, error) {
+	if lock == nil || lock.file == nil {
+		return "", errors.New("setup elevation lock is unavailable")
+	}
+	return fileSHA256(lock.file)
+}
+
+func (lock *windowsSetupLock) Close() error {
+	if lock == nil || lock.file == nil {
+		return nil
+	}
+	err := lock.file.Close()
+	lock.file = nil
+	return err
+}
 
 func (platform *WindowsPlatform) IsElevated() (bool, error) {
 	return windows.GetCurrentProcessToken().IsElevated(), nil
@@ -61,7 +144,7 @@ func (platform *WindowsPlatform) IsElevated() (bool, error) {
 
 func (platform *WindowsPlatform) Confirm(fingerprint string) (bool, error) {
 	message := "Mobile Egress Setup will trust and install software signed by this publisher certificate.\n\n" +
-		"Before continuing, use Windows Properties > Digital Signatures on this exact setup file to inspect and export its signer certificate. Compare that certificate's SHA-256 fingerprint with the value shared separately by the publisher.\n\n" +
+		"Before launch, use trusted Windows PowerShell from the Start menu to run Get-AuthenticodeSignature on this exact setup file. Require Status NotTrusted or Valid and signer thumbprint 85F220C1BF05A5D3A86B5DD408787EC1B122ECB7. Reject every other status. Windows Properties alone is not sufficient. Compare the OS-extracted certificate's SHA-256 fingerprint with the value shared separately by the publisher.\n\n" +
 		"Expected SHA-256 fingerprint (reminder only; this setup-displayed value is not identity evidence):\n" + fingerprint + "\n\n" +
 		"Continue only if the fingerprint extracted through Windows matches the separately shared value exactly.\n\nContinue?"
 	result, err := showMessageBox(message, "Mobile Egress Setup", messageBoxYesNo|messageBoxIconWarning|messageBoxTopmost)
@@ -323,7 +406,7 @@ func validatePreTrustAuthenticodeResult(raw []byte, trustStatus uint32, identity
 			return errors.New("Windows Authenticode status does not match valid trust")
 		}
 	case certEUntrustedRoot:
-		if result.Status != "NotTrusted" && result.Status != "UnknownError" {
+		if result.Status != "NotTrusted" {
 			return errors.New("Windows Authenticode status is not the precise untrusted-root condition")
 		}
 	default:
@@ -390,6 +473,99 @@ type winTrustData struct {
 	ProviderFlags      uint32
 	UIContext          uint32
 	SignatureSettings  unsafe.Pointer
+}
+
+type cryptProviderCert struct {
+	Size                uint32
+	Certificate         *windows.CertContext
+	Commercial          int32
+	TrustedRoot         int32
+	SelfSigned          int32
+	TestCertificate     int32
+	RevokedReason       uint32
+	Confidence          uint32
+	Error               uint32
+	TrustListContext    unsafe.Pointer
+	TrustListSignerCert int32
+	CTLContext          unsafe.Pointer
+	CTLError            uint32
+	IsCyclic            int32
+	ChainElement        unsafe.Pointer
+}
+
+type cryptProviderSigner struct {
+	Size               uint32
+	VerifyAsOf         windows.Filetime
+	CertificateCount   uint32
+	Certificates       *cryptProviderCert
+	SignerType         uint32
+	SignerInfo         unsafe.Pointer
+	Error              uint32
+	CounterSignerCount uint32
+	CounterSigners     *cryptProviderSigner
+	ChainContext       unsafe.Pointer
+}
+
+func inspectLockedAuthenticode(path string, handle windows.Handle) (status uint32, certificateDER []byte, timestamped bool, resultErr error) {
+	if handle == 0 || handle == windows.InvalidHandle {
+		return 0, nil, false, errors.New("setup elevation lock handle is invalid")
+	}
+	if err := winVerifyTrustW.Find(); err != nil {
+		return 0, nil, false, err
+	}
+	if err := providerData.Find(); err != nil {
+		return 0, nil, false, err
+	}
+	if err := providerSigner.Find(); err != nil {
+		return 0, nil, false, err
+	}
+	pathPointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	fileInfo := winTrustFileInfo{FilePath: pathPointer, File: handle}
+	fileInfo.Size = uint32(unsafe.Sizeof(fileInfo))
+	data := winTrustData{UIChoice: 2, UnionChoice: 1, File: &fileInfo, StateAction: windows.WTD_STATEACTION_VERIFY}
+	data.Size = uint32(unsafe.Sizeof(data))
+	action := windows.GUID{Data1: 0x00AAC56B, Data2: 0xCD44, Data3: 0x11D0, Data4: [8]byte{0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE}}
+	verificationStatus, _, _ := winVerifyTrustW.Call(0, uintptr(unsafe.Pointer(&action)), uintptr(unsafe.Pointer(&data)))
+	status = uint32(verificationStatus)
+	defer func() {
+		data.StateAction = windows.WTD_STATEACTION_CLOSE
+		closeStatus, _, _ := winVerifyTrustW.Call(0, uintptr(unsafe.Pointer(&action)), uintptr(unsafe.Pointer(&data)))
+		if closeStatus != 0 && resultErr == nil {
+			resultErr = errors.New("close Windows Authenticode verification state")
+		}
+		runtime.KeepAlive(pathPointer)
+		runtime.KeepAlive(fileInfo)
+		runtime.KeepAlive(data)
+	}()
+	provider, _, _ := providerData.Call(uintptr(data.StateData))
+	if provider == 0 {
+		return status, nil, false, errors.New("Windows Authenticode provider state is unavailable")
+	}
+	signerPointer, _, _ := providerSigner.Call(provider, 0, 0, 0)
+	if signerPointer == 0 {
+		return status, nil, false, errors.New("Windows Authenticode signer is unavailable")
+	}
+	signer := cryptProviderSignerFromAddress(signerPointer)
+	if signer.CertificateCount == 0 || signer.Certificates == nil || signer.Certificates.Certificate == nil {
+		return status, nil, false, errors.New("Windows Authenticode signer certificate is unavailable")
+	}
+	certificate := signer.Certificates.Certificate
+	if certificate.EncodedCert == nil || certificate.Length == 0 || certificate.Length > 16<<10 {
+		return status, nil, false, errors.New("Windows Authenticode signer certificate is invalid")
+	}
+	certificateDER = append([]byte(nil), unsafe.Slice(certificate.EncodedCert, certificate.Length)...)
+	counterSignerPointer, _, _ := providerSigner.Call(provider, 0, 1, 0)
+	timestamped = counterSignerPointer != 0
+	return status, certificateDER, timestamped, nil
+}
+
+func cryptProviderSignerFromAddress(address uintptr) *cryptProviderSigner {
+	var signer *cryptProviderSigner
+	*(*uintptr)(unsafe.Pointer(&signer)) = address
+	return signer
 }
 
 func winVerifyTrustStatus(path string) (uint32, error) {

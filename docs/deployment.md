@@ -58,7 +58,21 @@ if ($LASTEXITCODE -ne 0) { throw 'Restored Windows publisher validation failed.'
 
 The SHA-256 certificate fingerprint in `windows-signing\release-signing-certificate.txt` is the pre-trust identity check. Share that exact value separately with each friend through a trusted out-of-band channel. A fingerprint shown on the GitHub release, inside the ZIP, or by an executable being installed is not an independent identity check and does not replace the separately shared value.
 
-Friends extract the release ZIP, then use Windows on the exact `MobileEgressSetup.exe`: **Properties → Digital Signatures → Details → View Certificate → Details → Copy to File**, export the signature's signer certificate as DER, and run `certutil -hashfile <exported-certificate.cer> SHA256`. They stop if Windows exposes no Digital Signatures tab or signer certificate. Before running setup, they compare all 64 OS-extracted hexadecimal digits with the out-of-band value, ignoring only separator formatting and letter case. A fingerprint displayed by the untrusted setup or included in the ZIP is only a reminder and is not identity evidence. The initial Windows dialog can identify the setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**. Self-signing does not solve SmartScreen or create reputation. After the exact match, setup verifies its signature, requires explicit **Yes**, binds the confirmed setup digest into a one-time request, requests UAC for that same file, and makes the elevated child verify its own digest and exact signature before trusting the exact public certificate. It transactionally installs the controller and shortcut, then launches the controller unelevated.
+Friends extract the release ZIP, open the system **Windows PowerShell** from the Start menu (never a shell/script from the ZIP), and run the exact pre-launch check below from the extracted directory. The signer thumbprint must be exactly `85F220C1BF05A5D3A86B5DD408787EC1B122ECB7`; Status must be exactly `NotTrusted` on a fresh PC or `Valid` on an already-trusted PC. `HashMismatch`, `NotSigned`, `UnknownError`, and every other status are hard failures. They compare the OS-extracted certificate SHA-256 printed by the check with the out-of-band value. Windows Properties can help view the certificate but is not sufficient alone, and setup/ZIP-displayed values are not identity evidence.
+
+```powershell
+$setupPath = (Resolve-Path '.\MobileEgressSetup.exe').Path
+$expectedThumbprint = '85F220C1BF05A5D3A86B5DD408787EC1B122ECB7'
+$signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+$status = [string]$signature.Status
+if ($status -notin @('NotTrusted', 'Valid')) { throw "Reject setup: Authenticode status is $status." }
+if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedThumbprint) { throw 'Reject setup: signer thumbprint differs.' }
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try { $certificateFingerprint = ([BitConverter]::ToString($sha256.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', ':') } finally { $sha256.Dispose() }
+$certificateFingerprint
+```
+
+The initial Windows dialog can identify the setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**. Self-signing does not solve SmartScreen or create reputation. After the trusted check and exact fingerprint match, setup requires explicit **Yes**, locks the exact setup file against write/delete/replacement, verifies and hashes through that handle, and holds the lock through `ShellExecuteEx` process creation and wait. The elevated child independently verifies its own digest/signature before trust as defense in depth. Genuine-code self-checks do not authenticate malicious substituted code; the trusted OS-extracted signature check is the pre-trust authority. Only child exit zero plus a bound success result permits the unelevated parent to launch the transactionally installed controller.
 
 The signed controller carries the same public publisher certificate. Before an EC2 Client accepts its normal Authenticode validation, the controller establishes that exact public certificate as the EC2 trust anchor through its guided SSM flow. EC2 nodes receive only the public certificate and signed artifacts; they never receive the PFX, its password, or another private signing value.
 
@@ -293,7 +307,7 @@ On the controller PC:
 1. Verify the ZIP hash against the release record.
 2. Obtain the publisher's SHA-256 certificate fingerprint from the separately shared trusted channel; do not treat a value in the release itself as that identity check.
 3. Extract it into one directory; do not separate the setup application or sibling executables.
-4. Before opening `MobileEgressSetup.exe`, inspect that exact file with **Properties → Digital Signatures**, export the signature's signer certificate, and calculate its SHA-256 with `certutil -hashfile <exported-certificate.cer> SHA256`. Stop if the tab/certificate is absent; otherwise compare all 64 hexadecimal digits with the out-of-band value, ignoring only separator formatting and letter case. Do not use setup's displayed reminder as identity evidence. Then open setup, answer **Yes**, and approve its one UAC prompt. **Unknown publisher** and **More info → Run anyway** may be required before trust; self-signing does not suppress SmartScreen.
+4. Before opening `MobileEgressSetup.exe`, run the trusted Windows PowerShell check above on that exact file. Require exact thumbprint `85F220C1BF05A5D3A86B5DD408787EC1B122ECB7`, Status exactly `NotTrusted` or `Valid`, and an OS-extracted certificate SHA-256 matching the out-of-band value. Reject every other status; Properties alone and setup's reminder are insufficient. Then open setup, answer **Yes**, and approve its one UAC prompt. **Unknown publisher** and **More info → Run anyway** may be required before trust; self-signing does not suppress SmartScreen.
 5. Run `Get-AuthenticodeSignature` on every extracted `.exe` and require `Valid` with the recorded signer thumbprint after setup established the trusted publisher.
 
 On Android:

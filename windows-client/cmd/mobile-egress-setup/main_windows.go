@@ -94,27 +94,34 @@ func runElevated(nonce string, platform *setup.WindowsPlatform) error {
 		return err
 	}
 	exchange := setup.Exchange{Root: exchangeRoot}
-	installErr := setup.RunElevated(setup.ElevatedOptions{
-		Nonce:     nonce,
-		SetupPath: executable,
-		Exchange:  exchange,
-		Identity:  identity,
-	}, platform)
+	return completeElevatedRun(nonce, executable, exchange, func() error {
+		return setup.RunElevated(setup.ElevatedOptions{
+			Nonce:     nonce,
+			SetupPath: executable,
+			Exchange:  exchange,
+			Identity:  identity,
+		}, platform)
+	})
+}
+
+func completeElevatedRun(nonce, executable string, exchange setup.Exchange, install func() error) error {
+	installErr := install()
 	setupDigest, digestErr := setup.FileSHA256(executable)
-	if installErr == nil && digestErr != nil {
-		installErr = digestErr
+	if digestErr != nil {
+		return errors.Join(installErr, digestErr)
 	}
 	result := setup.Result{Nonce: nonce, SetupSHA256: setupDigest, Success: true, Message: "Mobile Egress was installed."}
 	if installErr != nil {
-		result = failureResult(nonce, installErr)
+		result = failureResult(nonce, setupDigest, installErr)
 	}
-	if err := exchange.WriteResult(result); err != nil {
-		return errors.Join(installErr, err)
+	resultErr := exchange.WriteResult(result)
+	if installErr != nil {
+		return errors.Join(installErr, resultErr)
 	}
-	return nil
+	return resultErr
 }
 
-func failureResult(nonce string, installErr error) setup.Result {
+func failureResult(nonce, setupDigest string, installErr error) setup.Result {
 	code := "install_failed"
 	message := "Installation did not complete. Verify the Mobile Egress publisher trust before retrying."
 	if errors.Is(installErr, setup.ErrTrustRollback) {
@@ -122,10 +129,11 @@ func failureResult(nonce string, installErr error) setup.Result {
 		message = "Installation did not complete and publisher trust cleanup failed. Review the Mobile Egress certificate entries before retrying."
 	}
 	return setup.Result{
-		Nonce:   nonce,
-		Success: false,
-		Code:    code,
-		Message: message,
+		Nonce:       nonce,
+		SetupSHA256: setupDigest,
+		Success:     false,
+		Code:        code,
+		Message:     message,
 	}
 }
 
