@@ -60,3 +60,32 @@ Result: both commands are unavailable on this Windows host (`swift` and `xcodebu
 ## Remaining Concern
 
 The `#if canImport(Security)` certificate-validation branch and the XCTest guarded by the same condition could not be compiled or run on Windows/Linux. The container result verifies the portable core only; macOS/Xcode verification remains required for the Apple Security path.
+
+## Fix Round 1
+
+Addressed four review findings:
+
+- Zero-extended the IPv6 network prefixes before matching, preserving Android's `2001::/23`, `2001:2::/48`, `3fff::/20`, and other byte-prefix semantics.
+- Added a raw top-level JSON lexer for `version` and now require the literal token `1`; `1.0` and `1e0` are rejected before Foundation can coerce them to `Int`.
+- Added portable real-PEM DER coverage for a parseable leaf (`CA:FALSE`) and a `CA:TRUE` certificate that lacks `keyCertSign`.
+- Changed pairing and migration capability validation from nonempty to nonblank, matching Android `isBlank()` behavior.
+
+### RED
+
+Command:
+
+```powershell
+docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-ios-agent,target=/workspace" -w /workspace/ios swift:6.0 swift test
+```
+
+Output: exit 1; 23 XCTest cases executed with 11 failures. The failures were the expected new regressions: `2001::1`, `2001:2::1`, and `3fff::1` were accepted; pairing, migration, and wire envelopes accepted both `1.0` and `1e0`; and pairing/migration accepted whitespace-only capabilities. The portable parseable non-CA and no-`keyCertSign` certificate test passed, proving the existing DER checks were exercised.
+
+### GREEN
+
+Command:
+
+```powershell
+docker run --rm --mount "type=bind,source=C:\Users\Chad\workspace\mobile-egress-ios-agent,target=/workspace" -w /workspace/ios swift:6.0 swift test
+```
+
+Output: exit 0; all 23 XCTest cases passed with 0 failures. This includes the new public-address, pairing, migration, wire-protocol, whitespace-capability, and portable certificate-authority regressions.

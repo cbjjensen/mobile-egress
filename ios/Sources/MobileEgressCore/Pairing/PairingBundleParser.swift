@@ -24,10 +24,13 @@ public final class PairingBundleParser {
     public func parse(_ input: String) throws -> PairingBundle {
         let data = try StrictQRCodeDecoder.decode(input)
         try StrictJSONObject.exactKeys(in: data, expected: ["version", "relayUrl", "caCertificatePem", "capability", "role", "expiresAt"])
+        guard StrictJSONObject.hasIntegerLiteral(1, forKey: "version", in: data) else {
+            throw CoreValidationError.invalidPairing
+        }
         let wire = try JSONDecoder().decode(PairingWire.self, from: data)
         guard wire.version == 1,
               wire.role == "agent",
-              !wire.capability.isEmpty,
+              !wire.capability.allSatisfy(\.isWhitespace),
               wire.capability.utf8.count <= 4 * 1024
         else {
             throw CoreValidationError.invalidPairing

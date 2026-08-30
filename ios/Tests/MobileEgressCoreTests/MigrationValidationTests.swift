@@ -21,6 +21,20 @@ final class MigrationValidationTests: XCTestCase {
         XCTAssertFalse(parser.recognizes(payload))
     }
 
+    func testMigrationRejectsDecimalAndExponentVersionLiterals() throws {
+        let parser = EndpointMigrationParser(now: { TestFixtures.now }, certificateValidator: FixtureCertificateValidator())
+        let migration = try TestFixtures.migrationQR()
+
+        XCTAssertThrowsError(try parser.parse(TestFixtures.replacingVersionLiteral(in: migration, with: "1.0")))
+        XCTAssertThrowsError(try parser.parse(TestFixtures.replacingVersionLiteral(in: migration, with: "1e0")))
+    }
+
+    func testMigrationRejectsWhitespaceOnlyCapability() throws {
+        let parser = EndpointMigrationParser(now: { TestFixtures.now }, certificateValidator: FixtureCertificateValidator())
+
+        XCTAssertThrowsError(try parser.parse(TestFixtures.migrationQR(capability: " \t\n")))
+    }
+
     func testMigrationRejectsDifferentCertificateAuthority() throws {
         let migration = try EndpointMigrationParser(now: { TestFixtures.now }, certificateValidator: FixtureCertificateValidator())
             .parse(TestFixtures.migrationQR())

@@ -53,6 +53,9 @@ public enum WireProtocol {
     public static func parseAgentInbound(_ raw: Data) throws -> WireEnvelope {
         guard raw.count <= maximumWebSocketMessageBytes else { throw CoreValidationError.invalidJSON }
         try StrictJSONObject.exactKeys(in: raw, expected: ["version", "type", "streamId", "payload"])
+        guard StrictJSONObject.hasIntegerLiteral(1, forKey: "version", in: raw) else {
+            throw CoreValidationError.invalidJSON
+        }
         let wire = try JSONDecoder().decode(WireEnvelopeWire.self, from: raw)
         try validate(version: wire.version, type: wire.type, streamID: wire.streamID, payload: wire.payload)
         guard agentInboundTypes.contains(wire.type) else { throw CoreValidationError.invalidJSON }

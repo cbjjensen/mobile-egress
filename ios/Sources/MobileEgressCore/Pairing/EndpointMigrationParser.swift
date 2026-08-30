@@ -22,6 +22,7 @@ public final class EndpointMigrationParser {
 
     public func recognizes(_ input: String) -> Bool {
         guard let data = try? StrictQRCodeDecoder.decode(input),
+              StrictJSONObject.hasIntegerLiteral(1, forKey: "version", in: data),
               let recognition = try? JSONDecoder().decode(MigrationRecognitionWire.self, from: data)
         else {
             return false
@@ -32,10 +33,13 @@ public final class EndpointMigrationParser {
     public func parse(_ input: String) throws -> EndpointMigration {
         let data = try StrictQRCodeDecoder.decode(input)
         try StrictJSONObject.exactKeys(in: data, expected: ["version", "type", "relayUrl", "caCertificatePem", "capability", "expiresAt"])
+        guard StrictJSONObject.hasIntegerLiteral(1, forKey: "version", in: data) else {
+            throw CoreValidationError.invalidMigration
+        }
         let wire = try JSONDecoder().decode(MigrationWire.self, from: data)
         guard wire.version == 1,
               wire.type == "agent-endpoint-migration",
-              !wire.capability.isEmpty,
+              !wire.capability.allSatisfy(\.isWhitespace),
               wire.capability.utf8.count <= 4 * 1024
         else {
             throw CoreValidationError.invalidMigration

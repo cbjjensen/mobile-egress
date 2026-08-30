@@ -8,7 +8,7 @@ final class PublicAddressPolicyTests: XCTestCase {
     }
 
     func testPublicAddressPolicyRejectsPrivateReservedAndNonLiteralAddresses() throws {
-        for address in ["10.0.0.1", "100.64.0.1", "192.168.1.1", "::1", "2001:db8::1", "fc00::1", "example.com"] {
+        for address in ["10.0.0.1", "100.64.0.1", "192.168.1.1", "::1", "2001::1", "2001:2::1", "2001:db8::1", "3fff::1", "fc00::1", "example.com"] {
             XCTAssertThrowsError(try PublicAddressPolicy.validate(ipLiteral: address, port: 443))
         }
         XCTAssertThrowsError(try PublicAddressPolicy.validate(ipLiteral: "1.1.1.1", port: 0))

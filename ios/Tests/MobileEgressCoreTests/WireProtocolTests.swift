@@ -29,4 +29,12 @@ final class WireProtocolTests: XCTestCase {
 
         XCTAssertThrowsError(try WireProtocol.parseAgentInbound(raw))
     }
+
+    func testWireProtocolRejectsDecimalAndExponentVersionLiterals() throws {
+        for version in ["1.0", "1e0"] {
+            let raw = Data("{\"version\":\(version),\"type\":\"data\",\"streamId\":\"stream-1\",\"payload\":\"\"}".utf8)
+
+            XCTAssertThrowsError(try WireProtocol.parseAgentInbound(raw))
+        }
+    }
 }

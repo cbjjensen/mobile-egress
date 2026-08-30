@@ -42,6 +42,28 @@ final class PairingValidationTests: XCTestCase {
         XCTAssertThrowsError(try parser.parse(payload))
     }
 
+    func testPairingRejectsDecimalAndExponentVersionLiterals() throws {
+        let parser = PairingBundleParser(now: { TestFixtures.now }, certificateValidator: AcceptingCertificateValidator())
+        let pairing = try TestFixtures.pairingQR()
+
+        XCTAssertThrowsError(try parser.parse(TestFixtures.replacingVersionLiteral(in: pairing, with: "1.0")))
+        XCTAssertThrowsError(try parser.parse(TestFixtures.replacingVersionLiteral(in: pairing, with: "1e0")))
+    }
+
+    func testPairingRejectsWhitespaceOnlyCapability() throws {
+        let parser = PairingBundleParser(now: { TestFixtures.now }, certificateValidator: AcceptingCertificateValidator())
+
+        XCTAssertThrowsError(try parser.parse(TestFixtures.pairingQR(capability: " \t\n")))
+    }
+
+    func testCertificateAuthorityValidatorRejectsParseableNonAuthorities() throws {
+        let validator = CertificateAuthorityValidator()
+
+        XCTAssertNoThrow(try validator.validate(TestFixtures.validCAPEM, at: TestFixtures.now))
+        XCTAssertThrowsError(try validator.validate(TestFixtures.nonCAPEM, at: TestFixtures.now))
+        XCTAssertThrowsError(try validator.validate(TestFixtures.caWithoutKeyCertSignPEM, at: TestFixtures.now))
+    }
+
     #if canImport(Security)
     func testCertificateAuthorityValidatorAcceptsAValidCAAndRejectsMalformedPEM() throws {
         let validator = CertificateAuthorityValidator()
