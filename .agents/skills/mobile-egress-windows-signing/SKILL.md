@@ -32,7 +32,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Signed Windows release failed.' }
 
 The build must produce a self-contained `windows-client\build\release\mobile-egress-windows-<version>.zip`, require valid timestamped Authenticode on all five executables, and bind node-release manifest v2 to the tracked certificate and `mobile-egress-client.exe` hash. `-CodeSigningThumbprint` is only an optional equality assertion, not a way to select another signer. Any missing/invalid signature or signer mismatch makes the entire archive unusable: stop, do not distribute it, and tell anyone who received it not to run it.
 
-On a replacement workstation, first restore both original ignored files to their exact paths through the secure backup process; do not display their contents. Then run:
+On a replacement workstation, first restore both original ignored files to their exact paths through the secure backup process; do not display their contents. Move the two opaque originals only through encrypted removable storage or an encrypted backup/vault transfer under the publisher's control; never email, chat, or cloud-share them unencrypted, never extract or display the password, and remove temporary transit copies after `-Restore` and `-ValidateOnly` succeed. Then run:
 
 ```powershell
 & .\scripts\setup-windows-signing.ps1 -Restore
