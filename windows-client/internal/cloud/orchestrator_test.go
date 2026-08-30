@@ -342,20 +342,21 @@ func TestNodeTrustBootstrapVerifiesExactUntrustedSignerBeforeTrustAndRollsBackOn
 				strings.ToUpper(release.SignerThumbprint),
 				"@('NotTrusted', 'Valid')",
 				"[Convert]::ToBase64String($untrustedSignature.SignerCertificate.RawData) -cne $certificateBase64",
-				"$addedStores.Add($StoreName)",
+				"$storesAbsentAtStart.Add($StoreName)",
+				"$confirmedAddedStores.Add($StoreName)",
 				"function Remove-AttemptTrust",
 				"[Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64",
-				"$store.Remove($candidate)",
+				"$store.Remove($exactMatches[0])",
 				"finally",
 			} {
 				if !strings.Contains(script, required) {
 					t.Fatalf("trust bootstrap is missing %q", required)
 				}
 			}
-			markAdded := strings.Index(script, "$addedStores.Add($StoreName)")
-			importCertificate := strings.Index(script, "Import-Certificate")
+			markAdded := strings.Index(script, "$storesAbsentAtStart.Add($StoreName)")
+			importCertificate := strings.Index(script, "  Import-ExactTrustCertificate -StoreName $StoreName")
 			if markAdded < 0 || importCertificate < 0 || markAdded > importCertificate {
-				t.Fatal("trust addition is not tracked before the possibly partial import")
+				t.Fatal("initial trust absence is not recorded before the possibly partial import")
 			}
 			if strings.Contains(script, "Remove-Item -LiteralPath $candidate.PSPath") || strings.Contains(script, "Remove-Item -LiteralPath (Join-Path $storePath") {
 				t.Fatal("trust rollback can remove by path/thumbprint instead of exact certificate bytes")

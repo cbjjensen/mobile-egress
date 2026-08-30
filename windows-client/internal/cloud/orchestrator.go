@@ -310,36 +310,100 @@ func (release NodeRelease) Validate() error {
 	return nil
 }
 
-func updateScript(release NodeRelease) string {
-	return trustedReleaseScript(release, `$service = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
+type trustedReleaseScriptOptions struct {
+	MutexName               string
+	MutexWaitMilliseconds   int
+	StorePrimitiveFunctions string
+}
+
+var productionTrustedReleaseScriptOptions = trustedReleaseScriptOptions{
+	MutexName:               `Global\MobileEgress.ClientReleaseTrust.v1`,
+	MutexWaitMilliseconds:   120_000,
+	StorePrimitiveFunctions: productionTrustStorePrimitiveFunctions,
+}
+
+const updateReleaseOperation = `$service = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
 if ($null -ne $service -and $service.Status -ne 'Stopped') { Stop-Service -Name 'MobileEgressClient' -Force }
 $executable = Join-Path $installDir 'mobile-egress-client.exe'
 Move-Item -Force -LiteralPath $download -Destination $executable
 if ($null -eq $service) {
   $null = & sc.exe create MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
+  if ($LASTEXITCODE -ne 0) { throw 'Client service creation failed' }
 } else {
   $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
+  if ($LASTEXITCODE -ne 0) { throw 'Client service configuration failed' }
 }
 Start-Service -Name 'MobileEgressClient'
-Write-Output '{"updated":true}'`)
-}
+$operationOutput = '{"updated":true}'`
 
-func installScript(release NodeRelease) string {
-	return trustedReleaseScript(release, `$executable = Join-Path $installDir 'mobile-egress-client.exe'
+const installReleaseOperation = `$executable = Join-Path $installDir 'mobile-egress-client.exe'
 Move-Item -Force -LiteralPath $download -Destination $executable
 $existing = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
 if ($null -eq $existing) {
   $null = & sc.exe create MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
+  if ($LASTEXITCODE -ne 0) { throw 'Client service creation failed' }
 } else {
   $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
+  if ($LASTEXITCODE -ne 0) { throw 'Client service configuration failed' }
 }
 $bootstrapOutput = (& $executable bootstrap --state-dir $stateDir 2>$null | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Client bootstrap failed' }
 if ([Text.Encoding]::UTF8.GetByteCount($bootstrapOutput) -gt 524288) { throw 'Client bootstrap output exceeded its public bound' }
-Write-Output $bootstrapOutput`)
+$operationOutput = $bootstrapOutput`
+
+func updateScript(release NodeRelease) string {
+	return updateScriptWithOptions(release, productionTrustedReleaseScriptOptions)
+}
+
+func updateScriptWithOptions(release NodeRelease, options trustedReleaseScriptOptions) string {
+	return trustedReleaseScriptWithOptions(release, updateReleaseOperation, options)
+}
+
+func installScript(release NodeRelease) string {
+	return trustedReleaseScriptWithOptions(release, installReleaseOperation, productionTrustedReleaseScriptOptions)
 }
 
 func trustedReleaseScript(release NodeRelease, operation string) string {
+	return trustedReleaseScriptWithOptions(release, operation, productionTrustedReleaseScriptOptions)
+}
+
+const productionTrustStorePrimitiveFunctions = `function Get-TrustStoreThumbprintMatches {
+  param([Parameter(Mandatory)][string]$StoreName)
+  $storePath = "Cert:\LocalMachine\$StoreName"
+  return @(Get-ChildItem -LiteralPath $storePath | Where-Object { $_.Thumbprint.ToUpperInvariant() -eq $certificateThumbprint })
+}
+
+function Import-ExactTrustCertificate {
+  param([Parameter(Mandatory)][string]$StoreName)
+  $null = Import-Certificate -FilePath $certificatePath -CertStoreLocation "Cert:\LocalMachine\$StoreName"
+}
+
+function Remove-ExactTrustCertificate {
+  param([Parameter(Mandatory)][string]$StoreName)
+  $store = [Security.Cryptography.X509Certificates.X509Store]::new($StoreName, [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+  try {
+    $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $exactMatches = [Collections.Generic.List[object]]::new()
+    $collisionFound = $false
+    foreach ($candidate in @($store.Certificates)) {
+      if ($candidate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint) { continue }
+      if ([Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64) {
+        $null = $exactMatches.Add($candidate)
+      } else {
+        $collisionFound = $true
+      }
+    }
+    if ($collisionFound) { throw 'publisher trust rollback found a non-exact thumbprint collision' }
+    if ($exactMatches.Count -gt 1) { throw 'publisher trust rollback found ambiguous exact duplicates' }
+    if ($exactMatches.Count -eq 1) { $store.Remove($exactMatches[0]) }
+  } finally {
+    $store.Close()
+    $store.Dispose()
+  }
+}`
+
+func trustedReleaseScriptWithOptions(release NodeRelease, operation string, options trustedReleaseScriptOptions) string {
+	mutexName := strings.ReplaceAll(options.MutexName, "'", "''")
 	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $installDir = 'C:\Program Files\MobileEgress'
@@ -350,92 +414,121 @@ $certificatePath = Join-Path $env:TEMP ("mobile-egress-publisher-$attemptID.cer"
 $certificateBase64 = '%s'
 $certificateSha256 = '%s'
 $certificateThumbprint = '%s'
-$addedStores = [Collections.Generic.List[string]]::new()
+$storesAbsentAtStart = [Collections.Generic.List[string]]::new()
+$confirmedAddedStores = [Collections.Generic.List[string]]::new()
+$operationOutput = $null
+
+%s
 
 function Get-ExactTrustCertificate {
   param([Parameter(Mandatory)][string]$StoreName)
-  $storePath = "Cert:\LocalMachine\$StoreName"
-  $thumbprintMatches = @(Get-ChildItem -LiteralPath $storePath | Where-Object { $_.Thumbprint.ToUpperInvariant() -eq $certificateThumbprint })
+  $thumbprintMatches = @(Get-TrustStoreThumbprintMatches -StoreName $StoreName)
+  $exactMatches = [Collections.Generic.List[object]]::new()
+  $collisionFound = $false
   foreach ($candidate in $thumbprintMatches) {
-    if ([Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64) { return $candidate }
+    if ([Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64) {
+      $null = $exactMatches.Add($candidate)
+    } else {
+      $collisionFound = $true
+    }
   }
-  if ($thumbprintMatches.Count -ne 0) { throw 'publisher trust store contains a non-exact thumbprint collision' }
+  if ($collisionFound) { throw 'publisher trust store contains a non-exact thumbprint collision' }
+  if ($exactMatches.Count -gt 1) { throw 'publisher trust store contains ambiguous exact duplicates' }
+  if ($exactMatches.Count -eq 1) { return $exactMatches[0] }
   return $null
 }
 
 function Ensure-ExactTrust {
   param([Parameter(Mandatory)][string]$StoreName)
   if ($null -ne (Get-ExactTrustCertificate -StoreName $StoreName)) { return }
-  $null = $addedStores.Add($StoreName)
-  $null = Import-Certificate -FilePath $certificatePath -CertStoreLocation "Cert:\LocalMachine\$StoreName"
+  $null = $storesAbsentAtStart.Add($StoreName)
+  Import-ExactTrustCertificate -StoreName $StoreName
   if ($null -eq (Get-ExactTrustCertificate -StoreName $StoreName)) { throw 'exact publisher trust import failed' }
+  $null = $confirmedAddedStores.Add($StoreName)
 }
 
 function Remove-AttemptTrust {
   param([Parameter(Mandatory)][string]$StoreName)
-  $store = [Security.Cryptography.X509Certificates.X509Store]::new($StoreName, [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
-  try {
-    $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-    foreach ($candidate in @($store.Certificates)) {
-      if ($candidate.Thumbprint.ToUpperInvariant() -eq $certificateThumbprint -and [Convert]::ToBase64String($candidate.RawData) -ceq $certificateBase64) {
-        $store.Remove($candidate)
-      }
-    }
-  } finally {
-    $store.Close()
-    $store.Dispose()
-  }
+  Remove-ExactTrustCertificate -StoreName $StoreName
 }
 
+$transactionMutex = $null
+$transactionMutexAcquired = $false
 try {
-  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
-  $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
-  if ($digest -ne '%s') { throw 'release digest verification failed' }
-
-  [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($certificateBase64))
-  $certificateDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $certificatePath).Hash.ToLowerInvariant()
-  if ($certificateDigest -ne $certificateSha256) { throw 'publisher certificate digest verification failed' }
-  $embeddedCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
   try {
-    if ($embeddedCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint -or [Convert]::ToBase64String($embeddedCertificate.RawData) -cne $certificateBase64) {
-      throw 'publisher certificate identity verification failed'
+    $transactionMutex = [Threading.Mutex]::new($false, '%s')
+    try {
+      $transactionMutexAcquired = $transactionMutex.WaitOne(%d)
+    } catch [Threading.AbandonedMutexException] {
+      $transactionMutexAcquired = $true
     }
-  } finally {
-    $embeddedCertificate.Dispose()
+  } catch {
+    throw 'Client release transaction lock acquisition failed'
   }
+  if (-not $transactionMutexAcquired) { throw 'Client release transaction lock timed out' }
 
-  $untrustedSignature = Get-AuthenticodeSignature -LiteralPath $download
-  if ($untrustedSignature.Status.ToString() -notin @('NotTrusted', 'Valid')) { throw 'release signature is not intact before trust' }
-  if ($null -eq $untrustedSignature.SignerCertificate -or [Convert]::ToBase64String($untrustedSignature.SignerCertificate.RawData) -cne $certificateBase64) {
-    throw 'release signer certificate does not match before trust'
-  }
-  if ($untrustedSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint) { throw 'release signer thumbprint does not match before trust' }
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -UseBasicParsing -Uri '%s' -OutFile $download
+    $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+    if ($digest -ne '%s') { throw 'release digest verification failed' }
 
-  Ensure-ExactTrust -StoreName 'Root'
-  Ensure-ExactTrust -StoreName 'TrustedPublisher'
+    [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($certificateBase64))
+    $certificateDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $certificatePath).Hash.ToLowerInvariant()
+    if ($certificateDigest -ne $certificateSha256) { throw 'publisher certificate digest verification failed' }
+    $embeddedCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
+    try {
+      if ($embeddedCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint -or [Convert]::ToBase64String($embeddedCertificate.RawData) -cne $certificateBase64) {
+        throw 'publisher certificate identity verification failed'
+      }
+    } finally {
+      $embeddedCertificate.Dispose()
+    }
 
-  $trustedSignature = Get-AuthenticodeSignature -LiteralPath $download
-  if ($trustedSignature.Status.ToString() -ne 'Valid' -or $null -eq $trustedSignature.SignerCertificate) { throw 'release signature is not valid after trust' }
-  if ($trustedSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint -or [Convert]::ToBase64String($trustedSignature.SignerCertificate.RawData) -cne $certificateBase64) {
-    throw 'release signer certificate does not match after trust'
-  }
+    $untrustedSignature = Get-AuthenticodeSignature -LiteralPath $download
+    if ($untrustedSignature.Status.ToString() -notin @('NotTrusted', 'Valid')) { throw 'release signature is not intact before trust' }
+    if ($null -eq $untrustedSignature.SignerCertificate -or [Convert]::ToBase64String($untrustedSignature.SignerCertificate.RawData) -cne $certificateBase64) {
+      throw 'release signer certificate does not match before trust'
+    }
+    if ($untrustedSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint) { throw 'release signer thumbprint does not match before trust' }
 
-  $null = New-Item -ItemType Directory -Force -Path $installDir
-  $null = New-Item -ItemType Directory -Force -Path $stateDir
-  $null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
+    Ensure-ExactTrust -StoreName 'Root'
+    Ensure-ExactTrust -StoreName 'TrustedPublisher'
+
+    $trustedSignature = Get-AuthenticodeSignature -LiteralPath $download
+    if ($trustedSignature.Status.ToString() -ne 'Valid' -or $null -eq $trustedSignature.SignerCertificate) { throw 'release signature is not valid after trust' }
+    if ($trustedSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificateThumbprint -or [Convert]::ToBase64String($trustedSignature.SignerCertificate.RawData) -cne $certificateBase64) {
+      throw 'release signer certificate does not match after trust'
+    }
+
+    $null = New-Item -ItemType Directory -Force -Path $installDir
+    $null = New-Item -ItemType Directory -Force -Path $stateDir
+    $null = & icacls.exe $stateDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'BUILTIN\Administrators:(OI)(CI)F'
+    if ($LASTEXITCODE -ne 0) { throw 'Client state ACL configuration failed' }
 %s
-} catch {
-  $rollbackFailed = $false
-  foreach ($storeName in @($addedStores)) {
-    try { Remove-AttemptTrust -StoreName $storeName } catch { $rollbackFailed = $true }
+  } catch {
+    $rollbackFailed = $false
+    foreach ($storeName in @($storesAbsentAtStart)) {
+      try { Remove-AttemptTrust -StoreName $storeName } catch { $rollbackFailed = $true }
+    }
+    if ($rollbackFailed) { throw 'Client release failed and exact publisher trust rollback failed' }
+    throw 'Client release operation failed'
   }
-  if ($rollbackFailed) { throw 'Client release failed and exact publisher trust rollback failed' }
-  throw 'Client release operation failed'
 } finally {
   Remove-Item -Force -LiteralPath $certificatePath -ErrorAction SilentlyContinue
   Remove-Item -Force -LiteralPath $download -ErrorAction SilentlyContinue
-}`, release.SignerCertificateBase64, release.SignerCertificateSHA256, strings.ToUpper(release.SignerThumbprint), release.URL, strings.ToLower(release.SHA256), operation)
+  $mutexCleanupFailed = $false
+  if ($transactionMutexAcquired -and $null -ne $transactionMutex) {
+    try { $transactionMutex.ReleaseMutex() } catch { $mutexCleanupFailed = $true }
+  }
+  if ($null -ne $transactionMutex) {
+    try { $transactionMutex.Dispose() } catch { $mutexCleanupFailed = $true }
+  }
+  if ($mutexCleanupFailed) { throw 'Client release transaction lock cleanup failed' }
+}
+if ([string]::IsNullOrWhiteSpace([string]$operationOutput)) { throw 'Client release returned invalid redacted output' }
+Write-Output $operationOutput
+`, release.SignerCertificateBase64, release.SignerCertificateSHA256, strings.ToUpper(release.SignerThumbprint), options.StorePrimitiveFunctions, mutexName, options.MutexWaitMilliseconds, release.URL, strings.ToLower(release.SHA256), operation)
 }
 
 func applyScript(envelopeJSON []byte) string {
