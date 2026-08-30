@@ -78,7 +78,7 @@ func (installer Installer) Install(ctx context.Context) (Release, error) {
 		return Release{}, err
 	}
 	if err := installer.ElevatedInstall(path); err != nil {
-		return Release{}, errors.New("Tailscale installation was cancelled or failed")
+		return Release{}, fmt.Errorf("Tailscale installation was cancelled or failed: %w", err)
 	}
 	return release, nil
 }

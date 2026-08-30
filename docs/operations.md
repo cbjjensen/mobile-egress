@@ -42,7 +42,8 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 
 | Symptom | Check | Safe response |
 |---|---|---|
-| Bridge setup required | Tailscale service/login, Funnel approval, WebView2, signed sibling binaries | Reopen the app, install/connect Tailscale, then retry with UAC. Do not manually expose port 8443. |
+| Bridge setup required | Read the Tailscale installation stage shown by the controller; then check Tailscale service/login, Funnel approval, WebView2, and signed sibling binaries | Correct the reported download, checksum, Authenticode, or UAC/MSI stage and retry. Do not manually expose port 8443. |
+| Tailscale reports Windows Installer code 1632 | Verify the user/System temp directories and `%windir%\Installer` exist and are writable; preserve the MSI verbose log | Treat a missing Windows Installer cache as an operating-system repair issue. Do not have Mobile Egress silently recreate or repopulate it; cached packages are machine-specific and require supported recovery or system-state restoration. |
 | Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes; Repair reuses the persisted desired endpoint/generation. Scan the migration QR. |
 | Interrupted reservation | Controller exited before recoverable node metadata was committed | Retry Install on the same instance, or explicitly cancel the reservation only if that instance is gone/unrecoverable. |
 | Agent offline | Android foreground service, cellular availability, battery restrictions | Start from visible UI; restore cellular. Wi-Fi is intentionally not a fallback. |

@@ -258,7 +258,7 @@ func (app *DesktopApp) InstallTailscale() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if _, err := app.tailscaleInstall.Install(ctx); err != nil {
-		return errors.New("Unable to install the verified Tailscale package. Approve UAC and try again.")
+		return fmt.Errorf("Unable to install the verified Tailscale package: %w", err)
 	}
 	return nil
 }

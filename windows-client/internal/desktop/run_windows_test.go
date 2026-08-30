@@ -29,6 +29,7 @@ import (
 	"mobile-egress/windows-client/internal/cloud"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
+	"mobile-egress/windows-client/internal/tailscale"
 )
 
 func TestControllerUsesASingleInstanceLock(t *testing.T) {
@@ -37,6 +38,14 @@ func TestControllerUsesASingleInstanceLock(t *testing.T) {
 	lock := controllerSingleInstanceLock(&DesktopApp{})
 	if lock == nil || lock.UniqueId == "" || lock.OnSecondInstanceLaunch == nil {
 		t.Fatalf("controller single-instance lock = %#v", lock)
+	}
+}
+
+func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
+	app := &DesktopApp{tailscaleInstall: tailscale.Installer{}}
+	err := app.InstallTailscale()
+	if err == nil || !strings.Contains(err.Error(), "verification and elevation are required") {
+		t.Fatalf("InstallTailscale() error = %v, want safe installer stage", err)
 	}
 }
 
