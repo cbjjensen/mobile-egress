@@ -2,6 +2,16 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 
+function Add-TestPathEntry {
+    param([string]$PathEntry)
+
+    if (-not [string]::IsNullOrWhiteSpace($PathEntry) -and (Test-Path -LiteralPath $PathEntry -PathType Container)) {
+        $env:Path = "$PathEntry;$env:Path"
+    }
+}
+
+Add-TestPathEntry 'C:\Users\Chad\AppData\Local\Programs\Go\bin'
+
 function Assert-Condition {
     param(
         [bool]$Condition,
@@ -116,6 +126,11 @@ Assert-Condition ($missingKeystoreOutput -match 'keystore is missing') 'A missin
 Assert-Condition ($missingKeystoreOutput -notmatch '(?i)storePassword|keyPassword|super-secret') 'Missing-keystore remediation must not expose signing values.'
 
 $testAllScript = Get-Content -Raw (Join-Path $PSScriptRoot 'test-all.ps1')
+Assert-Condition ($testAllScript -match 'Initialize-MobileEgressTestAllToolchain') 'test-all must bootstrap local toolchain paths before preflight.'
+Assert-Condition ($testAllScript -match 'AppData\\Roaming\\nvm\\nodejs') 'test-all must prefer the active NVM Node.js symlink over stale global nodejs paths.'
+Assert-Condition ($testAllScript -match 'AppData\\Local\\Programs\\Go') 'test-all must include the local Go installation when the inherited PATH omits go.exe.'
+Assert-Condition ($testAllScript -match 'Eclipse Adoptium\\jdk-17') 'test-all must set the known JDK 17 home for Android checks in clean shells.'
+Assert-Condition ($testAllScript -match 'AppData\\Local\\Android\\Sdk') 'test-all must set the known Android SDK root for Android checks in clean shells.'
 Assert-Condition ($testAllScript -match "preflight\.ps1'\) -Components Go, Node\s") 'test-all must run Go and frontend checks before Android without requiring a running Docker daemon.'
 Assert-Condition ($testAllScript -notmatch 'docker compose|deploy/docker-compose') 'The local Funnel gate must not require the removed public Compose relay deployment.'
 Assert-Condition ($testAllScript -match '\$androidPrerequisiteExit') 'test-all must preserve a nonzero Android prerequisite exit after printing remediation.'

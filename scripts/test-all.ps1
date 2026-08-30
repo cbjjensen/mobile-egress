@@ -1,6 +1,80 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 
+function Resolve-MobileEgressToolDirectory {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string[]]$Candidates
+    )
+
+    foreach ($candidate in $Candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate -PathType Container)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw "$Name was not found. Checked: $($Candidates -join ', ')"
+}
+
+function Add-MobileEgressPathEntry {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PathEntry
+    )
+
+    if (-not (Test-Path -LiteralPath $PathEntry -PathType Container)) {
+        throw "Required PATH directory was not found: $PathEntry"
+    }
+
+    $pathParts = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($pathParts -notcontains $PathEntry) {
+        $env:Path = "$PathEntry;$env:Path"
+    }
+}
+
+function Initialize-MobileEgressTestAllToolchain {
+    $javaHome = Resolve-MobileEgressToolDirectory -Name 'JDK 17' -Candidates @(
+        'C:\Users\Chad\AppData\Local\Programs\Eclipse Adoptium\jdk-17.0.20.1+1',
+        $env:JAVA_HOME
+    )
+    $androidHome = Resolve-MobileEgressToolDirectory -Name 'Android SDK' -Candidates @(
+        'C:\Users\Chad\AppData\Local\Android\Sdk',
+        $env:ANDROID_HOME,
+        $env:ANDROID_SDK_ROOT
+    )
+    $nodeHome = Resolve-MobileEgressToolDirectory -Name 'Node.js' -Candidates @(
+        'C:\Users\Chad\AppData\Roaming\nvm\nodejs',
+        'C:\Users\Chad\AppData\Roaming\nvm\v23.9.0',
+        $env:NODE_HOME
+    )
+    $goHome = Resolve-MobileEgressToolDirectory -Name 'Go' -Candidates @(
+        'C:\Users\Chad\AppData\Local\Programs\Go',
+        $env:GOROOT,
+        'C:\Program Files\Go'
+    )
+
+    $env:JAVA_HOME = $javaHome
+    $env:ANDROID_HOME = $androidHome
+    $env:ANDROID_SDK_ROOT = $androidHome
+    $env:NODE_HOME = $nodeHome
+    $env:GOROOT = $goHome
+
+    Add-MobileEgressPathEntry -PathEntry (Join-Path $javaHome 'bin')
+    Add-MobileEgressPathEntry -PathEntry (Join-Path $androidHome 'platform-tools')
+    Add-MobileEgressPathEntry -PathEntry (Join-Path $androidHome 'cmdline-tools\latest\bin')
+    Add-MobileEgressPathEntry -PathEntry $nodeHome
+    Add-MobileEgressPathEntry -PathEntry (Join-Path $goHome 'bin')
+
+    Write-Host 'Using local toolchain:'
+    Write-Host "  JAVA_HOME=$env:JAVA_HOME"
+    Write-Host "  ANDROID_HOME=$env:ANDROID_HOME"
+    Write-Host "  NODE_HOME=$env:NODE_HOME"
+    Write-Host "  GOROOT=$env:GOROOT"
+}
+
 function Invoke-RequiredCommand {
     param(
         [string]$Name,
@@ -16,6 +90,8 @@ function Invoke-RequiredCommand {
 
 Push-Location $repositoryRoot
 try {
+    Initialize-MobileEgressTestAllToolchain
+
     & (Join-Path $PSScriptRoot 'preflight.ps1') -Components Go, Node
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
