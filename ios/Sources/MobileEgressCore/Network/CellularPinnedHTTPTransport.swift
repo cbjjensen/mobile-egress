@@ -35,7 +35,10 @@ public final class CellularPinnedHTTPTransport: HTTPTransporting, @unchecked Sen
             throw CellularTransportError.invalidConfiguration
         }
         let encoded = try HTTP1Codec.encodeRequest(request)
-        let parameters = try makeParameters(configuration: configuration)
+        let parameters = try ApplePinnedTransportParameterBuilder(
+            identityResolver: identityResolver,
+            timeout: timeout
+        ).makeParameters(configuration: configuration)
         guard let port = NWEndpoint.Port(rawValue: UInt16(configuration.port)) else {
             throw CellularTransportError.invalidConfiguration
         }
@@ -54,13 +57,25 @@ public final class CellularPinnedHTTPTransport: HTTPTransporting, @unchecked Sen
             exchange.start()
         }
     }
+}
 
-    private func makeParameters(
+struct ApplePinnedTransportParameterBuilder {
+    let identityResolver: (any SecurityIdentityResolving)?
+    let timeout: TimeInterval
+
+    func makeTrustPolicy(
+        configuration: PinnedCellularTransportConfiguration
+    ) throws -> ApplePinnedServerTrustPolicy {
+        try ApplePinnedServerTrustPolicy(
+            hostname: configuration.hostname,
+            authorityDER: configuration.pinnedCertificateAuthorityDER
+        )
+    }
+
+    func makeParameters(
         configuration: PinnedCellularTransportConfiguration
     ) throws -> NWParameters {
-        guard SecCertificateCreateWithData(nil, configuration.pinnedCertificateAuthorityDER as CFData) != nil else {
-            throw CellularTransportError.invalidConfiguration
-        }
+        let trustPolicy = try makeTrustPolicy(configuration: configuration)
         let tls = NWProtocolTLS.Options()
         sec_protocol_options_set_min_tls_protocol_version(
             tls.securityProtocolOptions,
@@ -73,20 +88,9 @@ public final class CellularPinnedHTTPTransport: HTTPTransporting, @unchecked Sen
         sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, configuration.hostname)
         sec_protocol_options_set_peer_authentication_required(tls.securityProtocolOptions, true)
         let verificationQueue = DispatchQueue(label: "com.mobileegress.agent.tls-verify")
-        let authorityDER = configuration.pinnedCertificateAuthorityDER
-        let hostname = configuration.hostname
         sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, trustObject, complete in
             let trust = sec_trust_copy_ref(trustObject).takeRetainedValue()
-            guard let authority = SecCertificateCreateWithData(nil, authorityDER as CFData) else {
-                complete(false)
-                return
-            }
-            let policy = SecPolicyCreateSSL(true, hostname as CFString)
-            let configured = SecTrustSetPolicies(trust, policy) == errSecSuccess &&
-                SecTrustSetAnchorCertificates(trust, [authority] as CFArray) == errSecSuccess &&
-                SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess &&
-                SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess
-            complete(configured && SecTrustEvaluateWithError(trust, nil))
+            complete(trustPolicy.evaluate(trust))
         }, verificationQueue)
 
         if let keyTag = configuration.localIdentityKeyTag {
@@ -108,8 +112,39 @@ public final class CellularPinnedHTTPTransport: HTTPTransporting, @unchecked Sen
         parameters.includePeerToPeer = false
         parameters.allowLocalEndpointReuse = false
         parameters.multipathServiceType = .disabled
-        parameters.preferNoProxies = true
+        if #available(iOS 17.0, macOS 14.0, *) {
+            parameters.preferNoProxies = true
+        }
         return parameters
+    }
+}
+
+struct ApplePinnedServerTrustPolicy: Equatable, Sendable {
+    let hostname: String
+    let authorityDER: Data
+    let validatesHostname = true
+    let allowsSystemTrustFallback = false
+
+    init(hostname: String, authorityDER: Data) throws {
+        guard !hostname.isEmpty,
+              SecCertificateCreateWithData(nil, authorityDER as CFData) != nil
+        else {
+            throw CellularTransportError.invalidConfiguration
+        }
+        self.hostname = hostname
+        self.authorityDER = authorityDER
+    }
+
+    func evaluate(_ trust: SecTrust) -> Bool {
+        guard let authority = SecCertificateCreateWithData(nil, authorityDER as CFData) else {
+            return false
+        }
+        let policy = SecPolicyCreateSSL(true, hostname as CFString)
+        let configured = SecTrustSetPolicies(trust, policy) == errSecSuccess &&
+            SecTrustSetAnchorCertificates(trust, [authority] as CFArray) == errSecSuccess &&
+            SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess &&
+            SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess
+        return configured && SecTrustEvaluateWithError(trust, nil)
     }
 }
 
@@ -120,7 +155,7 @@ private final class NWHTTPExchange: @unchecked Sendable {
     private let continuation: CheckedContinuation<HTTPResponse, Error>
     private let queue = DispatchQueue(label: "com.mobileegress.agent.http-exchange")
     private var timer: DispatchSourceTimer?
-    private var response = Data()
+    private var responseAccumulator = HTTP1ResponseAccumulator()
     private var finished = false
     private var requestSent = false
 
@@ -171,22 +206,21 @@ private final class NWHTTPExchange: @unchecked Sendable {
 
     private func receiveResponse() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { content, _, isComplete, error in
-            if let content { self.response.append(content) }
             do {
-                if let expected = try HTTP1Codec.expectedResponseBytes(in: self.response) {
-                    guard self.response.count <= expected else { throw HTTP1Error.ambiguousResponse }
-                    if self.response.count == expected {
-                        self.finish(.success(try HTTP1Codec.parseResponse(self.response)))
-                        return
-                    }
+                let outcome = try self.responseAccumulator.receive(content ?? Data(), isComplete: isComplete)
+                if error != nil {
+                    self.finish(.failure(CellularTransportError.connectionFailed))
+                    return
+                }
+                if case let .complete(response) = outcome {
+                    self.finish(.success(response))
+                    return
                 }
             } catch {
                 self.finish(.failure(error))
                 return
             }
-            if error != nil {
-                self.finish(.failure(CellularTransportError.connectionFailed))
-            } else if isComplete {
+            if isComplete {
                 self.finish(.failure(HTTP1Error.truncatedResponse))
             } else {
                 self.receiveResponse()

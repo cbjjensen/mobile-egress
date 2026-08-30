@@ -15,12 +15,21 @@ public final class SecureEnclaveIdentityKeyManager: IdentityKeyManaging, @unchec
     public func createKey() throws -> IdentityKeyMaterial {
         let keyTag = Self.keyTagPrefix + UUID().uuidString.lowercased()
         let applicationTag = Data(keyTag.utf8)
+        var accessControlError: Unmanaged<CFError>?
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            [.privateKeyUsage],
+            &accessControlError
+        ) else {
+            throw IdentityError.keyCreationFailed
+        }
         let privateAttributes: [CFString: Any] = [
             kSecAttrIsPermanent: true,
             kSecAttrIsExtractable: false,
             kSecAttrApplicationTag: applicationTag,
             kSecAttrAccessGroup: accessGroup,
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessControl: accessControl,
             kSecAttrCanSign: true,
         ]
         let attributes: [CFString: Any] = [
@@ -64,6 +73,23 @@ public final class SecureEnclaveIdentityKeyManager: IdentityKeyManaging, @unchec
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw IdentityError.keyDeletionFailed
         }
+    }
+
+    func privateKey(forTag tag: String) throws -> SecKey {
+        guard tag.hasPrefix(Self.keyTagPrefix) else { throw IdentityError.identityLookupFailed }
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching([
+            kSecClass: kSecClassKey,
+            kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrApplicationTag: Data(tag.utf8),
+            kSecAttrAccessGroup: accessGroup,
+            kSecMatchLimit: kSecMatchLimitOne,
+            kSecReturnRef: true,
+        ] as CFDictionary, &result)
+        guard status == errSecSuccess, let result, CFGetTypeID(result) == SecKeyGetTypeID() else {
+            throw IdentityError.identityLookupFailed
+        }
+        return unsafeBitCast(result, to: SecKey.self)
     }
 }
 #endif

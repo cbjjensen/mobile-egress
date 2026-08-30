@@ -136,19 +136,26 @@ final class RecordingHTTPTransport: HTTPTransporting, @unchecked Sendable {
 }
 
 final class FakeIdentityKeyManager: IdentityKeyManaging, @unchecked Sendable {
-    let generated: IdentityKeyMaterial
+    private var generated: [IdentityKeyMaterial]
     var availableTags: Set<String>
     private(set) var deleteAttempts: [String] = []
     var deleteFailures: Set<String> = []
 
     init(generated: IdentityKeyMaterial, existingTags: Set<String> = []) {
+        self.generated = [generated]
+        availableTags = existingTags
+    }
+
+    init(generated: [IdentityKeyMaterial], existingTags: Set<String> = []) {
         self.generated = generated
         availableTags = existingTags
     }
 
     func createKey() throws -> IdentityKeyMaterial {
-        availableTags.insert(generated.keyTag)
-        return generated
+        guard !generated.isEmpty else { throw TestTask2Error.injected }
+        let key = generated.removeFirst()
+        availableTags.insert(key.keyTag)
+        return key
     }
 
     func deleteKey(tag: String) throws {
@@ -162,6 +169,7 @@ final class FakeAgentIdentityStore: AgentIdentityPersisting, @unchecked Sendable
     var current: AgentIdentity?
     var failStage = false
     var failSave = false
+    var saveFailures: Set<String> = []
     var removeFailures: Set<String> = []
     private(set) var stagedTags: Set<String> = []
     private(set) var events: [String] = []
@@ -183,7 +191,7 @@ final class FakeAgentIdentityStore: AgentIdentityPersisting, @unchecked Sendable
 
     func save(_ identity: AgentIdentity) throws {
         events.append("save:\(identity.keyTag)")
-        if failSave { throw TestTask2Error.injected }
+        if failSave || saveFailures.contains(identity.keyTag) { throw TestTask2Error.injected }
         current = identity
     }
 
@@ -199,6 +207,56 @@ struct FakeEnrollmentPerformer: EnrollmentPerforming {
 
     func enroll(pairing: PairingBundle, key: IdentityKeyMaterial) async throws -> AgentIdentity {
         try result.get()
+    }
+}
+
+actor InterleavingEnrollmentPerformer: EnrollmentPerforming {
+    private let firstCallGate = AsyncTestGate()
+    private var callCount = 0
+    private var callCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func enroll(pairing: PairingBundle, key: IdentityKeyMaterial) async throws -> AgentIdentity {
+        callCount += 1
+        let currentCall = callCount
+        resumeSatisfiedCallCountWaiters()
+        if currentCall == 1 {
+            await firstCallGate.wait()
+        }
+        return Task2Fixtures.identity(keyTag: key.keyTag, serial: currentCall == 1 ? "A1" : "A2")
+    }
+
+    func waitUntilCallCount(_ expected: Int) async {
+        if callCount >= expected { return }
+        await withCheckedContinuation { continuation in
+            callCountWaiters.append((expected, continuation))
+        }
+    }
+
+    func releaseFirstCall() async {
+        await firstCallGate.open()
+    }
+
+    private func resumeSatisfiedCallCountWaiters() {
+        let satisfied = callCountWaiters.filter { $0.0 <= callCount }
+        callCountWaiters.removeAll { $0.0 <= callCount }
+        satisfied.forEach { $0.1.resume() }
+    }
+}
+
+actor AsyncTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }
 

@@ -3,6 +3,52 @@ import XCTest
 @testable import MobileEgressCore
 
 final class EndpointMigrationExecutionTests: XCTestCase {
+    func testConcurrentEnrollmentAndMigrationUseTheNewActiveIdentityWithoutStaleRestore() async throws {
+        let old = Task2Fixtures.identity(
+            relayOrigin: "https://old-relay.example:8443",
+            keyTag: "mobile-egress.agent.key.old"
+        )
+        let newKey = Task2Fixtures.key(tag: "mobile-egress.agent.key.replacement")
+        let enrolled = Task2Fixtures.identity(
+            relayOrigin: "https://relay.example:8443",
+            keyTag: newKey.keyTag
+        )
+        let migrated = enrolled.replacingRelayOrigin("https://new-relay.example:9443")
+        let store = FakeAgentIdentityStore(current: old)
+        let keys = FakeIdentityKeyManager(generated: newKey, existingTags: [old.keyTag])
+        let enrollmentPerformer = InterleavingEnrollmentPerformer()
+        let migrationPerformer = RecordingMigrationPerformer(result: .success(migrated.relayOrigin))
+        let coordinator = IdentityWorkflowCoordinator()
+        let enrollmentRepository = EnrollmentRepository(
+            keyManager: keys,
+            identityStore: store,
+            performer: enrollmentPerformer,
+            coordinator: coordinator
+        )
+        let migrationRepository = EndpointMigrationRepository(
+            identityStore: store,
+            performer: migrationPerformer,
+            coordinator: coordinator
+        )
+
+        let enrollment = Task {
+            try await enrollmentRepository.replaceIdentity(using: Task2Fixtures.pairing())
+        }
+        await enrollmentPerformer.waitUntilCallCount(1)
+        let migration = Task { try await migrationRepository.consume(Task2Fixtures.migration()) }
+        await coordinator.waitUntilQueuedOperationCount(1)
+        await enrollmentPerformer.releaseFirstCall()
+
+        let enrollmentResult = try await enrollment.value
+        let migrationResult = try await migration.value
+        XCTAssertEqual(enrollmentResult, enrolled)
+        XCTAssertEqual(migrationResult, migrated)
+        XCTAssertEqual(migrationPerformer.receivedIdentity, enrolled)
+        XCTAssertEqual(store.current, migrated)
+        XCTAssertEqual(keys.availableTags, [newKey.keyTag])
+        XCTAssertEqual(store.stagedTags, [newKey.keyTag])
+    }
+
     func testMigrationUsesStoredMTLSIdentityAndPersistsOnlyRelayOrigin() async throws {
         let original = Task2Fixtures.identity(relayOrigin: "https://old-relay.example:8443")
         let store = FakeAgentIdentityStore(current: original)

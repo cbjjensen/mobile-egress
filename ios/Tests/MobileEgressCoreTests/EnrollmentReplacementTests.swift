@@ -2,6 +2,41 @@ import XCTest
 @testable import MobileEgressCore
 
 final class EnrollmentReplacementTests: XCTestCase {
+    func testConcurrentReplacementsCannotRestoreStaleMetadataOrLeakFailedCandidate() async throws {
+        let old = Task2Fixtures.identity(keyTag: "mobile-egress.agent.key.old")
+        let firstKey = Task2Fixtures.key(tag: "mobile-egress.agent.key.first")
+        let secondKey = Task2Fixtures.key(tag: "mobile-egress.agent.key.second")
+        let firstIdentity = Task2Fixtures.identity(keyTag: firstKey.keyTag, serial: "A1")
+        let store = FakeAgentIdentityStore(current: old)
+        store.saveFailures = [secondKey.keyTag]
+        let keys = FakeIdentityKeyManager(generated: [firstKey, secondKey], existingTags: [old.keyTag])
+        let performer = InterleavingEnrollmentPerformer()
+        let coordinator = IdentityWorkflowCoordinator()
+        let repository = EnrollmentRepository(
+            keyManager: keys,
+            identityStore: store,
+            performer: performer,
+            coordinator: coordinator
+        )
+
+        let first = Task { try await repository.replaceIdentity(using: Task2Fixtures.pairing()) }
+        await performer.waitUntilCallCount(1)
+        let second = Task { try await repository.replaceIdentity(using: Task2Fixtures.pairing()) }
+        await coordinator.waitUntilQueuedOperationCount(1)
+        await performer.releaseFirstCall()
+
+        let firstResult = try await first.value
+        XCTAssertEqual(firstResult, firstIdentity)
+        do {
+            _ = try await second.value
+            XCTFail("Expected the second replacement to fail during persistence")
+        } catch {}
+        XCTAssertEqual(store.current, firstIdentity)
+        XCTAssertEqual(store.stagedTags, [firstKey.keyTag])
+        XCTAssertEqual(keys.availableTags, [firstKey.keyTag])
+        XCTAssertEqual(keys.deleteAttempts, [old.keyTag, secondKey.keyTag])
+    }
+
     func testDurableReplacementPrecedesOldCredentialCleanup() async throws {
         let old = Task2Fixtures.identity(keyTag: "mobile-egress.agent.key.old")
         let new = Task2Fixtures.identity()

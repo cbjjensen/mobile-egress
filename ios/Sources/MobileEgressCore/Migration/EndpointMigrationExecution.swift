@@ -18,13 +18,25 @@ public protocol EndpointMigrationPerforming: Sendable {
 public final class EndpointMigrationRepository: @unchecked Sendable {
     private let identityStore: any AgentIdentityPersisting
     private let performer: any EndpointMigrationPerforming
+    private let coordinator: IdentityWorkflowCoordinator
 
-    public init(identityStore: any AgentIdentityPersisting, performer: any EndpointMigrationPerforming) {
+    public init(
+        identityStore: any AgentIdentityPersisting,
+        performer: any EndpointMigrationPerforming,
+        coordinator: IdentityWorkflowCoordinator = .shared
+    ) {
         self.identityStore = identityStore
         self.performer = performer
+        self.coordinator = coordinator
     }
 
     public func consume(_ migration: EndpointMigration) async throws -> AgentIdentity {
+        try await coordinator.withExclusiveAccess { [self] in
+            try await consumeExclusively(migration)
+        }
+    }
+
+    private func consumeExclusively(_ migration: EndpointMigration) async throws -> AgentIdentity {
         guard let identity = try identityStore.load() else { throw EndpointMigrationError.identityRequired }
         guard identity.role == "agent" else { throw EndpointMigrationError.identityRoleInvalid }
         guard identity.caCertificateDER == migration.certificateAuthority.der else {

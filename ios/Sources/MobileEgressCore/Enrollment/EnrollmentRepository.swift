@@ -2,18 +2,27 @@ public final class EnrollmentRepository: @unchecked Sendable {
     private let keyManager: any IdentityKeyManaging
     private let identityStore: any AgentIdentityPersisting
     private let performer: any EnrollmentPerforming
+    private let coordinator: IdentityWorkflowCoordinator
 
     public init(
         keyManager: any IdentityKeyManaging,
         identityStore: any AgentIdentityPersisting,
-        performer: any EnrollmentPerforming
+        performer: any EnrollmentPerforming,
+        coordinator: IdentityWorkflowCoordinator = .shared
     ) {
         self.keyManager = keyManager
         self.identityStore = identityStore
         self.performer = performer
+        self.coordinator = coordinator
     }
 
     public func replaceIdentity(using pairing: PairingBundle) async throws -> AgentIdentity {
+        try await coordinator.withExclusiveAccess { [self] in
+            try await replaceIdentityExclusively(using: pairing)
+        }
+    }
+
+    private func replaceIdentityExclusively(using pairing: PairingBundle) async throws -> AgentIdentity {
         let previous = try identityStore.load()
         let key = try keyManager.createKey()
         var candidate: AgentIdentity?

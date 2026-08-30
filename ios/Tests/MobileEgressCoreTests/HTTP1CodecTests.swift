@@ -56,6 +56,37 @@ final class HTTP1CodecTests: XCTestCase {
         XCTAssertThrowsError(try HTTP1Codec.parseResponse(bodyResponse))
     }
 
+    func testResponseAccumulatorWaitsForEOFAndRejectsTrailingBytesInALaterCallback() throws {
+        let body = Data("{\"ok\":true}".utf8)
+        let response = rawResponse(body: body)
+        let bodyEnd = response.index(response.endIndex, offsetBy: -1)
+        var accumulator = HTTP1ResponseAccumulator()
+
+        XCTAssertEqual(
+            try accumulator.receive(response[..<bodyEnd], isComplete: false),
+            .awaitingMoreData
+        )
+        XCTAssertEqual(
+            try accumulator.receive(response[bodyEnd...], isComplete: false),
+            .awaitingMoreData
+        )
+        XCTAssertThrowsError(try accumulator.receive(Data("x".utf8), isComplete: false)) { error in
+            XCTAssertEqual(error as? HTTP1Error, .ambiguousResponse)
+        }
+    }
+
+    func testResponseAccumulatorSucceedsOnlyAtEOFWithExactContentLength() throws {
+        let body = Data("{\"ok\":true}".utf8)
+        let response = rawResponse(body: body)
+        var accumulator = HTTP1ResponseAccumulator()
+
+        XCTAssertEqual(try accumulator.receive(response, isComplete: false), .awaitingMoreData)
+        XCTAssertEqual(
+            try accumulator.receive(Data(), isComplete: true),
+            .complete(try HTTP1Codec.parseResponse(response))
+        )
+    }
+
     private func rawResponse(body: Data) -> Data {
         var data = Data("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
         data.append(body)

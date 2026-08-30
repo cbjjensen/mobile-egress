@@ -3,7 +3,7 @@ import XCTest
 @testable import MobileEgressCore
 
 final class EnrollmentTests: XCTestCase {
-    func testEnrollmentPostsExactlyPublicKeyCapabilityAndAgentRole() async throws {
+    func testEnrollmentPostsExactlyPublicKeyCodeAndAgentRole() async throws {
         let transport = RecordingHTTPTransport(response: HTTPResponse(
             statusCode: 201,
             headers: ["content-type": ["application/json"]],
@@ -15,10 +15,12 @@ final class EnrollmentTests: XCTestCase {
 
         let request = try XCTUnwrap(transport.request)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: request.body) as? [String: String])
-        XCTAssertEqual(Set(object.keys), ["publicKeyPem", "capability", "role"])
+        XCTAssertEqual(Set(object.keys), ["code", "publicKeyPem", "role"])
         XCTAssertEqual(object["publicKeyPem"], Task2Fixtures.key().publicKeyPEM)
-        XCTAssertEqual(object["capability"], "one-use-enrollment-capability")
+        XCTAssertEqual(object["code"], "one-use-enrollment-capability")
         XCTAssertEqual(object["role"], "agent")
+        XCTAssertNil(object["capability"])
+        XCTAssertNil(object["csrPem"])
         XCTAssertEqual(request.path, "/v1/enroll")
         XCTAssertEqual(identity.serial, "A1")
         XCTAssertNil(transport.configuration?.localIdentityKeyTag)

@@ -46,6 +46,29 @@ public struct HTTPResponse: Equatable, Sendable {
     }
 }
 
+public enum HTTP1ResponseAccumulatorOutcome: Equatable, Sendable {
+    case awaitingMoreData
+    case complete(HTTPResponse)
+}
+
+public struct HTTP1ResponseAccumulator: Sendable {
+    private var data = Data()
+
+    public init() {}
+
+    public mutating func receive(
+        _ content: some DataProtocol,
+        isComplete: Bool
+    ) throws -> HTTP1ResponseAccumulatorOutcome {
+        data.append(contentsOf: content)
+        if let expected = try HTTP1Codec.expectedResponseBytes(in: data), data.count > expected {
+            throw HTTP1Error.ambiguousResponse
+        }
+        guard isComplete else { return .awaitingMoreData }
+        return .complete(try HTTP1Codec.parseResponse(data))
+    }
+}
+
 public protocol HTTPTransporting: Sendable {
     func execute(
         _ request: HTTPRequest,

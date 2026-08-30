@@ -74,7 +74,7 @@ public final class EnrollmentHTTPClient: EnrollmentPerforming, @unchecked Sendab
     public func enroll(pairing: PairingBundle, key: IdentityKeyMaterial) async throws -> AgentIdentity {
         let body = try JSONEncoder().encode(EnrollmentRequest(
             publicKeyPEM: key.publicKeyPEM,
-            capability: pairing.capability,
+            code: pairing.capability,
             role: "agent"
         ))
         let request = HTTPRequest(relayOrigin: pairing.relayOrigin, path: "/v1/enroll", body: body)
@@ -159,12 +159,12 @@ public final class EnrollmentHTTPClient: EnrollmentPerforming, @unchecked Sendab
 
 private struct EnrollmentRequest: Encodable {
     let publicKeyPEM: String
-    let capability: String
+    let code: String
     let role: String
 
     enum CodingKeys: String, CodingKey {
         case publicKeyPEM = "publicKeyPem"
-        case capability, role
+        case code, role
     }
 }
 
