@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	stateKey             = "headless-client-node-state-v1"
-	nodeStateVersion     = 1
-	configurationVersion = 1
-	maximumStateBytes    = 2 << 20
+	stateKey              = "headless-client-node-state-v1"
+	nodeStateVersion      = 2
+	configurationVersion  = 1
+	maximumStateBytes     = 2 << 20
+	maximumRetryEnvelopes = 32
 )
 
 type BootstrapResponse struct {
@@ -60,13 +61,14 @@ type Runtime struct {
 }
 
 type persistedState struct {
-	Version                   int            `json:"version"`
-	IdentityPrivateKeyPEM     string         `json:"identityPrivateKeyPem"`
-	CSRPEM                    string         `json:"csrPem"`
-	ConfigurationPrivateKey   string         `json:"configurationPrivateKey"`
-	ConfigurationPublicKey    string         `json:"configurationPublicKey"`
-	Configuration             *Configuration `json:"configuration,omitempty"`
-	LastConfigurationEnvelope string         `json:"lastConfigurationEnvelope,omitempty"`
+	Version                       int            `json:"version"`
+	IdentityPrivateKeyPEM         string         `json:"identityPrivateKeyPem"`
+	CSRPEM                        string         `json:"csrPem"`
+	ConfigurationPrivateKey       string         `json:"configurationPrivateKey"`
+	ConfigurationPublicKey        string         `json:"configurationPublicKey"`
+	Configuration                 *Configuration `json:"configuration,omitempty"`
+	CurrentConfigurationEnvelopes []string       `json:"currentConfigurationEnvelopes,omitempty"`
+	LastConfigurationEnvelope     string         `json:"lastConfigurationEnvelope,omitempty"`
 }
 
 type Repository struct {
@@ -111,7 +113,7 @@ func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.E
 	if err != nil {
 		return errors.New("sealed node configuration is malformed")
 	}
-	if fingerprint == state.LastConfigurationEnvelope {
+	if containsFingerprint(state.CurrentConfigurationEnvelopes, fingerprint) {
 		return errors.New("sealed node configuration was already applied")
 	}
 	configurationPrivateKey, err := base64.RawURLEncoding.Strict().DecodeString(state.ConfigurationPrivateKey)
@@ -136,18 +138,36 @@ func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.E
 	if err := validateConfiguration(state.IdentityPrivateKeyPEM, configuration); err != nil {
 		return errors.New("sealed node configuration is invalid")
 	}
-	if state.Configuration != nil && !validEndpointOnlyUpdate(*state.Configuration, configuration) {
-		return errors.New("sealed node configuration attempted to replace node secrets")
-	}
 	if state.Configuration == nil {
 		if configuration.Generation != 1 {
 			return errors.New("sealed node configuration has an invalid initial generation")
 		}
-	} else if configuration.Generation != state.Configuration.Generation+1 {
-		return errors.New("sealed node configuration is stale or out of sequence")
+	} else {
+		current := *state.Configuration
+		switch {
+		case configuration.Generation < current.Generation:
+			return errors.New("sealed node configuration is stale or out of sequence")
+		case configuration.Generation == current.Generation:
+			if configuration != current {
+				return errors.New("sealed node configuration changed content at the current generation")
+			}
+			state.CurrentConfigurationEnvelopes = append(state.CurrentConfigurationEnvelopes, fingerprint)
+			if len(state.CurrentConfigurationEnvelopes) > maximumRetryEnvelopes {
+				state.CurrentConfigurationEnvelopes = append([]string(nil), state.CurrentConfigurationEnvelopes[len(state.CurrentConfigurationEnvelopes)-maximumRetryEnvelopes:]...)
+			}
+			if err := repository.save(ctx, state); err != nil {
+				return fmt.Errorf("persist sealed node configuration retry: %w", err)
+			}
+			return nil
+		case configuration.Generation != current.Generation+1:
+			return errors.New("sealed node configuration is stale or out of sequence")
+		case !validEndpointOnlyUpdate(current, configuration):
+			return errors.New("sealed node configuration attempted to replace node secrets")
+		}
 	}
 	state.Configuration = &configuration
-	state.LastConfigurationEnvelope = fingerprint
+	state.CurrentConfigurationEnvelopes = []string{fingerprint}
+	state.LastConfigurationEnvelope = ""
 	if err := repository.save(ctx, state); err != nil {
 		return fmt.Errorf("persist sealed node configuration: %w", err)
 	}
@@ -221,14 +241,20 @@ func (repository *Repository) load(ctx context.Context) (persistedState, error) 
 	var state persistedState
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&state); err != nil || state.Version != nodeStateVersion {
+	if err := decoder.Decode(&state); err != nil {
 		return persistedState{}, errors.New("stored node state is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return persistedState{}, errors.New("stored node state is invalid")
 	}
+	migrated := migrateNodeState(&state)
 	if err := validateBootstrapState(state); err != nil {
 		return persistedState{}, errors.New("stored node state is invalid")
+	}
+	if migrated {
+		if err := repository.save(ctx, state); err != nil {
+			return persistedState{}, fmt.Errorf("migrate stored node state: %w", err)
+		}
 	}
 	return state, nil
 }
@@ -268,6 +294,30 @@ func validateBootstrapState(state persistedState) error {
 		return errors.New("invalid node configuration key")
 	}
 	return nil
+}
+
+func migrateNodeState(state *persistedState) bool {
+	if state == nil || state.Version != 1 {
+		return false
+	}
+	state.Version = nodeStateVersion
+	if state.Configuration != nil && state.Configuration.Generation == 0 {
+		state.Configuration.Generation = 1
+	}
+	if state.LastConfigurationEnvelope != "" && !containsFingerprint(state.CurrentConfigurationEnvelopes, state.LastConfigurationEnvelope) {
+		state.CurrentConfigurationEnvelopes = append(state.CurrentConfigurationEnvelopes, state.LastConfigurationEnvelope)
+	}
+	state.LastConfigurationEnvelope = ""
+	return true
+}
+
+func containsFingerprint(fingerprints []string, candidate string) bool {
+	for _, fingerprint := range fingerprints {
+		if fingerprint == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func validateConfiguration(privateKeyPEM string, configuration Configuration) error {

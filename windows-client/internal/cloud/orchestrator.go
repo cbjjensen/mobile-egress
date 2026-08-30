@@ -101,35 +101,21 @@ func (orchestrator *Orchestrator) Install(ctx context.Context, instanceID string
 		CertificatePEM: issued.CertificatePEM, CACertificatePEM: issued.CACertificatePEM,
 		SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
 	}
-	plaintext, err := json.Marshal(configuration)
-	if err != nil {
-		return ManagedNode{}, err
-	}
-	envelope, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, plaintext)
-	clear(plaintext)
-	if err != nil {
-		return ManagedNode{}, errors.New("seal Client configuration")
-	}
-	envelopeJSON, err := json.Marshal(envelope)
-	if err != nil {
-		return ManagedNode{}, err
-	}
-	defer clear(envelopeJSON)
-	applyOutput, err := orchestrator.runner.RunPowerShell(ctx, instanceID, applyScript(envelopeJSON))
-	if err != nil {
-		return ManagedNode{}, errors.New("sealed Client configuration command failed; inspect redacted SSM status")
-	}
-	if !validApplyOutput([]byte(applyOutput)) {
-		return ManagedNode{}, errors.New("Client configuration returned invalid redacted output")
-	}
 	node := ManagedNode{
 		InstanceID: instanceID, ClientSerial: strings.ToUpper(issued.Serial),
 		ConfigurationPublicKey: bootstrap.ConfigurationPublicKey, ConfigurationGeneration: 1, ServiceVersion: release.Version,
-		Health: "installed", SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
+		Health: "configuring", SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
 		RelayURL: issued.RelayURL, CertificatePEM: issued.CertificatePEM, CACertificatePEM: issued.CACertificatePEM,
 	}
 	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
-		return ManagedNode{}, errors.New("save encrypted managed-node metadata")
+		return ManagedNode{}, errors.New("save recoverable managed-node metadata before configuration")
+	}
+	if err := orchestrator.applyConfiguration(ctx, node, configuration); err != nil {
+		return ManagedNode{}, err
+	}
+	node.Health = "installed"
+	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
+		return ManagedNode{}, errors.New("save installed managed-node health")
 	}
 	return node, nil
 }
@@ -150,34 +136,21 @@ func (orchestrator *Orchestrator) UpdateEndpoint(ctx context.Context, node Manag
 		CertificatePEM: node.CertificatePEM, CACertificatePEM: node.CACertificatePEM,
 		SOCKSUsername: node.SOCKSUsername, SOCKSPassword: node.SOCKSPassword, SOCKSPort: node.SOCKSPort,
 	}
-	plaintext, err := json.Marshal(configuration)
-	if err != nil {
+	desired := node
+	desired.RelayURL = origin.String()
+	desired.ConfigurationGeneration++
+	desired.Health = "configuring"
+	if err := orchestrator.store.SaveNode(ctx, desired); err != nil {
+		return ManagedNode{}, errors.New("save recoverable endpoint metadata before configuration")
+	}
+	if err := orchestrator.applyConfiguration(ctx, desired, configuration); err != nil {
 		return ManagedNode{}, err
 	}
-	envelope, err := sealedconfig.Seal(node.ConfigurationPublicKey, plaintext)
-	clear(plaintext)
-	if err != nil {
-		return ManagedNode{}, errors.New("seal Client endpoint update")
-	}
-	envelopeJSON, err := json.Marshal(envelope)
-	if err != nil {
-		return ManagedNode{}, err
-	}
-	defer clear(envelopeJSON)
-	output, err := orchestrator.runner.RunPowerShell(ctx, node.InstanceID, applyScript(envelopeJSON))
-	if err != nil {
-		return ManagedNode{}, errors.New("sealed Client endpoint update failed; inspect redacted SSM status")
-	}
-	if !validApplyOutput([]byte(output)) {
-		return ManagedNode{}, errors.New("Client endpoint update returned invalid redacted output")
-	}
-	node.RelayURL = origin.String()
-	node.ConfigurationGeneration++
-	node.Health = "installed"
-	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
+	desired.Health = "installed"
+	if err := orchestrator.store.SaveNode(ctx, desired); err != nil {
 		return ManagedNode{}, errors.New("save rotated managed-node metadata")
 	}
-	return node, nil
+	return desired, nil
 }
 
 func (orchestrator *Orchestrator) Update(ctx context.Context, node ManagedNode, release NodeRelease) (ManagedNode, error) {
@@ -198,7 +171,9 @@ func (orchestrator *Orchestrator) Update(ctx context.Context, node ManagedNode, 
 		return ManagedNode{}, errors.New("Client update returned invalid redacted output")
 	}
 	node.ServiceVersion = release.Version
-	node.Health = "installed"
+	if node.Health != "configuring" {
+		node.Health = "installed"
+	}
 	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
 		return ManagedNode{}, errors.New("save updated managed-node metadata")
 	}
@@ -210,7 +185,57 @@ func (orchestrator *Orchestrator) Repair(ctx context.Context, node ManagedNode, 
 	if err != nil {
 		return ManagedNode{}, err
 	}
-	return orchestrator.UpdateEndpoint(ctx, updated, updated.RelayURL)
+	return orchestrator.ReapplyConfiguration(ctx, updated)
+}
+
+// ReapplyConfiguration delivers the controller's current generation. The node
+// accepts this only when it is either the missing initial configuration or an
+// authenticated byte-for-byte match for the configuration already persisted.
+func (orchestrator *Orchestrator) ReapplyConfiguration(ctx context.Context, node ManagedNode) (ManagedNode, error) {
+	if orchestrator == nil || orchestrator.runner == nil || orchestrator.store == nil {
+		return ManagedNode{}, errors.New("node orchestration dependencies are required")
+	}
+	if err := validateManagedNode(node); err != nil {
+		return ManagedNode{}, err
+	}
+	configuration := nodeservice.Configuration{
+		Version: 1, Generation: node.ConfigurationGeneration, RelayURL: node.RelayURL, Role: "client", Serial: node.ClientSerial,
+		CertificatePEM: node.CertificatePEM, CACertificatePEM: node.CACertificatePEM,
+		SOCKSUsername: node.SOCKSUsername, SOCKSPassword: node.SOCKSPassword, SOCKSPort: node.SOCKSPort,
+	}
+	if err := orchestrator.applyConfiguration(ctx, node, configuration); err != nil {
+		return ManagedNode{}, err
+	}
+	node.Health = "installed"
+	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
+		return ManagedNode{}, errors.New("save repaired managed-node metadata")
+	}
+	return node, nil
+}
+
+func (orchestrator *Orchestrator) applyConfiguration(ctx context.Context, node ManagedNode, configuration nodeservice.Configuration) error {
+	plaintext, err := json.Marshal(configuration)
+	if err != nil {
+		return err
+	}
+	envelope, err := sealedconfig.Seal(node.ConfigurationPublicKey, plaintext)
+	clear(plaintext)
+	if err != nil {
+		return errors.New("seal Client configuration")
+	}
+	envelopeJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	defer clear(envelopeJSON)
+	output, err := orchestrator.runner.RunPowerShell(ctx, node.InstanceID, applyScript(envelopeJSON))
+	if err != nil {
+		return errors.New("sealed Client configuration command failed; inspect redacted SSM status")
+	}
+	if !validApplyOutput([]byte(output)) {
+		return errors.New("Client configuration returned invalid redacted output")
+	}
+	return nil
 }
 
 func (release NodeRelease) Validate() error {

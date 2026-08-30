@@ -15,6 +15,10 @@ An EC2 application opts in with its node-specific `socks5://<user>:<password>@12
 - **Rotate endpoint safely** appears when the Tailscale Funnel origin differs from the encrypted Owner origin. Connect AWS first whenever managed nodes exist.
 - **Repair local relay** re-verifies the signed sibling relay, reapplies protected state ACLs, repairs the LocalSystem service configuration, and starts it without changing the CA or identities.
 
+Client installation reserves one of the ten encrypted controller slots before provisioning. The controller writes a recoverable `configuring` record before sending the sealed configuration and commits it to `installed` only after the node service restarts successfully. Endpoint rotation uses the same write-before-apply rule for its desired URL and generation. If either action times out and the node appears in the managed list, use **Repair**; it safely reapplies that desired generation and credentials. If the controller itself exited before the node appeared, choose **Install Client** for that same instance again to resume its durable reservation. A different instance cannot consume the reserved slot.
+
+Only one controller process may run for a Windows user/machine installation; launching it again activates the existing window. If a reserved EC2 instance was terminated or can no longer be recovered, use **Interrupted install reservations → Cancel reservation**, read the warning, and confirm explicitly. Cancellation releases only the local capacity reservation; it does not terminate an instance, revoke a certificate, or mutate AWS.
+
 ## Endpoint rotation runbook
 
 1. Restore Tailscale login. The controller verifies that Funnel has an enabled `*.ts.net:8443` raw-TCP mapping to `127.0.0.1:8443`; use **Repair Funnel and local relay** if that mapping was reset.
@@ -31,7 +35,8 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | Symptom | Check | Safe response |
 |---|---|---|
 | Bridge setup required | Tailscale service/login, Funnel approval, WebView2, signed sibling binaries | Reopen the app, install/connect Tailscale, then retry with UAC. Do not manually expose port 8443. |
-| Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes, scan migration QR. |
+| Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes; Repair reuses the persisted desired endpoint/generation. Scan the migration QR. |
+| Interrupted reservation | Controller exited before recoverable node metadata was committed | Retry Install on the same instance, or explicitly cancel the reservation only if that instance is gone/unrecoverable. |
 | Agent offline | Android foreground service, cellular availability, battery restrictions | Start from visible UI; restore cellular. Wi-Fi is intentionally not a fallback. |
 | Node missing | Region, running Windows Server 2019 x86-64 image, AWS authorization | Use `us-east-1`; the app intentionally filters other nodes. |
 | SSM offline | SSM Agent/service, outbound HTTPS/DNS, IAM policy propagation | Wait or repair SSM. Do not open inbound ports. |

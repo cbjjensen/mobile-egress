@@ -55,14 +55,16 @@ Admission is capped at 32 streams. Inbound and outbound queues are bounded; outb
 1. The controller verifies/installs Tailscale and obtains the stable Funnel FQDN.
 2. It generates an Owner key/CSR. The elevated helper installs the signed relay, initializes state with that CSR and public origin, ACLs state, and installs the relay service.
 3. For each EC2 node, the controller verifies or safely prepares SSM IAM access. It never replaces an existing instance profile.
-4. SSM installs the signed Client release. The node returns only a CSR and X25519 public key.
-5. The Owner calls the relay's direct Client-CSR endpoint.
-6. The controller generates SOCKS credentials, seals the endpoint/certificates/credentials to the node key using ephemeral X25519, HKDF-SHA256, and AES-256-GCM, and sends only the envelope through SSM.
-7. The node rejects malformed, tampered, replayed, or wrong-key envelopes, persists the configuration, and starts loopback SOCKS.
+4. The controller durably reserves one of its ten managed-node slots before remote provisioning begins.
+5. SSM installs the signed Client release. The node returns only a CSR and X25519 public key.
+6. The Owner calls the relay's direct Client-CSR endpoint.
+7. The controller generates SOCKS credentials and commits encrypted `configuring` metadata before it sends anything secret-bearing to the node. It seals the endpoint/certificates/credentials to the node key using ephemeral X25519, HKDF-SHA256, and AES-256-GCM, and sends only the envelope through SSM.
+8. The node rejects malformed, tampered, replayed, or wrong-key envelopes, persists the configuration, restarts its service, and starts loopback SOCKS.
+9. After that restart succeeds, the controller marks the node `installed`. Ambiguous failures retain enough encrypted metadata for **Repair** to reapply the exact same generation safely. The controller is single-instance, and an operator can explicitly cancel an abandoned pre-metadata reservation when its EC2 instance is no longer recoverable.
 
 ## Endpoint migration
 
-When Tailscale reports a different Funnel FQDN, the controller requires AWS connectivity first if nodes are managed. Under UAC it rotates only the relay leaf key/certificate and stored URL under the existing CA, restarts the service, updates the encrypted Owner endpoint, and pushes newly sealed endpoint-only configurations to nodes. It then displays a versioned `agent-endpoint-migration` QR. The existing Agent authenticates to the new endpoint with its current certificate, consumes the one-use capability, and updates only `relayOrigin`; its key alias and certificate remain unchanged.
+When Tailscale reports a different Funnel FQDN, the controller requires AWS connectivity first if nodes are managed. Under UAC it rotates only the relay leaf key/certificate and stored URL under the existing CA, restarts the service, and updates the encrypted Owner endpoint. For each node it first persists the desired endpoint/generation as `configuring`, then pushes the newly sealed endpoint-only configuration and marks it `installed` after restart. A failed node therefore remains repairable at the new endpoint. The controller then displays a versioned `agent-endpoint-migration` QR. The existing Agent authenticates to the new endpoint with its current certificate, consumes the one-use capability, and updates only `relayOrigin`; its key alias and certificate remain unchanged.
 
 ## Availability and trust
 

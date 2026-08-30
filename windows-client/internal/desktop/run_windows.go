@@ -47,6 +47,7 @@ type DesktopApp struct {
 	ownerRepository  *client.Repository
 
 	mu              sync.RWMutex
+	provisioning    sync.Mutex
 	ctx             context.Context
 	awsClient       *awssdk.Client
 	identityLogin   *awssdk.IdentityCenterLogin
@@ -131,12 +132,28 @@ func Run() error {
 		Windows:                          &windows.Options{WebviewIsTransparent: false, WindowIsTranslucent: false},
 		EnableDefaultContextMenu:         false,
 		EnableFraudulentWebsiteDetection: false,
+		SingleInstanceLock:               controllerSingleInstanceLock(application),
 	})
 	if err != nil {
 		application.shutdownApp()
 		showFatal(err)
 	}
 	return err
+}
+
+func controllerSingleInstanceLock(app *DesktopApp) *options.SingleInstanceLock {
+	return &options.SingleInstanceLock{
+		UniqueId: "com.cbjjensen.mobile-egress.controller",
+		OnSecondInstanceLaunch: func(options.SecondInstanceData) {
+			if app == nil {
+				return
+			}
+			if ctx := app.runtimeContext(); ctx != nil {
+				runtime.WindowUnminimise(ctx)
+				runtime.WindowShow(ctx)
+			}
+		},
+	}
 }
 
 func (app *DesktopApp) startup(ctx context.Context) {
@@ -409,6 +426,9 @@ func (app *DesktopApp) EnsureInstanceSSM(instanceID string, confirmExistingRoleC
 }
 
 func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView, error) {
+	app.provisioning.Lock()
+	defer app.provisioning.Unlock()
+
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {
 		return cloud.ManagedNodeView{}, errors.New("Connect AWS first.")
@@ -417,19 +437,20 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 	if !ok || !instance.SSMOnline {
 		return cloud.ManagedNodeView{}, errors.New("The selected instance is not currently online in Systems Manager.")
 	}
-	existing, loadErr := app.cloudRepository.Nodes(context.Background())
-	if loadErr != nil {
-		return cloud.ManagedNodeView{}, errors.New("Unable to load encrypted managed-node metadata.")
-	}
-	if err := cloud.ValidateInstallCandidate(existing, instanceID); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	if err := app.cloudRepository.ReserveNode(ctx, instanceID); err != nil {
 		return cloud.ManagedNodeView{}, errors.New("At most ten unique EC2 Client nodes can be managed. Use Update or Repair for an existing node.")
 	}
+	defer func() {
+		releaseContext, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer releaseCancel()
+		_ = app.cloudRepository.ReleaseNodeReservation(releaseContext, instanceID)
+	}()
 	release, err := loadNodeRelease()
 	if err != nil {
 		return cloud.ManagedNodeView{}, errors.New("This desktop build is missing a valid signed Client release manifest.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
 	orchestrator := cloud.NewOrchestrator(awsClient, ownerCertificateIssuer{repository: app.ownerRepository}, app.cloudRepository)
 	if _, err := orchestrator.Install(ctx, instanceID, release); err != nil {
 		return cloud.ManagedNodeView{}, errors.New("Unable to install the Client node through Systems Manager. No EC2 networking was changed.")
@@ -502,6 +523,40 @@ func (app *DesktopApp) updateOrRepairNode(instanceID string, repair bool) (cloud
 
 func (app *DesktopApp) ManagedNodes() ([]cloud.ManagedNodeView, error) {
 	return app.cloudRepository.NodeViews(context.Background())
+}
+
+func (app *DesktopApp) PendingEC2NodeReservations() ([]string, error) {
+	reservations, err := app.cloudRepository.NodeReservations(context.Background())
+	if err != nil {
+		return nil, errors.New("Unable to load encrypted pending-node reservations.")
+	}
+	return reservations, nil
+}
+
+func (app *DesktopApp) CancelEC2NodeReservation(instanceID string, confirmed bool) error {
+	if !confirmed {
+		return errors.New("Explicit confirmation is required to cancel a pending node reservation.")
+	}
+	app.provisioning.Lock()
+	defer app.provisioning.Unlock()
+	reservations, err := app.cloudRepository.NodeReservations(context.Background())
+	if err != nil {
+		return errors.New("Unable to load encrypted pending-node reservations.")
+	}
+	found := false
+	for _, reservedInstanceID := range reservations {
+		if reservedInstanceID == instanceID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("That pending node reservation no longer exists.")
+	}
+	if err := app.cloudRepository.ReleaseNodeReservation(context.Background(), instanceID); err != nil {
+		return errors.New("Unable to cancel the encrypted pending-node reservation.")
+	}
+	return nil
 }
 
 func (app *DesktopApp) NodeProxyLine(instanceID string) (string, error) {

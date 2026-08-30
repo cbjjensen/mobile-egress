@@ -171,6 +171,141 @@ func TestApplyRejectsAnOlderEnvelopeAfterANewerEndpointUpdate(t *testing.T) {
 	}
 }
 
+func TestApplyAcceptsAResealedCurrentConfigurationButRejectsChangedContent(t *testing.T) {
+	t.Parallel()
+
+	repository := NewRepository(securestore.NewMemoryStore())
+	bootstrap, err := repository.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := signedNodeConfig(t, bootstrap.CSRPEM, "https://relay.example.ts.net:8443", "node-user", "node-password")
+	plaintext, err := json.Marshal(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(context.Background(), second); err != nil {
+		t.Fatalf("Apply() rejected an idempotent resealed retry: %v", err)
+	}
+	if err := repository.Apply(context.Background(), second); err == nil {
+		t.Fatal("Apply() accepted an exact envelope replay")
+	}
+
+	changed := configuration
+	changed.RelayURL = "https://changed.example.ts.net:8443"
+	changedPlaintext, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedEnvelope, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, changedPlaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(context.Background(), changedEnvelope); err == nil {
+		t.Fatal("Apply() accepted changed content at the current generation")
+	}
+}
+
+func TestApplyAllowsUnlimitedFreshRetriesOfTheExactCurrentConfiguration(t *testing.T) {
+	t.Parallel()
+
+	repository := NewRepository(securestore.NewMemoryStore())
+	bootstrap, err := repository.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := signedNodeConfig(t, bootstrap.CSRPEM, "https://relay.example.ts.net:8443", "node-user", "node-password")
+	plaintext, err := json.Marshal(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 64; attempt++ {
+		envelope, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, plaintext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.Apply(context.Background(), envelope); err != nil {
+			t.Fatalf("Apply() retry %d failed: %v", attempt+1, err)
+		}
+	}
+}
+
+func TestRepositoryMigratesVersionOneConfigurationGeneration(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	repository := NewRepository(store)
+	bootstrap, err := repository.Bootstrap(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := signedNodeConfig(t, bootstrap.CSRPEM, "https://relay.example.ts.net:8443", "node-user", "node-password")
+	plaintext, err := json.Marshal(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := sealedconfig.Seal(bootstrap.ConfigurationPublicKey, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Apply(ctx, envelope); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := store.Get(ctx, stateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["version"] = float64(1)
+	legacyConfiguration := legacy["configuration"].(map[string]any)
+	legacyConfiguration["generation"] = float64(0)
+	legacyEnvelopes := legacy["currentConfigurationEnvelopes"].([]any)
+	legacy["lastConfigurationEnvelope"] = legacyEnvelopes[0]
+	delete(legacy, "currentConfigurationEnvelopes")
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, stateKey, encoded); err != nil {
+		t.Fatal(err)
+	}
+
+	migratedRepository := NewRepository(store)
+	if _, err := migratedRepository.Runtime(ctx); err != nil {
+		t.Fatalf("Runtime() did not migrate version-one state: %v", err)
+	}
+	if err := migratedRepository.Apply(ctx, envelope); err == nil {
+		t.Fatal("migrated state forgot the previously applied envelope fingerprint")
+	}
+	migratedRaw, err := store.Get(ctx, stateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated map[string]any
+	if err := json.Unmarshal(migratedRaw, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated["version"] != float64(2) || migrated["configuration"].(map[string]any)["generation"] != float64(1) {
+		t.Fatalf("migrated state = %#v", migrated)
+	}
+}
+
 func applyNodeConfig(t *testing.T, repository *Repository, publicKey string, config Configuration) {
 	t.Helper()
 	plaintext, err := json.Marshal(config)

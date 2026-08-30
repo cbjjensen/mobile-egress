@@ -14,7 +14,10 @@ import (
 	"mobile-egress/windows-client/internal/securestore"
 )
 
-const controllerStateKey = "local-bridge-controller-state-v1"
+const (
+	controllerStateKey     = "local-bridge-controller-state-v1"
+	controllerStateVersion = 2
+)
 
 type StoredAccessKeys struct {
 	AccessKeyID     string `json:"accessKeyId"`
@@ -31,9 +34,10 @@ type ManagedNodeView struct {
 }
 
 type controllerState struct {
-	Version    int               `json:"version"`
-	AccessKeys *StoredAccessKeys `json:"accessKeys,omitempty"`
-	Nodes      []ManagedNode     `json:"nodes,omitempty"`
+	Version          int               `json:"version"`
+	AccessKeys       *StoredAccessKeys `json:"accessKeys,omitempty"`
+	Nodes            []ManagedNode     `json:"nodes,omitempty"`
+	NodeReservations []string          `json:"nodeReservations,omitempty"`
 }
 
 type Repository struct {
@@ -88,13 +92,84 @@ func (repository *Repository) SaveNode(ctx context.Context, node ManagedNode) er
 			break
 		}
 	}
+	reservationIndex := -1
+	for index, instanceID := range state.NodeReservations {
+		if instanceID == node.InstanceID {
+			reservationIndex = index
+			break
+		}
+	}
 	if !replaced {
-		if len(state.Nodes) >= MaximumManagedNodes {
+		if reservationIndex < 0 && len(state.Nodes)+len(state.NodeReservations) >= MaximumManagedNodes {
 			return fmt.Errorf("at most %d EC2 nodes can be managed", MaximumManagedNodes)
 		}
 		state.Nodes = append(state.Nodes, node)
 	}
+	if reservationIndex >= 0 {
+		state.NodeReservations = append(state.NodeReservations[:reservationIndex], state.NodeReservations[reservationIndex+1:]...)
+	}
 	return repository.save(ctx, state)
+}
+
+// ReserveNode durably claims one of the managed-node slots before remote
+// provisioning begins. Repeating the same instance ID resumes an interrupted
+// attempt; a different instance cannot take that slot.
+func (repository *Repository) ReserveNode(ctx context.Context, instanceID string) error {
+	if !validInstanceID(instanceID) {
+		return errors.New("invalid EC2 instance ID")
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	state, err := repository.loadOrCreate(ctx)
+	if err != nil {
+		return err
+	}
+	for _, node := range state.Nodes {
+		if node.InstanceID == instanceID {
+			return errors.New("EC2 instance is already managed")
+		}
+	}
+	for _, reservedInstanceID := range state.NodeReservations {
+		if reservedInstanceID == instanceID {
+			return nil
+		}
+	}
+	if len(state.Nodes)+len(state.NodeReservations) >= MaximumManagedNodes {
+		return fmt.Errorf("at most %d EC2 Client nodes can be managed", MaximumManagedNodes)
+	}
+	state.NodeReservations = append(state.NodeReservations, instanceID)
+	return repository.save(ctx, state)
+}
+
+func (repository *Repository) ReleaseNodeReservation(ctx context.Context, instanceID string) error {
+	if !validInstanceID(instanceID) {
+		return errors.New("invalid EC2 instance ID")
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	state, err := repository.loadOrCreate(ctx)
+	if err != nil {
+		return err
+	}
+	for index, reservedInstanceID := range state.NodeReservations {
+		if reservedInstanceID == instanceID {
+			state.NodeReservations = append(state.NodeReservations[:index], state.NodeReservations[index+1:]...)
+			return repository.save(ctx, state)
+		}
+	}
+	return nil
+}
+
+func (repository *Repository) NodeReservations(ctx context.Context) ([]string, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	state, err := repository.loadOrCreate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reservations := append([]string(nil), state.NodeReservations...)
+	sort.Strings(reservations)
+	return reservations, nil
 }
 
 func (repository *Repository) Nodes(ctx context.Context) ([]ManagedNode, error) {
@@ -140,7 +215,7 @@ func (repository *Repository) ProxyLine(ctx context.Context, instanceID string) 
 func (repository *Repository) loadOrCreate(ctx context.Context) (controllerState, error) {
 	state, err := repository.load(ctx)
 	if errors.Is(err, securestore.ErrNotFound) {
-		return controllerState{Version: 1}, nil
+		return controllerState{Version: controllerStateVersion}, nil
 	}
 	return state, err
 }
@@ -159,12 +234,38 @@ func (repository *Repository) load(ctx context.Context) (controllerState, error)
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var state controllerState
-	if decoder.Decode(&state) != nil || state.Version != 1 || decoder.Decode(&struct{}{}) != io.EOF {
+	if decoder.Decode(&state) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return controllerState{}, errors.New("encrypted controller state is invalid")
 	}
+	migrated := migrateControllerState(&state)
+	if state.Version != controllerStateVersion {
+		return controllerState{}, errors.New("encrypted controller state is invalid")
+	}
+	seen := make(map[string]struct{}, len(state.Nodes)+len(state.NodeReservations))
 	for _, node := range state.Nodes {
 		if err := validateManagedNode(node); err != nil {
 			return controllerState{}, errors.New("encrypted controller state is invalid")
+		}
+		if _, exists := seen[node.InstanceID]; exists {
+			return controllerState{}, errors.New("encrypted controller state is invalid")
+		}
+		seen[node.InstanceID] = struct{}{}
+	}
+	for _, instanceID := range state.NodeReservations {
+		if !validInstanceID(instanceID) {
+			return controllerState{}, errors.New("encrypted controller state is invalid")
+		}
+		if _, exists := seen[instanceID]; exists {
+			return controllerState{}, errors.New("encrypted controller state is invalid")
+		}
+		seen[instanceID] = struct{}{}
+	}
+	if len(seen) > MaximumManagedNodes {
+		return controllerState{}, errors.New("encrypted controller state is invalid")
+	}
+	if migrated {
+		if err := repository.save(ctx, state); err != nil {
+			return controllerState{}, fmt.Errorf("migrate encrypted controller state: %w", err)
 		}
 	}
 	return state, nil
@@ -186,6 +287,19 @@ func validateManagedNode(node ManagedNode) error {
 		return errors.New("managed EC2 node metadata is incomplete")
 	}
 	return nil
+}
+
+func migrateControllerState(state *controllerState) bool {
+	if state == nil || state.Version != 1 {
+		return false
+	}
+	state.Version = controllerStateVersion
+	for index := range state.Nodes {
+		if state.Nodes[index].ConfigurationGeneration == 0 {
+			state.Nodes[index].ConfigurationGeneration = 1
+		}
+	}
+	return true
 }
 
 func ValidateInstallCandidate(nodes []ManagedNode, instanceID string) error {

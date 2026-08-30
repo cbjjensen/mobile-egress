@@ -20,9 +20,45 @@ import (
 
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/client"
+	"mobile-egress/windows-client/internal/cloud"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
+
+func TestControllerUsesASingleInstanceLock(t *testing.T) {
+	t.Parallel()
+
+	lock := controllerSingleInstanceLock(&DesktopApp{})
+	if lock == nil || lock.UniqueId == "" || lock.OnSecondInstanceLaunch == nil {
+		t.Fatalf("controller single-instance lock = %#v", lock)
+	}
+}
+
+func TestReservationCancellationRequiresExplicitConfirmation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := cloud.NewRepository(securestore.NewMemoryStore())
+	instanceID := "i-0123456789abcdef0"
+	if err := repository.ReserveNode(ctx, instanceID); err != nil {
+		t.Fatal(err)
+	}
+	app := &DesktopApp{cloudRepository: repository}
+	if err := app.CancelEC2NodeReservation(instanceID, false); err == nil {
+		t.Fatal("CancelEC2NodeReservation() accepted missing confirmation")
+	}
+	pending, err := app.PendingEC2NodeReservations()
+	if err != nil || len(pending) != 1 || pending[0] != instanceID {
+		t.Fatalf("pending reservations after rejected cancellation = %#v/%v", pending, err)
+	}
+	if err := app.CancelEC2NodeReservation(instanceID, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = app.PendingEC2NodeReservations()
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending reservations after confirmed cancellation = %#v/%v", pending, err)
+	}
+}
 
 func TestGetStatusReportsOwnerAndClientReadinessWithoutIdentitySecrets(t *testing.T) {
 	t.Parallel()

@@ -68,6 +68,8 @@ type DesktopAPI = {
   UpdateEC2Node(instanceId: string): Promise<ManagedNode>
   RepairEC2Node(instanceId: string): Promise<ManagedNode>
   ManagedNodes(): Promise<ManagedNode[]>
+  PendingEC2NodeReservations(): Promise<string[]>
+  CancelEC2NodeReservation(instanceId: string, confirmed: boolean): Promise<void>
   NodeProxyLine(instanceId: string): Promise<string>
   BootstrapOwner(encodedBundle: string): Promise<void>
   RetryClientSetup(): Promise<void>

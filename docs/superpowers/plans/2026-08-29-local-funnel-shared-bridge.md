@@ -46,6 +46,9 @@
 - [x] Add failing tests with AWS-boundary fakes for Identity Center/access-key authentication, Windows Server filtering, instance-profile safeguards, SSM readiness, node bootstrap, sealed configuration, update, and secret redaction.
 - [x] Implement AWS SDK adapters and a node orchestrator; persist controller credentials and per-node metadata with DPAPI.
 - [x] Add node inventory, install/repair/update, copy-proxy, and endpoint-rotation flows to the desktop UI.
+- [x] Make install capacity atomic with encrypted durable reservations, persist recoverable pre-apply metadata, and make current-generation configuration retries idempotent.
+- [x] Add in-place schema migration for controller and node state created before configuration generations and reservations.
+- [x] Enforce a single controller process, expose confirmed abandoned-reservation cancellation, and persist desired endpoint rotation state before SSM apply.
 - [x] Run targeted controller tests and frontend typecheck/build.
 
 ### Task 5: Android Capacity and Endpoint Migration

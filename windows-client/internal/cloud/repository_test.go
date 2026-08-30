@@ -2,6 +2,9 @@ package cloud
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 
 	"mobile-egress/windows-client/internal/securestore"
@@ -37,6 +40,102 @@ func TestEncryptedRepositoryPersistsAccessKeysAndManagedNodes(t *testing.T) {
 	}
 }
 
+func TestRepositoryMigratesVersionOneManagedNodeGeneration(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := securestore.NewMemoryStore()
+	node := testManagedNode("i-0123456789abcdef0")
+	node.ConfigurationGeneration = 0
+	legacy, err := json.Marshal(controllerState{Version: 1, Nodes: []ManagedNode{node}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, controllerStateKey, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, err := NewRepository(store).Nodes(ctx)
+	if err != nil {
+		t.Fatalf("Nodes() did not migrate version-one state: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].ConfigurationGeneration != 1 {
+		t.Fatalf("migrated nodes = %#v", nodes)
+	}
+	raw, err := store.Get(ctx, controllerStateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state controllerState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != 2 {
+		t.Fatalf("persisted migrated version = %d, want 2", state.Version)
+	}
+}
+
+func TestNodeReservationsAtomicallyEnforceTheManagedNodeLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := NewRepository(securestore.NewMemoryStore())
+	for index := 0; index < MaximumManagedNodes-1; index++ {
+		if err := repository.SaveNode(ctx, testManagedNode(fmt.Sprintf("i-%017x", index+1))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	instanceIDs := []string{"i-aaaaaaaaaaaaaaaaa", "i-bbbbbbbbbbbbbbbbb"}
+	errorsByCall := make([]error, len(instanceIDs))
+	var wait sync.WaitGroup
+	for index, instanceID := range instanceIDs {
+		wait.Add(1)
+		go func(index int, instanceID string) {
+			defer wait.Done()
+			errorsByCall[index] = repository.ReserveNode(ctx, instanceID)
+		}(index, instanceID)
+	}
+	wait.Wait()
+	successes := 0
+	for _, err := range errorsByCall {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent reservations succeeded %d times, errors = %#v", successes, errorsByCall)
+	}
+	reservations, err := repository.NodeReservations(ctx)
+	if err != nil || len(reservations) != 1 {
+		t.Fatalf("NodeReservations() = %#v/%v", reservations, err)
+	}
+	if err := repository.ReserveNode(ctx, reservations[0]); err != nil {
+		t.Fatalf("ReserveNode() did not allow recovery of the same reservation: %v", err)
+	}
+	if err := repository.ReleaseNodeReservation(ctx, reservations[0]); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSaveNodeAtomicallyConsumesItsReservation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := NewRepository(securestore.NewMemoryStore())
+	node := testManagedNode("i-0123456789abcdef0")
+	if err := repository.ReserveNode(ctx, node.InstanceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveNode(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	reservations, err := repository.NodeReservations(ctx)
+	if err != nil || len(reservations) != 0 {
+		t.Fatalf("reservation remained after commit: %#v/%v", reservations, err)
+	}
+}
+
 func TestValidateInstallCandidateRejectsAnEleventhNodeBeforeOrchestration(t *testing.T) {
 	t.Parallel()
 
@@ -53,5 +152,13 @@ func TestValidateInstallCandidateRejectsAnEleventhNodeBeforeOrchestration(t *tes
 	nodes[0].InstanceID = "i-0123456789abcdef0"
 	if err := ValidateInstallCandidate(nodes[:1], "i-0123456789abcdef0"); err == nil {
 		t.Fatal("ValidateInstallCandidate() accepted a duplicate managed node")
+	}
+}
+
+func testManagedNode(instanceID string) ManagedNode {
+	return ManagedNode{
+		InstanceID: instanceID, ClientSerial: "A1", ConfigurationPublicKey: "public", ConfigurationGeneration: 1,
+		ServiceVersion: "1.2.3", Health: "healthy", SOCKSUsername: "user", SOCKSPassword: "password", SOCKSPort: 1080,
+		RelayURL: "https://bridge.tail123.ts.net:8443", CertificatePEM: "certificate", CACertificatePEM: "ca",
 	}
 }

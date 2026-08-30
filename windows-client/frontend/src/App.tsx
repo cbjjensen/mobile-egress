@@ -14,14 +14,15 @@ export default function App() {
   const [roles, setRoles] = useState<string[]>([])
   const [instances, setInstances] = useState<EC2Instance[]>([])
   const [nodes, setNodes] = useState<ManagedNode[]>([])
+  const [pendingNodes, setPendingNodes] = useState<string[]>([])
   const [awsReady, setAWSReady] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
 
   const refresh = useCallback(async () => {
     try {
-      const [bridgeStatus, managed] = await Promise.all([api().GetBridgeStatus(), api().ManagedNodes()])
-      setBridge(bridgeStatus); setNodes(managed ?? [])
+      const [bridgeStatus, managed, pending] = await Promise.all([api().GetBridgeStatus(), api().ManagedNodes(), api().PendingEC2NodeReservations()])
+      setBridge(bridgeStatus); setNodes(managed ?? []); setPendingNodes(pending ?? [])
     } catch { setError('Unable to refresh local bridge status.') }
   }, [])
 
@@ -154,6 +155,14 @@ export default function App() {
     })
   }
 
+  async function cancelPendingNode(instanceId: string) {
+    if (!window.confirm(`Cancel the interrupted install reservation for ${instanceId}? Do this only when no installation is still running.`)) return
+    await action(`cancel-${instanceId}`, async () => {
+      await api().CancelEC2NodeReservation(instanceId, true)
+      setPendingNodes(await api().PendingEC2NodeReservations() ?? [])
+    })
+  }
+
   return <main className="shell">
     <header><div><p className="eyebrow">Personal cellular bridge</p><h1>Mobile Egress</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : 'Setup needed'}</div></header>
     <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Phone</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>EC2 Nodes</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS Login</button></nav>
@@ -175,6 +184,7 @@ export default function App() {
     {tab === 'nodes' && <section className="stack">
       <article className="card"><div className="row"><div><p className="step-label">Step 4</p><h2>Windows Server 2019 nodes</h2></div><button onClick={() => void refreshInstances()} disabled={!!busy}>Refresh us-east-1</button></div><p>Only running x86-64 Windows Server 2019 instances appear. They need outbound HTTPS and SSM; public IPs and inbound security-group rules are not used.</p>{!awsReady && <p className="note">Connect AWS on the AWS Login tab, then refresh.</p>}</article>
       <div className="node-grid">{instances.map(instance => { const managed = nodes.some(node => node.instanceId === instance.id); return <article className="card node" key={instance.id}><div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${instance.ssmOnline ? 'on' : ''}`}>{managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : 'SSM setup'}</span></div><p>{instance.imageDescription}</p>{instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}<div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy}>{instance.ssmOnline ? 'Check SSM role' : 'Prepare SSM'}</button><button className="primary" onClick={() => void installNode(instance.id)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div></article> })}</div>
+      {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
       {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => <div className="managed" key={node.instanceId}><div><strong>{node.instanceId}</strong><small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div><code>{node.proxy}</code><div className="actions"><button onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy}>Copy credentials</button><button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button><button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button></div></div>)}</div></article>}
     </section>}
     <footer>Closing the window keeps the controller available in the tray. The relay and EC2 Clients run as Windows services.</footer>
