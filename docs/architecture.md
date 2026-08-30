@@ -44,7 +44,7 @@ The relay TLS listener requests a client certificate but permits certificate-fre
 2. The Windows Client creates a random stream ID and sends the requested `{host,port}` to the relay.
 3. The relay resolves the host, applies the public-TCP destination policy to every returned address, and forwards the first approved `{ip,port}` to the Agent under the same stream ID.
 4. The Agent applies its own public-address check, creates the target socket from the selected Android cellular `Network`, and reports `opened` only after the TCP connection succeeds.
-5. The relay returns no SOCKS success until `opened`. Subsequent `data` payloads are opaque TCP bytes routed by stream ID until a terminal `rejected` or `close` transition.
+5. After the Windows Client receives `opened`, the Windows loopback listener returns SOCKS success to the selected application. Subsequent `data` payloads are opaque TCP bytes routed by stream ID until a terminal `rejected` or `close` transition.
 
 The wire schemas, directional state rules, limits, timeouts, and backpressure behavior are normative in the [protocol reference](protocol.md). Destination trust decisions are described in the [security model](security-model.md).
 
@@ -70,7 +70,7 @@ The following service behavior is hard-coded in the current implementation rathe
 - a 30-second relay opening deadline and a five-minute stream idle timeout; and
 - public TCP targets only.
 
-The relay `serve` command accepts the state directory and TLS listen address. Relay initialization accepts the state directory, public DNS name, and exact public HTTPS origin used in invitations and certificates. Compose supplies those command inputs from its deployment environment. Changing stream capacities or timeout constants requires a code change and a new build.
+The relay `serve` command accepts the state directory and TLS listen address. Relay initialization accepts the state directory, `--public-name` DNS name or IP address used as the relay certificate SAN, and `--public-url` exact HTTPS origin placed in the invitation. When `--public-url` is omitted, initialization derives an HTTPS origin on port 8443 from `--public-name`. Compose supplies those command inputs from its deployment environment. Changing stream capacities or timeout constants requires a code change and a new build.
 
 ## Health and observability
 

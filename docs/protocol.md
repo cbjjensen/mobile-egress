@@ -8,7 +8,7 @@ This document describes the implemented relay control API and tunnel wire protoc
 
 The relay requires TLS 1.3. Its TLS listener uses `VerifyClientCertIfGiven`: an absent client certificate is allowed so that health and enrollment can work, while a supplied certificate must verify against the relay CA.
 
-Enrollment is the only capability-authenticated state-changing endpoint. Before sending its one-use capability or CSR, a shipped client pins TLS to the CA certificate in its invitation. It then verifies that the returned CA is byte-for-byte the invited CA, that the issued certificate chains to that CA, matches the locally generated key and response serial, and has the requested role.
+Enrollment is the only capability-authenticated state-changing endpoint. Before sending its one-use capability or CSR, a shipped client pins TLS to the CA certificate in its invitation. It then verifies that the returned CA parses to the same certificate DER as the invited CA, that the issued certificate chains to that CA, matches the locally generated key and response serial, and has the requested role.
 
 After enrollment, Windows and Android pin the same relay CA and present their issued client certificate. TLS verification alone does not grant API access. Every protected HTTP request performs an application-level lookup of the certificate serial and rejects a missing, unknown, or revoked identity; the handler then enforces the endpoint's role. Session admission repeats the active role check immediately before WebSocket upgrade. While a session is open, the relay rechecks the identity status before processing every inbound binary message. A successful Owner revocation also detaches and closes the affected active session immediately.
 
@@ -22,7 +22,7 @@ After enrollment, Windows and Android pin the same relay CA and present their is
 | `POST /v1/revoke` | Active Owner certificate | Revokes the known hexadecimal certificate `serial` in the request and closes that identity's active session, if any. HTTP 204 has no response body. Relay v1 has no identity-list endpoint. |
 | `GET /v1/session` | Active Client or Agent certificate; Owner is forbidden | Upgrades to the v1 tunnel WebSocket. Only one session per certificate serial and only one Agent session may be active. |
 
-Control request bodies are JSON and are limited by the relay to 256 KiB. The decoder rejects unknown fields and trailing JSON. The implemented request shapes are:
+The relay gives its strict JSON decoder a bounded 256 KiB + 1 byte view of each control request body; this is a parsing window, not a `Content-Length` or whole-body rejection rule. Within that window, the decoder rejects unknown fields and trailing JSON. The implemented request shapes are:
 
 | Endpoint | Request body |
 | --- | --- |
@@ -52,7 +52,7 @@ The relay and Windows readers limit each complete WebSocket message to 2 MiB; An
 | `version` | Integer `1`. Other versions are rejected; there is no version negotiation. |
 | `type` | One of `open`, `opened`, `rejected`, `data`, `close`, `ping`, or `pong`. |
 | `streamId` | Empty for `ping` and `pong`; non-empty for stream messages. See the implementation-specific validation below. |
-| `payload` | Unpadded base64url using the URL-safe alphabet. Empty means zero decoded bytes. The decoded value is at most 1 MiB. Standard base64 characters and `=` padding are rejected. |
+| `payload` | Canonical encoders emit unpadded base64url using the URL-safe alphabet; empty means zero decoded bytes, and the decoded value is at most 1 MiB. Relay and Windows use Go `RawURLEncoding`, which rejects standard-base64 `+` and `/` plus `=` padding but ignores CR and LF in the encoded string. Android first requires the entire string to match `[A-Za-z0-9_-]*`, so its decoder rejects CR and LF. Senders must emit the canonical form; decoder acceptance is not uniform. |
 
 The relay parser requires all four fields exactly once and rejects unknown fields and trailing JSON. Shipped encoders always emit all four fields. A protocol violation closes the affected session and all of its streams rather than returning an extensible or partially accepted v1 envelope.
 
@@ -78,8 +78,8 @@ Therefore, an interoperable Client must generate an Android-compatible opaque ID
 | `rejected` | Relay → Client, or Agent → Relay → Client | A finite error code encoded as base64url. Shipped senders use it to terminate an opening attempt; the relay removes the tracked stream on receipt. Relay-originated rejection covers pre-forward validation, availability, capacity, and opening failures. |
 | `data` | Client ↔ Relay ↔ Agent | Opaque decoded TCP bytes. The relay accepts it only after `opened`; ordering follows the single WebSocket connection in each direction. |
 | `close` | Client or Agent → Relay; Relay → the stream peer(s) | A finite error code encoded as base64url. It is valid in opening or open state and is terminal. |
-| `ping` | Client or Agent ↔ Relay | `streamId` is empty. Receipt causes a `pong`. Shipped senders use an empty payload; current parsers require only that the payload be valid bounded base64url, not that it decode to zero bytes. |
-| `pong` | Client or Agent ↔ Relay | `streamId` is empty. It is accepted without a response. Shipped senders use an empty payload, with the same parser caveat as `ping`. |
+| `ping` | Client or Agent ↔ Relay | `streamId` is empty. Receipt causes a `pong`. Shipped senders use an empty payload; current parsers require only that the payload be accepted by their bounded decoder, not that it decode to zero bytes. |
+| `pong` | Client or Agent ↔ Relay | `streamId` is empty. It is accepted without a response. Shipped senders use an empty payload, with the same decoder caveat as `ping`. |
 
 The relay accepts Client stream traffic only as `open`, `data`, or `close`; it accepts Agent stream traffic only as `opened`, `rejected`, `data`, or `close`. Windows accepts only `opened`, `rejected`, `data`, or `close` from the relay, in addition to keepalives. Android accepts only `open`, `data`, or `close` from the relay, in addition to keepalives. A role-incompatible type closes that session.
 
