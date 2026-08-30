@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PairingBundle: Equatable {
+public struct PairingBundle: Equatable, Sendable {
     public let version: Int
     public let relayOrigin: String
     public let certificateAuthority: CertificateAuthority

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct EndpointMigration: Equatable {
+public struct EndpointMigration: Equatable, Sendable {
     public let version: Int
     public let relayOrigin: String
     public let certificateAuthority: CertificateAuthority
