@@ -4,7 +4,7 @@
 **Status:** Implemented — historical record
 **Scope:** Documentation only. This work describes the implemented system accurately; it does not add missing product capabilities.
 
-> **Historical implementation record:** This design has been implemented and is retained to explain the decisions behind the documentation-completeness work. Any unchecked boxes in the [companion implementation plan](../plans/2026-08-29-documentation-completeness.md) preserve its original execution history; they are not current work status or actionable instructions. Use the [current status ledger](../../status.md) for present validation and limitations, the [plan-scoped progress ledger](../../../.superpowers/sdd/2026-08-29-documentation-completeness/progress.md) for execution history, and the current [`relay`](../../../relay/), [`windows-client`](../../../windows-client/), [`android`](../../../android/), and [`scripts`](../../../scripts/) source for implemented behavior.
+> **Historical implementation record:** This design has been implemented and is retained to explain the decisions behind the documentation-completeness work. Any unchecked boxes in the [companion implementation plan](../plans/2026-08-29-documentation-completeness.md) preserve its original execution history; they are not current work status or actionable instructions. Use the [current status ledger](../../status.md) for present validation and limitations, Git history for execution commits, and the current [`relay`](../../../relay/), [`windows-client`](../../../windows-client/), [`android`](../../../android/), and [`scripts`](../../../scripts/) source for implemented behavior.
 
 ## Goal
 
