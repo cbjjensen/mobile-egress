@@ -41,6 +41,7 @@ const (
 	trustESubjectNotTrusted = uint32(0x800B0004)
 	setupTransactionName    = `Global\MobileEgressSetupTransaction`
 	setupTransactionTimeout = 2 * time.Minute
+	controllerStopTimeout   = 10 * time.Second
 )
 
 var (
@@ -409,8 +410,151 @@ func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity)
 		protectRecovery: restrictRecoveryDirectory,
 		shortcutPath:    commonShortcutPath,
 		controllerPath:  filepath.Join(InstallRoot, ControllerExecutableName),
+		stopController:  stopInstalledController,
 		createShortcut:  platform.writeShortcut,
 	})
+}
+
+type runningProcess struct {
+	id         uint32
+	executable string
+}
+
+type controllerProcessOperations struct {
+	list             func(executableName string) ([]runningProcess, error)
+	terminateAndWait func(processID uint32, timeout time.Duration) error
+}
+
+func stopInstalledController(path string) error {
+	want := filepath.Join(InstallRoot, ControllerExecutableName)
+	if !strings.EqualFold(filepath.Clean(path), filepath.Clean(want)) {
+		return errors.New("installed controller path is invalid")
+	}
+	return stopProcessesAtPath(path, controllerProcessOperations{
+		list:             listWindowsProcessesNamed,
+		terminateAndWait: terminateWindowsProcessAndWait,
+	})
+}
+
+func stopProcessesAtPath(path string, operations controllerProcessOperations) error {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) || operations.list == nil || operations.terminateAndWait == nil {
+		return errors.New("controller process shutdown configuration is invalid")
+	}
+	processes, err := operations.list(filepath.Base(path))
+	if err != nil {
+		return fmt.Errorf("find installed controller process: %w", err)
+	}
+	for _, process := range processes {
+		if !strings.EqualFold(filepath.Clean(process.executable), path) {
+			continue
+		}
+		if err := operations.terminateAndWait(process.id, controllerStopTimeout); err != nil {
+			return fmt.Errorf("stop installed controller process %d: %w", process.id, err)
+		}
+	}
+	return nil
+}
+
+func listWindowsProcessesNamed(executableName string) ([]runningProcess, error) {
+	if executableName == "" || filepath.Base(executableName) != executableName {
+		return nil, errors.New("controller executable name is invalid")
+	}
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snapshot)
+
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	err = windows.Process32First(snapshot, &entry)
+	if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	processes := make([]runningProcess, 0, 1)
+	for {
+		if strings.EqualFold(windows.UTF16ToString(entry.ExeFile[:]), executableName) {
+			executable, queryErr := windowsProcessExecutable(entry.ProcessID)
+			if queryErr == nil {
+				processes = append(processes, runningProcess{id: entry.ProcessID, executable: executable})
+			} else if !errors.Is(queryErr, windows.ERROR_INVALID_PARAMETER) {
+				return nil, fmt.Errorf("inspect controller process %d: %w", entry.ProcessID, queryErr)
+			}
+		}
+		err = windows.Process32Next(snapshot, &entry)
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return processes, nil
+}
+
+func windowsProcessExecutable(processID uint32) (result string, resultErr error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, processID)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err := windows.CloseHandle(handle); err != nil {
+			resultErr = errors.Join(resultErr, errors.New("close controller process query handle"))
+		}
+	}()
+	buffer := make([]uint16, 32768)
+	size := uint32(len(buffer))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buffer[0], &size); err != nil {
+		return "", err
+	}
+	if size == 0 || size > uint32(len(buffer)) {
+		return "", errors.New("controller process executable path is invalid")
+	}
+	return windows.UTF16ToString(buffer[:size]), nil
+}
+
+func terminateWindowsProcessAndWait(processID uint32, timeout time.Duration) (resultErr error) {
+	if processID == 0 || timeout <= 0 || timeout/time.Millisecond > time.Duration(^uint32(0)) {
+		return errors.New("controller process stop request is invalid")
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, processID)
+	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := windows.CloseHandle(handle); err != nil {
+			resultErr = errors.Join(resultErr, errors.New("close controller process stop handle"))
+		}
+	}()
+	if err := windows.TerminateProcess(handle, 0); err != nil {
+		status, waitErr := windows.WaitForSingleObject(handle, 0)
+		if waitErr == nil && status == windows.WAIT_OBJECT_0 {
+			return nil
+		}
+		return err
+	}
+	waitMilliseconds := uint32(timeout / time.Millisecond)
+	if waitMilliseconds == 0 {
+		waitMilliseconds = 1
+	}
+	status, err := windows.WaitForSingleObject(handle, waitMilliseconds)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case windows.WAIT_OBJECT_0:
+		return nil
+	case uint32(windows.WAIT_TIMEOUT):
+		return errors.New("installed controller did not exit before the update timeout")
+	default:
+		return errors.New("wait for installed controller returned an unexpected status")
+	}
 }
 
 func restrictRecoveryDirectory(path string) error {
@@ -703,6 +847,7 @@ type installTransactionOps struct {
 	protectRecovery func(path string) error
 	shortcutPath    string
 	controllerPath  string
+	stopController  func(controllerPath string) error
 	createShortcut  func(controllerPath string) error
 }
 
@@ -725,6 +870,7 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 	}
 	if operations.rename == nil || operations.remove == nil ||
 		((operations.shortcutPath == "") != (operations.controllerPath == "")) ||
+		((operations.shortcutPath == "") != (operations.stopController == nil)) ||
 		((operations.shortcutPath == "") != (operations.createShortcut == nil)) {
 		return errors.New("verified install operations are invalid")
 	}
@@ -789,6 +935,11 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 	for _, file := range staged {
 		if err := verify(file.path); err != nil {
 			return err
+		}
+	}
+	if operations.stopController != nil {
+		if err := operations.stopController(operations.controllerPath); err != nil {
+			return fmt.Errorf("stop installed controller before update: %w", err)
 		}
 	}
 

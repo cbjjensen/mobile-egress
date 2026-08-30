@@ -339,6 +339,127 @@ func TestInstallVerifiedFilesLeavesExistingFilesWhenStagedVerificationFails(t *t
 	}
 }
 
+func TestInstallVerifiedFilesStopsControllerAfterVerificationBeforeBackup(t *testing.T) {
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	files := transactionTestFiles(t, sourceRoot, destinationRoot)
+	shortcutPath := filepath.Join(t.TempDir(), "Mobile Egress.lnk")
+	if err := os.WriteFile(shortcutPath, []byte("old-shortcut"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verificationCalls := 0
+	controllerStopped := false
+	ops := installTransactionOps{
+		rename:         os.Rename,
+		remove:         os.Remove,
+		shortcutPath:   shortcutPath,
+		controllerPath: files[0].Destination,
+		stopController: func(path string) error {
+			if path != files[0].Destination {
+				t.Fatalf("controller stop path = %q, want %q", path, files[0].Destination)
+			}
+			if verificationCalls != len(files) {
+				t.Fatalf("controller stopped after %d verifications, want %d", verificationCalls, len(files))
+			}
+			assertTransactionTestFiles(t, files, "old-")
+			controllerStopped = true
+			return nil
+		},
+		createShortcut: func(path string) error {
+			return os.WriteFile(shortcutPath, []byte(path), 0o600)
+		},
+	}
+	err := installVerifiedFiles(files, func(string) error {
+		verificationCalls++
+		return nil
+	}, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !controllerStopped {
+		t.Fatal("installed controller was not stopped")
+	}
+	assertTransactionTestFiles(t, files, "new-")
+}
+
+func TestInstallVerifiedFilesLeavesInstallationUntouchedWhenControllerStopFails(t *testing.T) {
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	files := transactionTestFiles(t, sourceRoot, destinationRoot)
+	shortcutPath := filepath.Join(t.TempDir(), "Mobile Egress.lnk")
+	if err := os.WriteFile(shortcutPath, []byte("old-shortcut"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ops := installTransactionOps{
+		rename:         os.Rename,
+		remove:         os.Remove,
+		shortcutPath:   shortcutPath,
+		controllerPath: files[0].Destination,
+		stopController: func(string) error {
+			return errors.New("controller would not exit")
+		},
+		createShortcut: func(string) error {
+			t.Fatal("shortcut creation ran after controller stop failure")
+			return nil
+		},
+	}
+	err := installVerifiedFiles(files, func(string) error { return nil }, ops)
+	if err == nil || !strings.Contains(err.Error(), "controller would not exit") {
+		t.Fatalf("controller stop error = %v", err)
+	}
+	assertTransactionTestFiles(t, files, "old-")
+	shortcut, readErr := os.ReadFile(shortcutPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(shortcut) != "old-shortcut" {
+		t.Fatalf("shortcut = %q, want old-shortcut", shortcut)
+	}
+}
+
+func TestStopProcessesAtPathTerminatesOnlyExactInstalledController(t *testing.T) {
+	target := `C:\Program Files\MobileEgress\Controller\mobile-egress-windows.exe`
+	terminated := make([]uint32, 0, 1)
+	operations := controllerProcessOperations{
+		list: func(name string) ([]runningProcess, error) {
+			if name != ControllerExecutableName {
+				t.Fatalf("process name = %q, want %q", name, ControllerExecutableName)
+			}
+			return []runningProcess{
+				{id: 10, executable: `C:\Users\Chad\Desktop\mobile-egress-windows.exe`},
+				{id: 20, executable: `c:\program files\mobileegress\controller\MOBILE-EGRESS-WINDOWS.EXE`},
+			}, nil
+		},
+		terminateAndWait: func(processID uint32, timeout time.Duration) error {
+			if timeout != controllerStopTimeout {
+				t.Fatalf("stop timeout = %s, want %s", timeout, controllerStopTimeout)
+			}
+			terminated = append(terminated, processID)
+			return nil
+		},
+	}
+	if err := stopProcessesAtPath(target, operations); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(terminated, []uint32{20}) {
+		t.Fatalf("terminated processes = %#v, want only installed controller", terminated)
+	}
+}
+
+func TestStopProcessesAtPathSurfacesExactControllerStopFailure(t *testing.T) {
+	target := `C:\Program Files\MobileEgress\Controller\mobile-egress-windows.exe`
+	want := errors.New("access denied")
+	err := stopProcessesAtPath(target, controllerProcessOperations{
+		list: func(string) ([]runningProcess, error) {
+			return []runningProcess{{id: 42, executable: target}}, nil
+		},
+		terminateAndWait: func(uint32, time.Duration) error { return want },
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("stop error = %v, want wrapped %v", err, want)
+	}
+}
+
 func TestInstallVerifiedFilesRollsBackEveryFileWhenPromotionFails(t *testing.T) {
 	for _, failedName := range []string{AdminExecutableName, RelayExecutableName} {
 		t.Run(failedName, func(t *testing.T) {
@@ -491,6 +612,7 @@ func TestInstallVerifiedFilesRollsBackFilesAndShortcutWhenShortcutFails(t *testi
 		remove:         os.Remove,
 		shortcutPath:   shortcutPath,
 		controllerPath: files[0].Destination,
+		stopController: func(string) error { return nil },
 		createShortcut: func(string) error {
 			if err := os.WriteFile(shortcutPath, []byte("partial-new-shortcut"), 0o600); err != nil {
 				t.Fatal(err)
