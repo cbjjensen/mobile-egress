@@ -121,6 +121,10 @@ func Enroll(ctx context.Context, bundle pairing.Bundle) (Identity, error) {
 }
 
 func validateEnrollmentResult(requestedRole string, privateKey *ecdsa.PrivateKey, trustedCA *x509.Certificate, result enrollResponse) error {
+	return validateIssuedPublicIdentity(requestedRole, &privateKey.PublicKey, trustedCA, result)
+}
+
+func validateIssuedPublicIdentity(requestedRole string, expectedPublicKey any, trustedCA *x509.Certificate, result enrollResponse) error {
 	if result.Role != requestedRole || result.Serial == "" {
 		return errors.New("relay returned an identity with the wrong role or serial")
 	}
@@ -150,8 +154,12 @@ func validateEnrollmentResult(requestedRole string, privateKey *ecdsa.PrivateKey
 	}); err != nil {
 		return errors.New("client certificate does not verify against returned CA")
 	}
-	publicKey, ok := chain[0].PublicKey.(*ecdsa.PublicKey)
-	if !ok || !publicKey.Equal(&privateKey.PublicKey) {
+	certificatePublicKey, err := x509.MarshalPKIXPublicKey(chain[0].PublicKey)
+	if err != nil {
+		return errors.New("client certificate contains an invalid public key")
+	}
+	expectedPublicKeyDER, err := x509.MarshalPKIXPublicKey(expectedPublicKey)
+	if err != nil || !bytes.Equal(certificatePublicKey, expectedPublicKeyDER) {
 		return errors.New("client certificate does not match generated private key")
 	}
 	wantSerial := strings.ToUpper(chain[0].SerialNumber.Text(16))

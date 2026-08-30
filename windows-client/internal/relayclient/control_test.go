@@ -51,6 +51,28 @@ func TestClientIdentityCannotUseOwnerControls(t *testing.T) {
 	if err := Revoke(context.Background(), identity, "ABC123"); err == nil {
 		t.Fatal("Revoke accepted a client identity")
 	}
+	_, csr := testControlCSR(t)
+	if _, err := ProvisionClient(context.Background(), identity, csr); err == nil {
+		t.Fatal("ProvisionClient accepted a client identity")
+	}
+}
+
+func TestOwnerProvisionsClientCSRWithoutReceivingPrivateKey(t *testing.T) {
+	t.Parallel()
+
+	identity, server, requests := newControlFixture(t, "owner")
+	defer server.Close()
+	_, csr := testControlCSR(t)
+	issued, err := ProvisionClient(context.Background(), identity, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.Role != "client" || issued.Serial != "3" || issued.CertificatePEM == "" || issued.CACertificatePEM == "" {
+		t.Fatalf("ProvisionClient() result = %#v", issued)
+	}
+	if got := <-requests; got != "client-csr" {
+		t.Fatalf("request = %q", got)
+	}
 }
 
 func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, chan string) {
@@ -71,7 +93,7 @@ func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, c
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := make(chan string, 2)
+	requests := make(chan string, 3)
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
@@ -96,6 +118,28 @@ func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, c
 			_ = json.NewDecoder(request.Body).Decode(&body)
 			requests <- "revoke:" + body.Serial
 			writer.WriteHeader(http.StatusNoContent)
+		case "/v1/clients":
+			var body struct {
+				CSRPEM string `json:"csrPem"`
+			}
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			block, _ := pem.Decode([]byte(body.CSRPEM))
+			if block == nil {
+				http.Error(writer, "invalid", http.StatusBadRequest)
+				return
+			}
+			csr, err := x509.ParseCertificateRequest(block.Bytes)
+			if err != nil || csr.CheckSignature() != nil {
+				http.Error(writer, "invalid", http.StatusBadRequest)
+				return
+			}
+			certificate := signPublicKey(t, ca, caKey, csr.PublicKey, "client")
+			requests <- "client-csr"
+			writer.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(writer).Encode(map[string]string{
+				"certificatePem": string(certificate) + string(caPEM), "caCertificatePem": string(caPEM),
+				"serial": "3", "role": "client",
+			})
 		default:
 			http.NotFound(writer, request)
 		}
@@ -114,4 +158,19 @@ func newControlFixture(t *testing.T, role string) (Identity, *httptest.Server, c
 		CertificatePEM: string(deviceCertificate) + string(caPEM), CACertificatePEM: string(caPEM),
 	}
 	return identity, server, requests
+}
+
+func testControlCSR(t *testing.T) (*ecdsa.PrivateKey, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "node"},
+	}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: request}))
 }

@@ -3,19 +3,31 @@ package relayclient
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"mobile-egress/pairing"
 )
 
 type PairingCode struct {
 	Code      string    `json:"code"`
 	Role      string    `json:"role"`
 	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+type ProvisionedIdentity struct {
+	RelayURL         string `json:"relayUrl"`
+	Role             string `json:"role"`
+	Serial           string `json:"serial"`
+	CertificatePEM   string `json:"certificatePem"`
+	CACertificatePEM string `json:"caCertificatePem"`
 }
 
 func IssuePairing(ctx context.Context, identity Identity, role string) (PairingCode, error) {
@@ -53,6 +65,57 @@ func IssuePairing(ctx context.Context, identity Identity, role string) (PairingC
 		return PairingCode{}, errors.New("relay returned an invalid pairing expiry")
 	}
 	return PairingCode{Code: wire.Code, Role: wire.Role, ExpiresAt: expiresAt}, nil
+}
+
+func ProvisionClient(ctx context.Context, identity Identity, csrPEM string) (ProvisionedIdentity, error) {
+	if identity.Role != "owner" {
+		return ProvisionedIdentity{}, errors.New("owner identity required")
+	}
+	block, rest := pem.Decode([]byte(csrPEM))
+	if block == nil || block.Type != "CERTIFICATE REQUEST" || len(bytes.TrimSpace(rest)) != 0 {
+		return ProvisionedIdentity{}, errors.New("invalid Client certificate request")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil || csr.CheckSignature() != nil {
+		return ProvisionedIdentity{}, errors.New("invalid Client certificate request")
+	}
+	trustedCA, err := pairing.CACertificate(identity.CACertificatePEM)
+	if err != nil {
+		return ProvisionedIdentity{}, errors.New("stored Owner CA is invalid")
+	}
+	body, err := json.Marshal(map[string]string{"csrPem": csrPEM})
+	if err != nil {
+		return ProvisionedIdentity{}, err
+	}
+	response, transport, err := identityRequest(ctx, identity, "/v1/clients", body)
+	if transport != nil {
+		defer transport.CloseIdleConnections()
+	}
+	if err != nil {
+		return ProvisionedIdentity{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxControlResponseBytes))
+		return ProvisionedIdentity{}, fmt.Errorf("relay rejected Client provisioning with HTTP %d", response.StatusCode)
+	}
+	var result enrollResponse
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseBytes+1))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || requireJSONEOF(decoder) != nil {
+		return ProvisionedIdentity{}, errors.New("relay returned an invalid Client provisioning response")
+	}
+	if err := validateIssuedPublicIdentity("client", csr.PublicKey, trustedCA, result); err != nil {
+		return ProvisionedIdentity{}, err
+	}
+	baseURL, err := validateRelayURL(identity.RelayURL)
+	if err != nil {
+		return ProvisionedIdentity{}, err
+	}
+	return ProvisionedIdentity{
+		RelayURL: baseURL.String(), Role: result.Role, Serial: strings.ToUpper(result.Serial),
+		CertificatePEM: result.CertificatePEM, CACertificatePEM: result.CACertificatePEM,
+	}, nil
 }
 
 func Revoke(ctx context.Context, identity Identity, serial string) error {
