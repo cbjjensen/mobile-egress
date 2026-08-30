@@ -22,8 +22,10 @@ const (
 )
 
 var (
-	ErrConfirmationDeclined = errors.New("setup confirmation was declined")
-	ErrTrustRollback        = errors.New("publisher trust rollback failed")
+	ErrConfirmationDeclined    = errors.New("setup confirmation was declined")
+	ErrInstallRollback         = errors.New("installation rollback failed")
+	ErrSetupTransactionTimeout = errors.New("another Mobile Egress setup transaction is already running")
+	ErrTrustRollback           = errors.New("publisher trust rollback failed")
 
 	verifiedReleaseExecutables = [...]string{
 		SetupExecutableName,
@@ -140,9 +142,14 @@ type InstallFile struct {
 	Destination string
 }
 
+type ElevatedSetupTransaction interface {
+	Close() error
+}
+
 type ElevatedPlatform interface {
 	IsElevated() (bool, error)
 	VerifyPreTrustAuthenticode(path string, identity Identity) error
+	AcquireSetupTransaction() (ElevatedSetupTransaction, error)
 	EnsureTrust(Identity) (TrustChanges, error)
 	RollbackTrust(Identity, TrustChanges) error
 	VerifyAuthenticode(path string, identity Identity) error
@@ -175,6 +182,15 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 			return fmt.Errorf("required signed release file is missing: %s", name)
 		}
 	}
+	transaction, err := platform.AcquireSetupTransaction()
+	if err != nil {
+		return fmt.Errorf("acquire elevated setup transaction: %w", err)
+	}
+	defer func() {
+		if err := transaction.Close(); err != nil {
+			resultErr = errors.Join(resultErr, errors.New("release elevated setup transaction"))
+		}
+	}()
 	changes, err := platform.EnsureTrust(options.Identity)
 	if err != nil {
 		return rollbackTrustAfterFailure(platform, options.Identity, changes, fmt.Errorf("install publisher trust: %w", err))
@@ -195,7 +211,7 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 		{Source: filepath.Join(releaseDir, RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
 	}
 	if err := platform.Install(files, options.Identity); err != nil {
-		return errors.New("transactionally install signed release files and Start Menu shortcut")
+		return fmt.Errorf("transactionally install signed release files and Start Menu shortcut: %w", err)
 	}
 	return nil
 }

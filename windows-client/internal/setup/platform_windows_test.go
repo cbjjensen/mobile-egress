@@ -3,15 +3,152 @@
 package setup
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+func testSetupTransactionMutexName(t *testing.T) string {
+	t.Helper()
+	random := make([]byte, 12)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatal(err)
+	}
+	return `Local\MobileEgressSetupTransaction-Test-` + hex.EncodeToString(random)
+}
+
+func TestWindowsSetupTransactionRecoversAbandonedOwnership(t *testing.T) {
+	name := testSetupTransactionMutexName(t)
+	namePointer, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := windows.CreateMutex(nil, false, namePointer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(anchor)
+
+	command := exec.Command("powershell", "-NoProfile", "-Command", `$mutex = [Threading.Mutex]::new($false, $env:MOBILE_EGRESS_TEST_MUTEX_NAME)
+$null = $mutex.WaitOne()
+exit 0`)
+	command.Env = append(os.Environ(), "MOBILE_EGRESS_TEST_MUTEX_NAME="+name)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("abandon setup transaction mutex: %v\n%s", err, output)
+	}
+
+	transaction, err := acquireWindowsSetupTransaction(name, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("abandoned setup transaction was not recovered: %v", err)
+	}
+	if err := transaction.Close(); err != nil {
+		t.Fatalf("release abandoned setup transaction: %v", err)
+	}
+}
+
+func TestWindowsSetupTransactionPreventsOverlapUntilRelease(t *testing.T) {
+	name := testSetupTransactionMutexName(t)
+	ready := make(chan error, 1)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		transaction, err := acquireWindowsSetupTransaction(name, time.Second)
+		ready <- err
+		if err != nil {
+			return
+		}
+		<-release
+		ready <- transaction.Close()
+	}()
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+
+	if transaction, err := acquireWindowsSetupTransaction(name, 50*time.Millisecond); !errors.Is(err, ErrSetupTransactionTimeout) {
+		if err == nil {
+			_ = transaction.Close()
+		}
+		t.Fatalf("overlapping transaction result = %v, want timeout", err)
+	}
+	close(release)
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	transaction, err := acquireWindowsSetupTransaction(name, time.Second)
+	if err != nil {
+		t.Fatalf("transaction remained locked after release: %v", err)
+	}
+	if err := transaction.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAwaitElevatedProcessRetainsHandleUntilActualCompletion(t *testing.T) {
+	completion := make(chan struct{})
+	returned := make(chan struct{})
+	events := make(chan string, 4)
+	var exitCode uint32
+	var waitErr error
+	go func() {
+		exitCode, waitErr = awaitElevatedProcess(windows.Handle(123), elevatedProcessOperations{
+			wait: func(handle windows.Handle, milliseconds uint32) (uint32, error) {
+				if handle != windows.Handle(123) {
+					t.Errorf("wait handle = %v", handle)
+				}
+				if milliseconds != windows.INFINITE {
+					t.Errorf("wait duration = %d, want INFINITE", milliseconds)
+				}
+				events <- "wait-started"
+				<-completion
+				events <- "wait-completed"
+				return waitObject0, nil
+			},
+			getExitCode: func(handle windows.Handle, code *uint32) error {
+				events <- "exit-code"
+				*code = 37
+				return nil
+			},
+			close: func(handle windows.Handle) error {
+				events <- "close"
+				return nil
+			},
+		})
+		close(returned)
+	}()
+
+	if event := <-events; event != "wait-started" {
+		t.Fatalf("first event = %q", event)
+	}
+	select {
+	case <-returned:
+		t.Fatal("wait returned and released the handle before child completion")
+	default:
+	}
+	close(completion)
+	<-returned
+	if waitErr != nil || exitCode != 37 {
+		t.Fatalf("wait result = %d, %v", exitCode, waitErr)
+	}
+	for _, want := range []string{"wait-completed", "exit-code", "close"} {
+		if event := <-events; event != want {
+			t.Fatalf("event = %q, want %q", event, want)
+		}
+	}
+}
 
 func TestValidateAuthenticodeResultRequiresExactTimestampedCertificate(t *testing.T) {
 	identity, err := LoadIdentity(trackedCertificateDER(t), trackedFingerprint)
@@ -208,6 +345,7 @@ func TestInstallVerifiedFilesRollsBackEveryFileWhenPromotionFails(t *testing.T) 
 			sourceRoot := t.TempDir()
 			destinationRoot := t.TempDir()
 			files := transactionTestFiles(t, sourceRoot, destinationRoot)
+			backupRoot := ""
 			ops := installTransactionOps{
 				rename: func(oldPath, newPath string) error {
 					if strings.Contains(oldPath, ".mobile-egress-staging-") && filepath.Base(newPath) == failedName {
@@ -216,13 +354,91 @@ func TestInstallVerifiedFilesRollsBackEveryFileWhenPromotionFails(t *testing.T) 
 					return os.Rename(oldPath, newPath)
 				},
 				remove: os.Remove,
+				protectRecovery: func(path string) error {
+					backupRoot = path
+					return nil
+				},
 			}
 			err := installVerifiedFiles(files, func(string) error { return nil }, ops)
 			if err == nil {
 				t.Fatal("expected promotion failure")
 			}
 			assertTransactionTestFiles(t, files, "old-")
+			if _, statErr := os.Stat(backupRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("successful rollback left backup state at %q: %v", backupRoot, statErr)
+			}
 		})
+	}
+}
+
+func TestInstallRollbackFailurePreservesRestrictedRecoveryBackup(t *testing.T) {
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	files := transactionTestFiles(t, sourceRoot, destinationRoot)
+	backupRoot := ""
+	protected := false
+	ops := installTransactionOps{
+		rename: func(oldPath, newPath string) error {
+			if strings.Contains(oldPath, ".mobile-egress-staging-") && filepath.Base(newPath) == AdminExecutableName {
+				return errors.New("injected promotion failure")
+			}
+			if backupRoot != "" && oldPath == filepath.Join(backupRoot, ControllerExecutableName) && newPath == files[0].Destination {
+				return errors.New("injected restore failure")
+			}
+			if strings.Contains(newPath, ".mobile-egress-backup-") && !protected {
+				t.Fatal("existing file was moved before the recovery backup was restricted")
+			}
+			return os.Rename(oldPath, newPath)
+		},
+		remove: os.Remove,
+		protectRecovery: func(path string) error {
+			backupRoot = path
+			protected = true
+			return nil
+		},
+	}
+	err := installVerifiedFiles(files, func(string) error { return nil }, ops)
+	if !errors.Is(err, ErrInstallRollback) {
+		t.Fatalf("install rollback error = %v", err)
+	}
+	if backupRoot == "" || !protected {
+		t.Fatal("recovery backup was not restricted")
+	}
+	recovered, readErr := os.ReadFile(filepath.Join(backupRoot, ControllerExecutableName))
+	if readErr != nil {
+		t.Fatalf("preserved recovery backup is unavailable: %v", readErr)
+	}
+	if string(recovered) != "old-"+ControllerExecutableName {
+		t.Fatalf("preserved recovery backup = %q", recovered)
+	}
+}
+
+func TestRestrictRecoveryDirectoryUsesOnlySystemAndAdministratorsACL(t *testing.T) {
+	icaclsPath := `C:\Windows\System32\icacls.exe`
+	recoveryPath := `C:\Program Files\MobileEgress\Controller\.mobile-egress-backup-test`
+	called := false
+	err := restrictRecoveryDirectoryWith(icaclsPath, recoveryPath, func(executable string, arguments ...string) error {
+		called = true
+		if executable != icaclsPath {
+			t.Fatalf("executable = %q", executable)
+		}
+		want := []string{
+			recoveryPath,
+			"/inheritance:r",
+			"/grant:r",
+			"*S-1-5-18:(OI)(CI)F",
+			"*S-1-5-32-544:(OI)(CI)F",
+		}
+		if !reflect.DeepEqual(arguments, want) {
+			t.Fatalf("ACL arguments = %#v, want %#v", arguments, want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("ACL command was not invoked")
 	}
 }
 

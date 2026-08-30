@@ -33,13 +33,14 @@ const (
 	messageBoxYes           = 6
 	seeMaskNoCloseProcess   = 0x00000040
 	showNormal              = 1
-	waitTimeout             = 0x00000102
 	waitObject0             = 0x00000000
 	commonShortcutPath      = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress.lnk`
 	certEUntrustedRoot      = uint32(0x800B0109)
 	trustEBadDigest         = uint32(0x80096010)
 	trustENoSignature       = uint32(0x800B0100)
 	trustESubjectNotTrusted = uint32(0x800B0004)
+	setupTransactionName    = `Global\MobileEgressSetupTransaction`
+	setupTransactionTimeout = 2 * time.Minute
 )
 
 var (
@@ -56,6 +57,102 @@ var (
 type WindowsPlatform struct{}
 
 func NewWindowsPlatform() *WindowsPlatform { return &WindowsPlatform{} }
+
+func (platform *WindowsPlatform) AcquireSetupTransaction() (ElevatedSetupTransaction, error) {
+	return acquireWindowsSetupTransaction(setupTransactionName, setupTransactionTimeout)
+}
+
+type windowsSetupTransaction struct {
+	handle windows.Handle
+	closed bool
+}
+
+func acquireWindowsSetupTransaction(name string, timeout time.Duration) (*windowsSetupTransaction, error) {
+	if name == "" || timeout <= 0 || timeout/time.Millisecond > time.Duration(^uint32(0)) {
+		return nil, errors.New("elevated setup transaction lock configuration is invalid")
+	}
+	namePointer, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, err
+	}
+	runtime.LockOSThread()
+	handle, err := windows.CreateMutex(nil, false, namePointer)
+	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+	if handle == 0 {
+		runtime.UnlockOSThread()
+		return nil, errors.New("create elevated setup transaction lock")
+	}
+	waitMilliseconds := uint32(timeout / time.Millisecond)
+	if waitMilliseconds == 0 {
+		waitMilliseconds = 1
+	}
+	status, waitErr := windows.WaitForSingleObject(handle, waitMilliseconds)
+	if waitErr != nil {
+		_ = windows.CloseHandle(handle)
+		runtime.UnlockOSThread()
+		return nil, waitErr
+	}
+	switch status {
+	case windows.WAIT_OBJECT_0, windows.WAIT_ABANDONED:
+		return &windowsSetupTransaction{handle: handle}, nil
+	case uint32(windows.WAIT_TIMEOUT):
+		_ = windows.CloseHandle(handle)
+		runtime.UnlockOSThread()
+		return nil, ErrSetupTransactionTimeout
+	default:
+		_ = windows.CloseHandle(handle)
+		runtime.UnlockOSThread()
+		return nil, errors.New("wait for elevated setup transaction lock returned an unexpected status")
+	}
+}
+
+func (transaction *windowsSetupTransaction) Close() error {
+	if transaction == nil || transaction.closed {
+		return nil
+	}
+	transaction.closed = true
+	var cleanupErrors []error
+	if err := windows.ReleaseMutex(transaction.handle); err != nil {
+		cleanupErrors = append(cleanupErrors, errors.New("release elevated setup transaction lock"))
+	}
+	if err := windows.CloseHandle(transaction.handle); err != nil {
+		cleanupErrors = append(cleanupErrors, errors.New("close elevated setup transaction lock"))
+	}
+	transaction.handle = 0
+	runtime.UnlockOSThread()
+	return errors.Join(cleanupErrors...)
+}
+
+type elevatedProcessOperations struct {
+	wait        func(windows.Handle, uint32) (uint32, error)
+	getExitCode func(windows.Handle, *uint32) error
+	close       func(windows.Handle) error
+}
+
+func awaitElevatedProcess(process windows.Handle, operations elevatedProcessOperations) (exitCode uint32, resultErr error) {
+	if process == 0 || operations.wait == nil || operations.getExitCode == nil || operations.close == nil {
+		return 0, errors.New("elevated setup process handle is unavailable")
+	}
+	defer func() {
+		if err := operations.close(process); err != nil {
+			resultErr = errors.Join(resultErr, errors.New("close elevated setup process handle"))
+		}
+	}()
+	event, err := operations.wait(process, windows.INFINITE)
+	if err != nil {
+		return 0, err
+	}
+	if event != waitObject0 {
+		return 0, errors.New("wait for elevated setup returned an unexpected status")
+	}
+	if err := operations.getExitCode(process, &exitCode); err != nil {
+		return 0, err
+	}
+	return exitCode, nil
+}
 
 type windowsSetupLock struct {
 	path string
@@ -194,22 +291,11 @@ func (platform *WindowsPlatform) ElevateAndWait(executable, nonce string) (uint3
 	if info.Process == 0 {
 		return 0, errors.New("elevated setup process handle is unavailable")
 	}
-	defer windows.CloseHandle(info.Process)
-	event, err := windows.WaitForSingleObject(info.Process, uint32((10*time.Minute)/time.Millisecond))
-	if err != nil {
-		return 0, err
-	}
-	if event == waitTimeout {
-		return 0, errors.New("elevated setup timed out")
-	}
-	if event != waitObject0 {
-		return 0, errors.New("wait for elevated setup returned an unexpected status")
-	}
-	var exitCode uint32
-	if err := windows.GetExitCodeProcess(info.Process, &exitCode); err != nil {
-		return 0, err
-	}
-	return exitCode, nil
+	return awaitElevatedProcess(info.Process, elevatedProcessOperations{
+		wait:        windows.WaitForSingleObject,
+		getExitCode: windows.GetExitCodeProcess,
+		close:       windows.CloseHandle,
+	})
 }
 
 func (platform *WindowsPlatform) Launch(executable string) error {
@@ -318,12 +404,41 @@ func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity)
 	return installVerifiedFiles(files, func(path string) error {
 		return platform.VerifyAuthenticode(path, identity)
 	}, installTransactionOps{
-		rename:         windows.Rename,
-		remove:         os.Remove,
-		shortcutPath:   commonShortcutPath,
-		controllerPath: filepath.Join(InstallRoot, ControllerExecutableName),
-		createShortcut: platform.writeShortcut,
+		rename:          windows.Rename,
+		remove:          os.Remove,
+		protectRecovery: restrictRecoveryDirectory,
+		shortcutPath:    commonShortcutPath,
+		controllerPath:  filepath.Join(InstallRoot, ControllerExecutableName),
+		createShortcut:  platform.writeShortcut,
 	})
+}
+
+func restrictRecoveryDirectory(path string) error {
+	windowsDirectory, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		return err
+	}
+	icaclsPath := filepath.Join(windowsDirectory, "System32", "icacls.exe")
+	return restrictRecoveryDirectoryWith(icaclsPath, path, func(executable string, arguments ...string) error {
+		return exec.Command(executable, arguments...).Run()
+	})
+}
+
+func restrictRecoveryDirectoryWith(icaclsPath, path string, run func(string, ...string) error) error {
+	if icaclsPath == "" || path == "" || run == nil {
+		return errors.New("installation recovery ACL configuration is invalid")
+	}
+	if err := run(
+		icaclsPath,
+		path,
+		"/inheritance:r",
+		"/grant:r",
+		"*S-1-5-18:(OI)(CI)F",
+		"*S-1-5-32-544:(OI)(CI)F",
+	); err != nil {
+		return errors.New("restrict installation recovery backup")
+	}
+	return nil
 }
 
 func (platform *WindowsPlatform) writeShortcut(controllerPath string) error {
@@ -582,11 +697,12 @@ func winVerifyTrustStatus(path string) (uint32, error) {
 }
 
 type installTransactionOps struct {
-	rename         func(oldPath, newPath string) error
-	remove         func(path string) error
-	shortcutPath   string
-	controllerPath string
-	createShortcut func(controllerPath string) error
+	rename          func(oldPath, newPath string) error
+	remove          func(path string) error
+	protectRecovery func(path string) error
+	shortcutPath    string
+	controllerPath  string
+	createShortcut  func(controllerPath string) error
 }
 
 type installFileBackup struct {
@@ -610,6 +726,9 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 		((operations.shortcutPath == "") != (operations.controllerPath == "")) ||
 		((operations.shortcutPath == "") != (operations.createShortcut == nil)) {
 		return errors.New("verified install operations are invalid")
+	}
+	if operations.protectRecovery == nil {
+		operations.protectRecovery = func(string) error { return nil }
 	}
 	destinationRoot := filepath.Dir(files[0].Destination)
 	for _, file := range files {
@@ -673,22 +792,28 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(backupRoot)
+	if err := operations.protectRecovery(backupRoot); err != nil {
+		_ = os.RemoveAll(backupRoot)
+		return err
+	}
 	backups := make([]installFileBackup, 0, len(staged))
+	rollback := func(cause error, promoted []string, shortcutBackup string, shortcutExisted, shortcutAttempted bool) error {
+		return rollbackInstall(cause, operations, backups, promoted, shortcutBackup, shortcutExisted, shortcutAttempted, backupRoot)
+	}
 	for _, file := range staged {
 		backup := installFileBackup{destination: file.destination, backup: filepath.Join(backupRoot, filepath.Base(file.destination))}
 		info, statErr := os.Lstat(file.destination)
 		switch {
 		case statErr == nil:
 			if !info.Mode().IsRegular() {
-				return rollbackInstall(errors.New("installed destination is not a regular file"), operations, backups, nil, "", false, false)
+				return rollback(errors.New("installed destination is not a regular file"), nil, "", false, false)
 			}
 			if err := operations.rename(file.destination, backup.backup); err != nil {
-				return rollbackInstall(err, operations, backups, nil, "", false, false)
+				return rollback(err, nil, "", false, false)
 			}
 			backup.existed = true
 		case !os.IsNotExist(statErr):
-			return rollbackInstall(statErr, operations, backups, nil, "", false, false)
+			return rollback(statErr, nil, "", false, false)
 		}
 		backups = append(backups, backup)
 	}
@@ -700,55 +825,37 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 		switch {
 		case statErr == nil:
 			if !info.Mode().IsRegular() {
-				return rollbackInstall(errors.New("Start Menu shortcut is not a regular file"), operations, backups, nil, "", false, false)
+				return rollback(errors.New("Start Menu shortcut is not a regular file"), nil, "", false, false)
 			}
-			shortcutBackup, err = unusedSiblingPath(operations.shortcutPath)
-			if err != nil {
-				return rollbackInstall(err, operations, backups, nil, "", false, false)
-			}
+			shortcutBackup = filepath.Join(backupRoot, filepath.Base(operations.shortcutPath))
 			if err := operations.rename(operations.shortcutPath, shortcutBackup); err != nil {
-				return rollbackInstall(err, operations, backups, nil, "", false, false)
+				return rollback(err, nil, "", false, false)
 			}
 			shortcutExisted = true
 		case !os.IsNotExist(statErr):
-			return rollbackInstall(statErr, operations, backups, nil, "", false, false)
+			return rollback(statErr, nil, "", false, false)
 		}
 	}
 
 	promoted := make([]string, 0, len(staged))
 	for _, file := range staged {
 		if err := operations.rename(file.path, file.destination); err != nil {
-			return rollbackInstall(err, operations, backups, promoted, shortcutBackup, shortcutExisted, false)
+			return rollback(err, promoted, shortcutBackup, shortcutExisted, false)
 		}
 		promoted = append(promoted, file.destination)
 	}
 	if operations.createShortcut != nil {
 		if err := operations.createShortcut(operations.controllerPath); err != nil {
-			return rollbackInstall(err, operations, backups, promoted, shortcutBackup, shortcutExisted, true)
+			return rollback(err, promoted, shortcutBackup, shortcutExisted, true)
 		}
-		if shortcutExisted {
-			_ = operations.remove(shortcutBackup)
-		}
+	}
+	if err := os.RemoveAll(backupRoot); err != nil {
+		return rollback(err, promoted, shortcutBackup, shortcutExisted, operations.createShortcut != nil)
 	}
 	return nil
 }
 
-func unusedSiblingPath(path string) (string, error) {
-	file, err := os.CreateTemp(filepath.Dir(path), ".mobile-egress-shortcut-backup-")
-	if err != nil {
-		return "", err
-	}
-	name := file.Name()
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Remove(name); err != nil {
-		return "", err
-	}
-	return name, nil
-}
-
-func rollbackInstall(cause error, operations installTransactionOps, backups []installFileBackup, promoted []string, shortcutBackup string, shortcutExisted, shortcutAttempted bool) error {
+func rollbackInstall(cause error, operations installTransactionOps, backups []installFileBackup, promoted []string, shortcutBackup string, shortcutExisted, shortcutAttempted bool, backupRoot string) error {
 	var rollbackErrors []error
 	if operations.createShortcut != nil {
 		if shortcutAttempted {
@@ -775,7 +882,10 @@ func rollbackInstall(cause error, operations installTransactionOps, backups []in
 		}
 	}
 	if len(rollbackErrors) > 0 {
-		return errors.Join(cause, fmt.Errorf("roll back installation: %w", errors.Join(rollbackErrors...)))
+		return errors.Join(cause, ErrInstallRollback, fmt.Errorf("roll back installation: %w", errors.Join(rollbackErrors...)))
+	}
+	if err := os.RemoveAll(backupRoot); err != nil {
+		return errors.Join(cause, errors.New("remove restored installation backup"))
 	}
 	return cause
 }

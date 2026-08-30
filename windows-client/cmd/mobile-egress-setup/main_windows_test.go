@@ -59,6 +59,25 @@ func TestFailureResultDistinguishesTrustRollbackFailureWithoutLeakingDetails(t *
 	}
 }
 
+func TestFailureResultMapsInstallRollbackFailureToRedactedRecoveryGuidance(t *testing.T) {
+	result := failureResult(
+		strings.Repeat("d", 64),
+		strings.Repeat("a", 64),
+		errors.Join(setup.ErrInstallRollback, errors.New(`restore C:\Program Files\MobileEgress\Controller\.mobile-egress-backup-secret`)),
+	)
+	if result.Code != "install_rollback_failed" {
+		t.Fatalf("result code = %q", result.Code)
+	}
+	if !strings.Contains(result.Message, "Do not rerun setup") || !strings.Contains(result.Message, "contact the publisher") {
+		t.Fatalf("result lacks recovery guidance: %q", result.Message)
+	}
+	for _, secret := range []string{"Program Files", ".mobile-egress-backup-secret", `C:\`} {
+		if strings.Contains(result.Message, secret) {
+			t.Fatalf("result leaked %q: %q", secret, result.Message)
+		}
+	}
+}
+
 func TestCompleteElevatedRunWritesBoundFailureAndReturnsNonzero(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), setup.SetupExecutableName)
 	if err := os.WriteFile(executable, []byte("signed setup bytes"), 0o600); err != nil {

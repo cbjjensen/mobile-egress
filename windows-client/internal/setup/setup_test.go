@@ -399,15 +399,29 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 }
 
 type elevatedPlatformFake struct {
-	elevated    bool
-	verified    []string
-	installed   []InstallFile
-	changes     TrustChanges
-	rollback    TrustChanges
-	ensureErr   error
-	rollbackErr error
-	preTrustErr error
-	verifyErr   error
+	elevated            bool
+	verified            []string
+	installed           []InstallFile
+	changes             TrustChanges
+	rollback            TrustChanges
+	ensureCalls         int
+	transactionReleases int
+	events              []string
+	transactionErr      error
+	transactionCloseErr error
+	ensureErr           error
+	rollbackErr         error
+	preTrustErr         error
+	verifyErr           error
+	installErr          error
+}
+
+type elevatedTransactionFake struct{ platform *elevatedPlatformFake }
+
+func (transaction *elevatedTransactionFake) Close() error {
+	transaction.platform.events = append(transaction.platform.events, "transaction-release")
+	transaction.platform.transactionReleases++
+	return transaction.platform.transactionCloseErr
 }
 
 func (fake *elevatedPlatformFake) IsElevated() (bool, error) { return fake.elevated, nil }
@@ -415,10 +429,20 @@ func (fake *elevatedPlatformFake) VerifyPreTrustAuthenticode(path string, _ Iden
 	fake.verified = append(fake.verified, "pretrust:"+filepath.Base(path))
 	return fake.preTrustErr
 }
+func (fake *elevatedPlatformFake) AcquireSetupTransaction() (ElevatedSetupTransaction, error) {
+	fake.events = append(fake.events, "transaction-acquire")
+	if fake.transactionErr != nil {
+		return nil, fake.transactionErr
+	}
+	return &elevatedTransactionFake{platform: fake}, nil
+}
 func (fake *elevatedPlatformFake) EnsureTrust(Identity) (TrustChanges, error) {
+	fake.events = append(fake.events, "trust")
+	fake.ensureCalls++
 	return fake.changes, fake.ensureErr
 }
 func (fake *elevatedPlatformFake) RollbackTrust(_ Identity, changes TrustChanges) error {
+	fake.events = append(fake.events, "trust-rollback")
 	fake.rollback = changes
 	return fake.rollbackErr
 }
@@ -427,8 +451,51 @@ func (fake *elevatedPlatformFake) VerifyAuthenticode(path string, _ Identity) er
 	return fake.verifyErr
 }
 func (fake *elevatedPlatformFake) Install(files []InstallFile, _ Identity) error {
+	fake.events = append(fake.events, "install")
 	fake.installed = append([]InstallFile(nil), files...)
-	return nil
+	return fake.installErr
+}
+
+func TestRunElevatedSetupTransactionTimeoutOccursBeforeTrustMutation(t *testing.T) {
+	options, _ := elevatedTestOptions(t, "setup transaction timeout")
+	fake := &elevatedPlatformFake{elevated: true, transactionErr: ErrSetupTransactionTimeout}
+	err := RunElevated(options, fake)
+	if !errors.Is(err, ErrSetupTransactionTimeout) {
+		t.Fatalf("transaction timeout = %v", err)
+	}
+	if fake.ensureCalls != 0 || fake.rollback != (TrustChanges{}) || len(fake.installed) != 0 {
+		t.Fatalf("transaction timeout reached mutation: ensure=%d rollback=%#v installed=%d", fake.ensureCalls, fake.rollback, len(fake.installed))
+	}
+}
+
+func TestRunElevatedReleasesSetupTransactionAfterSuccessAndRollback(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		installErr error
+		wantEvents []string
+	}{
+		{name: "success", wantEvents: []string{"transaction-acquire", "trust", "install", "transaction-release"}},
+		{name: "failure", installErr: errors.New("injected install failure"), wantEvents: []string{"transaction-acquire", "trust", "install", "trust-rollback", "transaction-release"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options, _ := elevatedTestOptions(t, "setup transaction release "+test.name)
+			fake := &elevatedPlatformFake{
+				elevated:   true,
+				changes:    TrustChanges{RootAdded: true},
+				installErr: test.installErr,
+			}
+			err := RunElevated(options, fake)
+			if (err != nil) != (test.installErr != nil) {
+				t.Fatalf("RunElevated() error = %v", err)
+			}
+			if fake.transactionReleases != 1 {
+				t.Fatalf("transaction releases = %d, want 1", fake.transactionReleases)
+			}
+			if !reflect.DeepEqual(fake.events, test.wantEvents) {
+				t.Fatalf("events = %#v, want %#v", fake.events, test.wantEvents)
+			}
+		})
+	}
 }
 func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 	releaseDir := t.TempDir()
@@ -591,6 +658,25 @@ func TestRunElevatedSurfacesPartialTrustRollbackFailure(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fake.rollback, fake.changes) {
 		t.Fatalf("rolled back %#v, want exact partial changes %#v", fake.rollback, fake.changes)
+	}
+}
+
+func TestRunElevatedPropagatesInstallRollbackFailure(t *testing.T) {
+	options, _ := elevatedTestOptions(t, "install rollback failure")
+	fake := &elevatedPlatformFake{
+		elevated:   true,
+		changes:    TrustChanges{RootAdded: true},
+		installErr: errors.Join(ErrInstallRollback, errors.New(`restore C:\secret\mobile-egress-windows.exe`)),
+	}
+	err := RunElevated(options, fake)
+	if !errors.Is(err, ErrInstallRollback) {
+		t.Fatalf("install rollback sentinel was hidden: %v", err)
+	}
+	if !reflect.DeepEqual(fake.rollback, fake.changes) {
+		t.Fatalf("trust rollback = %#v, want %#v", fake.rollback, fake.changes)
+	}
+	if fake.transactionReleases != 1 {
+		t.Fatalf("transaction releases = %d, want 1", fake.transactionReleases)
 	}
 }
 

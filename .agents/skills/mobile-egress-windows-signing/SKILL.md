@@ -45,11 +45,11 @@ If restore rejects the PFX, password, ACL, private key, certificate match, or tr
 
 ## Friend setup
 
-Give a friend only the signed ZIP/setup and the SHA-256 certificate fingerprint from `windows-signing\release-signing-certificate.txt` through a separate trusted channel. Never separately send a CER/DER, recovery file, or verifier bundle.
+Give a friend only the signed ZIP/setup from the project's official GitHub Releases source and the SHA-256 certificate fingerprint from `windows-signing\release-signing-certificate.txt` through a separate trusted channel. Never separately send a CER/DER, recovery file, or verifier bundle. Under the approved relaxed convenience boundary, malicious substitution of the download source before first trust is out of scope; do not recommend mirrors, forwarded attachments, or repackaged archives.
 
 After extracting it, they may double-click `MobileEgressSetup.exe` directly. Inspecting **Properties → Digital Signatures** or using trusted system Windows PowerShell is useful but optional; never require a verifier script from the ZIP as the launcher. An optional PowerShell check may report `NotTrusted` on a fresh PC before setup and must report `Valid` after trust is installed, always with the exact tracked signer. On the first run, **Unknown publisher** and SmartScreen **More info → Run anyway** may still appear because self-signing does not create SmartScreen reputation; these are acceptable only when setup carries that exact signer. Disabling SmartScreen or signature checks is not supported.
 
-Setup displays the fingerprint, requires explicit **Yes**, verifies and locks its exact signed executable through elevation, installs trust and signed siblings, and launches the controller unelevated only after bound success.
+Setup displays the fingerprint, requires explicit **Yes**, verifies and locks its exact signed executable through elevation, and waits for actual child completion. The elevated child uses a fixed bounded machine-global mutex across trust, sibling verification, install, and rollback; timeout occurs before trust mutation and abandoned ownership is recoverable. It launches the controller unelevated only after bound success. If install rollback reports `install_rollback_failed`, do not rerun setup: preserve the restricted recovery backup and contact the publisher. Never expose or guess its internal path in friend-facing output.
 
 ## EC2 trust failures
 
@@ -68,5 +68,6 @@ Back up the original `windows-signing\mobile-egress-code-signing.pfx` and origin
 | Private files are missing | Restore both originals; never regenerate. |
 | Build reports a signer mismatch | Preserve the tracked public record and recover the matching private identity. |
 | Fresh PC says `NotTrusted` or `Unknown publisher` | Use the separately shared fingerprint and supported setup flow; do not disable protections. |
+| Setup reports `install_rollback_failed` | Do not rerun setup; preserve restricted recovery state and coordinate publisher-guided repair. |
 | EC2 install fails after download | Fix SSM/release integrity and retry through the controller; do not alter stores manually. |
 | Private values appear in output | Stop, restrict the evidence, and treat exposure as a potential signing-key incident. |

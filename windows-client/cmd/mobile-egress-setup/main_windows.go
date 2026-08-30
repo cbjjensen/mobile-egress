@@ -124,7 +124,10 @@ func completeElevatedRun(nonce, executable string, exchange setup.Exchange, inst
 func failureResult(nonce, setupDigest string, installErr error) setup.Result {
 	code := "install_failed"
 	message := "Installation did not complete. Verify the Mobile Egress publisher trust before retrying."
-	if errors.Is(installErr, setup.ErrTrustRollback) {
+	if errors.Is(installErr, setup.ErrInstallRollback) {
+		code = "install_rollback_failed"
+		message = "Installation rollback could not restore the previous Mobile Egress files. Do not rerun setup; contact the publisher and preserve the restricted recovery backup for repair."
+	} else if errors.Is(installErr, setup.ErrTrustRollback) {
 		code = "trust_rollback_failed"
 		message = "Installation did not complete and publisher trust cleanup failed. Review the Mobile Egress certificate entries before retrying."
 	}
