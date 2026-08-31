@@ -1,31 +1,22 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode } from './api'
+import awsPermissionsPolicy from './aws-permissions-policy.json'
+import { formatSSMWaitDetails, waitForSSMOnline } from './ssm-progress.js'
 
 const emptyBridge: BridgeStatus = { tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
-const requiredPermissionsPolicy = JSON.stringify({
-  Version: '2012-10-17',
-  Statement: [{
-    Sid: 'MobileEgressEC2AndSSMSetup',
-    Effect: 'Allow',
-    Action: [
-      'ec2:DescribeImages',
-      'ec2:DescribeInstances',
-      'ec2:AssociateIamInstanceProfile',
-      'iam:AddRoleToInstanceProfile',
-      'iam:AttachRolePolicy',
-      'iam:CreateInstanceProfile',
-      'iam:CreateRole',
-      'iam:GetInstanceProfile',
-      'iam:GetRole',
-      'iam:ListAttachedRolePolicies',
-      'iam:ListRolePolicies',
-      'ssm:DescribeInstanceInformation',
-      'ssm:GetCommandInvocation',
-      'ssm:SendCommand',
-    ],
-    Resource: '*',
-  }],
-}, null, 2)
+const requiredPermissionsPolicy = JSON.stringify(awsPermissionsPolicy, null, 2)
+type SSMProgress = {
+  phase: 'preparing' | 'waiting' | 'timeout'
+  startedAt: number
+  lastCheckedAt?: number
+  checkCount: number
+}
+
+function errorMessage(reason: unknown) {
+  if (reason instanceof Error) return reason.message
+  if (typeof reason === 'string' && reason.trim()) return reason
+  return 'Unable to complete that action.'
+}
 
 export default function App() {
   const [tab, setTab] = useState<'bridge' | 'phone' | 'nodes' | 'settings'>('bridge')
@@ -45,6 +36,8 @@ export default function App() {
   const [showPolicy, setShowPolicy] = useState(false)
   const [showSessionToken, setShowSessionToken] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
+  const [ssmProgress, setSSMProgress] = useState<Record<string, SSMProgress>>({})
+  const [clock, setClock] = useState(Date.now())
 
   const refresh = useCallback(async () => {
     try {
@@ -58,6 +51,13 @@ export default function App() {
     const timer = window.setInterval(() => void refresh(), 4000)
     return () => window.clearInterval(timer)
   }, [refresh])
+
+  useEffect(() => {
+    if (!Object.values(ssmProgress).some(progress => progress.phase === 'waiting')) return
+    setClock(Date.now())
+    const timer = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [ssmProgress])
 
   useEffect(() => {
     if (!phoneQr) return
@@ -78,7 +78,7 @@ export default function App() {
   async function action(name: string, work: () => Promise<void>) {
     setBusy(name); setError('')
     try { await work(); await refresh(); return true }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to complete that action.'); return false }
+    catch (reason) { setError(errorMessage(reason)); return false }
     finally { setBusy('') }
   }
 
@@ -168,15 +168,51 @@ export default function App() {
   }
 
   async function prepareSSM(instance: EC2Instance) {
-    await action(`ssm-${instance.id}`, async () => {
-      try { await api().EnsureInstanceSSM(instance.id, false) }
-      catch {
-        if (!instance.profileArn || !instance.roleName) throw new Error('Unable to create the dedicated SSM profile.')
+    const startedAt = Date.now()
+    setClock(startedAt)
+    setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'preparing', startedAt, checkCount: 0 } }))
+    let preparedRoleName = ''
+    const prepared = await action(`ssm-${instance.id}`, async () => {
+      try { preparedRoleName = (await api().EnsureInstanceSSM(instance.id, false)).roleName }
+      catch (reason) {
+        if (!instance.profileArn || !instance.roleName) throw reason
         if (!window.confirm(`Add AmazonSSMManagedInstanceCore to existing role ${instance.roleName}? The app will not replace its instance profile.`)) return
-        await api().EnsureInstanceSSM(instance.id, true)
+        preparedRoleName = (await api().EnsureInstanceSSM(instance.id, true)).roleName
       }
-      setInstances(await api().ListEC2Instances() ?? [])
     })
+    if (!prepared || !preparedRoleName) {
+      setSSMProgress(current => { const next = { ...current }; delete next[instance.id]; return next })
+      return
+    }
+
+    setInstances(current => current.map(item => item.id === instance.id
+      ? { ...item, profileArn: item.profileArn || 'attaching', roleName: preparedRoleName }
+      : item))
+    setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'waiting', startedAt, checkCount: 0 } }))
+    try {
+      const result = await waitForSSMOnline({
+        instanceId: instance.id,
+        listInstances: async () => await api().ListEC2Instances() ?? [],
+        onInventory: inventory => {
+          const checkedAt = Date.now()
+          setInstances(inventory)
+          setSSMProgress(current => {
+            const progress = current[instance.id]
+            if (!progress) return current
+            return { ...current, [instance.id]: { ...progress, lastCheckedAt: checkedAt, checkCount: progress.checkCount + 1 } }
+          })
+        },
+      })
+      if (result.online) {
+        setSSMProgress(current => { const next = { ...current }; delete next[instance.id]; return next })
+        return
+      }
+      setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
+      setError('The SSM profile is attached, but this instance did not come online within five minutes. Confirm the EC2 instance has outbound HTTPS, then retry the status check.')
+    } catch (reason) {
+      setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
+      setError(`The SSM profile is attached, but its status could not be refreshed. ${errorMessage(reason)}`)
+    }
   }
 
   async function installNode(instanceId: string) {
@@ -305,7 +341,14 @@ export default function App() {
 
     {tab === 'nodes' && <section className="stack">
       <article className="card"><div className="row"><div><p className="step-label">Step 4</p><h2>Windows Server 2019 nodes</h2></div><button onClick={() => void refreshInstances()} disabled={!!busy}>Refresh us-east-1</button></div><p>Only running x86-64 Windows Server 2019 instances appear. They need outbound HTTPS and SSM; public IPs and inbound security-group rules are not used.</p>{!awsReady && <p className="note">Connect AWS on the AWS Login tab, then refresh.</p>}</article>
-      <div className="node-grid">{instances.map(instance => { const managed = nodes.some(node => node.instanceId === instance.id); return <article className="card node" key={instance.id}><div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${instance.ssmOnline ? 'on' : ''}`}>{managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : 'SSM setup'}</span></div><p>{instance.imageDescription}</p>{instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}<div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy}>{instance.ssmOnline ? 'Check SSM role' : 'Prepare SSM'}</button><button className="primary" onClick={() => void installNode(instance.id)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div></article> })}</div>
+      <div className="node-grid">{instances.map(instance => {
+        const managed = nodes.some(node => node.instanceId === instance.id)
+        const progress = ssmProgress[instance.id]
+        const status = managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : progress?.phase === 'preparing' ? 'Preparing SSM…' : progress?.phase === 'waiting' ? 'Profile attached · waiting for SSM' : progress?.phase === 'timeout' ? 'SSM not online' : 'SSM setup'
+        const statusClass = instance.ssmOnline ? 'on' : progress?.phase === 'timeout' ? 'error-state' : progress ? 'waiting' : ''
+        const prepareLabel = progress?.phase === 'preparing' ? 'Preparing…' : progress?.phase === 'waiting' ? 'Waiting for SSM…' : progress?.phase === 'timeout' ? 'Retry SSM check' : instance.ssmOnline ? 'Check SSM role' : 'Prepare SSM'
+        return <article className="card node" key={instance.id}><div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${statusClass}`}>{status}</span></div><p>{instance.imageDescription}</p>{instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}{progress?.phase === 'waiting' && <div className="ssm-live" role="status"><span className="ssm-spinner" aria-hidden="true" /><span>Checking AWS every 10 seconds · {formatSSMWaitDetails(progress, clock)}</span></div>}<div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy || progress?.phase === 'preparing' || progress?.phase === 'waiting'}>{prepareLabel}</button><button className="primary" onClick={() => void installNode(instance.id)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div></article>
+      })}</div>
       {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
       {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => <div className="managed" key={node.instanceId}><div><strong>{node.instanceId}</strong><small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div><code>{node.proxy}</code><div className="actions"><button onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy}>Copy credentials</button><button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button><button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button></div></div>)}</div></article>}
     </section>}

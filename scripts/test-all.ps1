@@ -120,6 +120,7 @@ try {
 
         Push-Location (Join-Path $repositoryRoot 'windows-client\frontend')
         try {
+            Invoke-RequiredCommand -Name 'Frontend tests' -Command { npm test }
             Invoke-RequiredCommand -Name 'Frontend typecheck' -Command { npm run check }
             Invoke-RequiredCommand -Name 'Frontend build' -Command { npm run build }
         } finally {

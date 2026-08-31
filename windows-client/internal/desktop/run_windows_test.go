@@ -119,6 +119,13 @@ func TestOpenAWSIAMUserCreateConsoleUsesUsEastCreateUser(t *testing.T) {
 	}
 }
 
+func TestSSMPreparationErrorKeepsTheSafeFailingStage(t *testing.T) {
+	err := formatSSMPreparationError(errors.New("create dedicated SSM instance profile: create dedicated SSM IAM role"))
+	if err == nil || !strings.Contains(err.Error(), "create dedicated SSM IAM role") {
+		t.Fatalf("formatSSMPreparationError() = %v, want safe failing stage", err)
+	}
+}
+
 func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
 	app := &DesktopApp{tailscaleInstall: tailscale.Installer{}}
 	err := app.InstallTailscale()

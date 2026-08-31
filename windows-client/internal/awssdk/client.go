@@ -172,16 +172,17 @@ func (client *Client) CreateAndAttachDedicatedSSMProfile(ctx context.Context, in
 	if !validInstanceID(instanceID) {
 		return "", errors.New("invalid EC2 instance ID")
 	}
+	suffix := strings.TrimPrefix(instanceID, "i-")
+	roleName := "MobileEgressSSM-" + suffix
+	profileName := roleName
 	described, err := client.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instanceID}})
 	if err != nil || len(described.Reservations) != 1 || len(described.Reservations[0].Instances) != 1 {
 		return "", errors.New("verify EC2 instance profile absence")
 	}
-	if described.Reservations[0].Instances[0].IamInstanceProfile != nil {
-		return "", errors.New("EC2 instance already has an instance profile; it was not replaced")
+	profileAlreadyAttached, err := validateAttachedDedicatedProfile(described.Reservations[0].Instances[0].IamInstanceProfile, profileName)
+	if err != nil {
+		return "", err
 	}
-	suffix := strings.TrimPrefix(instanceID, "i-")
-	roleName := "MobileEgressSSM-" + suffix
-	profileName := roleName
 	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
 	tags := dedicatedTags(instanceID)
 	if _, err := client.iam.CreateRole(ctx, &iam.CreateRoleInput{RoleName: aws.String(roleName), AssumeRolePolicyDocument: aws.String(trust), Tags: tags}); err != nil && !isAlreadyExists(err) {
@@ -218,12 +219,25 @@ func (client *Client) CreateAndAttachDedicatedSSMProfile(ctx context.Context, in
 	default:
 		return "", errors.New("dedicated SSM instance profile contains unexpected roles and was not changed")
 	}
-	if _, err := client.ec2.AssociateIamInstanceProfile(ctx, &ec2.AssociateIamInstanceProfileInput{
-		InstanceId: aws.String(instanceID), IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(profileName)},
-	}); err != nil {
-		return "", errors.New("attach dedicated SSM instance profile")
+	if !profileAlreadyAttached {
+		if _, err := client.ec2.AssociateIamInstanceProfile(ctx, &ec2.AssociateIamInstanceProfileInput{
+			InstanceId: aws.String(instanceID), IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(profileName)},
+		}); err != nil {
+			return "", errors.New("attach dedicated SSM instance profile")
+		}
 	}
 	return roleName, nil
+}
+
+func validateAttachedDedicatedProfile(profile *ec2types.IamInstanceProfile, expectedName string) (bool, error) {
+	if profile == nil {
+		return false, nil
+	}
+	actualName, err := resourceName(aws.ToString(profile.Arn), "instance-profile")
+	if err != nil || actualName != expectedName {
+		return false, errors.New("EC2 instance already has an unrelated instance profile; it was not replaced")
+	}
+	return true, nil
 }
 
 func dedicatedTags(instanceID string) []iamtypes.Tag {

@@ -478,9 +478,13 @@ func (app *DesktopApp) EnsureInstanceSSM(instanceID string, confirmExistingRoleC
 		return result, errors.New("Explicit confirmation is required before adding AmazonSSMManagedInstanceCore to the existing role.")
 	}
 	if err != nil {
-		return result, errors.New("Unable to prepare that instance for Systems Manager without replacing its profile.")
+		return result, formatSSMPreparationError(err)
 	}
 	return result, nil
+}
+
+func formatSSMPreparationError(err error) error {
+	return fmt.Errorf("Unable to prepare that instance for Systems Manager without replacing its profile: %w", err)
 }
 
 func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView, error) {
