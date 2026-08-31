@@ -3,6 +3,40 @@ import XCTest
 @testable import MobileEgressCore
 
 final class AgentSessionRuntimeTests: XCTestCase {
+    func testRuntimeNotifiesTerminalFailureExactlyOnce() async {
+        let relay = RecordingRelayWebSocket()
+        let failures = RecordingTerminalFailures()
+        let runtime = AgentSessionRuntime(
+            relay: relay,
+            targetFactory: RecordingTargetConnectionFactory(),
+            terminalFailureHandler: { failures.record($0) }
+        )
+        await runtime.start()
+
+        await relay.emit(.failed(.tls))
+        await relay.emit(.failed(.authentication))
+
+        XCTAssertEqual(failures.values, [.relayTLS])
+    }
+
+    func testRuntimeExplicitStopDoesNotNotifyTerminalFailure() async {
+        let relay = RecordingRelayWebSocket()
+        let failures = RecordingTerminalFailures()
+        let runtime = AgentSessionRuntime(
+            relay: relay,
+            targetFactory: RecordingTargetConnectionFactory(),
+            terminalFailureHandler: { failures.record($0) }
+        )
+        await runtime.start()
+        await relay.emit(.connected)
+
+        await runtime.stop()
+        await runtime.stop()
+        await relay.emit(.failed(.unavailable))
+
+        XCTAssertEqual(failures.values, [])
+    }
+
     func testRuntimeRejectsPolicyBeforeFactoryCanCreateTarget() async throws {
         let relay = RecordingRelayWebSocket()
         let factory = RecordingTargetConnectionFactory()
@@ -100,6 +134,17 @@ final class AgentSessionRuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.connectionState, .stopped)
         XCTAssertEqual(snapshot.activeStreamCount, 0)
         XCTAssertEqual(snapshot.errorClass, .relayUnavailable)
+    }
+}
+
+private final class RecordingTerminalFailures: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [AgentRuntimeErrorClass] = []
+
+    var values: [AgentRuntimeErrorClass] { lock.withLock { recorded } }
+
+    func record(_ failure: AgentRuntimeErrorClass) {
+        lock.withLock { recorded.append(failure) }
     }
 }
 

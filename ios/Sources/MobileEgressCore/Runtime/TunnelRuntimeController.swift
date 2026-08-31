@@ -61,6 +61,24 @@ public actor TunnelRuntimeController {
         providerState = .failed
     }
 
+    public func handleTerminalFailure(
+        _ failure: AgentRuntimeErrorClass,
+        generation expected: UInt64,
+        cancelRunningProvider: @Sendable () -> Void
+    ) {
+        guard failure != .none,
+              generation == expected,
+              ownedRuntime?.generation == expected,
+              providerState == .starting || providerState == .running
+        else { return }
+        let shouldCancelProvider = providerState == .running
+        providerError = .runtimeUnavailable
+        providerState = .failed
+        if shouldCancelProvider {
+            cancelRunningProvider()
+        }
+    }
+
     public func stop() async {
         generation &+= 1
         let stopGeneration = generation

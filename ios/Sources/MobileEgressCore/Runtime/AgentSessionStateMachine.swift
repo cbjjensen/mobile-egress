@@ -44,6 +44,7 @@ struct AgentSessionStateMachine {
     private var nextStreamToken: UInt64 = 1
     private var nextWriteID: UInt64 = 1
     private var terminal = false
+    private(set) var terminalFailure: AgentRuntimeErrorClass?
 
     init(limits: AgentRuntimeLimits = .production) {
         self.limits = limits
@@ -419,7 +420,10 @@ struct AgentSessionStateMachine {
         guard !terminal else { return [] }
         terminal = true
         connectionState = .stopping
-        if error != .none { errorClass = error }
+        if error != .none {
+            errorClass = error
+            terminalFailure = error
+        }
         var effects: [AgentRuntimeEffect] = []
         switch relay {
         case let .close(code, reason): effects.append(.closeRelay(code: code, reason: reason))

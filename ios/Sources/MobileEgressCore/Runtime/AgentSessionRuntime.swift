@@ -8,13 +8,20 @@ public actor AgentSessionRuntime {
 
     private let relay: any RelayWebSocketIO
     private let targetFactory: any TargetConnectionFactory
+    private let terminalFailureHandler: @Sendable (AgentRuntimeErrorClass) -> Void
     private var machine = AgentSessionStateMachine()
     private var targets: [String: TargetHandle] = [:]
     private var outboundInFlight: OutboundFrame?
+    private var terminalFailureNotified = false
 
-    public init(relay: any RelayWebSocketIO, targetFactory: any TargetConnectionFactory) {
+    public init(
+        relay: any RelayWebSocketIO,
+        targetFactory: any TargetConnectionFactory,
+        terminalFailureHandler: @escaping @Sendable (AgentRuntimeErrorClass) -> Void = { _ in }
+    ) {
         self.relay = relay
         self.targetFactory = targetFactory
+        self.terminalFailureHandler = terminalFailureHandler
     }
 
     public func start() {
@@ -145,9 +152,16 @@ public actor AgentSessionRuntime {
         if machine.snapshot.connectionState == .stopping {
             outboundInFlight = nil
             machine.finishStopping()
+            notifyTerminalFailureIfNeeded()
             return
         }
         pumpOutbound()
+    }
+
+    private func notifyTerminalFailureIfNeeded() {
+        guard !terminalFailureNotified, let failure = machine.terminalFailure else { return }
+        terminalFailureNotified = true
+        terminalFailureHandler(failure)
     }
 
     private func pumpOutbound() {

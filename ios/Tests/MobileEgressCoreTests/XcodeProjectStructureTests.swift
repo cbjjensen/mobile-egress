@@ -222,6 +222,16 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertFalse(project.contains("TunnelRuntimeController.swift"))
     }
 
+    func testExtensionCancelsCurrentProviderGenerationForTerminalRuntimeFailure() throws {
+        let provider = try text(at: "MobileEgressTunnelExtension/PacketTunnelProvider.swift")
+
+        XCTAssertTrue(provider.contains("makeRuntime(generation: generation)"))
+        XCTAssertTrue(provider.contains("terminalFailureHandler: { [weak self] failure in"))
+        XCTAssertTrue(provider.contains("handleTerminalFailure(failure, generation: generation)"))
+        XCTAssertTrue(provider.contains("cancelTunnelWithError("))
+        XCTAssertTrue(provider.contains("TunnelProviderErrorClass.runtimeUnavailable.providerNSError"))
+    }
+
     private let expectedAppSources = [
         "AgentDashboardView.swift",
         "AgentViewModel.swift",

@@ -1,8 +1,5 @@
 param(
     [switch]$UseMacBuildServer,
-    [switch]$SkipPortableTests,
-    [ValidateSet('all', 'warnings', 'xcode', 'test')]
-    [string]$MacBuildServerStartAt = 'all',
     [string]$MacHost = '10.0.0.77',
     [string]$MacUser = 'diana',
     [string]$SshKeyPath = ''
@@ -74,12 +71,33 @@ function Assert-MacBuildServerKey {
     return $resolvedKey
 }
 
+function Assert-ExactCommittedTree {
+    param([string]$ExpectedCommit = '')
+
+    $pendingChanges = & git -C $repositoryRoot status --porcelain
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect the source-tree state for Mac build-server verification.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace(($pendingChanges | Out-String))) {
+        throw 'Commit or discard local changes before Mac build-server verification so every phase tests one exact tree.'
+    }
+    $commit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}$') {
+        throw 'Unable to resolve the exact source commit for Mac build-server verification.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedCommit) -and $commit -ne $ExpectedCommit) {
+        throw 'Source HEAD changed after portable tests; refusing to combine results from different commits.'
+    }
+
+    return $commit
+}
+
 function Invoke-MacBuildServerVerification {
     param(
         [string]$HostName,
         [string]$UserName,
         [string]$KeyPath,
-        [string]$StartAt
+        [string]$Commit
     )
 
     if ($HostName -notmatch '^[A-Za-z0-9.-]+$' -or $UserName -notmatch '^[A-Za-z0-9._-]+$') {
@@ -91,27 +109,16 @@ function Invoke-MacBuildServerVerification {
         }
     }
 
-    $pendingChanges = & git -C $repositoryRoot status --porcelain
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to inspect the source-tree state before creating the Mac bundle.'
-    }
-    if (-not [string]::IsNullOrWhiteSpace(($pendingChanges | Out-String))) {
-        throw 'Commit or discard local changes before Mac build-server verification so the bundle names one exact tree.'
-    }
-    $commit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}$') {
-        throw 'Unable to resolve the exact source commit for Mac build-server verification.'
-    }
+    $verifiedCommit = Assert-ExactCommittedTree -ExpectedCommit $Commit
 
     $resolvedKey = Assert-MacBuildServerKey -Path $KeyPath
     $macTarget = "$UserName@$HostName"
-    $bundlePath = Join-Path ([IO.Path]::GetTempPath()) "mobile-egress-ios-$commit.bundle"
-    $remoteBundlePath = "/tmp/mobile-egress-ios-$commit.bundle"
+    $bundlePath = Join-Path ([IO.Path]::GetTempPath()) "mobile-egress-ios-$verifiedCommit.bundle"
+    $remoteBundlePath = "/tmp/mobile-egress-ios-$verifiedCommit.bundle"
     $remoteScript = @'
 set -euo pipefail
 bundle_path="$1"
 commit="$2"
-phase="$3"
 checkout="$(mktemp -d)"
 cleanup() {
     rm -rf "$checkout" "$bundle_path"
@@ -121,16 +128,10 @@ git clone --no-checkout "$bundle_path" "$checkout"
 git -C "$checkout" checkout --detach "$commit"
 test "$(git -C "$checkout" rev-parse HEAD)" = "$commit"
 cd "$checkout/ios"
-if [ "$phase" = "all" ]; then
-    swift test
-fi
-if [ "$phase" = "all" ] || [ "$phase" = "warnings" ]; then
-    swift test -Xswiftc -warnings-as-errors
-fi
-if [ "$phase" != "test" ]; then
-    xcodebuild -list -project MobileEgressAgent.xcodeproj
-    xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
-fi
+swift test
+swift test -Xswiftc -warnings-as-errors
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
 xcodebuild -list -workspace .
 xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS"
 # Keep PowerShell's trailing carriage return inside a Bash comment.
@@ -141,11 +142,11 @@ xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=mac
         if ($LASTEXITCODE -ne 0) {
             throw "Git bundle creation failed with exit code $LASTEXITCODE."
         }
-        & scp -i $resolvedKey -o BatchMode=yes -o ConnectTimeout=5 $bundlePath "${macTarget}:$remoteBundlePath"
+        & scp -i $resolvedKey -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $bundlePath "${macTarget}:$remoteBundlePath"
         if ($LASTEXITCODE -ne 0) {
             throw "Mac bundle transfer failed with exit code $LASTEXITCODE."
         }
-        $remoteScript | & ssh -i $resolvedKey -o BatchMode=yes -o ConnectTimeout=5 $macTarget "bash -s -- '$remoteBundlePath' '$commit' '$StartAt'"
+        $remoteScript | & ssh -i $resolvedKey -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $macTarget "bash -s -- '$remoteBundlePath' '$verifiedCommit'"
         if ($LASTEXITCODE -ne 0) {
             throw "Mac iOS verification failed with exit code $LASTEXITCODE."
         }
@@ -181,19 +182,13 @@ if ($isMacHost) {
 }
 
 if ($isWindowsHost) {
-    if ($SkipPortableTests -and -not $UseMacBuildServer) {
-        throw '-SkipPortableTests is only valid with -UseMacBuildServer after a separately recorded portable-test pass.'
-    }
-    if ($MacBuildServerStartAt -ne 'all' -and -not $UseMacBuildServer) {
-        throw '-MacBuildServerStartAt is only valid with -UseMacBuildServer after separately recorded earlier Mac phases.'
-    }
-    if ($SkipPortableTests) {
-        Write-Host 'IOS_PORTABLE_TEST_STATUS=SKIPPED'
-    } else {
-        Invoke-PortableSwiftTests
-    }
+    $commit = ''
     if ($UseMacBuildServer) {
-        Invoke-MacBuildServerVerification -HostName $MacHost -UserName $MacUser -KeyPath $SshKeyPath -StartAt $MacBuildServerStartAt
+        $commit = Assert-ExactCommittedTree
+    }
+    Invoke-PortableSwiftTests
+    if ($UseMacBuildServer) {
+        Invoke-MacBuildServerVerification -HostName $MacHost -UserName $MacUser -KeyPath $SshKeyPath -Commit $commit
         Write-Host 'IOS_XCODE_STATUS=PASSED'
         exit 0
     }

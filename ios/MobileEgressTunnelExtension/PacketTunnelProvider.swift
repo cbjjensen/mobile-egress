@@ -20,7 +20,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             }
 
             do {
-                let runtime = try makeRuntime()
+                let runtime = try makeRuntime(generation: generation)
                 do {
                     try await setTunnelNetworkSettings(NoRoutesTunnelSettings.make())
                 } catch {
@@ -64,7 +64,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         }
     }
 
-    private func makeRuntime() throws -> AgentSessionRuntime {
+    private func makeRuntime(generation: UInt64) throws -> AgentSessionRuntime {
         let configuration: MobileEgressSystemConfiguration
         do {
             configuration = try ExtensionConfiguration.load()
@@ -103,8 +103,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         )
         return AgentSessionRuntime(
             relay: relay,
-            targetFactory: NetworkTargetConnectionFactory()
+            targetFactory: NetworkTargetConnectionFactory(),
+            terminalFailureHandler: { [weak self] failure in
+                self?.handleTerminalFailure(failure, generation: generation)
+            }
         )
+    }
+
+    private func handleTerminalFailure(
+        _ failure: AgentRuntimeErrorClass,
+        generation: UInt64
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            await runtimeController.handleTerminalFailure(failure, generation: generation) { [weak self] in
+                self?.cancelTunnelWithError(
+                    TunnelProviderErrorClass.runtimeUnavailable.providerNSError
+                )
+            }
+        }
     }
 }
 
