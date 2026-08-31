@@ -242,7 +242,6 @@ export default function App() {
             <h3>Open AWS</h3>
             <p>Sign in to the same AWS account where you normally view and manage your EC2 instances.</p>
             <button className="primary wide" type="button" onClick={() => void openIAMUserCreateConsole()} disabled={!!busy}>{busy === 'iam-user-console' ? 'Opening AWS…' : 'Open AWS IAM ↗'}</button>
-            <p className="guardrail">🛡 Never create or paste an access key for your AWS root account.</p>
           </div>
         </div>
 
