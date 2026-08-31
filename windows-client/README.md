@@ -37,7 +37,7 @@ The tray reports bridge/Funnel state and reopens the controller. Quitting the co
 
 - Owner/AWS/node controller metadata: Windows-user DPAPI store under the user's configuration directory.
 - Relay service: `MobileEgressRelay`, LocalSystem, auto start, `127.0.0.1:8443`, state `C:\ProgramData\MobileEgress\Relay`.
-- EC2 service: `MobileEgressClient`, LocalSystem, auto start, authenticated SOCKS5 at `127.0.0.1:1080` and an authenticated HTTP forward/CONNECT proxy at `127.0.0.1:1081`, state `C:\ProgramData\MobileEgress\Client`.
+- EC2 service: `MobileEgressClient`, LocalSystem, auto start, authenticated SOCKS5 at `127.0.0.1:1080` and an authenticated HTTP forward/CONNECT proxy at `127.0.0.1:1081`, state `C:\ProgramData\MobileEgress\Client`. Ordinary HTTP keeps at most two idle destination streams for 15 seconds so repeat requests avoid reopening the mobile path while the existing four-stream Client limit remains authoritative.
 - Installed service binaries: `C:\Program Files\MobileEgress`.
 
 ProgramData state ACLs are reduced to SYSTEM and local Administrators. The elevated helper stages only public CSR/result data; the Owner key never crosses UAC.

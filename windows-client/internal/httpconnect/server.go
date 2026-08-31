@@ -20,7 +20,11 @@ import (
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
-const maxPreOpenBytes = 64 << 10
+const (
+	maxPreOpenBytes     = 64 << 10
+	forwardIdleTimeout  = 15 * time.Second
+	maxIdleRelayStreams = 2
+)
 
 type StreamOpener interface {
 	Healthy() bool
@@ -35,10 +39,11 @@ type Config struct {
 }
 
 type trackedConnection struct {
-	mu     sync.Mutex
-	client net.Conn
-	stream io.ReadWriteCloser
-	closed bool
+	mu      sync.Mutex
+	client  net.Conn
+	stream  io.ReadWriteCloser
+	onClose func()
+	closed  bool
 }
 
 type Server struct {
@@ -47,6 +52,7 @@ type Server struct {
 	mu          sync.Mutex
 	listener    *net.TCPListener
 	httpServer  *http.Server
+	transport   *http.Transport
 	connections map[*trackedConnection]struct{}
 	context     context.Context
 	cancel      context.CancelFunc
@@ -74,6 +80,13 @@ func (server *Server) Start(port uint16) error {
 		return err
 	}
 	server.context, server.cancel = context.WithCancel(context.Background())
+	transport := &http.Transport{
+		DialContext:         server.dialRelay,
+		DisableCompression:  true,
+		IdleConnTimeout:     forwardIdleTimeout,
+		MaxIdleConns:        maxIdleRelayStreams,
+		MaxIdleConnsPerHost: maxIdleRelayStreams,
+	}
 	httpServer := &http.Server{
 		Handler:        http.HandlerFunc(server.handle),
 		MaxHeaderBytes: 1 << 20,
@@ -83,6 +96,7 @@ func (server *Server) Start(port uint16) error {
 	}
 	server.listener = listener
 	server.httpServer = httpServer
+	server.transport = transport
 	server.wg.Add(1)
 	go func() {
 		defer server.wg.Done()
@@ -105,12 +119,14 @@ func (server *Server) Stop() error {
 	server.mu.Lock()
 	listener := server.listener
 	httpServer := server.httpServer
+	transport := server.transport
 	if listener == nil {
 		server.mu.Unlock()
 		return nil
 	}
 	server.listener = nil
 	server.httpServer = nil
+	server.transport = nil
 	if server.cancel != nil {
 		server.cancel()
 	}
@@ -120,6 +136,7 @@ func (server *Server) Stop() error {
 	}
 	server.mu.Unlock()
 
+	transport.CloseIdleConnections()
 	err := httpServer.Close()
 	for _, connection := range connections {
 		connection.close()
@@ -164,15 +181,11 @@ func (server *Server) handleConnect(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	tracked := &trackedConnection{client: client}
+	tracked.onClose = func() { server.unregister(tracked) }
 	if !server.register(tracked) {
 		return
 	}
-	defer func() {
-		tracked.close()
-		server.mu.Lock()
-		delete(server.connections, tracked)
-		server.mu.Unlock()
-	}()
+	defer tracked.close()
 
 	openContext, cancelOpen := context.WithTimeout(server.context, server.config.OpenTimeout)
 	openingComplete := make(chan struct{})
@@ -219,7 +232,7 @@ func (server *Server) handleConnect(writer http.ResponseWriter, request *http.Re
 }
 
 func (server *Server) handleForwardHTTP(writer http.ResponseWriter, request *http.Request) {
-	host, port, err := forwardTarget(request)
+	_, _, err := forwardTarget(request)
 	if err != nil {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
@@ -228,35 +241,20 @@ func (server *Server) handleForwardHTTP(writer http.ResponseWriter, request *htt
 		writer.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	openContext, cancelOpen := context.WithTimeout(request.Context(), server.config.OpenTimeout)
-	stream, err := server.config.Opener.OpenStream(openContext, host, port)
-	cancelOpen()
-	if err != nil {
-		writer.WriteHeader(openFailureStatus(err))
-		return
-	}
-	tracked := &trackedConnection{stream: stream}
-	if !server.register(tracked) {
-		return
-	}
-	defer func() {
-		tracked.close()
-		server.mu.Lock()
-		delete(server.connections, tracked)
-		server.mu.Unlock()
-	}()
-
 	forwarded := request.Clone(request.Context())
 	forwarded.RequestURI = ""
-	forwarded.Close = true
+	forwarded.Close = false
 	removeHopByHopHeaders(forwarded.Header)
-	if err := forwarded.Write(stream); err != nil {
-		writer.WriteHeader(http.StatusBadGateway)
+	server.mu.Lock()
+	transport := server.transport
+	server.mu.Unlock()
+	if transport == nil {
+		writer.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	response, err := http.ReadResponse(bufio.NewReader(stream), forwarded)
+	response, err := transport.RoundTrip(forwarded)
 	if err != nil {
-		writer.WriteHeader(http.StatusBadGateway)
+		writer.WriteHeader(openFailureStatus(err))
 		return
 	}
 	defer response.Body.Close()
@@ -264,6 +262,31 @@ func (server *Server) handleForwardHTTP(writer http.ResponseWriter, request *htt
 	copyHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(writer, response.Body)
+}
+
+func (server *Server) dialRelay(ctx context.Context, network, address string) (net.Conn, error) {
+	if network != "tcp" && network != "tcp4" && network != "tcp6" {
+		return nil, errors.New("unsupported relay network")
+	}
+	host, port, err := connectTarget(address)
+	if err != nil {
+		return nil, err
+	}
+	if !server.config.Opener.Healthy() {
+		return nil, relayclient.ErrRelayUnavailable
+	}
+	openContext, cancelOpen := context.WithTimeout(ctx, server.config.OpenTimeout)
+	stream, err := server.config.Opener.OpenStream(openContext, host, port)
+	cancelOpen()
+	if err != nil {
+		return nil, err
+	}
+	connection := &trackedConnection{stream: stream}
+	connection.onClose = func() { server.unregister(connection) }
+	if !server.register(connection) {
+		return nil, net.ErrClosed
+	}
+	return connection, nil
 }
 
 func openFailureStatus(err error) int {
@@ -283,6 +306,12 @@ func (server *Server) register(connection *trackedConnection) bool {
 	server.connections[connection] = struct{}{}
 	server.mu.Unlock()
 	return true
+}
+
+func (server *Server) unregister(connection *trackedConnection) {
+	server.mu.Lock()
+	delete(server.connections, connection)
+	server.mu.Unlock()
 }
 
 func (server *Server) authenticate(value string) bool {
@@ -430,6 +459,7 @@ func (connection *trackedConnection) close() {
 	connection.closed = true
 	client := connection.client
 	stream := connection.stream
+	onClose := connection.onClose
 	connection.mu.Unlock()
 	if client != nil {
 		_ = client.Close()
@@ -437,4 +467,46 @@ func (connection *trackedConnection) close() {
 	if stream != nil {
 		_ = stream.Close()
 	}
+	if onClose != nil {
+		onClose()
+	}
 }
+
+func (connection *trackedConnection) Read(value []byte) (int, error) {
+	connection.mu.Lock()
+	stream := connection.stream
+	closed := connection.closed
+	connection.mu.Unlock()
+	if closed || stream == nil {
+		return 0, net.ErrClosed
+	}
+	return stream.Read(value)
+}
+
+func (connection *trackedConnection) Write(value []byte) (int, error) {
+	connection.mu.Lock()
+	stream := connection.stream
+	closed := connection.closed
+	connection.mu.Unlock()
+	if closed || stream == nil {
+		return 0, net.ErrClosed
+	}
+	return stream.Write(value)
+}
+
+func (connection *trackedConnection) Close() error {
+	connection.close()
+	return nil
+}
+
+func (connection *trackedConnection) LocalAddr() net.Addr  { return relayAddress("client") }
+func (connection *trackedConnection) RemoteAddr() net.Addr { return relayAddress("destination") }
+
+func (connection *trackedConnection) SetDeadline(time.Time) error      { return nil }
+func (connection *trackedConnection) SetReadDeadline(time.Time) error  { return nil }
+func (connection *trackedConnection) SetWriteDeadline(time.Time) error { return nil }
+
+type relayAddress string
+
+func (relayAddress) Network() string        { return "mobile-egress" }
+func (address relayAddress) String() string { return string(address) }

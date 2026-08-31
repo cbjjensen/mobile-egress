@@ -8,6 +8,8 @@ For a best-effort cellular address change, use **Rotate cellular IP** in the run
 
 Refract running on a managed EC2 node opts in with that node's **Copy proxy line** value: `127.0.0.1:1081:<username>:<password>`. The listener forwards ordinary HTTP and uses CONNECT to carry end-to-end HTTPS without Mobile Egress decrypting it. SOCKS-aware software can instead use **Copy SOCKS5 URL** at `127.0.0.1:1080`. Both values work only on the same EC2 node; never configure an EC2 security group, Windows system proxy, or public proxy listener.
 
+For ordinary HTTP, the Client reuses healthy destination connections instead of opening a new phone/relay stream for every request. It keeps no more than two idle destination streams and expires them after 15 seconds. These pooled and active connections still count toward the existing four-stream Client limit; there is no additional capacity tier.
+
 ## Controller actions
 
 - **Install Client** validates signed manifest v2 and its embedded publisher certificate, then verifies the GitHub artifact SHA-256 and exact Authenticode signer before installing a LocalSystem service and provisioning a node identity.

@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +26,7 @@ type fakeOpener struct {
 	targetHost  string
 	targetPort  uint16
 	remoteConns []net.Conn
+	onOpen      func(net.Conn)
 }
 
 func (opener *fakeOpener) Healthy() bool { return opener.healthy }
@@ -43,7 +47,11 @@ func (opener *fakeOpener) OpenStream(ctx context.Context, host string, port uint
 	opener.targetHost = host
 	opener.targetPort = port
 	opener.remoteConns = append(opener.remoteConns, remote)
+	onOpen := opener.onOpen
 	opener.mu.Unlock()
+	if onOpen != nil {
+		onOpen(remote)
+	}
 	return client, nil
 }
 
@@ -185,6 +193,73 @@ func TestPlainHTTPRequestIsForwardedThroughRelay(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusOK || string(body) != "plain-ok" {
 		t.Fatalf("proxy response = %d/%q, want 200/plain-ok", response.StatusCode, body)
+	}
+}
+
+func TestPlainHTTPReusesRelayStreamForSameDestination(t *testing.T) {
+	t.Parallel()
+
+	var requestCount atomic.Int32
+	serveErrors := make(chan error, 2)
+	opener := &fakeOpener{healthy: true}
+	opener.onOpen = func(connection net.Conn) {
+		go func() {
+			reader := bufio.NewReader(connection)
+			for {
+				request, err := http.ReadRequest(reader)
+				if err != nil {
+					if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+						serveErrors <- err
+					}
+					return
+				}
+				_ = request.Body.Close()
+				body := fmt.Sprintf("response-%d", requestCount.Add(1))
+				if _, err := fmt.Fprintf(connection, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+					if !errors.Is(err, net.ErrClosed) {
+						serveErrors <- err
+					}
+					return
+				}
+			}
+		}()
+	}
+	server := startTestServer(t, opener, 30*time.Second)
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   server.Addr().String(),
+		User:   url.UserPassword("user", "password"),
+	}
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport}
+
+	for index := 1; index <= 2; index++ {
+		response, err := client.Get("http://example.test/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("response-%d", index)
+		if response.StatusCode != http.StatusOK || string(body) != want {
+			t.Fatalf("response %d = %d/%q, want 200/%q", index, response.StatusCode, body, want)
+		}
+	}
+
+	opener.mu.Lock()
+	opened := len(opener.remoteConns)
+	opener.mu.Unlock()
+	if opened != 1 {
+		t.Fatalf("two requests to one destination opened %d relay streams, want 1", opened)
+	}
+	select {
+	case err := <-serveErrors:
+		t.Fatal(err)
+	default:
 	}
 }
 

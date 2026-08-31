@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode, SSMInstanceStatus } from './api'
 import { ActivityEvent, ActivitySeverity, appendActivityEvent, filterActivityEvents, formatActivityEvents } from './activity-log.js'
 import awsPermissionsPolicy from './aws-permissions-policy.json'
+import { managedNodeIdentity } from './managed-node.js'
 import { copyProxyLine, copySOCKS5URL, nodeProxyActions } from './proxy-actions.js'
 import { formatSSMCheckActivity, requiresSSMRoleConfirmation, runConfirmedSSMRestart, shouldSkipSSMProfileSetup, ssmStatusState, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMCredentialRefresh, waitForSSMOnline } from './ssm-progress.js'
 
@@ -502,8 +503,9 @@ export default function App() {
       {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
       {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => {
         const proxyActions = nodeProxyActions(node)
+        const identity = managedNodeIdentity(node.instanceId, instances)
         return <div className="managed" key={node.instanceId}>
-          <div><strong>{node.instanceId}</strong><small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div>
+          <div><strong>{identity.title}</strong>{identity.instanceId && <code>{identity.instanceId}</code>}<small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div>
           <div><code>{node.proxy}</code>{proxyActions.guidance && <small>{proxyActions.guidance}</small>}</div>
           <div className="actions">
             <button className="primary" onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy || proxyActions.primaryDisabled}>{proxyActions.primaryLabel}</button>
