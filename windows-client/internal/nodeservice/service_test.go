@@ -13,7 +13,7 @@ import (
 	"mobile-egress/windows-client/internal/securestore"
 )
 
-func TestServiceOwnsLoopbackSOCKSAndStopsCleanly(t *testing.T) {
+func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 	repository := configuredRepository(t)
 	tunnel := &fakeTunnel{healthy: true}
 	dialer := &fakeDialer{results: []dialResult{{err: errors.New("temporarily offline")}, {tunnel: tunnel}}}
@@ -26,7 +26,7 @@ func TestServiceOwnsLoopbackSOCKSAndStopsCleanly(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		status := service.Status()
-		if status.Running && status.Address == "127.0.0.1:1080" && status.Connected {
+		if status.Running && status.Address == "127.0.0.1:1080" && status.HTTPAddress == "127.0.0.1:1081" && status.Connected {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -39,6 +39,12 @@ func TestServiceOwnsLoopbackSOCKSAndStopsCleanly(t *testing.T) {
 	if err != nil {
 		cancel()
 		t.Fatalf("loopback SOCKS listener is unavailable: %v", err)
+	}
+	_ = connection.Close()
+	connection, err = net.DialTimeout("tcp4", "127.0.0.1:1081", time.Second)
+	if err != nil {
+		cancel()
+		t.Fatalf("loopback HTTP CONNECT listener is unavailable: %v", err)
 	}
 	_ = connection.Close()
 
@@ -57,6 +63,31 @@ func TestServiceOwnsLoopbackSOCKSAndStopsCleanly(t *testing.T) {
 	if _, err := net.DialTimeout("tcp4", "127.0.0.1:1080", 100*time.Millisecond); err == nil {
 		t.Fatal("SOCKS listener remained open after service stop")
 	}
+	if _, err := net.DialTimeout("tcp4", "127.0.0.1:1081", 100*time.Millisecond); err == nil {
+		t.Fatal("HTTP CONNECT listener remained open after service stop")
+	}
+}
+
+func TestServiceRollsBackSOCKSWhenHTTPConnectPortIsUnavailable(t *testing.T) {
+	occupied, err := net.Listen("tcp4", "127.0.0.1:1081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	service := NewService(configuredRepository(t), &fakeDialer{})
+	service.retryInterval = 10 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := service.Run(ctx); err == nil {
+		t.Fatal("Service.Run() accepted a partial startup with HTTP CONNECT unavailable")
+	}
+	if status := service.Status(); status.Running || status.Address != "" || status.HTTPAddress != "" {
+		t.Fatalf("status after partial startup = %#v, want stopped", status)
+	}
+	if _, err := net.DialTimeout("tcp4", "127.0.0.1:1080", 100*time.Millisecond); err == nil {
+		t.Fatal("SOCKS listener remained open after HTTP CONNECT startup failed")
+	}
 }
 
 func TestServiceRejectsMissingConfiguration(t *testing.T) {
@@ -69,6 +100,15 @@ func TestServiceRejectsMissingConfiguration(t *testing.T) {
 	service := NewService(repository, &fakeDialer{})
 	if err := service.Run(context.Background()); err == nil {
 		t.Fatal("Service.Run() accepted an unconfigured node")
+	}
+}
+
+func TestSwitchingTunnelReportsTheSharedRelayUnavailableError(t *testing.T) {
+	t.Parallel()
+
+	_, err := (&switchingTunnel{}).OpenStream(context.Background(), "example.test", 443)
+	if !errors.Is(err, relayclient.ErrRelayUnavailable) {
+		t.Fatalf("OpenStream() error = %v, want relayclient.ErrRelayUnavailable", err)
 	}
 }
 

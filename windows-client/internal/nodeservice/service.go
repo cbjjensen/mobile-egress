@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"mobile-egress/windows-client/internal/httpconnect"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/socks"
 )
@@ -28,10 +29,11 @@ func (DefaultDialer) Dial(ctx context.Context, identity relayclient.Identity) (T
 }
 
 type ServiceStatus struct {
-	Running   bool   `json:"running"`
-	Connected bool   `json:"connected"`
-	Address   string `json:"address"`
-	Serial    string `json:"serial,omitempty"`
+	Running     bool   `json:"running"`
+	Connected   bool   `json:"connected"`
+	Address     string `json:"address"`
+	HTTPAddress string `json:"httpAddress"`
+	Serial      string `json:"serial,omitempty"`
 }
 
 type Service struct {
@@ -62,10 +64,18 @@ func (service *Service) Run(ctx context.Context) error {
 	if err := proxy.Start(runtime.Port); err != nil {
 		return err
 	}
+	httpProxy := httpconnect.NewServer(httpconnect.Config{
+		Username: runtime.Username, Password: runtime.Password, Opener: opener,
+	})
+	if err := httpProxy.Start(1081); err != nil {
+		_ = proxy.Stop()
+		return err
+	}
 	service.setStatus(ServiceStatus{
-		Running: true, Address: "127.0.0.1:1080", Serial: runtime.Identity.Serial,
+		Running: true, Address: "127.0.0.1:1080", HTTPAddress: "127.0.0.1:1081", Serial: runtime.Identity.Serial,
 	})
 	defer func() {
+		_ = httpProxy.Stop()
 		_ = proxy.Stop()
 		opener.swap(nil)
 		service.setStatus(ServiceStatus{})
@@ -129,7 +139,7 @@ func (opener *switchingTunnel) Healthy() bool {
 func (opener *switchingTunnel) OpenStream(ctx context.Context, host string, port uint16) (io.ReadWriteCloser, error) {
 	tunnel := opener.current()
 	if tunnel == nil || !tunnel.Healthy() {
-		return nil, socks.ErrRelayUnavailable
+		return nil, relayclient.ErrRelayUnavailable
 	}
 	return tunnel.OpenStream(ctx, host, port)
 }

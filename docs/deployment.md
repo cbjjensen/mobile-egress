@@ -378,17 +378,19 @@ On each EC2 node, confirm the service and listener through an interactive admini
 
 ```powershell
 Get-Service -Name 'MobileEgressClient' | Select-Object Name, Status, StartType
-Get-NetTCPConnection -State Listen -LocalPort 1080 | Select-Object LocalAddress, LocalPort, OwningProcess
+Get-NetTCPConnection -State Listen -LocalPort 1080,1081 | Select-Object LocalAddress, LocalPort, OwningProcess
 ```
 
-The service must be automatic/running and the only SOCKS listener must be `127.0.0.1:1080`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
+The service must be automatic/running. Its only proxy listeners must be SOCKS5 at `127.0.0.1:1080` and HTTP CONNECT at `127.0.0.1:1081`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
 
 ### 6.4 Prove opt-in cellular egress on both nodes
 
-In the controller, choose **Copy credentials** for node A. Transfer the value only into that node's intended workload or private RDP clipboard. For a short manual curl test, read it from the clipboard so it is not written into PowerShell history:
+In the controller, choose **Copy proxy line** for node A. Client versions older than `1.0.22` show update guidance instead; choose **Update** and wait for the node card to refresh. Transfer the value only into that node's intended workload or private RDP clipboard. For a short HTTP CONNECT curl test, parse it from the clipboard so the secret is not written into PowerShell history:
 
 ```powershell
-$nodeProxy = (Get-Clipboard).Trim() -replace '^socks5://', 'socks5h://'
+$proxyParts = (Get-Clipboard).Trim().Split(':', 4)
+if ($proxyParts.Count -ne 4) { throw 'The copied proxy line is not IP:PORT:USERNAME:PASSWORD.' }
+$nodeProxy = "http://$($proxyParts[2]):$($proxyParts[3])@$($proxyParts[0]):$($proxyParts[1])"
 $previousAllProxy = $env:ALL_PROXY
 $directAddress = (& curl.exe --fail --silent --show-error --noproxy '*' 'https://checkip.amazonaws.com').Trim()
 if ($LASTEXITCODE -ne 0) { throw 'The direct egress check failed.' }
@@ -407,11 +409,11 @@ try {
         $env:ALL_PROXY = $previousAllProxy
     }
     Set-Clipboard -Value ''
-    Remove-Variable nodeProxy, previousAllProxy, directAddress, proxiedAddress -ErrorAction SilentlyContinue
+    Remove-Variable proxyParts, nodeProxy, previousAllProxy, directAddress, proxiedAddress -ErrorAction SilentlyContinue
 }
 ```
 
-Repeat with node B's own credentials. While both proxied requests work, run a direct request on each node and confirm it still uses its normal EC2 route. This proves per-application opt-in rather than a system-wide proxy.
+Choose **Copy proxy line** again, paste it directly into a Refract proxy list on that same EC2 node, and run Refract's proxy test. For SOCKS regression coverage, choose **Copy SOCKS5 URL** and repeat the existing `socks5h://` curl check. Repeat with node B's own credentials. While both proxied requests work, run a direct request on each node and confirm it still uses its normal EC2 route. This proves per-application opt-in rather than a system-wide proxy.
 
 The two-node run proves simultaneous multi-Client routing, but two Clients can open only eight streams because each is capped at four. The 32-stream aggregate is covered by automated tests. A physical 32-stream capacity run requires at least eight managed Clients, four held-open streams each; treat that as an extended test, not a claim that two nodes can reach 32.
 
@@ -432,7 +434,7 @@ If proxy traffic succeeds over phone Wi-Fi while cellular is disabled, fail the 
 Test one dependency at a time so the failed component is unambiguous:
 
 1. Reboot the controller PC. Tailscale unattended mode and `MobileEgressRelay` must return automatically; reopen the controller UI and confirm the bridge becomes ready without new Owner/Agent/Client identities.
-2. Reboot EC2 node A, then node B. `MobileEgressClient` must return automatically and retain the same serial/SOCKS credentials.
+2. Reboot EC2 node A, then node B. `MobileEgressClient` must return automatically, restore both loopback listeners, and retain the same serial/proxy credentials.
 3. Reboot the Android phone. The Agent is intentionally user-started and `START_NOT_STICKY`; open the app and tap **Start**, then confirm the same enrollment reconnects.
 4. Stop `MobileEgressClient` on one test node, choose **Repair** in the controller, and require the signed executable/configuration reapply to restore the service without changing serial or credentials.
 
@@ -448,7 +450,7 @@ Tailscale derives the MagicDNS/Funnel FQDN from the device machine name. Use the
 4. Connect AWS, choose **Rotate endpoint safely**, and approve UAC.
 5. Require both EC2 nodes to appear in the updated list. Use **Repair** for a failed node after SSM returns.
 6. Stop the Android Agent, scan the distinct migration QR, and restart the Agent.
-7. Confirm both workloads reconnect with unchanged Client serials, Android identity, and SOCKS credentials.
+7. Confirm both workloads reconnect with unchanged Client serials, Android identity, and proxy credentials.
 8. Rename the Tailscale machine back to its original name and repeat the rotation/migration once more so the accepted release finishes on its intended FQDN.
 
 Tailscale documents that editing a machine name changes its MagicDNS domain: [Machine names](https://tailscale.com/kb/1098/machine-names) and [MagicDNS](https://tailscale.com/docs/features/magicdns). Do not regenerate the tailnet DNS name or delete/re-enroll the node merely to test migration.
@@ -458,7 +460,7 @@ Tailscale documents that editing a machine name changes its MagicDNS domain: [Ma
 Before signing off:
 
 - inspect SSM command history and require only signed-release metadata, public publisher DER/fingerprints, public bootstrap CSR/key output, sealed ciphertext, and fixed success/error output;
-- confirm no raw SOCKS password, private key, pairing capability, or plaintext node configuration appears;
+- confirm no raw proxy password, private key, pairing capability, or plaintext node configuration appears;
 - confirm no EC2 instance, Elastic IP, public IP, or inbound rule was created/changed by Mobile Egress;
 - confirm Windows relay/node state directories remain ACL-restricted to SYSTEM and local Administrators; and
 - save only aggregate pass/fail results in the acceptance record.

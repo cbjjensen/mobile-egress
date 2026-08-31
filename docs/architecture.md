@@ -5,9 +5,9 @@
 Every operator has one independent bridge. Their Windows 10/11 PC owns the relay and control plane, up to ten of their Windows Server 2019 EC2 instances are Clients, and one Android phone is the cellular Agent.
 
 ```text
-EC2 workload -> loopback SOCKS -> Client service --+
-                                                   +-> public *.ts.net:8443 -> Funnel raw TCP -> 127.0.0.1:8443 relay -> Agent -> cellular target
-EC2 workload -> loopback SOCKS -> Client service --+
+EC2 Refract -> loopback HTTP CONNECT -> Client service --+
+                                                        +-> public *.ts.net:8443 -> Funnel raw TCP -> 127.0.0.1:8443 relay -> Agent -> cellular target
+EC2 workload -> loopback SOCKS5 -> Client service -------+
 ```
 
 Tailscale passes Mobile Egress TLS bytes without replacing the relay certificate. The public Funnel name is the certificate server name. The local Owner uses `127.0.0.1:8443` as a dial override while still validating the public name.
@@ -23,7 +23,7 @@ The Wails/React app is the only normal operator interface. It:
 - generates the Owner P-256 key in the unelevated process, sends only its CSR to the elevated helper, and stores the resulting Owner identity with Windows DPAPI;
 - supports IAM Identity Center device login and DPAPI-encrypted access-key fallback;
 - inventories only supported `us-east-1` instances and orchestrates installation/update/repair with SSM;
-- stores encrypted node metadata and reveals SOCKS credentials only on an explicit copy action; and
+- stores encrypted node metadata and reveals proxy credentials only on an explicit HTTP-line or SOCKS-URL copy action; and
 - coordinates Funnel endpoint rotation, sealed EC2 updates, and a one-use Android migration QR.
 
 ### Local relay
@@ -40,9 +40,9 @@ The relay permits multiple simultaneous Clients, one active Agent session, four 
 
 - its P-256 Client private key and CSR;
 - a durable X25519 sealed-configuration private key; and
-- its authenticated SOCKS username and password after decrypting the Owner-supplied configuration.
+- its authenticated proxy username and password after decrypting the Owner-supplied configuration.
 
-Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080`, so an EC2 application must explicitly opt in. It reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
+Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080` and HTTP CONNECT to `127.0.0.1:1081`, so an EC2 application must explicitly opt in. Both listeners use the same retained credentials and relay session. HTTPS clients establish end-to-end TLS through CONNECT; Mobile Egress does not decrypt that traffic. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
 
 ### Android Agent
 
@@ -59,7 +59,7 @@ Admission is capped at 32 streams. Inbound and outbound queues are bounded; outb
 5. The signed controller validates node-release manifest v2, including the bounded self-signed Code Signing certificate and exact fingerprints. SSM pins the artifact hash and exact pre-trust signer bytes. Fresh Windows Server 2019 may report that already-pinned self-signed signature as `UnknownError`; that status is accepted only at this pre-trust checkpoint after both pins match. SSM then adds only the embedded public certificate to the node Root/TrustedPublisher stores when absent, requires post-trust Authenticode `Valid`, and installs the Client. Attempt-added trust is rolled back on later failure; existing exact trust is idempotent. The node returns only a CSR and X25519 public key.
 6. The Owner calls the relay's direct Client-CSR endpoint.
 7. The controller generates SOCKS credentials and commits encrypted `configuring` metadata before it sends anything secret-bearing to the node. It seals the endpoint/certificates/credentials to the node key using ephemeral X25519, HKDF-SHA256, and AES-256-GCM, and sends only the envelope through SSM.
-8. The node rejects malformed, tampered, replayed, or wrong-key envelopes, persists the configuration, restarts its service, and starts loopback SOCKS.
+8. The node rejects malformed, tampered, replayed, or wrong-key envelopes, persists the configuration, restarts its service, and starts both loopback proxy listeners atomically.
 9. After that restart succeeds, the controller marks the node `installed`. Ambiguous failures retain enough encrypted metadata for **Repair** to reapply the exact same generation safely. The controller is single-instance, and an operator can explicitly cancel an abandoned pre-metadata reservation when its EC2 instance is no longer recoverable.
 
 ## Endpoint migration

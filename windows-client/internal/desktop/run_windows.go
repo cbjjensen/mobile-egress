@@ -715,6 +715,10 @@ func (app *DesktopApp) NodeProxyLine(instanceID string) (string, error) {
 	return app.cloudRepository.ProxyLine(context.Background(), instanceID)
 }
 
+func (app *DesktopApp) NodeSOCKSProxyURL(instanceID string) (string, error) {
+	return app.cloudRepository.SOCKSProxyURL(context.Background(), instanceID)
+}
+
 func (app *DesktopApp) BootstrapOwner(encodedBundle string) error {
 	bundle, err := pairing.Decode(encodedBundle)
 	if err != nil {

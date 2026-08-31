@@ -18,7 +18,7 @@
 | Node Client private key | EC2 node ProgramData | No |
 | Node X25519 private key | EC2 node ProgramData | No |
 | Android private key | Android Keystore | No |
-| SOCKS username/password | Controller encrypted metadata and sealed node config | Ciphertext only |
+| Proxy username/password | Controller encrypted metadata and sealed node config | Ciphertext only |
 | CSR and X25519 public key | Node bootstrap output | Yes; public only |
 | Release publisher certificate DER/fingerprints | Signed controller manifest | Yes; public only |
 | Certificates/CA/endpoint | Controller then sealed config | Ciphertext in SSM by policy, despite being public identity material |
@@ -36,7 +36,7 @@ IAM Identity Center uses the browser/device authorization flow; the AWS password
 
 ## Network safeguards
 
-The relay and all SOCKS listeners bind loopback. Only Funnel publishes port 8443, which is TLS relay traffic—not SOCKS. EC2 needs outbound HTTPS/SSM only. Applications opt in individually; the product does not alter the OS default route.
+The relay and all proxy listeners bind loopback. Each EC2 Client exposes authenticated SOCKS5 on `127.0.0.1:1080` and authenticated HTTP CONNECT on `127.0.0.1:1081`; neither is reachable through an EC2 security group. Only Funnel publishes port 8443, which is Mobile Egress TLS relay traffic—not a public proxy. EC2 needs outbound HTTPS/SSM only. Applications opt in individually; the product does not alter the OS default route. HTTPS tunneled through CONNECT remains end-to-end encrypted between the EC2 application and destination.
 
 Android requests a cellular transport and creates relay/target sockets from that `Network`. Loss/unavailability fails closed. Destination policy is enforced in both relay and Agent. DNS names, target IPs, URLs, headers, payloads, and credentials are excluded from diagnostics.
 

@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode, SSMInstanceStatus } from './api'
 import { ActivityEvent, ActivitySeverity, appendActivityEvent, filterActivityEvents, formatActivityEvents } from './activity-log.js'
 import awsPermissionsPolicy from './aws-permissions-policy.json'
+import { copyProxyLine, copySOCKS5URL, nodeProxyActions } from './proxy-actions.js'
 import { formatSSMCheckActivity, requiresSSMRoleConfirmation, runConfirmedSSMRestart, shouldSkipSSMProfileSetup, ssmStatusState, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMCredentialRefresh, waitForSSMOnline } from './ssm-progress.js'
 
 const emptyBridge: BridgeStatus = { tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
@@ -335,8 +336,13 @@ export default function App() {
   }
 
   async function copyNodeProxy(instanceId: string) {
-    const copied = await action(`copy-${instanceId}`, async () => { await navigator.clipboard.writeText(await api().NodeProxyLine(instanceId)) })
-    recordActivity(instanceId, instanceName(instanceId), 'Proxy credentials', copied ? 'success' : 'error', copied ? 'Credentials copied to the clipboard.' : 'Copy failed. See the error banner.')
+    const copied = await action(`copy-http-${instanceId}`, async () => { await copyProxyLine(api(), navigator.clipboard, instanceId) })
+    recordActivity(instanceId, instanceName(instanceId), 'HTTP proxy', copied ? 'success' : 'error', copied ? 'HTTP proxy line copied.' : 'Copy failed. See the error banner.')
+  }
+
+  async function copyNodeSOCKS(instanceId: string) {
+    const copied = await action(`copy-socks-${instanceId}`, async () => { await copySOCKS5URL(api(), navigator.clipboard, instanceId) })
+    recordActivity(instanceId, instanceName(instanceId), 'SOCKS5 proxy', copied ? 'success' : 'error', copied ? 'SOCKS5 URL copied.' : 'Copy failed. See the error banner.')
   }
 
   async function maintainNode(instanceId: string, repair: boolean) {
@@ -494,7 +500,19 @@ export default function App() {
         {visibleActivityEvents.length === 0 ? <p className="activity-empty">No activity for this filter yet.</p> : <div className="activity-list">{visibleActivityEvents.map(event => <div className="activity-entry" key={event.id}><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`activity-level ${event.severity}`}>{event.severity}</span><div><strong>{event.instanceId ? `${event.instanceName || event.instanceId} · ${event.instanceId}` : 'Mobile Egress'}</strong><small>{event.action}</small><p>{event.message}</p></div></div>)}</div>}
       </details>
       {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
-      {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => <div className="managed" key={node.instanceId}><div><strong>{node.instanceId}</strong><small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div><code>{node.proxy}</code><div className="actions"><button onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy}>Copy credentials</button><button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button><button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button></div></div>)}</div></article>}
+      {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => {
+        const proxyActions = nodeProxyActions(node)
+        return <div className="managed" key={node.instanceId}>
+          <div><strong>{node.instanceId}</strong><small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div>
+          <div><code>{node.proxy}</code>{proxyActions.guidance && <small>{proxyActions.guidance}</small>}</div>
+          <div className="actions">
+            <button className="primary" onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy || proxyActions.primaryDisabled}>{proxyActions.primaryLabel}</button>
+            <button onClick={() => void copyNodeSOCKS(node.instanceId)} disabled={!!busy}>Copy SOCKS5 URL</button>
+            <button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button>
+            <button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button>
+          </div>
+        </div>
+      })}</div></article>}
     </section>}
     <footer>Closing the window keeps the controller available in the tray. The relay and EC2 Clients run as Windows services.</footer>
   </main>

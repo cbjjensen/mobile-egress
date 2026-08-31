@@ -48,6 +48,7 @@ export type ManagedNode = {
   serviceVersion: string
   health: string
   proxy: string
+  httpProxyReady: boolean
 }
 export type SSMProfileResult = { changed: boolean; roleName: string }
 export type SSMInstanceStatus = {
@@ -85,6 +86,7 @@ type DesktopAPI = {
   PendingEC2NodeReservations(): Promise<string[]>
   CancelEC2NodeReservation(instanceId: string, confirmed: boolean): Promise<void>
   NodeProxyLine(instanceId: string): Promise<string>
+  NodeSOCKSProxyURL(instanceId: string): Promise<string>
   BootstrapOwner(encodedBundle: string): Promise<void>
   RetryClientSetup(): Promise<void>
   ReplaceClient(): Promise<void>
