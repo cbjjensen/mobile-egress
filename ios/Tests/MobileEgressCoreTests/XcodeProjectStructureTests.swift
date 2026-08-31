@@ -165,9 +165,12 @@ final class XcodeProjectStructureTests: XCTestCase {
             "let observationToken = connectionState.observationToken"
         ))
         XCTAssertTrue(viewModel.contains("matching: observationToken"))
-        XCTAssertTrue(viewModel.contains(
-            "guard connectionState.isCurrent(providerStatusToken) else { return }"
-        ))
+        XCTAssertEqual(
+            viewModel.occurrences(
+                of: "guard connectionState.isCurrent(providerStatusToken) else { return }"
+            ),
+            2
+        )
     }
 
     func testAgentViewModelReportsBothExplicitStopTransactionOutcomes() throws {

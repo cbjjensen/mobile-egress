@@ -67,6 +67,7 @@ public struct TunnelConnectionStateReducer: Sendable {
     private enum Expectation: Equatable, Sendable {
         case idle
         case startingAwaitingEvidence
+        case persistedOnDemandAwaitingEvidence
         case startingWithEvidence
         case active
         case explicitStop
@@ -98,7 +99,7 @@ public struct TunnelConnectionStateReducer: Sendable {
         onDemandEnabled: Bool
     ) -> TunnelConnectionPresentation {
         guard onDemandEnabled, expectation == .idle else { return current }
-        expectation = .startingWithEvidence
+        expectation = .persistedOnDemandAwaitingEvidence
         current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
         advanceRevision()
         return current
@@ -164,8 +165,9 @@ public struct TunnelConnectionStateReducer: Sendable {
         matching token: TunnelConnectionObservationToken
     ) -> TunnelConnectionPresentation? {
         guard isCurrent(token) else { return nil }
-        let previousExpectation = expectation
-        let previousPresentation = current
+        // Every current-token lifecycle input is accepted as a temporal boundary,
+        // including observations that are deliberately presentation no-ops.
+        defer { advanceRevision() }
         switch phase {
         case .connecting:
             guard expectation != .explicitStop else { return current }
@@ -180,7 +182,8 @@ public struct TunnelConnectionStateReducer: Sendable {
             expectation = .active
             current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
         case .disconnecting:
-            if expectation == .startingAwaitingEvidence {
+            if expectation == .startingAwaitingEvidence ||
+                expectation == .persistedOnDemandAwaitingEvidence {
                 return current
             }
             if expectation == .startingWithEvidence {
@@ -189,9 +192,6 @@ public struct TunnelConnectionStateReducer: Sendable {
             current = TunnelConnectionPresentation(providerState: .stopping, providerError: .none)
         case .invalid, .disconnected:
             observeDisconnected(disconnectError: disconnectError)
-        }
-        if expectation != previousExpectation || current != previousPresentation {
-            advanceRevision()
         }
         return current
     }
@@ -207,6 +207,13 @@ public struct TunnelConnectionStateReducer: Sendable {
             current = TunnelConnectionPresentation(providerState: .stopped, providerError: .none)
         case .startingAwaitingEvidence:
             return
+        case .persistedOnDemandAwaitingEvidence:
+            guard let disconnectError else { return }
+            expectation = .idle
+            current = TunnelConnectionPresentation(
+                providerState: .failed,
+                providerError: disconnectError
+            )
         case .startingWithEvidence:
             expectation = .idle
             current = TunnelConnectionPresentation(
