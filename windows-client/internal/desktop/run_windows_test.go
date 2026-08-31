@@ -3,6 +3,7 @@
 package desktop
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -16,6 +17,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"image/png"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -32,6 +34,23 @@ import (
 	"mobile-egress/windows-client/internal/securestore"
 	"mobile-egress/windows-client/internal/tailscale"
 )
+
+func TestEncodeQrPNGUsesFourPixelModulesForDensePairingPayload(t *testing.T) {
+	t.Parallel()
+
+	encoded := strings.Repeat("a", 1000)
+	encodedPNG, err := encodeQrPNG(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := png.DecodeConfig(bytes.NewReader(encodedPNG))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.Width != 516 || configuration.Height != 516 {
+		t.Fatalf("dense QR dimensions = %dx%d, want 516x516 for four-pixel modules", configuration.Width, configuration.Height)
+	}
+}
 
 func TestControllerUsesASingleInstanceLock(t *testing.T) {
 	t.Parallel()

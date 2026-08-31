@@ -261,7 +261,7 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(encodedMigration)
 	clear(encodedMigration)
-	png, err := qrcode.Encode(encoded, qrcode.Medium, 256)
+	png, err := encodeQrPNG(encoded)
 	if err != nil {
 		return EndpointMigrationView{}, errors.New("Unable to create the Android migration QR.")
 	}
@@ -646,7 +646,7 @@ func (app *DesktopApp) IssueAgentQr() (AgentQrView, error) {
 	if err != nil {
 		return AgentQrView{}, errors.New("Unable to create a phone pairing code. Please try again.")
 	}
-	png, err := qrcode.Encode(encoded, qrcode.Medium, 256)
+	png, err := encodeQrPNG(encoded)
 	if err != nil {
 		return AgentQrView{}, errors.New("Unable to create a phone pairing code. Please try again.")
 	}
@@ -654,6 +654,12 @@ func (app *DesktopApp) IssueAgentQr() (AgentQrView, error) {
 		ImageDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
 		ExpiresAt:    result.ExpiresAt.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func encodeQrPNG(encoded string) ([]byte, error) {
+	// A negative size asks go-qrcode for an exact number of pixels per module.
+	// Whole-pixel modules keep dense pairing payloads scannable.
+	return qrcode.Encode(encoded, qrcode.Medium, -4)
 }
 
 func (app *DesktopApp) Revoke(serial string) error {

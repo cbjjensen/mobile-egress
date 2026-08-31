@@ -45,7 +45,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .serialline code { overflow-wrap: anywhere; }
 .recovery-steps { margin: 0; padding-left: 22px; color: #aab7c8; line-height: 1.7; }
 .qr-card { display: grid; justify-items: center; gap: 12px; padding-top: 18px; }
-.qr-card img { width: min(256px, 100%); border-radius: 12px; background: #fff; padding: 10px; image-rendering: pixelated; }
+.qr-card img { width: auto; max-width: 100%; height: auto; border-radius: 12px; background: #fff; image-rendering: pixelated; }
 .qr-card p { margin: 0; text-align: center; }
 code { overflow: hidden; text-overflow: ellipsis; color: #a9c8e6; }
 .issued small { grid-column: 1 / -1; color: #79889a; }
