@@ -177,14 +177,24 @@ func verifySignedSibling(path string) error {
 	if err != nil {
 		return err
 	}
-	const script = `$controller = Get-AuthenticodeSignature -LiteralPath $args[0]
-$sibling = Get-AuthenticodeSignature -LiteralPath $args[1]
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return verifySignedPair(ctx, controllerPath, path)
+}
+
+func verifySignedPair(ctx context.Context, controllerPath, siblingPath string) error {
+	const script = `Import-Module "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1" -ErrorAction Stop
+$controller = Get-AuthenticodeSignature -LiteralPath $env:MOBILE_EGRESS_SIGNATURE_CONTROLLER_PATH
+$sibling = Get-AuthenticodeSignature -LiteralPath $env:MOBILE_EGRESS_SIGNATURE_SIBLING_PATH
 if ($controller.Status -ne 'Valid' -or $sibling.Status -ne 'Valid' -or
     $null -eq $controller.SignerCertificate -or $null -eq $sibling.SignerCertificate -or
     $controller.SignerCertificate.Thumbprint -ne $sibling.SignerCertificate.Thumbprint) { exit 1 }`
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, controllerPath, path).Run()
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	command.Env = append(os.Environ(),
+		"MOBILE_EGRESS_SIGNATURE_CONTROLLER_PATH="+controllerPath,
+		"MOBILE_EGRESS_SIGNATURE_SIBLING_PATH="+siblingPath,
+	)
+	return command.Run()
 }
 
 func shellExecuteElevated(executable string, arguments []string) error {

@@ -254,14 +254,24 @@ func verifyMobileEgressSignature(path string) error {
 	if err != nil {
 		return err
 	}
-	const script = `$admin = Get-AuthenticodeSignature -LiteralPath $args[0]
-$target = Get-AuthenticodeSignature -LiteralPath $args[1]
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return verifyMobileEgressSignaturePair(ctx, adminPath, path)
+}
+
+func verifyMobileEgressSignaturePair(ctx context.Context, adminPath, targetPath string) error {
+	const script = `Import-Module "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1" -ErrorAction Stop
+$admin = Get-AuthenticodeSignature -LiteralPath $env:MOBILE_EGRESS_SIGNATURE_ADMIN_PATH
+$target = Get-AuthenticodeSignature -LiteralPath $env:MOBILE_EGRESS_SIGNATURE_TARGET_PATH
 if ($admin.Status -ne 'Valid' -or $target.Status -ne 'Valid' -or
     $null -eq $admin.SignerCertificate -or $null -eq $target.SignerCertificate -or
     $admin.SignerCertificate.Thumbprint -ne $target.SignerCertificate.Thumbprint) { exit 1 }`
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, adminPath, path).Run()
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	command.Env = append(os.Environ(),
+		"MOBILE_EGRESS_SIGNATURE_ADMIN_PATH="+adminPath,
+		"MOBILE_EGRESS_SIGNATURE_TARGET_PATH="+targetPath,
+	)
+	return command.Run()
 }
 
 func copyFile(sourcePath, destinationPath string) error {
