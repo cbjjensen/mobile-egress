@@ -101,6 +101,24 @@ func TestOpenAWSIdentityCenterConsoleUsesUsEastDashboard(t *testing.T) {
 	}
 }
 
+func TestOpenAWSIAMUserCreateConsoleUsesUsEastCreateUser(t *testing.T) {
+	t.Parallel()
+
+	var openedURL string
+	app := &DesktopApp{
+		ctx: context.Background(),
+		browserOpenURL: func(_ context.Context, consoleURL string) {
+			openedURL = consoleURL
+		},
+	}
+	if err := app.OpenAWSIAMUserCreateConsole(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := openedURL, "https://console.aws.amazon.com/iam/home?region=us-east-1#/users/create"; got != want {
+		t.Fatalf("opened URL = %q, want %q", got, want)
+	}
+}
+
 func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
 	app := &DesktopApp{tailscaleInstall: tailscale.Installer{}}
 	err := app.InstallTailscale()

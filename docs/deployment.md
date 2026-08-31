@@ -365,13 +365,14 @@ The only relay listener must be `127.0.0.1:8443`.
 
 ### 6.3 Connect AWS and install two Clients
 
-1. In **AWS Login**, use IAM Identity Center browser login if available. If IAM Identity Center is not set up yet, choose **Open setup page**. A beginner may sign in to the AWS Console as root only to enable IAM Identity Center, choose **Single-Region instance** in **US East (N. Virginia)**, create an Identity Center user, assign that user access to the AWS account, and then copy the **AWS access portal URL** into Mobile Egress. Do not paste the root login, an EC2 console URL, or the Identity Center management URL into the Start URL field.
-2. Use DPAPI-encrypted access keys only as fallback. Create an IAM user for Mobile Egress and use that IAM user's access key; never create or paste root access keys.
-3. Refresh **EC2 Nodes** and confirm only the intended supported `us-east-1` instances appear.
-4. For a profile-less node, choose **Prepare SSM** and allow the dedicated role/profile creation.
-5. For an existing non-SSM role, read the displayed role name and explicitly approve adding only `AmazonSSMManagedInstanceCore`. Never approve profile replacement.
-6. Wait for each node to show **SSM online**, then choose **Install Client** on both. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
-7. Require distinct Client serials and credentials. Do not paste credentials into SSM, tickets, chat, or the acceptance record.
+1. In **AWS Login**, use the default IAM user access-key path. Choose **Create IAM user** to open the `us-east-1` IAM user creation page. A beginner may sign in to the AWS Console as root only to create an IAM user named `mobile-egress`; root credentials are for console setup only.
+2. Create an access key for the `mobile-egress` IAM user and paste that IAM user's access key into Mobile Egress. Credentials are encrypted with Windows DPAPI. Never create or paste root access keys.
+3. IAM Identity Center remains available under **Advanced** for users who already have it. If it must be set up, use root only in the browser to enable IAM Identity Center, choose **Single-Region instance** in **US East (N. Virginia)**, create an Identity Center user, assign that user access to the AWS account, and copy the **AWS access portal URL** into Mobile Egress. Do not paste the root login, an EC2 console URL, or the Identity Center management URL into the Start URL field.
+4. Refresh **EC2 Nodes** and confirm only the intended supported `us-east-1` instances appear.
+5. For a profile-less node, choose **Prepare SSM** and allow the dedicated role/profile creation.
+6. For an existing non-SSM role, read the displayed role name and explicitly approve adding only `AmazonSSMManagedInstanceCore`. Never approve profile replacement.
+7. Wait for each node to show **SSM online**, then choose **Install Client** on both. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
+8. Require distinct Client serials and credentials. Do not paste credentials into SSM, tickets, chat, or the acceptance record.
 
 On each EC2 node, confirm the service and listener through an interactive administrative PowerShell session:
 

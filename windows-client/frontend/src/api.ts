@@ -60,6 +60,7 @@ type DesktopAPI = {
   RepairLocalBridge(): Promise<BridgeStatus>
   RotateLocalBridge(): Promise<EndpointMigration>
   SaveAWSAccessKeys(accessKeyId: string, secretAccessKey: string, sessionToken: string): Promise<void>
+  OpenAWSIAMUserCreateConsole(): Promise<void>
   OpenAWSIdentityCenterConsole(): Promise<void>
   BeginAWSIdentityCenter(startUrl: string, ssoRegion: string): Promise<DeviceAuthorization>
   CompleteAWSIdentityCenter(): Promise<AWSAccount[]>
