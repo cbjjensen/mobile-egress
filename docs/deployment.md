@@ -1,6 +1,6 @@
 # Release, deployment, and physical acceptance
 
-This is the Windows/Android operator runbook for producing signed GitHub-release artifacts and proving them on a real Windows PC, Android phone, and EC2 nodes. Normal friends do not perform these steps; they follow the root README after you publish an accepted release. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
+This is the Windows and mobile-Agent operator runbook for producing signed GitHub-release artifacts and proving them on a real Windows PC, a cellular Agent device, and EC2 nodes. Normal friends do not perform these steps; they follow the root README after you publish an accepted release. Android APK packaging and cellular-IP rotation are covered here. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
 
 The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
 
@@ -347,13 +347,13 @@ On Android:
 2. Install the APK through your approved sideloading process.
 3. Confirm Android identifies it as Mobile Egress and does not report a signing mismatch.
 
-### 6.2 Set up the local bridge and phone
+### 6.2 Set up the local bridge and Agent
 
 1. In **Bridge**, choose **Install Tailscale** only when the status is **Not installed**, then approve UAC. If Tailscale is already present, the controller shows **Installed · not connected** instead of offering another MSI installation.
 2. Choose **Connect Tailscale** while installed/offline and finish browser login. This starts login and unattended mode without rerunning the installer. Once the status is **Online**, choose **Set up local bridge**. On the first Funnel setup, the controller automatically opens Tailscale's official Funnel approval page while the hidden CLI waits; approve it, then approve relay UAC. Require Funnel active, relay healthy, and a `https://<machine>.<tailnet>.ts.net:8443` public origin.
 3. Confirm Windows Defender Firewall/router settings were not manually opened for port 8443.
-4. In **Agent**, generate the Agent QR. Scan it in Android and tap **Start**.
-5. Keep Wi-Fi enabled on the phone while cellular data is also enabled. Require the Android UI/notification to show cellular available and relay connected.
+4. In **Agent**, generate the Agent QR. Scan it in the compatible Android or iOS app and start the Agent.
+5. Keep Wi-Fi enabled on the Agent device while cellular data is also enabled. Require the Agent UI or notification, as appropriate for the platform, to show cellular available and relay connected.
 6. On Windows, confirm the relay is automatic/running and loopback-only:
 
 ```powershell
@@ -426,7 +426,7 @@ To test the four-stream Client cap physically, use a controlled HTTPS endpoint t
 
 1. Leave phone Wi-Fi connected.
 2. Disable cellular data on the phone without stopping Wi-Fi.
-3. Require the Android Agent to report loss/offline, existing proxied streams to close, and new proxied requests to fail.
+3. Require the Agent to report loss/offline, existing proxied streams to close, and new proxied requests to fail.
 4. Confirm an ordinary direct EC2 request still works; this separates Mobile Egress failure from an EC2 outage.
 5. Re-enable cellular, wait for the Agent to reconnect, and confirm both node proxies recover.
 
@@ -438,7 +438,7 @@ Test one dependency at a time so the failed component is unambiguous:
 
 1. Reboot the controller PC. Tailscale unattended mode and `MobileEgressRelay` must return automatically; reopen the controller UI and confirm the bridge becomes ready without new Owner/Agent/Client identities.
 2. Reboot EC2 node A, then node B. `MobileEgressClient` must return automatically, restore both loopback listeners, and retain the same serial/proxy credentials.
-3. Reboot the Android phone. The Agent is intentionally user-started and `START_NOT_STICKY`; open the app and tap **Start**, then confirm the same enrollment reconnects.
+3. Reboot the selected Agent device. On Android, the Agent is intentionally user-started and `START_NOT_STICKY`; open the app and tap **Start**. On iOS, reopen the app and start the configured Agent connection. In either case, confirm the same enrollment reconnects.
 4. Stop `MobileEgressClient` on one test node, choose **Repair** in the controller, and require the signed executable/configuration reapply to restore the service without changing serial or credentials.
 
 To prove **Update**, start the lab from an earlier signed candidate, then open the controller from this candidate and choose **Update**. For a first-ever release, create a lower-version acceptance prerelease from the same reviewed commit before installing the final candidate. Both versions need their own immutable tags/assets; never overwrite one release with the other.
@@ -452,8 +452,8 @@ Tailscale derives the MagicDNS/Funnel FQDN from the device machine name. Use the
 3. Return to Mobile Egress and wait for **Rotation required**.
 4. Connect AWS, choose **Rotate endpoint safely**, and approve UAC.
 5. Require both EC2 nodes to appear in the updated list. Use **Repair** for a failed node after SSM returns.
-6. Stop the Android Agent, scan the distinct migration QR, and restart the Agent.
-7. Confirm both workloads reconnect with unchanged Client serials, Android identity, and proxy credentials.
+6. Stop the Agent, scan the distinct migration QR in the compatible app, and restart the Agent.
+7. Confirm both workloads reconnect with unchanged Client serials, Agent identity, and proxy credentials.
 8. Rename the Tailscale machine back to its original name and repeat the rotation/migration once more so the accepted release finishes on its intended FQDN.
 
 Tailscale documents that editing a machine name changes its MagicDNS domain: [Machine names](https://tailscale.com/kb/1098/machine-names) and [MagicDNS](https://tailscale.com/docs/features/magicdns). Do not regenerate the tailnet DNS name or delete/re-enroll the node merely to test migration.

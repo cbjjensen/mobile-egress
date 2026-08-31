@@ -84,7 +84,7 @@ Assert-Condition ($releaseScript -match 'Get-MobileEgressAndroidSdkRoot -Reposit
 Assert-Condition ($releaseScript -notmatch '(?i)write-(host|output|information).*?(storePassword|keyPassword|keyAlias|storeFile)') 'The release script must not print signing properties.'
 Assert-Condition ($releaseScript -match 'check-ignore -q -- android/keystore.properties') 'The release script must require the signing properties file to remain ignored.'
 $gitIgnore = Get-Content -Raw (Join-Path $repositoryRoot '.gitignore')
-Assert-Condition ($gitIgnore -match '(?m)^android/mobile-egress-release\.jks$') 'The reusable Android release keystore must have an explicit ignore rule.'
+Assert-Condition ($gitIgnore -match '(?m)^android/mobile-egress-release\.jks\r?$') 'The reusable Android release keystore must have an explicit ignore rule.'
 $releaseCertificateRecordPath = Join-Path $repositoryRoot 'android\release-signing-certificate.txt'
 Assert-Condition (Test-Path -LiteralPath $releaseCertificateRecordPath -PathType Leaf) 'The public Android release certificate identity must be tracked for future comparisons.'
 $releaseCertificateRecord = Get-Content -Raw $releaseCertificateRecordPath

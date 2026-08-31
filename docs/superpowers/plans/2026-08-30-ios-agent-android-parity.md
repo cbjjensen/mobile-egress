@@ -75,4 +75,3 @@
 - [ ] Add a macOS-oriented iOS verification entry point that runs Swift package tests and Xcode build/tests while returning an explicit unsupported-host result on Windows.
 - [ ] Document real-device acceptance for enrollment, cellular-only operation while Wi-Fi is available, endpoint migration, restart/identity retention, stream limits, and clear error behavior.
 - [ ] Run all existing repository checks, run the new iOS verifier as far as this host permits, review the full diff for secrets and protocol changes, and commit the task.
-

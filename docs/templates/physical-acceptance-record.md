@@ -48,10 +48,10 @@ Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable p
 | Both Clients route simultaneously without changing default routes | | |
 | Fifth held-open stream on one Client fails closed | | |
 | Cellular loss with Wi-Fi available fails closed | | |
-| Guided IP rotation disconnects active streams and opens Airplane Mode settings | | Record changed/unchanged/unverified only; never record addresses. |
-| Ten-second rotation reconnects the relay without Wi-Fi fallback | | |
-| Unchanged result offers and completes a 30-second retry | | |
-| Rotation cancellation or timeout restores normal Agent behavior | | |
+| Guided IP rotation disconnects active streams and opens Airplane Mode settings (if Android) | | Record changed/unchanged/unverified only; never record addresses. |
+| Ten-second rotation reconnects the relay without Wi-Fi fallback (if Android) | | |
+| Unchanged result offers and completes a 30-second retry (if Android) | | |
+| Rotation cancellation or timeout restores normal Agent behavior (if Android) | | |
 | Controller PC reboot recovery | | |
 | EC2 node A/B reboot recovery | | |
 | Agent restart/relaunch behavior matches its platform expectation | | |
