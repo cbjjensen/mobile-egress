@@ -251,10 +251,10 @@ export default function App() {
           <div className="wizard-step-body">
             <h3>Create a Mobile Egress user</h3>
             <ol className="micro-steps">
-              <li><span>1</span>In the AWS sidebar, click <strong>Users</strong></li>
-              <li><span>2</span>Click <strong>Create user</strong></li>
-              <li><span>3</span>Enter <strong>mobile-egress</strong> as the user name</li>
-              <li><span>4</span>Leave console access turned off, then click <strong>Next</strong></li>
+              <li><span>1</span><div className="micro-step-text">In the AWS sidebar, click <strong>Users</strong></div></li>
+              <li><span>2</span><div className="micro-step-text">Click <strong>Create user</strong></div></li>
+              <li><span>3</span><div className="micro-step-text">Enter <strong>mobile-egress</strong> as the user name</div></li>
+              <li><span>4</span><div className="micro-step-text">Leave console access turned off, then click <strong>Next</strong></div></li>
             </ol>
             <div className="copy-name"><code>mobile-egress</code><button type="button" onClick={() => void navigator.clipboard.writeText('mobile-egress')} aria-label="Copy mobile-egress user name">⧉</button></div>
             <div className="split-actions">
@@ -291,7 +291,7 @@ export default function App() {
             <form onSubmit={saveAccessKeys}>
               <label>Access key ID<input name="accessKeyId" required autoComplete="off" placeholder="AKIA..." /></label>
               <label>Secret access key<div className="secret-field"><input name="secretAccessKey" type={showSecret ? 'text' : 'password'} required autoComplete="off" /><button type="button" onClick={() => setShowSecret(value => !value)} aria-label={showSecret ? 'Hide secret access key' : 'Show secret access key'}>{showSecret ? 'Hide' : '👁'}</button></div></label>
-              <button className="link-button" type="button" onClick={() => setShowSessionToken(value => !value)}>⌄ Using temporary credentials?</button>
+              <button className="link-button" type="button" onClick={() => setShowSessionToken(value => !value)}>{showSessionToken ? '⌃' : '⌄'} Using temporary credentials?</button>
               {showSessionToken && <label>Session token<textarea name="sessionToken" rows={3} autoComplete="off" /></label>}
               <button className="primary wide" disabled={!!busy}>{busy === 'access-key' ? 'Testing AWS connection…' : 'Test AWS connection'}</button>
             </form>
