@@ -1,6 +1,8 @@
 package com.mobileegress.agent.pairing
 
 import android.net.Network
+import com.mobileegress.agent.network.ResponseBodyTooLargeException
+import com.mobileegress.agent.network.readBoundedResponseBody
 import com.mobileegress.agent.security.AgentIdentity
 import com.mobileegress.agent.security.DeviceKey
 import com.mobileegress.agent.security.PinnedTls
@@ -117,11 +119,11 @@ class EnrollmentClient {
 
     private fun readLimitedBody(source: okio.BufferedSource?): ByteArray {
         if (source == null) throw EnrollmentException("Relay returned an empty enrollment response")
-        val bytes = source.readByteArray(MAX_CONTROL_BYTES + 1L)
-        if (bytes.size > MAX_CONTROL_BYTES) {
+        return try {
+            readBoundedResponseBody(source, MAX_CONTROL_BYTES)
+        } catch (_: ResponseBodyTooLargeException) {
             throw EnrollmentException("Relay enrollment response is too large")
         }
-        return bytes
     }
 
     companion object {

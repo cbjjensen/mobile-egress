@@ -5,12 +5,9 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.mobileegress.agent.pairing.AgentIdentityPersistence
 import java.security.KeyStore
-import java.security.SecureRandom
 import java.util.Base64
-import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -36,14 +33,13 @@ class SecureIdentityStore(context: Context) : AgentIdentityPersistence {
         return try {
             val pieces = stored.split(':')
             if (pieces.size != 3 || pieces[0] != FORMAT_VERSION) throw IllegalArgumentException()
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
+            val clear = decryptIdentityPayload(
+                EncryptedIdentityPayload(
+                    Base64.getUrlDecoder().decode(pieces[1]),
+                    Base64.getUrlDecoder().decode(pieces[2]),
+                ),
                 encryptionKey(),
-                GCMParameterSpec(128, Base64.getUrlDecoder().decode(pieces[1])),
             )
-            cipher.updateAAD(ASSOCIATED_DATA)
-            val clear = cipher.doFinal(Base64.getUrlDecoder().decode(pieces[2]))
             json.decodeFromString<AgentIdentity>(clear.decodeToString())
                 .takeIf { it.role == "agent" && it.serial.isNotBlank() && it.keyAlias.isNotBlank() }
                 ?: throw IllegalArgumentException()
@@ -56,13 +52,12 @@ class SecureIdentityStore(context: Context) : AgentIdentityPersistence {
     override fun save(identity: AgentIdentity) {
         require(identity.role == "agent")
         try {
-            val iv = ByteArray(12).also(SecureRandom()::nextBytes)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, encryptionKey(), GCMParameterSpec(128, iv))
-            cipher.updateAAD(ASSOCIATED_DATA)
-            val encrypted = cipher.doFinal(json.encodeToString(identity).encodeToByteArray())
+            val encrypted = encryptIdentityPayload(
+                json.encodeToString(identity).encodeToByteArray(),
+                encryptionKey(),
+            )
             val encoder = Base64.getUrlEncoder().withoutPadding()
-            val value = "$FORMAT_VERSION:${encoder.encodeToString(iv)}:${encoder.encodeToString(encrypted)}"
+            val value = "$FORMAT_VERSION:${encoder.encodeToString(encrypted.iv)}:${encoder.encodeToString(encrypted.ciphertext)}"
             if (!preferences.edit().putString(IDENTITY, value).commit()) {
                 throw CredentialStoreException("Could not preserve Agent identity")
             }
@@ -103,7 +98,5 @@ class SecureIdentityStore(context: Context) : AgentIdentityPersistence {
         private const val PREFERENCES = "mobile_egress_secure_identity"
         private const val IDENTITY = "identity"
         private const val FORMAT_VERSION = "v1"
-        private const val TRANSFORMATION = "AES/GCM/NoPadding"
-        private val ASSOCIATED_DATA = "mobile-egress-agent-identity-v1".encodeToByteArray()
     }
 }

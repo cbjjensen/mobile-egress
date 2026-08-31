@@ -39,6 +39,11 @@ interface AgentSessionListener {
     fun onTerminated(errorClass: ErrorClass)
 }
 
+internal fun agentSessionUrl(relayOrigin: String) =
+    relayOrigin.toHttpUrl().newBuilder()
+        .addPathSegments("v1/session")
+        .build()
+
 class AgentSession(
     private val network: Network,
     private val identity: AgentIdentity,
@@ -80,10 +85,7 @@ class AgentSession(
 
     fun connect() {
         if (closed.get()) return
-        val sessionUrl = identity.relayOrigin.toHttpUrl().newBuilder()
-            .scheme("wss")
-            .addPathSegments("v1/session")
-            .build()
+        val sessionUrl = agentSessionUrl(identity.relayOrigin)
         val request = Request.Builder().url(sessionUrl).build()
         webSocket = client.newWebSocket(request, SocketListener())
     }

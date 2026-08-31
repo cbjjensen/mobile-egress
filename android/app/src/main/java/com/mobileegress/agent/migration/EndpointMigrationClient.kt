@@ -2,6 +2,8 @@ package com.mobileegress.agent.migration
 
 import android.net.Network
 import com.mobileegress.agent.network.CellularNetworkAcquirer
+import com.mobileegress.agent.network.ResponseBodyTooLargeException
+import com.mobileegress.agent.network.readBoundedResponseBody
 import com.mobileegress.agent.pairing.PairingBundleParser
 import com.mobileegress.agent.security.AgentIdentity
 import com.mobileegress.agent.security.DeviceKeyStore
@@ -39,8 +41,11 @@ class EndpointMigrationClient {
                 if (response.code != 200) throw EndpointMigrationException("Relay rejected endpoint migration")
                 val source = response.body?.source()
                     ?: throw EndpointMigrationException("Relay returned an empty migration response")
-                val raw = source.readByteArray(MAX_CONTROL_BYTES + 1L)
-                if (raw.size > MAX_CONTROL_BYTES) throw EndpointMigrationException("Migration response is too large")
+                val raw = try {
+                    readBoundedResponseBody(source, MAX_CONTROL_BYTES)
+                } catch (_: ResponseBodyTooLargeException) {
+                    throw EndpointMigrationException("Migration response is too large")
+                }
                 val result = try {
                     json.decodeFromString<MigrationConsumeResponse>(raw.decodeToString())
                 } catch (error: SerializationException) {

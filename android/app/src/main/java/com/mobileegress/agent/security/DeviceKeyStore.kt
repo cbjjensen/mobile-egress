@@ -21,6 +21,11 @@ data class DeviceKey(
     val publicKey: PublicKey,
 )
 
+internal fun deviceKeyDigests(): Array<String> = arrayOf(
+    KeyProperties.DIGEST_NONE,
+    KeyProperties.DIGEST_SHA256,
+)
+
 class DeviceKeyStore : EnrollmentCredentialKeys {
     private fun keyStore(): KeyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
 
@@ -33,7 +38,7 @@ class DeviceKeyStore : EnrollmentCredentialKeys {
                 KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
             )
                 .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setDigests(*deviceKeyDigests())
                 .setUserAuthenticationRequired(false)
                 .build(),
         )
