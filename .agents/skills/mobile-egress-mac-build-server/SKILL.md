@@ -78,6 +78,8 @@ ssh -i .\.local\mac-build-server\id_ed25519 diana@Y9YD7JN54M.local hostname
 
 Keep source changes in Git and use SSH to trigger Mac-side commands. Clone or update the same branch on the Mac before building. Do not try to produce iOS release artifacts on Windows.
 
+Use `docs/ios-build-server.md` as the maintained runbook for prerequisites, readiness checks, source sync, future `xcodebuild` commands, and troubleshooting.
+
 For build automation, add repo scripts that SSH to the Mac using the project-local key. Keep those scripts parameterized enough to tolerate IP changes, but default to the known local host above.
 
 Stop and ask before installing software on the Mac, changing Xcode signing identities, changing Apple developer account state, or publishing anything to TestFlight/App Store.

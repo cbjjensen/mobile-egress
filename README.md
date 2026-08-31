@@ -42,6 +42,7 @@ Friends do not clone the repository, run Docker, execute setup scripts, open inb
 - [Release, deployment, and step-by-step physical acceptance](docs/deployment.md)
 - [Physical acceptance record template](docs/templates/physical-acceptance-record.md)
 - [Operations](docs/operations.md)
+- [iOS build server over SSH](docs/ios-build-server.md)
 - [Security model](docs/security-model.md)
 - [Protocol](docs/protocol.md)
 - [Current status](docs/status.md)

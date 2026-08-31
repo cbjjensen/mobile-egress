@@ -8,6 +8,7 @@
 - Headless Windows Client service with on-node P-256/X25519 keys, sealed/replay-protected configuration, loopback authenticated SOCKS5, outbound reconnect, and Windows SCM support.
 - Android cellular-only foreground Agent, strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, 32-stream admission, and guided non-root cellular IP rotation with transient IPv4/IPv6 comparison.
 - Signed release packaging script and app-first friend documentation.
+- Windows-to-Mac SSH build-server runbook for future iOS Agent development.
 
 ## Automated validation
 
@@ -26,5 +27,6 @@ The repository cannot automatically prove real Tailscale browser/Funnel authoriz
 - Windows 10/11 controller and x86-64 Windows Server 2019 nodes in `us-east-1` only.
 - Funnel is beta, requires browser approval, uses public `*.ts.net` names, and has non-configurable bandwidth limits. Personal-plan use must comply with Tailscale terms; commercial/bulk use needs a supported ingress arrangement.
 - No automatic GitHub updater. The operator deliberately downloads a signed controller bundle; node update/repair uses release metadata embedded in that signed controller.
+- iOS Agent work requires a Mac build host with Xcode. Simulator/local proof work can start without a paid Apple Developer Program membership, but friend distribution through TestFlight, App Store, or Ad Hoc requires paid Apple enrollment.
 - Endpoint migration preserves the CA and identities; it is not recovery from relay-state/CA compromise.
 - The app does not create/terminate EC2, open inbound rules, guarantee a carrier IP change, or route all OS traffic.
