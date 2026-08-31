@@ -42,6 +42,10 @@ button:disabled { opacity: .55; cursor: wait; }
 .pill.waiting { color: #ffd46b; background: #4a3b15; }
 .pill.error-state { color: #ff9eaa; background: #4b2029; }
 .ssm-live { display: flex; align-items: center; gap: 9px; margin: 12px 0; padding: 10px 12px; border: 1px solid #4a3b15; border-radius: 10px; background: #19170e; color: #ffd46b; font-size: 12px; }
+.ssm-recovery { display: grid; gap: 12px; margin: 14px 0; padding: 14px; border: 1px solid #285f8c; border-radius: 10px; background: linear-gradient(145deg, #10263a, #0d1824); }
+.ssm-recovery strong { display: block; color: #dff1ff; margin-bottom: 5px; }
+.ssm-recovery p { min-height: 0; margin: 0; color: #a9bdd0; font-size: 12px; }
+.ssm-recovery button { width: 100%; justify-content: center; }
 .ssm-spinner { width: 13px; height: 13px; flex: 0 0 auto; border: 2px solid #5d512c; border-top-color: #ffd46b; border-radius: 50%; animation: ssm-spin .8s linear infinite; }
 @keyframes ssm-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ssm-spinner { animation: none; border-color: #ffd46b; } }

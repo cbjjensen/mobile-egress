@@ -474,23 +474,28 @@ func withInstanceSSMStatus(instances []cloud.Instance, instanceID string, online
 }
 
 func (app *DesktopApp) InstanceSSMOnline(instanceID string) (bool, error) {
+	status, err := app.InstanceSSMStatus(instanceID)
+	return status.Online, err
+}
+
+func (app *DesktopApp) InstanceSSMStatus(instanceID string) (cloud.SSMInstanceStatus, error) {
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {
-		return false, errors.New("Connect AWS first.")
+		return cloud.SSMInstanceStatus{}, errors.New("Connect AWS first.")
 	}
 	if _, ok := app.inventoryInstance(instanceID); !ok {
-		return false, errors.New("Refresh EC2 inventory and select a supported instance.")
+		return cloud.SSMInstanceStatus{}, errors.New("Refresh EC2 inventory and select a supported instance.")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	online, err := awsClient.InstanceSSMOnline(ctx, instanceID)
+	status, err := awsClient.InstanceSSMStatus(ctx, instanceID)
 	if err != nil {
-		return false, errors.New("Unable to check that instance in Systems Manager.")
+		return cloud.SSMInstanceStatus{}, errors.New("Unable to check that instance in Systems Manager.")
 	}
 	app.mu.Lock()
-	app.awsInventory = withInstanceSSMStatus(app.awsInventory, instanceID, online)
+	app.awsInventory = withInstanceSSMStatus(app.awsInventory, instanceID, status.Online)
 	app.mu.Unlock()
-	return online, nil
+	return status, nil
 }
 
 func (app *DesktopApp) EnsureInstanceSSM(instanceID string, confirmExistingRoleChange bool) (cloud.SSMProfileResult, error) {
@@ -516,6 +521,22 @@ func (app *DesktopApp) EnsureInstanceSSM(instanceID string, confirmExistingRoleC
 
 func formatSSMPreparationError(err error) error {
 	return fmt.Errorf("Unable to prepare that instance for Systems Manager without replacing its profile: %w", err)
+}
+
+func (app *DesktopApp) RebootEC2Instance(instanceID string) error {
+	awsClient := app.currentAWSClient()
+	if awsClient == nil {
+		return errors.New("Connect AWS first.")
+	}
+	if _, ok := app.inventoryInstance(instanceID); !ok {
+		return errors.New("Refresh EC2 inventory and select a supported instance.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := awsClient.RebootInstance(ctx, instanceID); err != nil {
+		return errors.New("Unable to restart that EC2 instance. Confirm the AWS user allows ec2:RebootInstances and try again.")
+	}
+	return nil
 }
 
 func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView, error) {

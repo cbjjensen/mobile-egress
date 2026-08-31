@@ -2,11 +2,13 @@ package awssdk
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
 
 	aws "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -27,6 +29,35 @@ func TestSelectedInstanceSSMFilterTargetsOnlyTheRequestedInstance(t *testing.T) 
 		t.Fatal("selectedInstanceSSMFilters accepted an invalid instance ID")
 	}
 	var _ []ssmtypes.InstanceInformationStringFilter = filters
+}
+
+func TestSelectedInstanceSSMStatusDistinguishesMissingAndCurrentRegistration(t *testing.T) {
+	t.Parallel()
+
+	missing, err := selectedInstanceSSMStatus("i-0123456789abcdef0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing.Registered || missing.Online || missing.PingStatus != "NotRegistered" {
+		t.Fatalf("missing SSM status = %#v, want an explicit unregistered state", missing)
+	}
+
+	lastPing := time.Date(2026, time.August, 31, 18, 2, 3, 0, time.UTC)
+	current, err := selectedInstanceSSMStatus("i-0123456789abcdef0", []ssmtypes.InstanceInformation{
+		{InstanceId: aws.String("i-0ffffffffffffffff"), PingStatus: ssmtypes.PingStatusOnline},
+		{
+			InstanceId:       aws.String("i-0123456789abcdef0"),
+			PingStatus:       ssmtypes.PingStatusOnline,
+			AgentVersion:     aws.String("3.3.3050.0"),
+			LastPingDateTime: &lastPing,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Registered || !current.Online || current.PingStatus != "Online" || current.AgentVersion != "3.3.3050.0" || current.LastPingAt != "2026-08-31T18:02:03Z" {
+		t.Fatalf("current SSM status = %#v, want selected-instance diagnostics", current)
+	}
 }
 
 func TestDedicatedIAMResourceValidationRejectsNameCollisions(t *testing.T) {
@@ -180,5 +211,60 @@ func TestDedicatedProfileAttachmentStopsIfAnotherProfileAppears(t *testing.T) {
 	}
 	if associationAttempts != 1 || descriptions != 2 {
 		t.Fatalf("attempts/descriptions = %d/%d, want 1/2", associationAttempts, descriptions)
+	}
+}
+
+func TestRequestInstanceRebootTargetsOnlyTheSelectedInstance(t *testing.T) {
+	t.Parallel()
+
+	var requested []string
+	err := requestInstanceReboot(
+		context.Background(),
+		"i-0123456789abcdef0",
+		func(_ context.Context, input *ec2.RebootInstancesInput, _ ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error) {
+			requested = append([]string(nil), input.InstanceIds...)
+			return &ec2.RebootInstancesOutput{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) != 1 || requested[0] != "i-0123456789abcdef0" {
+		t.Fatalf("reboot targets = %v, want only the selected instance", requested)
+	}
+}
+
+func TestRequestInstanceRebootRejectsInvalidIDBeforeAWS(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	err := requestInstanceReboot(
+		context.Background(),
+		"not-an-instance",
+		func(context.Context, *ec2.RebootInstancesInput, ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error) {
+			calls++
+			return &ec2.RebootInstancesOutput{}, nil
+		},
+	)
+	if err == nil || err.Error() != "invalid EC2 instance ID" {
+		t.Fatalf("reboot error = %v, want invalid instance ID", err)
+	}
+	if calls != 0 {
+		t.Fatalf("AWS reboot calls = %d, want 0", calls)
+	}
+}
+
+func TestRequestInstanceRebootRedactsAWSFailure(t *testing.T) {
+	t.Parallel()
+
+	err := requestInstanceReboot(
+		context.Background(),
+		"i-0123456789abcdef0",
+		func(context.Context, *ec2.RebootInstancesInput, ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error) {
+			return nil, errors.New("provider detail that must not reach the UI")
+		},
+	)
+	if err == nil || err.Error() != "request EC2 instance reboot" {
+		t.Fatalf("reboot error = %v, want redacted provider failure", err)
 	}
 }

@@ -50,6 +50,13 @@ export type ManagedNode = {
   proxy: string
 }
 export type SSMProfileResult = { changed: boolean; roleName: string }
+export type SSMInstanceStatus = {
+  registered: boolean
+  online: boolean
+  pingStatus: string
+  agentVersion?: string
+  lastPingAt?: string
+}
 
 type DesktopAPI = {
   GetStatus(): Promise<Status>
@@ -68,7 +75,9 @@ type DesktopAPI = {
   SelectAWSIdentityCenterRole(accountId: string, roleName: string): Promise<void>
   ListEC2Instances(): Promise<EC2Instance[]>
   InstanceSSMOnline(instanceId: string): Promise<boolean>
+  InstanceSSMStatus(instanceId: string): Promise<SSMInstanceStatus>
   EnsureInstanceSSM(instanceId: string, confirmExistingRoleChange: boolean): Promise<SSMProfileResult>
+  RebootEC2Instance(instanceId: string): Promise<void>
   InstallEC2Node(instanceId: string): Promise<ManagedNode>
   UpdateEC2Node(instanceId: string): Promise<ManagedNode>
   RepairEC2Node(instanceId: string): Promise<ManagedNode>

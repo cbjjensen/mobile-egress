@@ -1,17 +1,19 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode } from './api'
+import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode, SSMInstanceStatus } from './api'
 import { ActivityEvent, ActivitySeverity, appendActivityEvent, filterActivityEvents, formatActivityEvents } from './activity-log.js'
 import awsPermissionsPolicy from './aws-permissions-policy.json'
-import { requiresSSMRoleConfirmation, shouldSkipSSMProfileSetup, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMOnline } from './ssm-progress.js'
+import { formatSSMCheckActivity, requiresSSMRoleConfirmation, runConfirmedSSMRestart, shouldSkipSSMProfileSetup, ssmStatusState, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMCredentialRefresh, waitForSSMOnline } from './ssm-progress.js'
 
 const emptyBridge: BridgeStatus = { tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
 const requiredPermissionsPolicy = JSON.stringify(awsPermissionsPolicy, null, 2)
 type SSMProgress = {
-  phase: 'preparing' | 'waiting' | 'timeout'
+  phase: 'preparing' | 'waiting' | 'restart-required' | 'rebooting' | 'timeout'
   startedAt: number
   lastCheckedAt?: number
   checkCount: number
   setupSkipped?: boolean
+  afterReboot?: boolean
+  timeoutSeconds?: number
 }
 
 function errorMessage(reason: unknown) {
@@ -229,19 +231,34 @@ export default function App() {
       return
     }
 
-    recordActivity(instance.id, instance.name, 'SSM', 'success', setupSkipped ? 'Profile and SSM permissions already configured. Checking readiness.' : 'SSM setup completed. Checking readiness.')
+    recordActivity(instance.id, instance.name, 'SSM', 'success', setupSkipped ? 'Profile and SSM permissions already configured. Checking for registration.' : 'SSM setup completed. Checking for registration.')
+    const preparedInstance = { ...instance, profileArn: instance.profileArn || 'attached', roleName: preparedRoleName }
     setInstances(current => current.map(item => item.id === instance.id
-      ? { ...item, profileArn: item.profileArn || 'attaching', roleName: preparedRoleName }
+      ? { ...item, profileArn: item.profileArn || 'attached', roleName: preparedRoleName }
       : item))
-    setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'waiting', startedAt, checkCount: 0, setupSkipped } }))
+    await monitorInstanceSSM(preparedInstance, { setupSkipped })
+  }
+
+  async function monitorInstanceSSM(instance: EC2Instance, options: { setupSkipped?: boolean; afterReboot?: boolean; freshAfter?: string } = {}) {
+    const startedAt = Date.now()
+    const timeoutSeconds = options.afterReboot ? 300 : 30
+    setClock(startedAt)
+    setSSMProgress(current => ({
+      ...current,
+      [instance.id]: { phase: 'waiting', startedAt, checkCount: 0, setupSkipped: options.setupSkipped, afterReboot: options.afterReboot, timeoutSeconds },
+    }))
     let checkCount = 0
+    let latestStatus: SSMInstanceStatus = { registered: false, online: false, pingStatus: 'NotRegistered' }
     try {
-      const result = await waitForSSMOnline({
-        checkOnline: async () => await api().InstanceSSMOnline(instance.id),
-        onCheck: online => {
+      const monitorOptions = {
+        checkOnline: async () => {
+          latestStatus = await api().InstanceSSMStatus(instance.id)
+          return ssmStatusState(latestStatus, options.freshAfter) === 'ready'
+        },
+        onCheck: (online: boolean) => {
           const checkedAt = Date.now()
           checkCount += 1
-          recordActivity(instance.id, instance.name, 'SSM check', online ? 'success' : 'info', online ? 'Instance reported SSM online.' : `Check ${checkCount}: waiting for registration.`)
+          recordActivity(instance.id, instance.name, 'SSM check', online ? 'success' : 'info', formatSSMCheckActivity(latestStatus, checkCount, options.freshAfter))
           setInstances(current => current.map(item => item.id === instance.id ? { ...item, ssmOnline: online } : item))
           setSSMProgress(current => {
             const progress = current[instance.id]
@@ -252,18 +269,59 @@ export default function App() {
         onOnline: async () => {
           setSSMProgress(current => { const next = { ...current }; delete next[instance.id]; return next })
           if (!nodes.some(node => node.instanceId === instance.id)) {
-            await installNode({ ...instance, profileArn: instance.profileArn || 'attached', roleName: preparedRoleName, ssmOnline: true })
+            await installNode({ ...instance, profileArn: instance.profileArn || 'attached', ssmOnline: true })
           }
         },
-      })
-      if (result.online) return
-      setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
-      setError('The SSM profile is attached, but this instance did not come online within five minutes. Confirm the EC2 instance has outbound HTTPS, then retry the status check.')
-      recordActivity(instance.id, instance.name, 'SSM check', 'error', 'Timed out after five minutes. Confirm outbound HTTPS and retry.')
+      }
+      const result = options.afterReboot ? await waitForSSMOnline(monitorOptions) : await waitForSSMCredentialRefresh(monitorOptions)
+      if (result.online) return result
+      if (options.afterReboot) {
+        setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
+        setError('AWS accepted the restart, but no fresh SSM Agent ping arrived within five minutes. Check the Windows AmazonSSMAgent service and outbound HTTPS, then retry.')
+        recordActivity(instance.id, instance.name, 'SSM recovery', 'error', 'No fresh SSM Agent ping arrived within five minutes after the restart request. Check the Windows Agent service and outbound HTTPS.')
+      } else {
+        setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'restart-required' } }))
+        recordActivity(instance.id, instance.name, 'SSM recovery', 'warning', 'No SSM registration appeared during the 30-second credential refresh window. An explicit EC2 restart is available.')
+      }
+      return result
     } catch (reason) {
       setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
       setError(`The SSM profile is attached, but its status could not be refreshed. ${errorMessage(reason)}`)
       recordActivity(instance.id, instance.name, 'SSM check', 'error', 'Status refresh failed. See the error banner.')
+      return { online: false }
+    }
+  }
+
+  async function restartEC2AndContinue(instance: EC2Instance) {
+    const label = instance.name || instance.id
+    const confirmed = window.confirm(`Restart ${label} now? The Windows server will be briefly unavailable. Mobile Egress will wait for a fresh SSM Agent ping and then install the Client automatically.`)
+    let rebootRequestedAt = ''
+    try {
+      const result = await runConfirmedSSMRestart({
+        confirmed,
+        reboot: async () => {
+          rebootRequestedAt = new Date().toISOString()
+          setBusy(`reboot-${instance.id}`)
+          setError('')
+          setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'rebooting', startedAt: Date.now(), checkCount: 0, timeoutSeconds: 300 } }))
+          recordActivity(instance.id, instance.name, 'SSM recovery', 'info', 'Restart confirmed. Sending the selected instance ID to the EC2 reboot API.')
+          try {
+            await api().RebootEC2Instance(instance.id)
+            recordActivity(instance.id, instance.name, 'SSM recovery', 'success', 'AWS accepted the EC2 restart request. Waiting for a new SSM Agent ping.')
+          } finally {
+            setBusy('')
+          }
+        },
+        monitor: async () => await monitorInstanceSSM(instance, { afterReboot: true, freshAfter: rebootRequestedAt }),
+      })
+      if (result.outcome === 'cancelled') {
+        recordActivity(instance.id, instance.name, 'SSM recovery', 'warning', 'EC2 restart cancelled. No instance change was made.')
+      }
+    } catch (reason) {
+      setBusy('')
+      setError(errorMessage(reason))
+      setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'restart-required', startedAt: Date.now(), checkCount: 0, timeoutSeconds: 30 } }))
+      recordActivity(instance.id, instance.name, 'SSM recovery', 'error', 'EC2 restart request failed. Confirm ec2:RebootInstances is allowed, then retry.')
     }
   }
 
@@ -371,8 +429,8 @@ export default function App() {
             <h3>Give it limited permissions</h3>
             <p>Open the mobile-egress user, then choose Permissions → Add permissions → Create inline policy.</p>
             <div className="permission-grid">
-              <div><h4>This app can</h4><p>✓ View your EC2 instances</p><p>✓ Check instance status</p><p>✓ Connect through Systems Manager</p></div>
-              <div><h4>This app cannot</h4><p>× Access AWS billing</p><p>× Create other AWS users</p><p>× Use services it does not need</p></div>
+              <div><h4>This app can</h4><p>✓ View your EC2 instances</p><p>✓ Check instance status</p><p>✓ Connect through Systems Manager</p><p>✓ Restart a selected EC2 after confirmation</p></div>
+              <div><h4>This app cannot</h4><p>× Access AWS billing</p><p>× Create other AWS users</p><p>× Create, stop, or terminate EC2 instances</p></div>
             </div>
             <div className="split-actions">
               <button type="button" onClick={() => setShowPolicy(value => !value)}>{showPolicy ? 'Hide technical policy' : 'View technical policy'}</button>
@@ -412,10 +470,19 @@ export default function App() {
       <div className="node-grid">{instances.map(instance => {
         const managed = nodes.some(node => node.instanceId === instance.id)
         const progress = ssmProgress[instance.id]
-        const status = managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : progress?.phase === 'preparing' ? 'Preparing SSM…' : progress?.phase === 'waiting' ? ssmWaitingStatusText(progress) : progress?.phase === 'timeout' ? 'SSM not online' : 'SSM setup'
+        const status = managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : progress?.phase === 'preparing' ? 'Preparing SSM…' : progress?.phase === 'waiting' ? ssmWaitingStatusText(progress) : progress?.phase === 'rebooting' ? 'Restarting EC2…' : progress?.phase === 'restart-required' ? 'SSM Agent restart needed' : progress?.phase === 'timeout' ? 'SSM not online' : 'SSM setup'
         const statusClass = instance.ssmOnline ? 'on' : progress?.phase === 'timeout' ? 'error-state' : progress ? 'waiting' : ''
-        const prepareLabel = progress?.phase === 'preparing' ? 'Preparing…' : progress?.phase === 'waiting' ? 'Waiting for SSM…' : progress?.phase === 'timeout' ? 'Retry SSM check' : instance.ssmOnline ? 'SSM ready' : 'Prepare SSM'
-        return <article className="card node" key={instance.id}><div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${statusClass}`}>{status}</span></div><p>{instance.imageDescription}</p>{instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}{progress?.phase === 'waiting' && <div className="ssm-live" role="status"><span className="ssm-spinner" aria-hidden="true" /><span>{ssmWaitingLiveText(progress, clock)}</span></div>}<div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy || instance.ssmOnline || progress?.phase === 'preparing' || progress?.phase === 'waiting'}>{prepareLabel}</button><button className="primary" onClick={() => void installNode(instance)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div></article>
+        const prepareLabel = progress?.phase === 'preparing' ? 'Preparing…' : progress?.phase === 'waiting' ? 'Waiting for SSM…' : progress?.phase === 'restart-required' ? 'Check SSM again' : progress?.phase === 'timeout' ? 'Retry SSM check' : instance.ssmOnline ? 'SSM ready' : 'Prepare SSM'
+        const progressBlocksPreparation = progress?.phase === 'preparing' || progress?.phase === 'waiting' || progress?.phase === 'rebooting'
+        return <article className="card node" key={instance.id}>
+          <div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${statusClass}`}>{status}</span></div>
+          <p>{instance.imageDescription}</p>
+          {instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}
+          {progress?.phase === 'waiting' && <div className="ssm-live" role="status"><span className="ssm-spinner" aria-hidden="true" /><span>{ssmWaitingLiveText(progress, clock)}</span></div>}
+          {progress?.phase === 'rebooting' && <div className="ssm-live" role="status"><span className="ssm-spinner" aria-hidden="true" /><span>Sending the restart request to AWS…</span></div>}
+          {progress?.phase === 'restart-required' && <div className="ssm-recovery" role="status"><div><strong>Restart the SSM Agent safely</strong><p>The profile and permissions are attached, but the already-running Windows Agent did not refresh its credentials. Restarting this EC2 instance usually resolves it; nothing is terminated or recreated.</p></div><button className="primary" onClick={() => void restartEC2AndContinue(instance)} disabled={!!busy}>{busy === `reboot-${instance.id}` ? 'Restarting…' : 'Restart EC2 and continue'}</button></div>}
+          <div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy || instance.ssmOnline || progressBlocksPreparation}>{prepareLabel}</button><button className="primary" onClick={() => void installNode(instance)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div>
+        </article>
       })}</div>
       <details className="card activity-panel" open>
         <summary><span>Activity logs</span><small>{activityEvents.length} / 200 session events</small></summary>

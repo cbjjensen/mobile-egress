@@ -371,7 +371,7 @@ The only relay listener must be `127.0.0.1:8443`.
 4. Refresh **EC2 Nodes** and confirm only the intended supported `us-east-1` instances appear.
 5. For a profile-less node, choose **Prepare SSM** and allow the dedicated role/profile creation. The controller retries only AWS propagation-class attachment errors with bounded backoff for up to one minute, rechecking before every attempt that no other profile appeared. Permission and unrelated-profile errors stop immediately.
 6. For an existing non-SSM role, read the displayed role name and explicitly approve adding only `AmazonSSMManagedInstanceCore`. Never approve profile replacement.
-7. Let the controller wait for each node to show **SSM online**. An attached role that already has the SSM policy is verified without mutation. On later runs, an online node shows **SSM ready** and bypasses profile setup. The controller checks only the selected instance, polls every two seconds initially, backs off while retaining the five-minute bound, and automatically starts **Install Client** as soon as SSM is online. Use **Install Client** manually only to retry an interrupted install. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
+7. Let the controller check the selected node for 30 seconds. If SSM registers, it starts **Install Client** automatically. If registration remains absent, the node card explains that the already-running Agent may still have stale credentials and offers **Restart EC2 and continue**. Read the interruption warning and explicitly confirm; the app calls the EC2 reboot API for only that instance, then waits up to five minutes for an online SSM record whose last ping is newer than the restart request. It installs the Client only after that fresh ping. Reboot is never automatic and does not terminate, stop/start, or recreate the instance. The activity panel records whether SSM was unregistered, offline, stale after reboot, or ready, plus the Agent version and last-ping timestamp when AWS supplies them. On later runs, an online node shows **SSM ready** and bypasses profile setup. Use **Install Client** manually only to retry an interrupted install. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
 8. Require distinct Client serials and credentials. Do not paste credentials into SSM, tickets, chat, or the acceptance record.
 
 On each EC2 node, confirm the service and listener through an interactive administrative PowerShell session:
@@ -489,7 +489,7 @@ If a required item fails, do not promote it. Record the finite failure class, fi
 
 The selected identity needs these read/command actions, scoped to the account, region, and selected nodes where AWS supports resource constraints:
 
-- `ec2:DescribeInstances` and `ec2:DescribeImages`;
+- `ec2:DescribeInstances`, `ec2:DescribeImages`, and `ec2:RebootInstances` (used only after explicit recovery confirmation);
 - `ssm:DescribeInstanceInformation`, `ssm:SendCommand`, and `ssm:GetCommandInvocation`; and
 - `iam:GetInstanceProfile`, `iam:GetRole`, `iam:ListAttachedRolePolicies`, and `iam:ListRolePolicies`.
 

@@ -28,7 +28,7 @@ SSM command text contains signed release metadata or a base64 wrapper around the
 
 ## AWS safeguards
 
-The controller is hard-coded to `us-east-1`, inventories only running x86-64 Windows Server 2019, and manages at most ten nodes. It never calls EC2 creation/termination, public-address allocation, or security-group ingress APIs.
+The controller is hard-coded to `us-east-1`, inventories only running x86-64 Windows Server 2019, and manages at most ten nodes. It never calls EC2 creation/termination, public-address allocation, or security-group ingress APIs. SSM recovery can call `ec2:RebootInstances` only for a supported instance already present in the refreshed inventory and only after an explicit interruption confirmation. The controller waits for a post-request SSM ping before installing; cancelling makes no AWS change.
 
 It never replaces an existing instance profile. For a profile-less instance it rechecks absence before association. Deterministic dedicated roles/profiles are tagged to the instance and reused only when their tags, exact EC2 trust policy, role membership, and absence of unexpected managed/inline policies all match. For an existing role it requires explicit operator confirmation and attaches only `AmazonSSMManagedInstanceCore`.
 

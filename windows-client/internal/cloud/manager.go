@@ -34,6 +34,14 @@ type SSMProfileResult struct {
 	RoleName string `json:"roleName"`
 }
 
+type SSMInstanceStatus struct {
+	Registered   bool   `json:"registered"`
+	Online       bool   `json:"online"`
+	PingStatus   string `json:"pingStatus"`
+	AgentVersion string `json:"agentVersion,omitempty"`
+	LastPingAt   string `json:"lastPingAt,omitempty"`
+}
+
 type IAMProvider interface {
 	CreateAndAttachDedicatedSSMProfile(context.Context, string) (string, error)
 	RoleHasManagedPolicy(context.Context, string, string) (bool, error)

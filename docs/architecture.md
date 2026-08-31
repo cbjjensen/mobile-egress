@@ -54,7 +54,7 @@ Admission is capped at 32 streams. Inbound and outbound queues are bounded; outb
 
 1. The controller independently models Tailscale as absent, installed/offline, or online. It offers verified MSI installation only when absent, uses a connect-only browser/unattended flow when installed/offline, and obtains the stable Funnel FQDN after it is online.
 2. It generates an Owner key/CSR. The elevated helper installs the signed relay, initializes state with that CSR and public origin, ACLs state, and installs the relay service.
-3. For each EC2 node, the controller verifies or safely prepares SSM IAM access. It never replaces an existing instance profile.
+3. For each EC2 node, the controller verifies or safely prepares SSM IAM access. It never replaces an existing instance profile. It allows a 30-second passive Agent credential refresh first; if SSM remains unavailable, an explicit operator-confirmed recovery may reboot only that selected instance. The controller then requires a post-request SSM ping before provisioning, so a stale online record cannot trigger Client installation.
 4. The controller durably reserves one of its ten managed-node slots before remote provisioning begins.
 5. The signed controller validates node-release manifest v2, including the bounded self-signed Code Signing certificate and exact fingerprints. SSM pins the artifact hash and exact pre-trust signer bytes, adds only that embedded public certificate to the node Root/TrustedPublisher stores when absent, requires post-trust Authenticode `Valid`, and installs the Client. Attempt-added trust is rolled back on later failure; existing exact trust is idempotent. The node returns only a CSR and X25519 public key.
 6. The Owner calls the relay's direct Client-CSR endpoint.

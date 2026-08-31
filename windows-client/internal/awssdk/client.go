@@ -166,23 +166,67 @@ func selectedInstanceSSMFilters(instanceID string) ([]ssmtypes.InstanceInformati
 }
 
 func (client *Client) InstanceSSMOnline(ctx context.Context, instanceID string) (bool, error) {
+	status, err := client.InstanceSSMStatus(ctx, instanceID)
+	return status.Online, err
+}
+
+func (client *Client) InstanceSSMStatus(ctx context.Context, instanceID string) (cloud.SSMInstanceStatus, error) {
 	if client == nil || client.ssm == nil {
-		return false, errors.New("AWS client is unavailable")
+		return cloud.SSMInstanceStatus{}, errors.New("AWS client is unavailable")
 	}
 	filters, err := selectedInstanceSSMFilters(instanceID)
 	if err != nil {
-		return false, err
+		return cloud.SSMInstanceStatus{}, err
 	}
 	output, err := client.ssm.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{Filters: filters})
 	if err != nil {
-		return false, errors.New("check selected Systems Manager instance")
+		return cloud.SSMInstanceStatus{}, errors.New("check selected Systems Manager instance")
 	}
-	for _, info := range output.InstanceInformationList {
-		if aws.ToString(info.InstanceId) == instanceID && info.PingStatus == ssmtypes.PingStatusOnline {
-			return true, nil
+	return selectedInstanceSSMStatus(instanceID, output.InstanceInformationList)
+}
+
+func selectedInstanceSSMStatus(instanceID string, information []ssmtypes.InstanceInformation) (cloud.SSMInstanceStatus, error) {
+	if !validInstanceID(instanceID) {
+		return cloud.SSMInstanceStatus{}, errors.New("invalid EC2 instance ID")
+	}
+	for _, info := range information {
+		if aws.ToString(info.InstanceId) != instanceID {
+			continue
 		}
+		status := cloud.SSMInstanceStatus{
+			Registered:   true,
+			Online:       info.PingStatus == ssmtypes.PingStatusOnline,
+			PingStatus:   string(info.PingStatus),
+			AgentVersion: aws.ToString(info.AgentVersion),
+		}
+		if info.LastPingDateTime != nil {
+			status.LastPingAt = info.LastPingDateTime.UTC().Format(time.RFC3339Nano)
+		}
+		return status, nil
 	}
-	return false, nil
+	return cloud.SSMInstanceStatus{PingStatus: "NotRegistered"}, nil
+}
+
+type rebootInstancesFunc func(context.Context, *ec2.RebootInstancesInput, ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error)
+
+func (client *Client) RebootInstance(ctx context.Context, instanceID string) error {
+	if client == nil || client.ec2 == nil {
+		return errors.New("AWS client is unavailable")
+	}
+	return requestInstanceReboot(ctx, instanceID, client.ec2.RebootInstances)
+}
+
+func requestInstanceReboot(ctx context.Context, instanceID string, reboot rebootInstancesFunc) error {
+	if !validInstanceID(instanceID) {
+		return errors.New("invalid EC2 instance ID")
+	}
+	if reboot == nil {
+		return errors.New("request EC2 instance reboot")
+	}
+	if _, err := reboot(ctx, &ec2.RebootInstancesInput{InstanceIds: []string{instanceID}}); err != nil {
+		return errors.New("request EC2 instance reboot")
+	}
+	return nil
 }
 
 func (client *Client) roleForProfile(ctx context.Context, profileARN string) (string, error) {

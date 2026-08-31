@@ -8,6 +8,7 @@
         "ec2:DescribeImages",
         "ec2:DescribeInstances",
         "ec2:AssociateIamInstanceProfile",
+        "ec2:RebootInstances",
         "iam:AddRoleToInstanceProfile",
         "iam:AttachRolePolicy",
         "iam:CreateInstanceProfile",
