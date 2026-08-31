@@ -333,8 +333,9 @@ export default function App() {
             <h2>Connect AWS</h2>
             <p>Connect the AWS account where you normally see your EC2 instances.</p>
           </div>
-          <div className="aws-badges"><span>◷ About 3 minutes</span><span>✓ No AWS CLI needed</span></div>
         </div>
+
+        <button className="link-button manual-access-link" type="button" onClick={() => document.getElementById('manual-aws-key')?.scrollIntoView({ behavior: 'smooth' })}>Already have an access key? Enter it manually</button>
 
         <ol className="aws-progress" aria-label="AWS setup steps">
           {['Open AWS', 'Create user', 'Add permissions', 'Connect'].map((label, index) => <li key={label} className="active"><span>{index + 1}</span><strong>{label}</strong></li>)}
@@ -400,7 +401,6 @@ export default function App() {
           </div>
         </div>
 
-        <button className="link-button centered" type="button" onClick={() => document.getElementById('manual-aws-key')?.scrollIntoView({ behavior: 'smooth' })}>Already have an access key? Enter it manually</button>
       </article>
 
       <details id="manual-aws-key" className="card"><summary>Manual access-key entry</summary><form onSubmit={saveAccessKeys}><label>Access key ID<input name="accessKeyId" required autoComplete="off" /></label><label>Secret access key<input name="secretAccessKey" type="password" required autoComplete="off" /></label><label>Session token (optional)<textarea name="sessionToken" rows={3} autoComplete="off" /></label><button className="primary" disabled={!!busy}>Save AWS access key</button></form></details>
