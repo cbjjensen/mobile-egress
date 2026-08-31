@@ -13,8 +13,15 @@ public enum TunnelPreferenceTransaction {
         try await session.loadPreferences()
         session.applyConfiguration(onDemandEnabled: true)
         try await session.savePreferences()
-        try await session.loadPreferences()
-        try session.startTunnelSession()
+        do {
+            try await session.loadPreferences()
+            try session.startTunnelSession()
+        } catch {
+            session.applyConfiguration(onDemandEnabled: false)
+            try? await session.savePreferences()
+            try? await session.loadPreferences()
+            throw error
+        }
     }
 
     public static func stop(using session: any TunnelPreferenceSession) async throws {

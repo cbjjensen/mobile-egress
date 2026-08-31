@@ -128,6 +128,14 @@ final class ProviderMessagingTests: XCTestCase {
             (.tunnelSettings, 3),
             (.runtimeUnavailable, 4),
             (.invalidMessage, 5),
+            (.relayUnavailable, 6),
+            (.relayAuth, 7),
+            (.relayTLS, 8),
+            (.protocol, 9),
+            (.targetPolicy, 10),
+            (.targetConnect, 11),
+            (.backpressure, 12),
+            (.internal, 13),
         ]
 
         XCTAssertEqual(
@@ -158,6 +166,50 @@ final class ProviderMessagingTests: XCTestCase {
             ),
             .runtimeUnavailable
         )
+    }
+
+    func testRuntimeErrorsRetainTheirFiniteClassificationAcrossProviderShutdown() {
+        let expected: [(AgentRuntimeErrorClass, TunnelProviderErrorClass)] = [
+            (.none, .none),
+            (.relayUnavailable, .relayUnavailable),
+            (.relayAuth, .relayAuth),
+            (.relayTLS, .relayTLS),
+            (.protocol, .protocol),
+            (.targetPolicy, .targetPolicy),
+            (.targetConnect, .targetConnect),
+            (.backpressure, .backpressure),
+            (.internal, .internal),
+        ]
+
+        for (runtimeError, providerError) in expected {
+            XCTAssertEqual(
+                TunnelProviderErrorClass(runtimeFailure: runtimeError),
+                providerError
+            )
+        }
+    }
+
+    func testProviderErrorsExposeFiniteUserMessagesFromTheSharedType() {
+        let expected: [(TunnelProviderErrorClass, String?)] = [
+            (.none, nil),
+            (.identityUnavailable, "Enrollment is required."),
+            (.invalidConfiguration, "Tunnel configuration is invalid."),
+            (.tunnelSettings, "iOS rejected the tunnel settings."),
+            (.runtimeUnavailable, "Agent runtime is unavailable."),
+            (.invalidMessage, "Tunnel status response was invalid."),
+            (.relayUnavailable, "Relay is unavailable."),
+            (.relayAuth, "Relay authentication failed."),
+            (.relayTLS, "Relay trust validation failed."),
+            (.protocol, "Relay protocol error."),
+            (.targetPolicy, "A target was blocked by policy."),
+            (.targetConnect, "A target connection failed."),
+            (.backpressure, "Agent capacity was exceeded."),
+            (.internal, "Agent runtime failed."),
+        ]
+
+        for (error, message) in expected {
+            XCTAssertEqual(error.userMessage, message)
+        }
     }
 
     private func assertConfigurationError(

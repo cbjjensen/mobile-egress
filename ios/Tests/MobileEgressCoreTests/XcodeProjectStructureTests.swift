@@ -118,11 +118,18 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertNotNil(catalog["info"])
         XCTAssertNotNil(accent["colors"])
         let images = try XCTUnwrap(appIcon["images"] as? [[String: Any]])
-        XCTAssertTrue(images.contains {
+        let universalIcon = try XCTUnwrap(images.first {
             $0["idiom"] as? String == "universal" &&
                 $0["platform"] as? String == "ios" &&
                 $0["size"] as? String == "1024x1024"
         })
+        let iconFilename = try XCTUnwrap(universalIcon["filename"] as? String)
+        let iconData = try data(at: "Assets/AppAssets.xcassets/AppIcon.appiconset/\(iconFilename)")
+        XCTAssertEqual(Array(iconData.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        XCTAssertEqual(iconData.pngDimension(at: 16), 1_024)
+        XCTAssertEqual(iconData.pngDimension(at: 20), 1_024)
+        XCTAssertEqual(iconData[safe: 24], 8, "AppIcon must use 8-bit color channels")
+        XCTAssertEqual(iconData[safe: 25], 2, "AppIcon must be opaque RGB without an alpha channel")
 
         XCTAssertEqual(try swiftFiles(in: "MobileEgressAgent"), Set(expectedAppSources))
         XCTAssertEqual(try swiftFiles(in: "MobileEgressTunnelExtension"), Set(expectedExtensionSources))
@@ -229,7 +236,7 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(provider.contains("terminalFailureHandler: { [weak self] failure in"))
         XCTAssertTrue(provider.contains("handleTerminalFailure(failure, generation: generation)"))
         XCTAssertTrue(provider.contains("cancelTunnelWithError("))
-        XCTAssertTrue(provider.contains("TunnelProviderErrorClass.runtimeUnavailable.providerNSError"))
+        XCTAssertTrue(provider.contains("cancelTunnelWithError(error.providerNSError)"))
     }
 
     private let expectedAppSources = [
@@ -329,5 +336,16 @@ private enum ProjectFixtureError: Error {
 private extension String {
     func occurrences(of needle: String) -> Int {
         components(separatedBy: needle).count - 1
+    }
+}
+
+private extension Data {
+    subscript(safe index: Int) -> UInt8? {
+        indices.contains(index) ? self[index] : nil
+    }
+
+    func pngDimension(at offset: Int) -> UInt32? {
+        guard count >= offset + 4 else { return nil }
+        return self[offset..<(offset + 4)].reduce(0) { ($0 << 8) | UInt32($1) }
     }
 }

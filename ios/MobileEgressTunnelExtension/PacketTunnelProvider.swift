@@ -116,10 +116,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     ) {
         Task { [weak self] in
             guard let self else { return }
-            await runtimeController.handleTerminalFailure(failure, generation: generation) { [weak self] in
-                self?.cancelTunnelWithError(
-                    TunnelProviderErrorClass.runtimeUnavailable.providerNSError
-                )
+            await runtimeController.handleTerminalFailure(failure, generation: generation) { [weak self] error in
+                self?.cancelTunnelWithError(error.providerNSError)
             }
         }
     }
@@ -143,25 +141,10 @@ private enum ProviderStartFailure: Error, Sendable {
 
 private extension TunnelProviderErrorClass {
     var providerNSError: NSError {
-        let description: String
-        switch self {
-        case .none:
-            description = "No provider error."
-        case .identityUnavailable:
-            description = "Enrollment is required."
-        case .invalidConfiguration:
-            description = "Tunnel configuration is invalid."
-        case .tunnelSettings:
-            description = "Tunnel settings were rejected."
-        case .runtimeUnavailable:
-            description = "Agent runtime is unavailable."
-        case .invalidMessage:
-            description = "Provider message is invalid."
-        }
         return NSError(
             domain: TunnelProviderErrorClass.providerErrorDomain,
             code: providerErrorCode,
-            userInfo: [NSLocalizedDescriptionKey: description]
+            userInfo: [NSLocalizedDescriptionKey: userMessage ?? "No provider error."]
         )
     }
 }

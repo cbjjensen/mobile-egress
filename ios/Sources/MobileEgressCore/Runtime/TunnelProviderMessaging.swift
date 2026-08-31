@@ -15,6 +15,14 @@ public enum TunnelProviderErrorClass: String, Equatable, Sendable {
     case tunnelSettings
     case runtimeUnavailable
     case invalidMessage
+    case relayUnavailable
+    case relayAuth
+    case relayTLS
+    case `protocol`
+    case targetPolicy
+    case targetConnect
+    case backpressure
+    case `internal`
 
     public static let providerErrorDomain = "com.mobileegress.agent.tunnel"
 
@@ -26,6 +34,47 @@ public enum TunnelProviderErrorClass: String, Equatable, Sendable {
         case .tunnelSettings: 3
         case .runtimeUnavailable: 4
         case .invalidMessage: 5
+        case .relayUnavailable: 6
+        case .relayAuth: 7
+        case .relayTLS: 8
+        case .protocol: 9
+        case .targetPolicy: 10
+        case .targetConnect: 11
+        case .backpressure: 12
+        case .internal: 13
+        }
+    }
+
+    public init(runtimeFailure: AgentRuntimeErrorClass) {
+        switch runtimeFailure {
+        case .none: self = .none
+        case .relayUnavailable: self = .relayUnavailable
+        case .relayAuth: self = .relayAuth
+        case .relayTLS: self = .relayTLS
+        case .protocol: self = .protocol
+        case .targetPolicy: self = .targetPolicy
+        case .targetConnect: self = .targetConnect
+        case .backpressure: self = .backpressure
+        case .internal: self = .internal
+        }
+    }
+
+    public var userMessage: String? {
+        switch self {
+        case .none: nil
+        case .identityUnavailable: "Enrollment is required."
+        case .invalidConfiguration: "Tunnel configuration is invalid."
+        case .tunnelSettings: "iOS rejected the tunnel settings."
+        case .runtimeUnavailable: "Agent runtime is unavailable."
+        case .invalidMessage: "Tunnel status response was invalid."
+        case .relayUnavailable: "Relay is unavailable."
+        case .relayAuth: "Relay authentication failed."
+        case .relayTLS: "Relay trust validation failed."
+        case .protocol: "Relay protocol error."
+        case .targetPolicy: "A target was blocked by policy."
+        case .targetConnect: "A target connection failed."
+        case .backpressure: "Agent capacity was exceeded."
+        case .internal: "Agent runtime failed."
         }
     }
 
@@ -37,6 +86,14 @@ public enum TunnelProviderErrorClass: String, Equatable, Sendable {
         case 3: return .tunnelSettings
         case 4: return .runtimeUnavailable
         case 5: return .invalidMessage
+        case 6: return .relayUnavailable
+        case 7: return .relayAuth
+        case 8: return .relayTLS
+        case 9: return .protocol
+        case 10: return .targetPolicy
+        case 11: return .targetConnect
+        case 12: return .backpressure
+        case 13: return .internal
         default: return .runtimeUnavailable
         }
     }

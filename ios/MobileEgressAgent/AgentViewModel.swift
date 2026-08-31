@@ -100,7 +100,7 @@ final class AgentViewModel: ObservableObject {
     var errorMessage: String? {
         if let userError { return userError.message }
         if providerStatus.providerError != .none {
-            return providerErrorMessage(providerStatus.providerError)
+            return providerStatus.providerError.userMessage
         }
         if providerStatus.runtimeSnapshot.errorClass != .none {
             return runtimeErrorMessage(providerStatus.runtimeSnapshot.errorClass)
@@ -293,17 +293,6 @@ final class AgentViewModel: ObservableObject {
         } catch {
             guard connectionState.isCurrent(providerStatusToken) else { return }
             userError = .statusUnavailable
-        }
-    }
-
-    private func providerErrorMessage(_ error: TunnelProviderErrorClass) -> String? {
-        switch error {
-        case .none: nil
-        case .identityUnavailable: "Enrollment is required."
-        case .invalidConfiguration: "Tunnel configuration is invalid."
-        case .tunnelSettings: "iOS rejected the tunnel settings."
-        case .runtimeUnavailable: "Agent runtime is unavailable."
-        case .invalidMessage: "Tunnel status response was invalid."
         }
     }
 

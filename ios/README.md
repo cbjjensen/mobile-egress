@@ -36,7 +36,7 @@ Before a signed build, register the host and extension App IDs under the same Ap
 
 ## On-demand is not Apple Always-On VPN
 
-The host app saves a `NETunnelProviderManager` configuration with `NEOnDemandRuleConnect`, `isOnDemandEnabled`, and `disconnectOnSleep = false`. This is app-managed on-demand persistence intended to let the configured packet tunnel relaunch according to the OS's Network Extension behavior.
+The host app saves a `NETunnelProviderManager` configuration with `NEOnDemandRuleConnect`, `isOnDemandEnabled`, and `disconnectOnSleep = false`. This is app-managed on-demand persistence intended to let the configured packet tunnel relaunch according to the OS's Network Extension behavior. If the manual start submission fails after that intent is saved, the app makes a best-effort compensating save with on-demand disabled so a reported start failure does not leave an unexpected background activation request behind.
 
 It is **not** Apple's true Always-On VPN. True Always-On VPN requires supervised devices and MDM configuration; a TestFlight-installed app cannot honestly claim that guarantee. Treat sleep/relaunch behavior as real-device acceptance, not as a replacement for supervised-device policy. The tunnel settings intentionally have no included IPv4 or IPv6 routes, so this extension does not turn the device into a general VPN; the Agent's relay and target sockets remain the Mobile Egress workload.
 
@@ -78,7 +78,7 @@ The unsigned commands verify source/project integration only. They do not prove 
 4. In Organizer, validate the archive, distribute to App Store Connect, and upload the build. Wait for Apple processing, complete required App Store Connect metadata/compliance, then assign internal or external TestFlight testers.
 5. Install the processed TestFlight build on a real iPhone/iPad and execute the acceptance checklist below. Keep the sanitized evidence with the release record.
 
-Final AppIcon artwork/asset-archive validation and signed provisioning are still release work until they are performed against the selected Apple team and archive. This repository contains asset catalog metadata and unsigned project structure, not proof of an accepted signed asset archive.
+The asset catalog includes an opaque 1024×1024 Mobile Egress AppIcon and the verification suite checks its catalog reference, dimensions, and PNG color format. Signed asset-archive validation and provisioning remain release work until they are performed against the selected Apple team; the checked-in icon and unsigned project build are not proof of an accepted signed archive.
 
 ## Real-device acceptance
 

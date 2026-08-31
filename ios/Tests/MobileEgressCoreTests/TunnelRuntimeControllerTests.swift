@@ -5,30 +5,30 @@ final class TunnelRuntimeControllerTests: XCTestCase {
     func testRunningRuntimeTerminalFailureCancelsProviderExactlyOnce() async throws {
         let controller = TunnelRuntimeController()
         let runtime = CountingTunnelRuntime()
-        let cancellations = LockedCounter()
+        let cancellations = LockedProviderErrors()
         await runtime.releaseStart()
         let pendingGeneration = await controller.beginStart()
         let generation = try XCTUnwrap(pendingGeneration)
         let installed = await controller.installAndStart(runtime, generation: generation)
         XCTAssertTrue(installed)
 
-        await controller.handleTerminalFailure(.relayUnavailable, generation: generation) {
-            cancellations.increment()
+        await controller.handleTerminalFailure(.relayUnavailable, generation: generation) { error in
+            cancellations.append(error)
         }
-        await controller.handleTerminalFailure(.relayTLS, generation: generation) {
-            cancellations.increment()
+        await controller.handleTerminalFailure(.relayTLS, generation: generation) { error in
+            cancellations.append(error)
         }
 
         let status = await controller.status()
-        XCTAssertEqual(cancellations.value, 1)
+        XCTAssertEqual(cancellations.values, [.relayUnavailable])
         XCTAssertEqual(status.providerState, .failed)
-        XCTAssertEqual(status.providerError, .runtimeUnavailable)
+        XCTAssertEqual(status.providerError, .relayUnavailable)
     }
 
     func testTerminalFailureDuringStartFailsStartWithoutProviderCancellation() async throws {
         let controller = TunnelRuntimeController()
         let runtime = CountingTunnelRuntime()
-        let cancellations = LockedCounter()
+        let cancellations = LockedProviderErrors()
         let pendingGeneration = await controller.beginStart()
         let generation = try XCTUnwrap(pendingGeneration)
         let installTask = Task {
@@ -36,25 +36,25 @@ final class TunnelRuntimeControllerTests: XCTestCase {
         }
         await runtime.waitUntilStartCount(1)
 
-        await controller.handleTerminalFailure(.relayUnavailable, generation: generation) {
-            cancellations.increment()
+        await controller.handleTerminalFailure(.relayUnavailable, generation: generation) { error in
+            cancellations.append(error)
         }
         await runtime.releaseStart()
 
         let installed = await installTask.value
         let stopCount = await runtime.stopCountValue()
         XCTAssertFalse(installed)
-        XCTAssertEqual(cancellations.value, 0)
+        XCTAssertEqual(cancellations.values, [])
         XCTAssertEqual(stopCount, 1)
         let status = await controller.status()
         XCTAssertEqual(status.providerState, .failed)
-        XCTAssertEqual(status.providerError, .runtimeUnavailable)
+        XCTAssertEqual(status.providerError, .relayUnavailable)
     }
 
     func testExplicitStopRejectsStaleTerminalFailureCallback() async throws {
         let controller = TunnelRuntimeController()
         let runtime = CountingTunnelRuntime()
-        let cancellations = LockedCounter()
+        let cancellations = LockedProviderErrors()
         await runtime.releaseStart()
         let pendingGeneration = await controller.beginStart()
         let generation = try XCTUnwrap(pendingGeneration)
@@ -62,12 +62,12 @@ final class TunnelRuntimeControllerTests: XCTestCase {
         XCTAssertTrue(installed)
 
         await controller.stop()
-        await controller.handleTerminalFailure(.relayUnavailable, generation: generation) {
-            cancellations.increment()
+        await controller.handleTerminalFailure(.relayUnavailable, generation: generation) { error in
+            cancellations.append(error)
         }
 
         let stopCount = await runtime.stopCountValue()
-        XCTAssertEqual(cancellations.value, 0)
+        XCTAssertEqual(cancellations.values, [])
         XCTAssertEqual(stopCount, 1)
         let status = await controller.status()
         XCTAssertEqual(status.providerState, .stopped)
@@ -113,14 +113,14 @@ final class TunnelRuntimeControllerTests: XCTestCase {
     }
 }
 
-private final class LockedCounter: @unchecked Sendable {
+private final class LockedProviderErrors: @unchecked Sendable {
     private let lock = NSLock()
-    private var count = 0
+    private var errors: [TunnelProviderErrorClass] = []
 
-    var value: Int { lock.withLock { count } }
+    var values: [TunnelProviderErrorClass] { lock.withLock { errors } }
 
-    func increment() {
-        lock.withLock { count += 1 }
+    func append(_ error: TunnelProviderErrorClass) {
+        lock.withLock { errors.append(error) }
     }
 }
 

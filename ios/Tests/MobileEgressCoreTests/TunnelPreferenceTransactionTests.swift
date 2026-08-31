@@ -17,6 +17,51 @@ final class TunnelPreferenceTransactionTests: XCTestCase {
         ])
     }
 
+    func testStartRollsBackOnDemandWhenPostSaveReloadFails() async {
+        let session = await RecordingTunnelPreferenceSession(failureAtOperationIndex: 3)
+
+        do {
+            try await TunnelPreferenceTransaction.start(using: session)
+            XCTFail("Expected the post-save preference reload to fail")
+        } catch {
+            XCTAssertEqual(error as? RecordingPreferenceError, .injected)
+        }
+
+        let operations = await session.operations
+        XCTAssertEqual(operations, [
+            .load,
+            .apply(onDemandEnabled: true),
+            .save,
+            .load,
+            .apply(onDemandEnabled: false),
+            .save,
+            .load,
+        ])
+    }
+
+    func testStartRollsBackOnDemandWhenTunnelSubmissionFails() async {
+        let session = await RecordingTunnelPreferenceSession(failureAtOperationIndex: 4)
+
+        do {
+            try await TunnelPreferenceTransaction.start(using: session)
+            XCTFail("Expected the tunnel start submission to fail")
+        } catch {
+            XCTAssertEqual(error as? RecordingPreferenceError, .injected)
+        }
+
+        let operations = await session.operations
+        XCTAssertEqual(operations, [
+            .load,
+            .apply(onDemandEnabled: true),
+            .save,
+            .load,
+            .start,
+            .apply(onDemandEnabled: false),
+            .save,
+            .load,
+        ])
+    }
+
     func testSuccessfulStopPersistsDisabledOnDemandBeforeStoppingSession() async throws {
         let session = await RecordingTunnelPreferenceSession()
 
@@ -68,9 +113,14 @@ private enum RecordingPreferenceError: Error, Equatable {
 private final class RecordingTunnelPreferenceSession: TunnelPreferenceSession {
     private(set) var operations: [RecordedPreferenceOperation] = []
     private let failure: RecordedPreferenceOperation?
+    private let failureAtOperationIndex: Int?
 
-    init(failure: RecordedPreferenceOperation? = nil) {
+    init(
+        failure: RecordedPreferenceOperation? = nil,
+        failureAtOperationIndex: Int? = nil
+    ) {
         self.failure = failure
+        self.failureAtOperationIndex = failureAtOperationIndex
     }
 
     func loadPreferences() async throws {
@@ -95,6 +145,8 @@ private final class RecordingTunnelPreferenceSession: TunnelPreferenceSession {
 
     private func record(_ operation: RecordedPreferenceOperation) throws {
         operations.append(operation)
-        if operation == failure { throw RecordingPreferenceError.injected }
+        if operation == failure || operations.count - 1 == failureAtOperationIndex {
+            throw RecordingPreferenceError.injected
+        }
     }
 }
