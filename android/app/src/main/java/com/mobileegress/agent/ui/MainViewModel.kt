@@ -18,6 +18,7 @@ import com.mobileegress.agent.security.SecureIdentityStore
 import com.mobileegress.agent.service.AgentForegroundService
 import com.mobileegress.agent.status.AgentRuntimeStatus
 import com.mobileegress.agent.status.AgentStatusBus
+import com.mobileegress.agent.network.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +34,7 @@ data class MainUiState(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val rotationSettingsLaunchGate = RotationSettingsLaunchGate()
     private val identityStore = SecureIdentityStore(application)
     private val deviceKeyStore = DeviceKeyStore()
     private val cellularNetworkAcquirer = CellularNetworkAcquirer(application)
@@ -126,6 +128,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             AgentForegroundService.stopFromUi(getApplication())
         }
     }
+
+    fun rotateCellularIp(holdSeconds: Int) {
+        val current = mutableState.value
+        if (
+            current.paired &&
+            current.runtime.running &&
+            !current.runtime.rotation.isActive()
+        ) {
+            AgentForegroundService.rotateIpFromUi(getApplication(), holdSeconds)
+        }
+    }
+
+    fun cancelCellularIpRotation() {
+        if (mutableState.value.runtime.rotation.isActive()) {
+            AgentForegroundService.cancelRotationFromUi(getApplication())
+        }
+    }
+
+    fun consumeAirplaneSettingsLaunch(attemptId: Long): Boolean =
+        rotationSettingsLaunchGate.consume(attemptId)
 
     fun copySafeStatus(): String = mutableState.value.runtime.copySafeText(mutableState.value.paired)
 

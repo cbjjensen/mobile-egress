@@ -4,6 +4,9 @@ import com.mobileegress.agent.status.AgentRuntimeStatus
 import com.mobileegress.agent.status.CellularHealth
 import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
+import com.mobileegress.agent.network.PublicIpSnapshot
+import com.mobileegress.agent.network.RotationResult
+import com.mobileegress.agent.network.RotationState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -51,7 +54,84 @@ class AgentScreenPresentationTest {
         assertEquals("Cellular relay active", presentation.headline)
         assertEquals(ScreenTone.Success, presentation.tone)
         assertEquals(AgentPrimaryAction.Stop, presentation.agentPrimaryAction)
+        assertEquals(RotationAction.Rotate, presentation.rotationAction)
+        assertEquals("Rotate cellular IP", presentation.rotationLabel)
+        assertTrue(presentation.rotationEnabled)
         assertFalse(presentation.scanEnabled)
+    }
+
+    @Test
+    fun `active rotation replaces the normal headline and disables another attempt`() {
+        val presentation = presentAgentScreen(
+            MainUiState(
+                paired = true,
+                pairingStatus = "Paired",
+                runtime = AgentRuntimeStatus(
+                    running = true,
+                    cellular = CellularHealth.Available,
+                    relay = RelayHealth.Disconnected,
+                    rotation = RotationState.AwaitingAirplaneOn(
+                        attemptId = 9,
+                        originalNetworkToken = "private-token",
+                        holdSeconds = 10,
+                        before = PublicIpSnapshot(ipv4 = "198.51.100.40"),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("Turn Airplane Mode on", presentation.headline)
+        assertEquals("Waiting for Airplane Mode", presentation.rotationLabel)
+        assertFalse(presentation.rotationEnabled)
+    }
+
+    @Test
+    fun `unchanged result offers a thirty second retry`() {
+        val presentation = presentAgentScreen(
+            MainUiState(
+                paired = true,
+                pairingStatus = "Paired",
+                runtime = AgentRuntimeStatus(
+                    running = true,
+                    cellular = CellularHealth.Available,
+                    relay = RelayHealth.Connected,
+                    rotation = RotationState.Completed(
+                        attemptId = 9,
+                        before = PublicIpSnapshot(ipv4 = "198.51.100.40"),
+                        after = PublicIpSnapshot(ipv4 = "198.51.100.40"),
+                        result = RotationResult.Unchanged,
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("Carrier reused the IP", presentation.headline)
+        assertEquals(RotationAction.Retry, presentation.rotationAction)
+        assertEquals("Retry with 30-second reset", presentation.rotationLabel)
+        assertTrue(presentation.rotationEnabled)
+    }
+
+    @Test
+    fun `completed rotation exposes transient before and after address rows`() {
+        val rows = rotationAddressRows(
+            RotationState.Completed(
+                attemptId = 9,
+                before = PublicIpSnapshot(ipv4 = "198.51.100.40", ipv6 = "2001:db8::40"),
+                after = PublicIpSnapshot(ipv4 = "198.51.100.41"),
+                result = RotationResult.Changed,
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                RotationAddressRow("IPv4 before", "198.51.100.40"),
+                RotationAddressRow("IPv4 after", "198.51.100.41"),
+                RotationAddressRow("IPv6 before", "2001:db8::40"),
+                RotationAddressRow("IPv6 after", "Not verified"),
+            ),
+            rows,
+        )
+        assertTrue(rotationAddressRows(RotationState.Idle).isEmpty())
     }
 
     @Test

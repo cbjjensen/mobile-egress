@@ -17,9 +17,16 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.mobileegress.agent.R
 import com.mobileegress.agent.network.CellularNetworkAcquirer
+import com.mobileegress.agent.network.CellularIpRotationController
 import com.mobileegress.agent.network.CellularRequiredController
+import com.mobileegress.agent.network.IpifyPublicIpProbe
 import com.mobileegress.agent.network.NetworkTransport
 import com.mobileegress.agent.network.PathEvent
+import com.mobileegress.agent.network.RotationEffect
+import com.mobileegress.agent.network.RotationEvent
+import com.mobileegress.agent.network.RotationFailure
+import com.mobileegress.agent.network.RotationState
+import com.mobileegress.agent.network.isActive
 import com.mobileegress.agent.security.DeviceKeyStore
 import com.mobileegress.agent.security.SecureIdentityStore
 import com.mobileegress.agent.session.AgentSession
@@ -31,6 +38,7 @@ import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
 import com.mobileegress.agent.ui.MainActivity
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -38,6 +46,8 @@ import kotlinx.coroutines.launch
 class AgentForegroundService : LifecycleService() {
     private val foregroundController = ForegroundController()
     private val pathController = CellularRequiredController()
+    private val rotationController = CellularIpRotationController()
+    private val publicIpProbe = IpifyPublicIpProbe()
     private val runtimeLock = Any()
     private lateinit var connectivityManager: ConnectivityManager
     private lateinit var identityStore: SecureIdentityStore
@@ -47,7 +57,12 @@ class AgentForegroundService : LifecycleService() {
     private var selectedToken: String? = null
     private var session: AgentSession? = null
     private var reconnectJob: Job? = null
+    private var rotationProbeJob: Job? = null
+    private var rotationLossTimeoutJob: Job? = null
+    private var rotationHoldJob: Job? = null
+    private var rotationReturnTimeoutJob: Job? = null
     private var generation = 0L
+    private var rotationAttemptId = 0L
     private var reconnectAttempt = 0
 
     override fun onCreate() {
@@ -72,6 +87,13 @@ class AgentForegroundService : LifecycleService() {
         when (intent?.action) {
             ACTION_START_FROM_UI -> execute(foregroundController.reduce(ForegroundEvent.UiStartRequested).effects)
             ACTION_STOP_FROM_UI -> execute(foregroundController.reduce(ForegroundEvent.UiStopRequested).effects)
+            ACTION_ROTATE_IP_FROM_UI -> requestIpRotation(
+                intent.getIntExtra(EXTRA_HOLD_SECONDS, DEFAULT_HOLD_SECONDS).coerceIn(
+                    MIN_HOLD_SECONDS,
+                    MAX_HOLD_SECONDS,
+                ),
+            )
+            ACTION_CANCEL_ROTATION_FROM_UI -> processRotation(RotationEvent.Cancelled)
             else -> if (foregroundController.state == ForegroundState.Stopped) stopSelf(startId)
         }
         return Service.START_NOT_STICKY
@@ -139,6 +161,23 @@ class AgentForegroundService : LifecycleService() {
                     token = (++generation).toString()
                     selectedToken = token
                 }
+                if (rotationController.state.isActive()) {
+                    AgentStatusBus.update {
+                        it.copy(
+                            cellular = CellularHealth.Available,
+                            relay = RelayHealth.Disconnected,
+                            errorClass = ErrorClass.None,
+                        )
+                    }
+                    processRotation(RotationEvent.CellularAvailable(token))
+                    return
+                }
+                if (
+                    (rotationController.state as? RotationState.Failed)?.failure ==
+                    RotationFailure.CellularDidNotReturn
+                ) {
+                    processRotation(RotationEvent.Reset)
+                }
                 val transition = pathController.reduce(
                     PathEvent.NetworkAvailable(token, NetworkTransport.CELLULAR),
                 )
@@ -171,6 +210,9 @@ class AgentForegroundService : LifecycleService() {
                 pathController.reduce(PathEvent.NetworkLost(token))
                 oldSession?.close()
                 reconnectAttempt = 0
+                if (rotationController.state.isActive()) {
+                    processRotation(RotationEvent.CellularLost)
+                }
                 AgentStatusBus.update {
                     it.copy(
                         cellular = CellularHealth.Unavailable,
@@ -272,6 +314,139 @@ class AgentForegroundService : LifecycleService() {
         }
     }
 
+    private fun requestIpRotation(holdSeconds: Int) {
+        val request = synchronized(runtimeLock) {
+            val token = selectedToken ?: return
+            if (selectedNetwork == null || foregroundController.state != ForegroundState.Running) return
+            RotationEvent.Requested(++rotationAttemptId, token, holdSeconds)
+        }
+        processRotation(request)
+    }
+
+    @Synchronized
+    private fun processRotation(event: RotationEvent) {
+        if (event == RotationEvent.Cancelled) cancelRotationJobs()
+        val transition = rotationController.reduce(event)
+        AgentStatusBus.update { it.copy(rotation = transition.state) }
+        executeRotationEffects(transition.effects)
+    }
+
+    private fun executeRotationEffects(effects: List<RotationEffect>) {
+        effects.forEach { effect ->
+            when (effect) {
+                RotationEffect.CloseSessionAndStreams -> closeRelayForRotation()
+                is RotationEffect.ProbeBefore -> probeForRotation(effect.networkToken, before = true)
+                is RotationEffect.OpenAirplaneSettings -> Unit
+                RotationEffect.ScheduleLossTimeout -> {
+                    rotationLossTimeoutJob?.cancel()
+                    rotationLossTimeoutJob = lifecycleScope.launch {
+                        delay(LOSS_TIMEOUT_MILLIS)
+                        processRotation(RotationEvent.LossTimedOut)
+                    }
+                }
+                RotationEffect.CancelLossTimeout -> {
+                    rotationLossTimeoutJob?.cancel()
+                    rotationLossTimeoutJob = null
+                }
+                is RotationEffect.StartHoldCountdown -> startRotationHoldCountdown(effect.seconds)
+                RotationEffect.ScheduleReturnTimeout -> {
+                    rotationReturnTimeoutJob?.cancel()
+                    rotationReturnTimeoutJob = lifecycleScope.launch {
+                        delay(RETURN_TIMEOUT_MILLIS)
+                        processRotation(RotationEvent.ReturnTimedOut)
+                    }
+                }
+                RotationEffect.CancelReturnTimeout -> {
+                    rotationReturnTimeoutJob?.cancel()
+                    rotationReturnTimeoutJob = null
+                }
+                is RotationEffect.ProbeAfter -> probeForRotation(effect.networkToken, before = false)
+                is RotationEffect.ResumeRelay -> resumeRelayAfterRotation(effect.networkToken)
+            }
+        }
+    }
+
+    private fun closeRelayForRotation() {
+        val oldSession = synchronized(runtimeLock) {
+            generation++
+            reconnectJob?.cancel()
+            reconnectJob = null
+            session.also { session = null }
+        }
+        oldSession?.close()
+        reconnectAttempt = 0
+        AgentStatusBus.update {
+            it.copy(relay = RelayHealth.Disconnected, activeStreams = 0, errorClass = ErrorClass.None)
+        }
+    }
+
+    private fun probeForRotation(networkToken: String, before: Boolean) {
+        rotationProbeJob?.cancel()
+        val expectedAttempt = rotationController.state.attemptId()
+        val network = synchronized(runtimeLock) {
+            selectedNetwork.takeIf { selectedToken == networkToken }
+        }
+        rotationProbeJob = lifecycleScope.launch {
+            val snapshot = try {
+                if (network == null) com.mobileegress.agent.network.PublicIpSnapshot() else publicIpProbe.probe(network)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                com.mobileegress.agent.network.PublicIpSnapshot()
+            }
+            if (rotationController.state.attemptId() == expectedAttempt) {
+                processRotation(
+                    if (before) {
+                        RotationEvent.BeforeProbeCompleted(snapshot)
+                    } else {
+                        RotationEvent.AfterProbeCompleted(snapshot)
+                    },
+                )
+            }
+            rotationProbeJob = null
+        }
+    }
+
+    private fun startRotationHoldCountdown(seconds: Int) {
+        rotationHoldJob?.cancel()
+        rotationHoldJob = lifecycleScope.launch {
+            for (remaining in (seconds - 1) downTo 1) {
+                delay(1_000)
+                processRotation(RotationEvent.HoldCountdownTick(remaining))
+            }
+            delay(1_000)
+            processRotation(RotationEvent.HoldCountdownFinished)
+            rotationHoldJob = null
+        }
+    }
+
+    private fun resumeRelayAfterRotation(networkToken: String) {
+        val network = synchronized(runtimeLock) {
+            selectedNetwork.takeIf { selectedToken == networkToken }
+        } ?: return
+        pathController.reduce(PathEvent.NetworkAvailable(networkToken, NetworkTransport.CELLULAR))
+        AgentStatusBus.update {
+            it.copy(
+                cellular = CellularHealth.Available,
+                relay = RelayHealth.Connecting,
+                activeStreams = 0,
+                errorClass = ErrorClass.None,
+            )
+        }
+        connectRelay(network, networkToken)
+    }
+
+    private fun cancelRotationJobs() {
+        rotationProbeJob?.cancel()
+        rotationProbeJob = null
+        rotationLossTimeoutJob?.cancel()
+        rotationLossTimeoutJob = null
+        rotationHoldJob?.cancel()
+        rotationHoldJob = null
+        rotationReturnTimeoutJob?.cancel()
+        rotationReturnTimeoutJob = null
+    }
+
     private fun stopCellularRuntime() {
         val callback: ConnectivityManager.NetworkCallback?
         val oldSession: AgentSession?
@@ -286,6 +461,8 @@ class AgentForegroundService : LifecycleService() {
             oldSession = session
             session = null
         }
+        cancelRotationJobs()
+        processRotation(RotationEvent.Reset)
         if (callback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(callback)
@@ -325,7 +502,7 @@ class AgentForegroundService : LifecycleService() {
             Intent(this, AgentForegroundService::class.java).setAction(ACTION_STOP_FROM_UI),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val summary = "Cellular ${status.cellular.name.lowercase()} · Relay ${status.relay.name.lowercase()} · ${status.activeStreams} streams"
+        val summary = agentNotificationSummary(status)
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
             .setSmallIcon(R.drawable.ic_mobile_egress)
             .setContentTitle(getString(R.string.notification_title))
@@ -341,8 +518,16 @@ class AgentForegroundService : LifecycleService() {
     companion object {
         private const val ACTION_START_FROM_UI = "com.mobileegress.agent.action.START_FROM_UI"
         private const val ACTION_STOP_FROM_UI = "com.mobileegress.agent.action.STOP_FROM_UI"
+        private const val ACTION_ROTATE_IP_FROM_UI = "com.mobileegress.agent.action.ROTATE_IP_FROM_UI"
+        private const val ACTION_CANCEL_ROTATION_FROM_UI = "com.mobileegress.agent.action.CANCEL_ROTATION_FROM_UI"
+        private const val EXTRA_HOLD_SECONDS = "hold_seconds"
         private const val NOTIFICATION_CHANNEL = "mobile_egress_agent"
         private const val NOTIFICATION_ID = 4101
+        private const val DEFAULT_HOLD_SECONDS = 10
+        private const val MIN_HOLD_SECONDS = 10
+        private const val MAX_HOLD_SECONDS = 30
+        private const val LOSS_TIMEOUT_MILLIS = 120_000L
+        private const val RETURN_TIMEOUT_MILLIS = 180_000L
 
         fun startFromUi(context: Context) {
             androidx.core.content.ContextCompat.startForegroundService(
@@ -356,5 +541,31 @@ class AgentForegroundService : LifecycleService() {
                 Intent(context, AgentForegroundService::class.java).setAction(ACTION_STOP_FROM_UI),
             )
         }
+
+        fun rotateIpFromUi(context: Context, holdSeconds: Int) {
+            context.startService(
+                Intent(context, AgentForegroundService::class.java)
+                    .setAction(ACTION_ROTATE_IP_FROM_UI)
+                    .putExtra(EXTRA_HOLD_SECONDS, holdSeconds),
+            )
+        }
+
+        fun cancelRotationFromUi(context: Context) {
+            context.startService(
+                Intent(context, AgentForegroundService::class.java)
+                    .setAction(ACTION_CANCEL_ROTATION_FROM_UI),
+            )
+        }
     }
+}
+
+private fun RotationState.attemptId(): Long? = when (this) {
+    RotationState.Idle -> null
+    is RotationState.Preparing -> attemptId
+    is RotationState.AwaitingAirplaneOn -> attemptId
+    is RotationState.Detaching -> attemptId
+    is RotationState.AwaitingCellularReturn -> attemptId
+    is RotationState.Verifying -> attemptId
+    is RotationState.Completed -> attemptId
+    is RotationState.Failed -> attemptId
 }

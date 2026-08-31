@@ -4,6 +4,8 @@
 
 `MobileEgressRelay` and each `MobileEgressClient` run as automatic LocalSystem services. Closing the controller window leaves it in the tray; quitting the controller does not stop those services. Start/stop the Android Agent only through its visible UI or foreground notification.
 
+For a best-effort cellular address change, use **Rotate cellular IP** in the running Android Agent. Confirm stream disconnection, turn Airplane Mode on in the system screen the app opens, wait for the notification countdown, then turn it off. The Agent verifies and reconnects automatically. An unchanged result means the carrier reused the address; retry with the offered 30-second reset. Do not record the displayed addresses in acceptance evidence.
+
 An EC2 application opts in with its node-specific `socks5://<user>:<password>@127.0.0.1:1080` value. Never configure an EC2 security group, Windows system proxy, or public listener for SOCKS.
 
 ## Controller actions
@@ -50,6 +52,10 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes; Repair reuses the persisted desired endpoint/generation. Scan the migration QR. |
 | Interrupted reservation | Controller exited before recoverable node metadata was committed | Retry Install on the same instance, or explicitly cancel the reservation only if that instance is gone/unrecoverable. |
 | Agent offline | Android foreground service, cellular availability, battery restrictions | Start from visible UI; restore cellular. Wi-Fi is intentionally not a fallback. |
+| Cellular IP unchanged | Rotation completed but the carrier reused the comparable IPv4/IPv6 address | Use the offered 30-second retry. Reassignment is carrier-controlled and cannot be guaranteed. |
+| Rotation waiting for Airplane Mode | System settings is open but cellular never disappeared | Turn Airplane Mode on manually or return to the Agent and cancel. It cancels automatically after two minutes. |
+| Rotation waiting for cellular | Airplane Mode remains on, mobile data is unavailable, or carrier attachment is slow | Turn Airplane Mode off and restore cellular. After three minutes the Agent returns to normal waiting behavior and reconnects whenever cellular appears. |
+| IP result unverified | ipify was unreachable or no address family succeeded both before and after | Proxy traffic still remains cellular-only. Retry later; do not treat the result as proof that the address changed. |
 | Node missing | Region, running Windows Server 2019 x86-64 image, AWS authorization | Use `us-east-1`; the app intentionally filters other nodes. |
 | SSM offline | SSM Agent/service, outbound HTTPS/DNS, IAM policy propagation | Wait or repair SSM. Do not open inbound ports. |
 | Install/update rejected before SSM | Manifest v2 shape; certificate DER bound/parse; self-signature; Code Signing EKU; CA=false; validity; SHA-1/SHA-256 consistency | Rebuild from the established tracked CER and current signing identity. Do not edit the manifest or initialize a replacement identity. |

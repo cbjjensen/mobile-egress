@@ -46,7 +46,7 @@ Bootstrap output contains only the CSR and X25519 public key. The service binds 
 
 ### Android Agent
 
-The Android app stores its P-256 identity in Android Keystore and encrypted app storage. A foreground service requests a cellular `Network` and uses that network's socket factory for the relay and every target socket. Loss of cellular closes streams; Wi-Fi is never used as fallback.
+The Android app stores its P-256 identity in Android Keystore and encrypted app storage. A foreground service requests a cellular `Network` and uses that network's socket factory for the relay and every target socket. Loss of cellular closes streams; Wi-Fi is never used as fallback. Its guided IP-rotation state machine may close the relay, query ipify IPv4/IPv6 endpoints through that same cellular network, open the system Airplane Mode settings for manual toggling, observe radio loss/return, and reconnect. No relay protocol or default-route behavior changes.
 
 Admission is capped at 32 streams. Inbound and outbound queues are bounded; outbound data scheduling is round-robin across ready streams so one stream cannot monopolize the Agent.
 

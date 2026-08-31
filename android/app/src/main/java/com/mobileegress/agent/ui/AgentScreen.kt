@@ -26,13 +26,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +53,7 @@ import com.mobileegress.agent.status.AgentRuntimeStatus
 import com.mobileegress.agent.status.CellularHealth
 import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
+import com.mobileegress.agent.network.isActive
 
 @Composable
 fun AgentScreen(
@@ -58,6 +65,8 @@ fun AgentScreen(
     onScannerUnavailable: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onRotateIp: (Int) -> Unit,
+    onCancelRotation: () -> Unit,
     onCopyStatus: () -> Unit,
 ) {
     val presentation = presentAgentScreen(state)
@@ -91,6 +100,8 @@ fun AgentScreen(
                 presentation = presentation,
                 onStart = onStart,
                 onStop = onStop,
+                onRotateIp = onRotateIp,
+                onCancelRotation = onCancelRotation,
                 onCopyStatus = onCopyStatus,
             )
             Text(
@@ -231,9 +242,12 @@ private fun AgentCard(
     presentation: AgentScreenPresentation,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onRotateIp: (Int) -> Unit,
+    onCancelRotation: () -> Unit,
     onCopyStatus: () -> Unit,
 ) {
     val runtime = state.runtime
+    var pendingRotationSeconds by remember { mutableStateOf<Int?>(null) }
     AppCard {
         SectionHeader(
             step = "02",
@@ -274,6 +288,66 @@ private fun AgentCard(
             MetricTile("Data down", formatByteCount(runtime.bytesDown), Modifier.weight(1f))
         }
         AgentMessage(runtime.errorClass)
+        val addressRows = rotationAddressRows(runtime.rotation)
+        if (addressRows.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    addressRows.forEach { row ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                row.label,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                row.value,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (presentation.rotationAction != RotationAction.None) {
+            val holdSeconds = if (presentation.rotationAction == RotationAction.Retry) 30 else 10
+            Button(
+                onClick = {
+                    if (runtime.activeStreams > 0) {
+                        pendingRotationSeconds = holdSeconds
+                    } else {
+                        onRotateIp(holdSeconds)
+                    }
+                },
+                enabled = presentation.rotationEnabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 54.dp),
+                shape = RoundedCornerShape(17.dp),
+            ) {
+                Text(presentation.rotationLabel)
+            }
+        }
+        if (runtime.rotation.isActive()) {
+            OutlinedButton(
+                onClick = onCancelRotation,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(17.dp),
+            ) {
+                Text("Cancel IP rotation")
+            }
+        }
         when (presentation.agentPrimaryAction) {
             AgentPrimaryAction.Start -> Button(
                 onClick = onStart,
@@ -313,6 +387,33 @@ private fun AgentCard(
             shape = RoundedCornerShape(17.dp),
         ) {
             Text("Copy diagnostic status")
+        }
+        pendingRotationSeconds?.let { holdSeconds ->
+            AlertDialog(
+                onDismissRequest = { pendingRotationSeconds = null },
+                title = { Text("Disconnect active streams?") },
+                text = {
+                    Text(
+                        "Rotating the cellular IP will disconnect ${runtime.activeStreams} active " +
+                            if (runtime.activeStreams == 1) "stream." else "streams.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingRotationSeconds = null
+                            onRotateIp(holdSeconds)
+                        },
+                    ) {
+                        Text("Disconnect and rotate")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRotationSeconds = null }) {
+                        Text("Keep connected")
+                    }
+                },
+            )
         }
     }
 }
@@ -515,6 +616,8 @@ private fun UnpairedAgentPreview() {
             onScannerUnavailable = {},
             onStart = {},
             onStop = {},
+            onRotateIp = {},
+            onCancelRotation = {},
             onCopyStatus = {},
         )
     }
@@ -549,6 +652,8 @@ private fun ConnectedAgentPreview() {
             onScannerUnavailable = {},
             onStart = {},
             onStop = {},
+            onRotateIp = {},
+            onCancelRotation = {},
             onCopyStatus = {},
         )
     }

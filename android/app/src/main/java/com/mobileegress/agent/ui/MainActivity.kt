@@ -5,8 +5,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -14,6 +16,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import com.mobileegress.agent.network.RotationState
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -38,6 +42,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
+            val rotation = state.runtime.rotation
+            LaunchedEffect(rotation) {
+                val attemptId = (rotation as? RotationState.AwaitingAirplaneOn)?.attemptId
+                if (attemptId != null && viewModel.consumeAirplaneSettingsLaunch(attemptId)) {
+                    openAirplaneModeSettings()
+                }
+            }
             MobileEgressTheme {
                 AgentScreen(
                     state = state,
@@ -48,6 +59,8 @@ class MainActivity : ComponentActivity() {
                     onScannerUnavailable = viewModel::onScannerUnavailable,
                     onStart = ::startFromVisibleUi,
                     onStop = viewModel::stopAgent,
+                    onRotateIp = viewModel::rotateCellularIp,
+                    onCancelRotation = viewModel::cancelCellularIpRotation,
                     onCopyStatus = ::copySafeStatus,
                 )
             }
@@ -82,5 +95,15 @@ class MainActivity : ComponentActivity() {
         getSystemService(ClipboardManager::class.java).setPrimaryClip(
             ClipData.newPlainText("Mobile Egress status", viewModel.copySafeStatus()),
         )
+    }
+
+    private fun openAirplaneModeSettings() {
+        val airplaneSettings = Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)
+        val intent = if (airplaneSettings.resolveActivity(packageManager) != null) {
+            airplaneSettings
+        } else {
+            Intent(Settings.ACTION_WIRELESS_SETTINGS)
+        }
+        startActivity(intent)
     }
 }
