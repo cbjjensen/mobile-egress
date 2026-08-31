@@ -445,6 +445,15 @@ function Resolve-MobileEgressReleaseComponents {
     return @($resolved)
 }
 
+function Get-MobileEgressAndroidApkName {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    return "zfnf-mobile-egress-android-$Version.apk"
+}
+
 function Get-MobileEgressReleaseArtifactDefinitions {
     param(
         [Parameter(Mandatory)]
@@ -467,9 +476,10 @@ function Get-MobileEgressReleaseArtifactDefinitions {
         }
     }
     if ($resolvedComponents -contains 'Android') {
+        $androidApkName = Get-MobileEgressAndroidApkName -Version $Version
         [pscustomobject]@{
-            Name = 'app-release.apk'
-            Path = Join-Path $RepositoryRoot 'android\app\build\outputs\apk\release\app-release.apk'
+            Name = $androidApkName
+            Path = Join-Path $RepositoryRoot "android\app\build\outputs\apk\release\$androidApkName"
         }
     }
 }
@@ -494,7 +504,7 @@ function Get-MobileEgressReleaseDownloadItemDefinitions {
         [pscustomobject]@{
             Key = 'android'
             Label = 'Android agent APK'
-            CurrentName = 'app-release.apk'
+            CurrentName = Get-MobileEgressAndroidApkName -Version $Version
         }
     )
 }
@@ -510,7 +520,7 @@ function Test-MobileEgressReleaseDownloadAssetName {
     switch ($Key) {
         'windows' { return $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
         'client' { return $Name -ceq 'mobile-egress-client.exe' }
-        'android' { return $Name -ceq 'app-release.apk' }
+        'android' { return $Name -match '^zfnf-mobile-egress-android-[0-9]+\.[0-9]+\.[0-9]+\.apk$' -or $Name -ceq 'app-release.apk' }
         default { throw "Unsupported download item: $Key" }
     }
 }
@@ -736,7 +746,7 @@ function Assert-MobileEgressReleaseArtifacts {
         if ($null -eq $apksignerDirectory) {
             throw 'Android Build-Tools 35 apksigner is unavailable.'
         }
-        $apkPath = Join-Path $RepositoryRoot 'android\app\build\outputs\apk\release\app-release.apk'
+        $apkPath = Join-Path $RepositoryRoot "android\app\build\outputs\apk\release\$(Get-MobileEgressAndroidApkName -Version $Version)"
         $apkVerification = Invoke-MobileEgressNativeResult -FilePath (Join-Path $apksignerDirectory.FullName 'apksigner.bat') -Arguments @('verify', '--verbose', '--print-certs', $apkPath)
         if ($apkVerification.ExitCode -ne 0) {
             throw 'APK signature verification failed.'

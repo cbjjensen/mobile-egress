@@ -1,5 +1,6 @@
 package com.mobileegress.agent.status
 
+import com.mobileegress.agent.branding.AgentBranding
 import com.mobileegress.agent.network.RotationState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,7 +34,7 @@ data class AgentRuntimeStatus(
     val rotation: RotationState = RotationState.Idle,
 ) {
     fun copySafeText(paired: Boolean): String = listOf(
-        "Mobile Egress Agent",
+        AgentBranding.agentName,
         "Paired: ${if (paired) "yes" else "no"}",
         "Running: ${if (running) "yes" else "no"}",
         "Cellular: ${cellular.name.lowercase()}",

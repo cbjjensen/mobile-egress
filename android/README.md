@@ -12,14 +12,14 @@ Tap **Start** to request a cellular network and connect. Every relay and target 
 
 On a paired, running Agent with cellular available, choose **Rotate cellular IP**. If proxy streams are active, confirm that they may be disconnected. The Agent checks the current public IPv4 and IPv6 through the selected cellular network, closes the relay session, and opens Android's Airplane Mode settings.
 
-1. Turn Airplane Mode **on**. Android requires this manual system-setting action; Mobile Egress cannot toggle it for you.
+1. Turn Airplane Mode **on**. Android requires this manual system-setting action; ZFNF Mobile Egress cannot toggle it for you.
 2. Keep it on until the Agent notification's ten-second countdown finishes.
-3. Turn Airplane Mode **off**. You may then return to Mobile Egress.
+3. Turn Airplane Mode **off**. You may then return to ZFNF Mobile Egress.
 4. The Agent waits for cellular, checks the address again, reconnects the relay, and shows **Changed**, **Unchanged**, or **Could not verify** with transient before/after values.
 
 If the carrier reused the address, choose **Retry with 30-second reset**. Rotation is best effort: a carrier may return the same public or CGNAT address repeatedly. **Cancel IP rotation** restores the current relay where cellular is still available. If cellular does not disconnect within two minutes, the Agent cancels automatically; if it does not return within three minutes, the Agent continues waiting normally.
 
-Address checks use the public HTTPS endpoints `api.ipify.org` and `api6.ipify.org`. Those requests and their DNS lookups are cellular-bound. Exact addresses are kept only in the live screen; Mobile Egress does not persist, log, or copy them into diagnostic status. ipify necessarily receives the request's public address. No root, ADB, accessibility service, VPN, extra Android permission, APN edit, or automatic Airplane Mode control is used.
+Address checks use the public HTTPS endpoints `api.ipify.org` and `api6.ipify.org`. Those requests and their DNS lookups are cellular-bound. Exact addresses are kept only in the live screen; ZFNF Mobile Egress does not persist, log, or copy them into diagnostic status. ipify necessarily receives the request's public address. No root, ADB, accessibility service, VPN, extra Android permission, APN edit, or automatic Airplane Mode control is used.
 
 ## Endpoint migration
 
@@ -42,4 +42,4 @@ cd android
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```
 
-For a distributable APK, the publisher reuses the ignored `mobile-egress-release.jks` and `keystore.properties`, then runs `scripts\release-android.ps1`. The script also matches the APK signer to the tracked public certificate identity. Do not distribute a debug or unsigned APK as a production Agent, regenerate an established release key, or give signing files to friends. Future agents must follow [the Android signing skill](../.agents/skills/mobile-egress-android-signing/SKILL.md).
+For a distributable APK, the publisher reuses the ignored `mobile-egress-release.jks` and `keystore.properties`, then runs `scripts\release-android.ps1`. The signed output is named `zfnf-mobile-egress-android-<version>.apk`, and the script also matches the APK signer to the tracked public certificate identity. Do not distribute a debug or unsigned APK as a production Agent, regenerate an established release key, or give signing files to friends. Future agents must follow [the Android signing skill](../.agents/skills/mobile-egress-android-signing/SKILL.md).

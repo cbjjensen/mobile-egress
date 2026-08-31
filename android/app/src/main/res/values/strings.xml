@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">Mobile Egress</string>
-    <string name="notification_channel_name">Mobile Egress Agent</string>
+    <string name="app_name">ZFNF Mobile Egress</string>
+    <string name="notification_channel_name">ZFNF Mobile Egress Agent</string>
     <string name="notification_channel_description">Status for the owner-started cellular relay Agent</string>
-    <string name="notification_title">Mobile Egress Agent running</string>
+    <string name="notification_title">ZFNF Mobile Egress Agent running</string>
     <string name="stop">Stop</string>
 </resources>

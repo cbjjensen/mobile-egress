@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import com.mobileegress.agent.branding.AgentBranding
 import com.mobileegress.agent.network.RotationState
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -95,7 +96,7 @@ class MainActivity : ComponentActivity() {
 
     private fun copySafeStatus() {
         getSystemService(ClipboardManager::class.java).setPrimaryClip(
-            ClipData.newPlainText("Mobile Egress status", viewModel.copySafeStatus()),
+            ClipData.newPlainText(AgentBranding.statusClipboardLabel, viewModel.copySafeStatus()),
         )
     }
 

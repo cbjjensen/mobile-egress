@@ -13,6 +13,7 @@ val releaseProperties = Properties().apply {
         releasePropertiesFile.inputStream().use(::load)
     }
 }
+val androidVersionName = "1.0.26"
 
 android {
     namespace = "com.mobileegress.agent"
@@ -22,8 +23,8 @@ android {
         applicationId = "com.mobileegress.agent"
         minSdk = 29
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.0.23"
+        versionCode = 12
+        versionName = androidVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -77,6 +78,15 @@ android {
             "META-INF/NOTICE.md",
             "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
         )
+    }
+
+    applicationVariants.all {
+        if (buildType.name == "release") {
+            outputs.all {
+                (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                    "zfnf-mobile-egress-android-$androidVersionName.apk"
+            }
+        }
     }
 }
 

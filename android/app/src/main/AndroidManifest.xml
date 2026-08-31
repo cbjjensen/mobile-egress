@@ -32,7 +32,7 @@
             android:stopWithTask="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Owner-started personal mobile-egress Agent: maintains an authenticated relay tunnel and cellular-bound outbound TCP streams; never accepts inbound connections or falls back to Wi-Fi." />
+                android:value="Owner-started personal ZFNF Mobile Egress Agent: maintains an authenticated relay tunnel and cellular-bound outbound TCP streams; never accepts inbound connections or falls back to Wi-Fi." />
         </service>
     </application>
 </manifest>

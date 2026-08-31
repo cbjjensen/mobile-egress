@@ -30,9 +30,9 @@ Assert-Condition $invalidComponentRejected 'Unknown release components must stop
 $windowsDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows'))
 Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe') 'A Windows release must publish the controller bundle and its coupled EC2 Client, but not Android.'
 $androidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Android'))
-Assert-Condition (($androidDefinitions.Name -join ',') -eq 'app-release.apk') 'An Android release must publish only the signed APK.'
+Assert-Condition (($androidDefinitions.Name -join ',') -eq 'zfnf-mobile-egress-android-1.2.3.apk') 'An Android release must publish only the versioned ZFNF APK.'
 $allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
-Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,app-release.apk') 'The full release must retain the established three-artifact set.'
+Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,zfnf-mobile-egress-android-1.2.3.apk') 'The full release must retain the established three-artifact set with the renamed Android APK.'
 
 $windowsDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.3' -Version '1.2.3' -ReleasedArtifacts $windowsDefinitions -PublishedReleases @(
     [pscustomobject]@{
@@ -41,7 +41,7 @@ $windowsDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag '
         assets = @(
             [pscustomobject]@{ name = 'mobile-egress-windows-1.2.2.zip' },
             [pscustomobject]@{ name = 'mobile-egress-client.exe' },
-            [pscustomobject]@{ name = 'app-release.apk' }
+            [pscustomobject]@{ name = 'zfnf-mobile-egress-android-1.2.2.apk' }
         )
     }
 ))
@@ -66,7 +66,7 @@ Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'android' }
 
 $downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $windowsDownloadLinks
 Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'
-Assert-Condition ($downloadSection -match '\[app-release\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.2/app-release\.apk\)') 'The download section must render fallback assets as direct GitHub download links.'
+Assert-Condition ($downloadSection -match '\[zfnf-mobile-egress-android-1\.2\.2\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.2/zfnf-mobile-egress-android-1\.2\.2\.apk\)') 'The download section must render fallback assets as direct GitHub download links.'
 
 $updatedBody = Update-MobileEgressReleaseBodyDownloadSection -Body "Generated notes`n`n<!-- mobile-egress-downloads:start -->`nold`n<!-- mobile-egress-downloads:end -->`n" -DownloadSection $downloadSection
 Assert-Condition (($updatedBody | Select-String -Pattern '<!-- mobile-egress-downloads:start -->' -AllMatches).Matches.Count -eq 1) 'Updating release notes must replace the managed Downloads section instead of appending duplicates.'
@@ -85,11 +85,11 @@ $expandedReleases = @(Get-MobileEgressGitHubReleases -ListReleases {
         tagName = $Tag
         isDraft = $false
         isPrerelease = $true
-        assets = @([pscustomobject]@{ name = 'app-release.apk' })
+        assets = @([pscustomobject]@{ name = 'zfnf-mobile-egress-android-1.2.3.apk' })
     }
 })
 Assert-Condition (($viewedReleaseTags -join ',') -eq 'v1.2.3') 'GitHub release fallback discovery must view non-draft releases individually because release list does not expose assets.'
-Assert-Condition ($expandedReleases[0].assets[0].name -eq 'app-release.apk') 'Expanded GitHub releases must include asset names for fallback download links.'
+Assert-Condition ($expandedReleases[0].assets[0].name -eq 'zfnf-mobile-egress-android-1.2.3.apk') 'Expanded GitHub releases must include asset names for fallback download links.'
 
 $noteUpdates = [System.Collections.Generic.List[string]]::new()
 Sync-MobileEgressReleaseDownloadNotes -CurrentTag 'v1.2.4' -Version '1.2.4' -ReleasedArtifacts $androidDefinitions -CurrentBody 'Generated release notes' -PublishedReleases @(

@@ -24,6 +24,7 @@ class AgentStatusTest {
 
         val copied = status.copySafeText(paired = true)
 
+        assertTrue(copied.contains("ZFNF Mobile Egress Agent"))
         assertTrue(copied.contains("IP rotation: changed"))
         assertFalse(copied.contains("198.51.100"))
         assertFalse(copied.contains("2001:db8"))

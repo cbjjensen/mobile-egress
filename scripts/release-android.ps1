@@ -178,7 +178,12 @@ try {
     }
 
     $apksignerCommand = Join-Path $apksigner 'apksigner.bat'
-    $releaseApk = '.\app\build\outputs\apk\release\app-release.apk'
+    $releaseApks = @(Get-ChildItem -LiteralPath '.\app\build\outputs\apk\release' -Filter 'zfnf-mobile-egress-android-*.apk' -File)
+    if ($releaseApks.Count -ne 1) {
+        Write-Host 'Expected exactly one versioned ZFNF Android release APK.'
+        exit 11
+    }
+    $releaseApk = $releaseApks[0].FullName
     & $apksignerCommand verify --verbose $releaseApk
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
