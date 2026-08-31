@@ -40,6 +40,20 @@ test('activity log copy output contains only the visible event fields', () => {
   assert.equal(output, '2026-08-31T05:00:00.000Z [SUCCESS] Bot 4.0 (i-a) · SSM · Profile attached.')
 })
 
+test('activity log uses the ZFNF product name for controller events', () => {
+  const output = formatActivityEvents([{
+    id: '1',
+    timestamp: '2026-08-31T05:00:00.000Z',
+    instanceId: '',
+    instanceName: '',
+    action: 'Bridge',
+    severity: 'warning',
+    message: 'Waiting for setup.',
+  }])
+
+  assert.equal(output, '2026-08-31T05:00:00.000Z [WARNING] ZFNF Mobile Egress · Bridge · Waiting for setup.')
+})
+
 test('EC2 UI exposes session-only filtered activity log controls without raw errors', async () => {
   const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
 

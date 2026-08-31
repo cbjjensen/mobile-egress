@@ -1,3 +1,5 @@
+import { productDisplayName } from './branding.js'
+
 const maximumActivityEvents = 200
 
 export function appendActivityEvent(events, event) {
@@ -13,7 +15,7 @@ export function formatActivityEvents(events) {
   return events.map(event => {
     const subject = event.instanceId
       ? `${event.instanceName || event.instanceId} (${event.instanceId})`
-      : 'Mobile Egress'
+      : productDisplayName
     return `${event.timestamp} [${event.severity.toUpperCase()}] ${subject} · ${event.action} · ${event.message}`
   }).join('\n')
 }

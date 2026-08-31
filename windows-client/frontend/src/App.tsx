@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode, SSMInstanceStatus } from './api'
 import { ActivityEvent, ActivitySeverity, appendActivityEvent, filterActivityEvents, formatActivityEvents } from './activity-log.js'
 import awsPermissionsPolicy from './aws-permissions-policy.json'
+import { productDisplayName } from './branding.js'
 import { managedNodeIdentity } from './managed-node.js'
 import { copyProxyLine, copySOCKS5URL, nodeProxyActions } from './proxy-actions.js'
 import { formatSSMCheckActivity, requiresSSMRoleConfirmation, runConfirmedSSMRestart, shouldSkipSSMProfileSetup, ssmStatusState, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMCredentialRefresh, waitForSSMOnline } from './ssm-progress.js'
@@ -296,7 +297,7 @@ export default function App() {
 
   async function restartEC2AndContinue(instance: EC2Instance) {
     const label = instance.name || instance.id
-    const confirmed = window.confirm(`Restart ${label} now? The Windows server will be briefly unavailable. Mobile Egress will wait for a fresh SSM Agent ping and then install the Client automatically.`)
+    const confirmed = window.confirm(`Restart ${label} now? The Windows server will be briefly unavailable. ${productDisplayName} will wait for a fresh SSM Agent ping and then install the Client automatically.`)
     let rebootRequestedAt = ''
     try {
       const result = await runConfirmedSSMRestart({
@@ -379,7 +380,7 @@ export default function App() {
   const activityInstanceOptions = [...activitySubjects].sort((left, right) => (left[1] || left[0]).localeCompare(right[1] || right[0]))
 
   return <main className="shell">
-    <header><div><p className="eyebrow">Personal cellular bridge</p><h1>Mobile Egress</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
+    <header><div><p className="eyebrow">Personal cellular bridge</p><h1>{productDisplayName}</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
     <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Phone</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>EC2 Nodes</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS Login</button></nav>
     {error && <div className="error" role="alert">{error}</div>}
 
@@ -418,7 +419,7 @@ export default function App() {
         <div className="wizard-panel">
           <div className="wizard-step-number">2</div>
           <div className="wizard-step-body">
-            <h3>Create a Mobile Egress user</h3>
+            <h3>Create a {productDisplayName} user</h3>
             <ol className="micro-steps">
               <li><span>1</span><div className="micro-step-text">In the AWS sidebar, click <strong>Users</strong></div></li>
               <li><span>2</span><div className="micro-step-text">Click <strong>Create user</strong></div></li>
@@ -469,7 +470,7 @@ export default function App() {
       </article>
 
       <details id="manual-aws-key" className="card"><summary>Manual access-key entry</summary><form onSubmit={saveAccessKeys}><label>Access key ID<input name="accessKeyId" required autoComplete="off" /></label><label>Secret access key<input name="secretAccessKey" type="password" required autoComplete="off" /></label><label>Session token (optional)<textarea name="sessionToken" rows={3} autoComplete="off" /></label><button className="primary" disabled={!!busy}>Save AWS access key</button></form></details>
-      <details className="card"><summary>Advanced: IAM Identity Center</summary><p>Use this if your AWS account already has IAM Identity Center. If you only have the AWS root login, root can enable Identity Center in the browser, but Mobile Egress signs in as the Identity Center user you create.</p><div className="setup-callout"><div><strong>Need a Start URL?</strong><p>Open IAM Identity Center, choose Enable, then choose Single-Region instance in US East (N. Virginia). Create a user for yourself, assign it access to this AWS account, and copy the AWS access portal URL into the Start URL field.</p></div><button onClick={() => void openIdentityCenterConsole()} disabled={!!busy}>{busy === 'sso-console' ? 'Opening AWS…' : 'Open setup page'}</button></div><form onSubmit={beginIdentityCenter} className="form-grid"><label>Start URL<input name="startUrl" required placeholder="https://d-xxxxxxxxxx.awsapps.com/start" /></label><label>SSO region<input name="region" required defaultValue="us-east-1" /></label><button className="primary" disabled={!!busy}>Open AWS login</button></form>{authorization && <div className="issued"><code>{authorization.userCode}</code><button onClick={() => window.open(authorization.verificationUrl, '_blank')}>Open browser again</button><small>Approve in the browser, then continue.</small><button className="primary" onClick={() => void completeIdentityCenter()} disabled={!!busy}>I approved the login</button></div>}{accounts.length > 0 && <form onSubmit={selectRole} className="form-grid"><label>AWS account<select value={selectedAccount} onChange={event => void chooseAccount(event.target.value)} required><option value="">Choose account</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name || account.id}</option>)}</select></label><label>Role<select name="role" required><option value="">Choose role</option>{roles.map(role => <option key={role} value={role}>{role}</option>)}</select></label><button className="primary" disabled={!!busy}>Use this role</button></form>}</details>
+      <details className="card advanced-identity-card"><summary>Advanced: IAM Identity Center</summary><p>Use this if your AWS account already has IAM Identity Center. If you only have the AWS root login, root can enable Identity Center in the browser, but {productDisplayName} signs in as the Identity Center user you create.</p><div className="setup-callout"><div><strong>Need a Start URL?</strong><p>Open IAM Identity Center, choose Enable, then choose Single-Region instance in US East (N. Virginia). Create a user for yourself, assign it access to this AWS account, and copy the AWS access portal URL into the Start URL field.</p></div><button onClick={() => void openIdentityCenterConsole()} disabled={!!busy}>{busy === 'sso-console' ? 'Opening AWS…' : 'Open setup page'}</button></div><form onSubmit={beginIdentityCenter} className="form-grid"><label>Start URL<input name="startUrl" required placeholder="https://d-xxxxxxxxxx.awsapps.com/start" /></label><label>SSO region<input name="region" required defaultValue="us-east-1" /></label><button className="primary" disabled={!!busy}>Open AWS login</button></form>{authorization && <div className="issued"><code>{authorization.userCode}</code><button onClick={() => window.open(authorization.verificationUrl, '_blank')}>Open browser again</button><small>Approve in the browser, then continue.</small><button className="primary" onClick={() => void completeIdentityCenter()} disabled={!!busy}>I approved the login</button></div>}{accounts.length > 0 && <form onSubmit={selectRole} className="form-grid"><label>AWS account<select value={selectedAccount} onChange={event => void chooseAccount(event.target.value)} required><option value="">Choose account</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name || account.id}</option>)}</select></label><label>Role<select name="role" required><option value="">Choose role</option>{roles.map(role => <option key={role} value={role}>{role}</option>)}</select></label><button className="primary" disabled={!!busy}>Use this role</button></form>}</details>
     </section>}
 
     {tab === 'nodes' && <section className="stack">
@@ -493,12 +494,12 @@ export default function App() {
       })}</div>
       <details className="card activity-panel" open>
         <summary><span>Activity logs</span><small>{activityEvents.length} / 200 session events</small></summary>
-        <p className="note">Session only. Closing Mobile Egress clears these sanitized events.</p>
+        <p className="note">Session only. Closing {productDisplayName} clears these sanitized events.</p>
         <div className="activity-controls">
           <label>EC2 instance<select value={activityFilter} onChange={event => setActivityFilter(event.target.value)}><option value="all">All instances</option>{activityInstanceOptions.map(([instanceId, name]) => <option value={instanceId} key={instanceId}>{name ? `${name} · ${instanceId}` : instanceId}</option>)}</select></label>
           <div className="actions"><button onClick={() => void copyVisibleActivityLogs(visibleActivityEvents)} disabled={!!busy || visibleActivityEvents.length === 0}>Copy visible logs</button><button onClick={() => setActivityEvents([])} disabled={activityEvents.length === 0}>Clear logs</button></div>
         </div>
-        {visibleActivityEvents.length === 0 ? <p className="activity-empty">No activity for this filter yet.</p> : <div className="activity-list">{visibleActivityEvents.map(event => <div className="activity-entry" key={event.id}><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`activity-level ${event.severity}`}>{event.severity}</span><div><strong>{event.instanceId ? `${event.instanceName || event.instanceId} · ${event.instanceId}` : 'Mobile Egress'}</strong><small>{event.action}</small><p>{event.message}</p></div></div>)}</div>}
+        {visibleActivityEvents.length === 0 ? <p className="activity-empty">No activity for this filter yet.</p> : <div className="activity-list">{visibleActivityEvents.map(event => <div className="activity-entry" key={event.id}><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`activity-level ${event.severity}`}>{event.severity}</span><div><strong>{event.instanceId ? `${event.instanceName || event.instanceId} · ${event.instanceId}` : productDisplayName}</strong><small>{event.action}</small><p>{event.message}</p></div></div>)}</div>}
       </details>
       {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
       {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => {

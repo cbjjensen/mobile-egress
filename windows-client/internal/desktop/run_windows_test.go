@@ -62,6 +62,17 @@ func TestControllerUsesASingleInstanceLock(t *testing.T) {
 	}
 }
 
+func TestDesktopDisplayNameUsesZFNFBranding(t *testing.T) {
+	t.Parallel()
+
+	if got, want := desktopDisplayName, "ZFNF Mobile Egress"; got != want {
+		t.Fatalf("desktop display name = %q, want %q", got, want)
+	}
+	if desktopBackgroundRed != 0 || desktopBackgroundGreen != 0 || desktopBackgroundBlue != 0 {
+		t.Fatalf("desktop background RGB = (%d, %d, %d), want true black", desktopBackgroundRed, desktopBackgroundGreen, desktopBackgroundBlue)
+	}
+}
+
 func TestFunnelApprovalUsesTheDesktopBrowserWhenRuntimeIsReady(t *testing.T) {
 	t.Parallel()
 

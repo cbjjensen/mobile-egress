@@ -38,6 +38,13 @@ import (
 	"mobile-egress/windows-client/internal/tailscale"
 )
 
+const (
+	desktopDisplayName     = "ZFNF Mobile Egress"
+	desktopBackgroundRed   = 0
+	desktopBackgroundGreen = 0
+	desktopBackgroundBlue  = 0
+)
+
 type DesktopApp struct {
 	core             *client.Core
 	bridge           *localbridge.Manager
@@ -134,8 +141,8 @@ func Run() error {
 		})
 	}
 	err = wails.Run(&options.App{
-		Title: "Mobile Egress", Width: 880, Height: 660, MinWidth: 720, MinHeight: 540,
-		BackgroundColour: options.NewRGB(15, 20, 28),
+		Title: desktopDisplayName, Width: 880, Height: 660, MinWidth: 720, MinHeight: 540,
+		BackgroundColour: options.NewRGB(desktopBackgroundRed, desktopBackgroundGreen, desktopBackgroundBlue),
 		AssetServer:      &assetserver.Options{Assets: assets.Files()},
 		OnStartup:        application.startup, OnShutdown: application.onShutdown,
 		OnBeforeClose: application.beforeClose, Bind: []interface{}{application},
@@ -802,10 +809,10 @@ func (app *DesktopApp) Quit() {
 
 func (app *DesktopApp) trayReady() {
 	systray.SetIcon(trayIcon())
-	systray.SetTooltip("Mobile Egress")
+	systray.SetTooltip(desktopDisplayName)
 	statusItem := systray.AddMenuItem("Bridge status unavailable", "Local relay and Funnel status")
 	statusItem.Disable()
-	showItem := systray.AddMenuItem("Show Mobile Egress", "Open the controller window")
+	showItem := systray.AddMenuItem("Show "+desktopDisplayName, "Open the controller window")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit controller", "Close the controller; Windows services keep running")
 
@@ -962,7 +969,7 @@ func showFatal(err error) {
 		return
 	}
 	message, messageErr := windowssys.UTF16PtrFromString(err.Error())
-	caption, captionErr := windowssys.UTF16PtrFromString("Mobile Egress")
+	caption, captionErr := windowssys.UTF16PtrFromString(desktopDisplayName)
 	if messageErr == nil && captionErr == nil {
 		_, _ = windowssys.MessageBox(0, message, caption, windowssys.MB_OK|windowssys.MB_ICONERROR)
 	}
