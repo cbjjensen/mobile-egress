@@ -62,6 +62,8 @@ type tailscaleInstaller interface {
 	Install(context.Context) (tailscale.Release, error)
 }
 
+const awsIdentityCenterDashboardURL = "https://console.aws.amazon.com/singlesignon/home?region=us-east-1#/dashboard"
+
 // embeddedReleaseManifestBase64 is injected before the controller executable is
 // Authenticode-signed. Node release trust is therefore rooted in the signed
 // controller instead of mutable files beside it.
@@ -361,6 +363,18 @@ func (app *DesktopApp) BeginAWSIdentityCenter(startURL, ssoRegion string) (awssd
 		runtime.BrowserOpenURL(runtimeContext, authorization.VerificationURL)
 	}
 	return authorization, nil
+}
+
+func (app *DesktopApp) OpenAWSIdentityCenterConsole() error {
+	if app == nil || app.browserOpenURL == nil {
+		return errors.New("Unable to open the AWS Identity Center console in this build.")
+	}
+	runtimeContext := app.runtimeContext()
+	if runtimeContext == nil {
+		return errors.New("Unable to open the AWS Identity Center console before the app is ready.")
+	}
+	app.browserOpenURL(runtimeContext, awsIdentityCenterDashboardURL)
+	return nil
 }
 
 func (app *DesktopApp) CompleteAWSIdentityCenter() ([]awssdk.IdentityCenterAccount, error) {

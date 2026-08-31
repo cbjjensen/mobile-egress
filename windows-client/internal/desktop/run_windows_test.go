@@ -83,6 +83,24 @@ func TestFunnelApprovalUsesTheDesktopBrowserWhenRuntimeIsReady(t *testing.T) {
 	}
 }
 
+func TestOpenAWSIdentityCenterConsoleUsesUsEastDashboard(t *testing.T) {
+	t.Parallel()
+
+	var openedURL string
+	app := &DesktopApp{
+		ctx: context.Background(),
+		browserOpenURL: func(_ context.Context, consoleURL string) {
+			openedURL = consoleURL
+		},
+	}
+	if err := app.OpenAWSIdentityCenterConsole(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := openedURL, "https://console.aws.amazon.com/singlesignon/home?region=us-east-1#/dashboard"; got != want {
+		t.Fatalf("opened URL = %q, want %q", got, want)
+	}
+}
+
 func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
 	app := &DesktopApp{tailscaleInstall: tailscale.Installer{}}
 	err := app.InstallTailscale()
