@@ -67,6 +67,7 @@ type DesktopAPI = {
   AWSIdentityCenterRoles(accountId: string): Promise<string[]>
   SelectAWSIdentityCenterRole(accountId: string, roleName: string): Promise<void>
   ListEC2Instances(): Promise<EC2Instance[]>
+  InstanceSSMOnline(instanceId: string): Promise<boolean>
   EnsureInstanceSSM(instanceId: string, confirmExistingRoleChange: boolean): Promise<SSMProfileResult>
   InstallEC2Node(instanceId: string): Promise<ManagedNode>
   UpdateEC2Node(instanceId: string): Promise<ManagedNode>

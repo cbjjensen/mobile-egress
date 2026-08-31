@@ -371,7 +371,7 @@ The only relay listener must be `127.0.0.1:8443`.
 4. Refresh **EC2 Nodes** and confirm only the intended supported `us-east-1` instances appear.
 5. For a profile-less node, choose **Prepare SSM** and allow the dedicated role/profile creation.
 6. For an existing non-SSM role, read the displayed role name and explicitly approve adding only `AmazonSSMManagedInstanceCore`. Never approve profile replacement.
-7. Wait for each node to show **SSM online**, then choose **Install Client** on both. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
+7. Let the controller wait for each node to show **SSM online**. An attached role that already has the SSM policy is verified without mutation. On later runs, an online node shows **SSM ready** and bypasses profile setup. The controller checks only the selected instance, polls every two seconds initially, backs off while retaining the five-minute bound, and automatically starts **Install Client** as soon as SSM is online. Use **Install Client** manually only to retry an interrupted install. The first successful install adds only the manifest-embedded exact publisher certificate to the node's LocalMachine Root and TrustedPublisher stores; subsequent install/update/repair is idempotent.
 8. Require distinct Client serials and credentials. Do not paste credentials into SSM, tickets, chat, or the acceptance record.
 
 On each EC2 node, confirm the service and listener through an interactive administrative PowerShell session:

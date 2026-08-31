@@ -462,6 +462,37 @@ func (app *DesktopApp) ListEC2Instances() ([]cloud.Instance, error) {
 	return instances, nil
 }
 
+func withInstanceSSMStatus(instances []cloud.Instance, instanceID string, online bool) []cloud.Instance {
+	updated := append([]cloud.Instance(nil), instances...)
+	for index := range updated {
+		if updated[index].ID == instanceID {
+			updated[index].SSMOnline = online
+			break
+		}
+	}
+	return updated
+}
+
+func (app *DesktopApp) InstanceSSMOnline(instanceID string) (bool, error) {
+	awsClient := app.currentAWSClient()
+	if awsClient == nil {
+		return false, errors.New("Connect AWS first.")
+	}
+	if _, ok := app.inventoryInstance(instanceID); !ok {
+		return false, errors.New("Refresh EC2 inventory and select a supported instance.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	online, err := awsClient.InstanceSSMOnline(ctx, instanceID)
+	if err != nil {
+		return false, errors.New("Unable to check that instance in Systems Manager.")
+	}
+	app.mu.Lock()
+	app.awsInventory = withInstanceSSMStatus(app.awsInventory, instanceID, online)
+	app.mu.Unlock()
+	return online, nil
+}
+
 func (app *DesktopApp) EnsureInstanceSSM(instanceID string, confirmExistingRoleChange bool) (cloud.SSMProfileResult, error) {
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {

@@ -126,6 +126,19 @@ func TestSSMPreparationErrorKeepsTheSafeFailingStage(t *testing.T) {
 	}
 }
 
+func TestWithInstanceSSMStatusUpdatesOnlyTheSelectedInstance(t *testing.T) {
+	t.Parallel()
+
+	inventory := []cloud.Instance{{ID: "i-0123456789abcdef0"}, {ID: "i-fedcba98765432100"}}
+	updated := withInstanceSSMStatus(inventory, "i-0123456789abcdef0", true)
+	if !updated[0].SSMOnline || updated[1].SSMOnline {
+		t.Fatalf("updated inventory = %#v", updated)
+	}
+	if inventory[0].SSMOnline {
+		t.Fatal("withInstanceSSMStatus mutated the source inventory")
+	}
+}
+
 func TestInstallTailscaleReportsTheSafeFailingStage(t *testing.T) {
 	app := &DesktopApp{tailscaleInstall: tailscale.Installer{}}
 	err := app.InstallTailscale()

@@ -156,6 +156,33 @@ func (client *Client) ssmOnline(ctx context.Context) (map[string]bool, error) {
 	return result, nil
 }
 
+func selectedInstanceSSMFilters(instanceID string) ([]ssmtypes.InstanceInformationStringFilter, error) {
+	if !validInstanceID(instanceID) {
+		return nil, errors.New("invalid EC2 instance ID")
+	}
+	return []ssmtypes.InstanceInformationStringFilter{{Key: aws.String("InstanceIds"), Values: []string{instanceID}}}, nil
+}
+
+func (client *Client) InstanceSSMOnline(ctx context.Context, instanceID string) (bool, error) {
+	if client == nil || client.ssm == nil {
+		return false, errors.New("AWS client is unavailable")
+	}
+	filters, err := selectedInstanceSSMFilters(instanceID)
+	if err != nil {
+		return false, err
+	}
+	output, err := client.ssm.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{Filters: filters})
+	if err != nil {
+		return false, errors.New("check selected Systems Manager instance")
+	}
+	for _, info := range output.InstanceInformationList {
+		if aws.ToString(info.InstanceId) == instanceID && info.PingStatus == ssmtypes.PingStatusOnline {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (client *Client) roleForProfile(ctx context.Context, profileARN string) (string, error) {
 	profileName, err := resourceName(profileARN, "instance-profile")
 	if err != nil {

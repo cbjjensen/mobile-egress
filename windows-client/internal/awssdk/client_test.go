@@ -7,7 +7,24 @@ import (
 	aws "github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+func TestSelectedInstanceSSMFilterTargetsOnlyTheRequestedInstance(t *testing.T) {
+	t.Parallel()
+
+	filters, err := selectedInstanceSSMFilters("i-0123456789abcdef0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filters) != 1 || aws.ToString(filters[0].Key) != "InstanceIds" || len(filters[0].Values) != 1 || filters[0].Values[0] != "i-0123456789abcdef0" {
+		t.Fatalf("selected SSM filters = %#v", filters)
+	}
+	if _, err := selectedInstanceSSMFilters("not-an-instance"); err == nil {
+		t.Fatal("selectedInstanceSSMFilters accepted an invalid instance ID")
+	}
+	var _ []ssmtypes.InstanceInformationStringFilter = filters
+}
 
 func TestDedicatedIAMResourceValidationRejectsNameCollisions(t *testing.T) {
 	t.Parallel()

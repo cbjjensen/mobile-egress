@@ -11,22 +11,45 @@ export function formatSSMWaitDetails(progress, now = Date.now()) {
   return `${checks} · ${recency} · waiting ${duration(elapsedSeconds)} / 5:00`
 }
 
+export function shouldSkipSSMProfileSetup(instance) {
+  return Boolean(instance?.ssmOnline)
+}
+
+export function requiresSSMRoleConfirmation(reason) {
+  const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : ''
+  return message.includes('Explicit confirmation is required before adding AmazonSSMManagedInstanceCore to the existing role.')
+}
+
+export function ssmWaitingStatusText(progress) {
+  return progress?.setupSkipped ? 'Profile already configured · checking SSM' : 'SSM setup complete · checking SSM'
+}
+
+export function ssmWaitingLiveText(progress, now = Date.now()) {
+  const preparation = progress?.setupSkipped ? 'SSM permissions already configured' : 'SSM setup complete'
+  return `${preparation} · checking this instance rapidly · ${formatSSMWaitDetails(progress, now)}`
+}
+
+export function ssmPollInterval(completedChecks) {
+  if (completedChecks <= 15) return 2_000
+  if (completedChecks <= 27) return 5_000
+  return 10_000
+}
+
 export async function waitForSSMOnline({
-  instanceId,
-  listInstances,
-  onInventory,
-  intervalMs = 10_000,
-  maxAttempts = 30,
+  checkOnline,
+  onCheck,
+  onOnline = async () => {},
+  maxAttempts = 49,
   wait = delay,
 }) {
-  let inventory = []
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (attempt > 0) await wait(intervalMs)
-    inventory = await listInstances()
-    onInventory(inventory)
-    if (inventory.some(instance => instance.id === instanceId && instance.ssmOnline)) {
-      return { online: true, inventory }
+    if (attempt > 0) await wait(ssmPollInterval(attempt))
+    const online = await checkOnline()
+    onCheck(online)
+    if (online) {
+      await onOnline()
+      return { online: true }
     }
   }
-  return { online: false, inventory }
+  return { online: false }
 }

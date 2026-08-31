@@ -1,7 +1,8 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode } from './api'
+import { ActivityEvent, ActivitySeverity, appendActivityEvent, filterActivityEvents, formatActivityEvents } from './activity-log.js'
 import awsPermissionsPolicy from './aws-permissions-policy.json'
-import { formatSSMWaitDetails, waitForSSMOnline } from './ssm-progress.js'
+import { requiresSSMRoleConfirmation, shouldSkipSSMProfileSetup, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMOnline } from './ssm-progress.js'
 
 const emptyBridge: BridgeStatus = { tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
 const requiredPermissionsPolicy = JSON.stringify(awsPermissionsPolicy, null, 2)
@@ -10,6 +11,7 @@ type SSMProgress = {
   startedAt: number
   lastCheckedAt?: number
   checkCount: number
+  setupSkipped?: boolean
 }
 
 function errorMessage(reason: unknown) {
@@ -38,6 +40,26 @@ export default function App() {
   const [showSecret, setShowSecret] = useState(false)
   const [ssmProgress, setSSMProgress] = useState<Record<string, SSMProgress>>({})
   const [clock, setClock] = useState(Date.now())
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
+  const [activityFilter, setActivityFilter] = useState('all')
+  const activitySequence = useRef(0)
+
+  function recordActivity(instanceId: string, instanceName: string, actionName: string, severity: ActivitySeverity, message: string) {
+    activitySequence.current += 1
+    setActivityEvents(current => appendActivityEvent(current, {
+      id: `${Date.now()}-${activitySequence.current}`,
+      timestamp: new Date().toISOString(),
+      instanceId,
+      instanceName,
+      action: actionName,
+      severity,
+      message,
+    }))
+  }
+
+  function instanceName(instanceId: string) {
+    return instances.find(instance => instance.id === instanceId)?.name ?? ''
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -164,86 +186,132 @@ export default function App() {
   }
 
   async function refreshInstances() {
-    await action('inventory', async () => { setInstances(await api().ListEC2Instances() ?? []); setAWSReady(true) })
+    let count = 0
+    const refreshed = await action('inventory', async () => {
+      const inventory = await api().ListEC2Instances() ?? []
+      count = inventory.length
+      setInstances(inventory); setAWSReady(true)
+    })
+    recordActivity('', '', 'Inventory', refreshed ? 'success' : 'error', refreshed ? `Found ${count} supported EC2 ${count === 1 ? 'instance' : 'instances'}.` : 'Refresh failed. See the error banner.')
   }
 
   async function prepareSSM(instance: EC2Instance) {
+    if (shouldSkipSSMProfileSetup(instance)) {
+      recordActivity(instance.id, instance.name, 'SSM', 'success', 'Instance is already SSM online. Profile setup skipped.')
+      return
+    }
+
+    const existingProfile = Boolean(instance.profileArn && instance.roleName)
+    recordActivity(instance.id, instance.name, 'SSM', 'info', existingProfile ? 'Verifying the attached profile and SSM permissions.' : 'Preparing the instance profile.')
     const startedAt = Date.now()
     setClock(startedAt)
     setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'preparing', startedAt, checkCount: 0 } }))
     let preparedRoleName = ''
+    let setupSkipped = false
+    let cancelled = false
     const prepared = await action(`ssm-${instance.id}`, async () => {
-      try { preparedRoleName = (await api().EnsureInstanceSSM(instance.id, false)).roleName }
+      try {
+        const result = await api().EnsureInstanceSSM(instance.id, false)
+        preparedRoleName = result.roleName
+        setupSkipped = !result.changed
+      }
       catch (reason) {
-        if (!instance.profileArn || !instance.roleName) throw reason
-        if (!window.confirm(`Add AmazonSSMManagedInstanceCore to existing role ${instance.roleName}? The app will not replace its instance profile.`)) return
-        preparedRoleName = (await api().EnsureInstanceSSM(instance.id, true)).roleName
+        if (!instance.profileArn || !instance.roleName || !requiresSSMRoleConfirmation(reason)) throw reason
+        if (!window.confirm(`Add AmazonSSMManagedInstanceCore to existing role ${instance.roleName}? The app will not replace its instance profile.`)) { cancelled = true; return }
+        const result = await api().EnsureInstanceSSM(instance.id, true)
+        preparedRoleName = result.roleName
+        setupSkipped = !result.changed
       }
     })
     if (!prepared || !preparedRoleName) {
       setSSMProgress(current => { const next = { ...current }; delete next[instance.id]; return next })
+      recordActivity(instance.id, instance.name, 'SSM', cancelled ? 'warning' : 'error', cancelled ? 'Existing-role change cancelled.' : 'Preparation failed. See the error banner.')
       return
     }
 
+    recordActivity(instance.id, instance.name, 'SSM', 'success', setupSkipped ? 'Profile and SSM permissions already configured. Checking readiness.' : 'SSM setup completed. Checking readiness.')
     setInstances(current => current.map(item => item.id === instance.id
       ? { ...item, profileArn: item.profileArn || 'attaching', roleName: preparedRoleName }
       : item))
-    setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'waiting', startedAt, checkCount: 0 } }))
+    setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'waiting', startedAt, checkCount: 0, setupSkipped } }))
+    let checkCount = 0
     try {
       const result = await waitForSSMOnline({
-        instanceId: instance.id,
-        listInstances: async () => await api().ListEC2Instances() ?? [],
-        onInventory: inventory => {
+        checkOnline: async () => await api().InstanceSSMOnline(instance.id),
+        onCheck: online => {
           const checkedAt = Date.now()
-          setInstances(inventory)
+          checkCount += 1
+          recordActivity(instance.id, instance.name, 'SSM check', online ? 'success' : 'info', online ? 'Instance reported SSM online.' : `Check ${checkCount}: waiting for registration.`)
+          setInstances(current => current.map(item => item.id === instance.id ? { ...item, ssmOnline: online } : item))
           setSSMProgress(current => {
             const progress = current[instance.id]
             if (!progress) return current
             return { ...current, [instance.id]: { ...progress, lastCheckedAt: checkedAt, checkCount: progress.checkCount + 1 } }
           })
         },
+        onOnline: async () => {
+          setSSMProgress(current => { const next = { ...current }; delete next[instance.id]; return next })
+          if (!nodes.some(node => node.instanceId === instance.id)) {
+            await installNode({ ...instance, profileArn: instance.profileArn || 'attached', roleName: preparedRoleName, ssmOnline: true })
+          }
+        },
       })
-      if (result.online) {
-        setSSMProgress(current => { const next = { ...current }; delete next[instance.id]; return next })
-        return
-      }
+      if (result.online) return
       setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
       setError('The SSM profile is attached, but this instance did not come online within five minutes. Confirm the EC2 instance has outbound HTTPS, then retry the status check.')
+      recordActivity(instance.id, instance.name, 'SSM check', 'error', 'Timed out after five minutes. Confirm outbound HTTPS and retry.')
     } catch (reason) {
       setSSMProgress(current => ({ ...current, [instance.id]: { ...(current[instance.id] ?? { startedAt, checkCount: 0 }), phase: 'timeout' } }))
       setError(`The SSM profile is attached, but its status could not be refreshed. ${errorMessage(reason)}`)
+      recordActivity(instance.id, instance.name, 'SSM check', 'error', 'Status refresh failed. See the error banner.')
     }
   }
 
-  async function installNode(instanceId: string) {
-    await action(`install-${instanceId}`, async () => {
-      await api().InstallEC2Node(instanceId)
+  async function installNode(instance: EC2Instance) {
+    recordActivity(instance.id, instance.name, 'Client install', 'info', 'Installing the signed Windows Client through SSM.')
+    const installed = await action(`install-${instance.id}`, async () => {
+      await api().InstallEC2Node(instance.id)
       setNodes(await api().ManagedNodes() ?? [])
     })
+    recordActivity(instance.id, instance.name, 'Client install', installed ? 'success' : 'error', installed ? 'Client installed successfully.' : 'Installation failed. See the error banner.')
   }
 
   async function copyNodeProxy(instanceId: string) {
-    await action(`copy-${instanceId}`, async () => { await navigator.clipboard.writeText(await api().NodeProxyLine(instanceId)) })
+    const copied = await action(`copy-${instanceId}`, async () => { await navigator.clipboard.writeText(await api().NodeProxyLine(instanceId)) })
+    recordActivity(instanceId, instanceName(instanceId), 'Proxy credentials', copied ? 'success' : 'error', copied ? 'Credentials copied to the clipboard.' : 'Copy failed. See the error banner.')
   }
 
   async function maintainNode(instanceId: string, repair: boolean) {
-    await action(`${repair ? 'repair' : 'update'}-${instanceId}`, async () => {
+    const actionName = repair ? 'Client repair' : 'Client update'
+    recordActivity(instanceId, instanceName(instanceId), actionName, 'info', repair ? 'Repair started.' : 'Update started.')
+    const completed = await action(`${repair ? 'repair' : 'update'}-${instanceId}`, async () => {
       if (repair) await api().RepairEC2Node(instanceId)
       else await api().UpdateEC2Node(instanceId)
       setNodes(await api().ManagedNodes() ?? [])
     })
+    recordActivity(instanceId, instanceName(instanceId), actionName, completed ? 'success' : 'error', completed ? `${repair ? 'Repair' : 'Update'} completed.` : `${repair ? 'Repair' : 'Update'} failed. See the error banner.`)
   }
 
   async function cancelPendingNode(instanceId: string) {
     if (!window.confirm(`Cancel the interrupted install reservation for ${instanceId}? Do this only when no installation is still running.`)) return
-    await action(`cancel-${instanceId}`, async () => {
+    const cancelled = await action(`cancel-${instanceId}`, async () => {
       await api().CancelEC2NodeReservation(instanceId, true)
       setPendingNodes(await api().PendingEC2NodeReservations() ?? [])
     })
+    recordActivity(instanceId, instanceName(instanceId), 'Reservation', cancelled ? 'success' : 'error', cancelled ? 'Interrupted install reservation cancelled.' : 'Cancellation failed. See the error banner.')
+  }
+
+  async function copyVisibleActivityLogs(events: ActivityEvent[]) {
+    await action('copy-activity', async () => { await navigator.clipboard.writeText(formatActivityEvents(events)) })
   }
 
   const readyInstanceCount = instances.filter(instance => instance.ssmOnline).length
   const setupInstanceCount = Math.max(instances.length - readyInstanceCount, 0)
+  const visibleActivityEvents = filterActivityEvents(activityEvents, activityFilter)
+  const activitySubjects = new Map<string, string>()
+  for (const instance of instances) activitySubjects.set(instance.id, instance.name)
+  for (const event of activityEvents) if (event.instanceId && !activitySubjects.has(event.instanceId)) activitySubjects.set(event.instanceId, event.instanceName)
+  const activityInstanceOptions = [...activitySubjects].sort((left, right) => (left[1] || left[0]).localeCompare(right[1] || right[0]))
 
   return <main className="shell">
     <header><div><p className="eyebrow">Personal cellular bridge</p><h1>Mobile Egress</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
@@ -344,11 +412,20 @@ export default function App() {
       <div className="node-grid">{instances.map(instance => {
         const managed = nodes.some(node => node.instanceId === instance.id)
         const progress = ssmProgress[instance.id]
-        const status = managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : progress?.phase === 'preparing' ? 'Preparing SSM…' : progress?.phase === 'waiting' ? 'Profile attached · waiting for SSM' : progress?.phase === 'timeout' ? 'SSM not online' : 'SSM setup'
+        const status = managed ? 'Managed' : instance.ssmOnline ? 'SSM online' : progress?.phase === 'preparing' ? 'Preparing SSM…' : progress?.phase === 'waiting' ? ssmWaitingStatusText(progress) : progress?.phase === 'timeout' ? 'SSM not online' : 'SSM setup'
         const statusClass = instance.ssmOnline ? 'on' : progress?.phase === 'timeout' ? 'error-state' : progress ? 'waiting' : ''
-        const prepareLabel = progress?.phase === 'preparing' ? 'Preparing…' : progress?.phase === 'waiting' ? 'Waiting for SSM…' : progress?.phase === 'timeout' ? 'Retry SSM check' : instance.ssmOnline ? 'Check SSM role' : 'Prepare SSM'
-        return <article className="card node" key={instance.id}><div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${statusClass}`}>{status}</span></div><p>{instance.imageDescription}</p>{instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}{progress?.phase === 'waiting' && <div className="ssm-live" role="status"><span className="ssm-spinner" aria-hidden="true" /><span>Checking AWS every 10 seconds · {formatSSMWaitDetails(progress, clock)}</span></div>}<div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy || progress?.phase === 'preparing' || progress?.phase === 'waiting'}>{prepareLabel}</button><button className="primary" onClick={() => void installNode(instance.id)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div></article>
+        const prepareLabel = progress?.phase === 'preparing' ? 'Preparing…' : progress?.phase === 'waiting' ? 'Waiting for SSM…' : progress?.phase === 'timeout' ? 'Retry SSM check' : instance.ssmOnline ? 'SSM ready' : 'Prepare SSM'
+        return <article className="card node" key={instance.id}><div className="row"><div><h2>{instance.name || instance.id}</h2><code>{instance.id}</code></div><span className={`pill ${statusClass}`}>{status}</span></div><p>{instance.imageDescription}</p>{instance.roleName && <div className="serialline"><span>Existing IAM role</span><code>{instance.roleName}</code></div>}{progress?.phase === 'waiting' && <div className="ssm-live" role="status"><span className="ssm-spinner" aria-hidden="true" /><span>{ssmWaitingLiveText(progress, clock)}</span></div>}<div className="actions"><button onClick={() => void prepareSSM(instance)} disabled={!!busy || instance.ssmOnline || progress?.phase === 'preparing' || progress?.phase === 'waiting'}>{prepareLabel}</button><button className="primary" onClick={() => void installNode(instance)} disabled={!!busy || !instance.ssmOnline || managed}>{managed ? 'Client installed' : busy === `install-${instance.id}` ? 'Installing…' : 'Install Client'}</button></div></article>
       })}</div>
+      <details className="card activity-panel" open>
+        <summary><span>Activity logs</span><small>{activityEvents.length} / 200 session events</small></summary>
+        <p className="note">Session only. Closing Mobile Egress clears these sanitized events.</p>
+        <div className="activity-controls">
+          <label>EC2 instance<select value={activityFilter} onChange={event => setActivityFilter(event.target.value)}><option value="all">All instances</option>{activityInstanceOptions.map(([instanceId, name]) => <option value={instanceId} key={instanceId}>{name ? `${name} · ${instanceId}` : instanceId}</option>)}</select></label>
+          <div className="actions"><button onClick={() => void copyVisibleActivityLogs(visibleActivityEvents)} disabled={!!busy || visibleActivityEvents.length === 0}>Copy visible logs</button><button onClick={() => setActivityEvents([])} disabled={activityEvents.length === 0}>Clear logs</button></div>
+        </div>
+        {visibleActivityEvents.length === 0 ? <p className="activity-empty">No activity for this filter yet.</p> : <div className="activity-list">{visibleActivityEvents.map(event => <div className="activity-entry" key={event.id}><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`activity-level ${event.severity}`}>{event.severity}</span><div><strong>{event.instanceId ? `${event.instanceName || event.instanceId} · ${event.instanceId}` : 'Mobile Egress'}</strong><small>{event.action}</small><p>{event.message}</p></div></div>)}</div>}
+      </details>
       {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
       {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => <div className="managed" key={node.instanceId}><div><strong>{node.instanceId}</strong><small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div><code>{node.proxy}</code><div className="actions"><button onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy}>Copy credentials</button><button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button><button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button></div></div>)}</div></article>}
     </section>}
