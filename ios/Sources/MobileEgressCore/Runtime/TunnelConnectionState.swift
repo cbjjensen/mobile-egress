@@ -7,6 +7,45 @@ public enum TunnelConnectionPhase: Equatable, Sendable {
     case disconnecting
 }
 
+public enum TunnelCommand: Equatable, Sendable {
+    case start
+    case stop
+}
+
+public struct TunnelCommandDecision: Equatable, Sendable {
+    public let command: TunnelCommand
+    public let isEnabled: Bool
+
+    public var isDestructive: Bool {
+        command == .stop
+    }
+
+    public static func resolve(
+        providerState: TunnelProviderLifecycleState,
+        connectionPhase: TunnelConnectionPhase
+    ) -> Self {
+        if providerState == .stopping || connectionPhase == .disconnecting {
+            return Self(command: .stop, isEnabled: false)
+        }
+        if providerState == .starting || providerState == .running {
+            return Self(command: .stop, isEnabled: true)
+        }
+        switch connectionPhase {
+        case .connecting, .connected, .reasserting:
+            return Self(command: .stop, isEnabled: true)
+        case .invalid, .disconnected:
+            return Self(command: .start, isEnabled: true)
+        case .disconnecting:
+            return Self(command: .stop, isEnabled: false)
+        }
+    }
+
+    private init(command: TunnelCommand, isEnabled: Bool) {
+        self.command = command
+        self.isEnabled = isEnabled
+    }
+}
+
 public struct TunnelConnectionPresentation: Equatable, Sendable {
     public let providerState: TunnelProviderLifecycleState
     public let providerError: TunnelProviderErrorClass
@@ -20,8 +59,12 @@ public struct TunnelConnectionPresentation: Equatable, Sendable {
     }
 }
 
+public struct TunnelConnectionObservationToken: Equatable, Sendable {
+    fileprivate let revision: UInt64
+}
+
 public struct TunnelConnectionStateReducer: Sendable {
-    private enum Expectation: Sendable {
+    private enum Expectation: Equatable, Sendable {
         case idle
         case startingAwaitingEvidence
         case startingWithEvidence
@@ -34,8 +77,21 @@ public struct TunnelConnectionStateReducer: Sendable {
         providerState: .stopped,
         providerError: .none
     )
+    private var revision: UInt64 = 0
 
     public init() {}
+
+    public var presentation: TunnelConnectionPresentation {
+        current
+    }
+
+    public var observationToken: TunnelConnectionObservationToken {
+        TunnelConnectionObservationToken(revision: revision)
+    }
+
+    public func isCurrent(_ token: TunnelConnectionObservationToken) -> Bool {
+        token.revision == revision
+    }
 
     @discardableResult
     public mutating func restorePersistentIntent(
@@ -44,6 +100,7 @@ public struct TunnelConnectionStateReducer: Sendable {
         guard onDemandEnabled, expectation == .idle else { return current }
         expectation = .startingWithEvidence
         current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
+        advanceRevision()
         return current
     }
 
@@ -51,6 +108,7 @@ public struct TunnelConnectionStateReducer: Sendable {
     public mutating func startRequested() -> TunnelConnectionPresentation {
         expectation = .startingAwaitingEvidence
         current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
+        advanceRevision()
         return current
     }
 
@@ -63,6 +121,7 @@ public struct TunnelConnectionStateReducer: Sendable {
         }
         expectation = .idle
         current = TunnelConnectionPresentation(providerState: .failed, providerError: error)
+        advanceRevision()
         return current
     }
 
@@ -70,6 +129,7 @@ public struct TunnelConnectionStateReducer: Sendable {
     public mutating func stopRequested() -> TunnelConnectionPresentation {
         expectation = .explicitStop
         current = TunnelConnectionPresentation(providerState: .stopping, providerError: .none)
+        advanceRevision()
         return current
     }
 
@@ -81,6 +141,7 @@ public struct TunnelConnectionStateReducer: Sendable {
         if !persistenceSucceeded {
             expectation = .active
         }
+        advanceRevision()
         return current
     }
 
@@ -89,6 +150,22 @@ public struct TunnelConnectionStateReducer: Sendable {
         _ phase: TunnelConnectionPhase,
         disconnectError: TunnelProviderErrorClass?
     ) -> TunnelConnectionPresentation {
+        observe(
+            phase,
+            disconnectError: disconnectError,
+            matching: observationToken
+        ) ?? current
+    }
+
+    @discardableResult
+    public mutating func observe(
+        _ phase: TunnelConnectionPhase,
+        disconnectError: TunnelProviderErrorClass?,
+        matching token: TunnelConnectionObservationToken
+    ) -> TunnelConnectionPresentation? {
+        guard isCurrent(token) else { return nil }
+        let previousExpectation = expectation
+        let previousPresentation = current
         switch phase {
         case .connecting:
             guard expectation != .explicitStop else { return current }
@@ -113,7 +190,14 @@ public struct TunnelConnectionStateReducer: Sendable {
         case .invalid, .disconnected:
             observeDisconnected(disconnectError: disconnectError)
         }
+        if expectation != previousExpectation || current != previousPresentation {
+            advanceRevision()
+        }
         return current
+    }
+
+    private mutating func advanceRevision() {
+        revision &+= 1
     }
 
     private mutating func observeDisconnected(disconnectError: TunnelProviderErrorClass?) {
@@ -124,11 +208,10 @@ public struct TunnelConnectionStateReducer: Sendable {
         case .startingAwaitingEvidence:
             return
         case .startingWithEvidence:
-            guard let disconnectError else { return }
             expectation = .idle
             current = TunnelConnectionPresentation(
                 providerState: .failed,
-                providerError: disconnectError
+                providerError: disconnectError ?? .runtimeUnavailable
             )
         case .active:
             expectation = .idle

@@ -2,6 +2,40 @@ import XCTest
 @testable import MobileEgressCore
 
 final class TunnelConnectionStateTests: XCTestCase {
+    func testSuspendedHistoricalDisconnectLookupCannotCrossCurrentAttemptRevision() async {
+        let state = await MainActor.run { MainActorConnectionStateHarness() }
+        let lookup = SuspendedDisconnectLookup()
+        let historicalToken = await state.observationToken
+        let lookupTask = Task { await lookup.fetch() }
+
+        await lookup.waitUntilSuspended()
+        let startToken = await state.startRequested()
+        XCTAssertNotEqual(historicalToken, startToken)
+        let connectingPresentation = await state.observe(
+            .connecting,
+            disconnectError: nil,
+            matching: startToken
+        )
+        XCTAssertEqual(
+            connectingPresentation,
+            TunnelConnectionPresentation(providerState: .starting, providerError: .none)
+        )
+
+        await lookup.complete(with: .identityUnavailable)
+        let historicalError = await lookupTask.value
+        let stalePresentation = await state.observe(
+            .disconnected,
+            disconnectError: historicalError,
+            matching: historicalToken
+        )
+        XCTAssertNil(stalePresentation)
+        let currentPresentation = await state.presentation
+        XCTAssertEqual(
+            currentPresentation,
+            TunnelConnectionPresentation(providerState: .starting, providerError: .none)
+        )
+    }
+
     func testNewStartIgnoresTheSameHistoricalDisconnectErrorUntilCurrentAttemptEvidence() {
         var state = TunnelConnectionStateReducer()
 
@@ -52,7 +86,6 @@ final class TunnelConnectionStateTests: XCTestCase {
 
         _ = state.startRequested()
         _ = state.observe(.connecting, disconnectError: nil)
-        _ = state.observe(.disconnecting, disconnectError: nil)
         XCTAssertEqual(
             state.observe(.disconnected, disconnectError: nil),
             TunnelConnectionPresentation(providerState: .failed, providerError: .runtimeUnavailable)
@@ -128,5 +161,61 @@ final class TunnelConnectionStateTests: XCTestCase {
             state.observe(.disconnected, disconnectError: .tunnelSettings),
             TunnelConnectionPresentation(providerState: .failed, providerError: .tunnelSettings)
         )
+    }
+}
+
+@MainActor
+private final class MainActorConnectionStateHarness {
+    private var state = TunnelConnectionStateReducer()
+
+    var observationToken: TunnelConnectionObservationToken {
+        state.observationToken
+    }
+
+    var presentation: TunnelConnectionPresentation {
+        state.presentation
+    }
+
+    func startRequested() -> TunnelConnectionObservationToken {
+        _ = state.startRequested()
+        return state.observationToken
+    }
+
+    func observe(
+        _ phase: TunnelConnectionPhase,
+        disconnectError: TunnelProviderErrorClass?,
+        matching token: TunnelConnectionObservationToken
+    ) -> TunnelConnectionPresentation? {
+        state.observe(phase, disconnectError: disconnectError, matching: token)
+    }
+}
+
+private actor SuspendedDisconnectLookup {
+    private var didSuspend = false
+    private var resultContinuation: CheckedContinuation<TunnelProviderErrorClass?, Never>?
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func fetch() async -> TunnelProviderErrorClass? {
+        didSuspend = true
+        let waiters = suspensionWaiters
+        suspensionWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        return await withCheckedContinuation { continuation in
+            resultContinuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        guard !didSuspend else { return }
+        await withCheckedContinuation { continuation in
+            suspensionWaiters.append(continuation)
+        }
+    }
+
+    func complete(with result: TunnelProviderErrorClass?) {
+        resultContinuation?.resume(returning: result)
+        resultContinuation = nil
     }
 }

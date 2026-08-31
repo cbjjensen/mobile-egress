@@ -218,7 +218,7 @@ final class TunnelManager: TunnelPreferenceSession {
     }
 }
 
-private extension NEVPNStatus {
+extension NEVPNStatus {
     var connectionPhase: TunnelConnectionPhase {
         switch self {
         case .invalid: .invalid

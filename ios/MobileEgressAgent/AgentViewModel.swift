@@ -64,11 +64,17 @@ final class AgentViewModel: ObservableObject {
     }
 
     var canToggleTunnel: Bool {
-        isEnrolled && !isProcessingScan && !isChangingTunnel
+        isEnrolled &&
+            !isProcessingScan &&
+            !isChangingTunnel &&
+            tunnelCommandDecision.isEnabled
     }
 
-    var isTunnelActive: Bool {
-        vpnStatus.isInProgress
+    var tunnelCommandDecision: TunnelCommandDecision {
+        TunnelCommandDecision.resolve(
+            providerState: providerStatus.providerState,
+            connectionPhase: vpnStatus.connectionPhase
+        )
     }
 
     var statusTitle: String {
@@ -152,6 +158,7 @@ final class AgentViewModel: ObservableObject {
     }
 
     func toggleTunnel() {
+        let decision = tunnelCommandDecision
         guard canToggleTunnel else {
             if !isEnrolled { userError = .identityUnavailable }
             return
@@ -159,7 +166,7 @@ final class AgentViewModel: ObservableObject {
         isChangingTunnel = true
         userError = nil
         Task { [weak self] in
-            await self?.changeTunnelState()
+            await self?.changeTunnelState(command: decision.command)
         }
     }
 
@@ -205,16 +212,17 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    private func changeTunnelState() async {
+    private func changeTunnelState(command: TunnelCommand) async {
         defer { isChangingTunnel = false }
         guard let tunnelManager else {
             userError = .configurationUnavailable
             return
         }
 
-        if isTunnelActive {
+        switch command {
+        case .stop:
             await stopTunnel(using: tunnelManager)
-        } else {
+        case .start:
             await startTunnel(using: tunnelManager)
         }
     }
@@ -261,12 +269,14 @@ final class AgentViewModel: ObservableObject {
 
     private func refresh(observedPhase: TunnelConnectionPhase? = nil) async {
         guard let tunnelManager else { return }
+        let observationToken = connectionState.observationToken
         let refresh = await tunnelManager.connectionRefresh(observedPhase: observedPhase)
-        vpnStatus = refresh.status
-        let presentation = connectionState.observe(
+        guard let presentation = connectionState.observe(
             refresh.phase,
-            disconnectError: refresh.disconnectError
-        )
+            disconnectError: refresh.disconnectError,
+            matching: observationToken
+        ) else { return }
+        vpnStatus = refresh.status
         guard vpnStatus == .connected else {
             providerStatus = Self.providerStatus(for: presentation)
             if presentation.providerError != .none, userError == .statusUnavailable {
@@ -274,10 +284,14 @@ final class AgentViewModel: ObservableObject {
             }
             return
         }
+        let providerStatusToken = connectionState.observationToken
         do {
-            providerStatus = try await tunnelManager.providerStatus()
+            let refreshedProviderStatus = try await tunnelManager.providerStatus()
+            guard connectionState.isCurrent(providerStatusToken) else { return }
+            providerStatus = refreshedProviderStatus
             if userError == .statusUnavailable { userError = nil }
         } catch {
+            guard connectionState.isCurrent(providerStatusToken) else { return }
             userError = .statusUnavailable
         }
     }

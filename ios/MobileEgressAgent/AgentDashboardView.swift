@@ -6,6 +6,7 @@ struct AgentDashboardView: View {
     @ObservedObject var model: AgentViewModel
 
     var body: some View {
+        let commandDecision = model.tunnelCommandDecision
         NavigationStack {
             List {
                 Section("Status") {
@@ -33,10 +34,13 @@ struct AgentDashboardView: View {
                     }
                     .disabled(!model.canScan)
 
-                    Button(role: model.isTunnelActive ? .destructive : nil, action: model.toggleTunnel) {
+                    Button(
+                        role: commandDecision.isDestructive ? .destructive : nil,
+                        action: model.toggleTunnel
+                    ) {
                         Label(
-                            model.isTunnelActive ? "Stop" : "Start",
-                            systemImage: model.isTunnelActive ? "stop.fill" : "play.fill"
+                            commandDecision.command == .stop ? "Stop" : "Start",
+                            systemImage: commandDecision.command == .stop ? "stop.fill" : "play.fill"
                         )
                     }
                     .disabled(!model.canToggleTunnel)

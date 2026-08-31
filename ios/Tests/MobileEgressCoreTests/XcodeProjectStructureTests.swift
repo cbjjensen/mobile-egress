@@ -158,6 +158,18 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(viewModel.contains("refresh(observedPhase: phase)"))
     }
 
+    func testAppleRefreshRejectsReentrantStaleAsyncResults() throws {
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+
+        XCTAssertTrue(viewModel.contains(
+            "let observationToken = connectionState.observationToken"
+        ))
+        XCTAssertTrue(viewModel.contains("matching: observationToken"))
+        XCTAssertTrue(viewModel.contains(
+            "guard connectionState.isCurrent(providerStatusToken) else { return }"
+        ))
+    }
+
     func testAgentViewModelReportsBothExplicitStopTransactionOutcomes() throws {
         let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
 
@@ -167,6 +179,23 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(viewModel.contains(
             "connectionState.stopTransactionCompleted(persistenceSucceeded: false)"
         ))
+    }
+
+    func testAppCommandPresentationAndActionConsumePortableDecision() throws {
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+        let dashboard = try text(at: "MobileEgressAgent/AgentDashboardView.swift")
+
+        XCTAssertTrue(viewModel.contains("var tunnelCommandDecision: TunnelCommandDecision"))
+        XCTAssertTrue(viewModel.contains("TunnelCommandDecision.resolve("))
+        XCTAssertTrue(viewModel.contains("tunnelCommandDecision.isEnabled"))
+        XCTAssertTrue(viewModel.contains("let decision = tunnelCommandDecision"))
+        XCTAssertTrue(viewModel.contains("changeTunnelState(command: decision.command)"))
+        XCTAssertTrue(viewModel.contains("switch command"))
+        XCTAssertFalse(viewModel.contains("if isTunnelActive"))
+        XCTAssertTrue(dashboard.contains("let commandDecision = model.tunnelCommandDecision"))
+        XCTAssertTrue(dashboard.contains("commandDecision.isDestructive"))
+        XCTAssertTrue(dashboard.contains("commandDecision.command == .stop"))
+        XCTAssertTrue(dashboard.contains(".disabled(!model.canToggleTunnel)"))
     }
 
     func testAppleManagerConsumesPortablePreferenceTransaction() throws {
