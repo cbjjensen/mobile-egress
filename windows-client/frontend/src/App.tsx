@@ -227,7 +227,7 @@ export default function App() {
         <div className="aws-wizard-header">
           <div>
             <h2>Connect AWS</h2>
-            <p>Connect the AWS account where you normally see your EC2 instances. We&apos;ll walk you through every step.</p>
+            <p>Connect the AWS account where you normally see your EC2 instances.</p>
           </div>
           <div className="aws-badges"><span>◷ About 3 minutes</span><span>✓ No AWS CLI needed</span></div>
         </div>
@@ -257,10 +257,7 @@ export default function App() {
               <li><span>4</span><div className="micro-step-text">Leave console access turned off, then click <strong>Next</strong></div></li>
             </ol>
             <div className="copy-name"><code>mobile-egress</code><button type="button" onClick={() => void navigator.clipboard.writeText('mobile-egress')} aria-label="Copy mobile-egress user name">⧉</button></div>
-            <div className="split-actions">
-              <button type="button" onClick={() => void openIAMUserCreateConsole()} disabled={!!busy}>Open IAM Users ↗</button>
-              <button type="button">✓ I created the user</button>
-            </div>
+            <button className="primary wide" type="button" onClick={() => void openIAMUserCreateConsole()} disabled={!!busy}>Open IAM Users ↗</button>
           </div>
         </div>
 
