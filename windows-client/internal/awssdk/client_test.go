@@ -1,13 +1,16 @@
 package awssdk
 
 import (
+	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	aws "github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/smithy-go"
 )
 
 func TestSelectedInstanceSSMFilterTargetsOnlyTheRequestedInstance(t *testing.T) {
@@ -81,5 +84,101 @@ func TestDedicatedProfileAttachmentAllowsOnlyTheExpectedIdempotentRetry(t *testi
 	attached, err = validateAttachedDedicatedProfile(nil, expectedName)
 	if err != nil || attached {
 		t.Fatalf("absent attachment = %v/%v, want not attached", attached, err)
+	}
+}
+
+func TestDedicatedProfileAttachmentRetriesPropagationErrorsWithBackoff(t *testing.T) {
+	t.Parallel()
+
+	const expectedName = "MobileEgressSSM-0123456789abcdef0"
+	associationAttempts := 0
+	descriptions := 0
+	waits := make([]time.Duration, 0)
+	err := retryDedicatedProfileAttachment(
+		context.Background(),
+		expectedName,
+		[]time.Duration{0, 2 * time.Second, 4 * time.Second},
+		func(context.Context) (*ec2types.IamInstanceProfile, error) {
+			descriptions++
+			return nil, nil
+		},
+		func(context.Context) error {
+			associationAttempts++
+			if associationAttempts < 3 {
+				return &smithy.GenericAPIError{Code: "InvalidParameterValue", Message: "profile has not propagated"}
+			}
+			return nil
+		},
+		func(_ context.Context, duration time.Duration) error {
+			waits = append(waits, duration)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if associationAttempts != 3 || descriptions != 3 {
+		t.Fatalf("attempts/descriptions = %d/%d, want 3/3", associationAttempts, descriptions)
+	}
+	if len(waits) != 2 || waits[0] != 2*time.Second || waits[1] != 4*time.Second {
+		t.Fatalf("waits = %v, want [2s 4s]", waits)
+	}
+}
+
+func TestDedicatedProfileAttachmentDoesNotRetryPermissionErrors(t *testing.T) {
+	t.Parallel()
+
+	associationAttempts := 0
+	waits := 0
+	err := retryDedicatedProfileAttachment(
+		context.Background(),
+		"MobileEgressSSM-0123456789abcdef0",
+		[]time.Duration{0, 2 * time.Second, 4 * time.Second},
+		func(context.Context) (*ec2types.IamInstanceProfile, error) { return nil, nil },
+		func(context.Context) error {
+			associationAttempts++
+			return &smithy.GenericAPIError{Code: "UnauthorizedOperation", Message: "denied"}
+		},
+		func(context.Context, time.Duration) error {
+			waits++
+			return nil
+		},
+	)
+	if err == nil || err.Error() != "attach dedicated SSM instance profile: AWS permission denied" {
+		t.Fatalf("retry error = %v, want safe permission classification", err)
+	}
+	if associationAttempts != 1 || waits != 0 {
+		t.Fatalf("attempts/waits = %d/%d, want 1/0", associationAttempts, waits)
+	}
+}
+
+func TestDedicatedProfileAttachmentStopsIfAnotherProfileAppears(t *testing.T) {
+	t.Parallel()
+
+	const expectedName = "MobileEgressSSM-0123456789abcdef0"
+	descriptions := 0
+	associationAttempts := 0
+	err := retryDedicatedProfileAttachment(
+		context.Background(),
+		expectedName,
+		[]time.Duration{0, 2 * time.Second, 4 * time.Second},
+		func(context.Context) (*ec2types.IamInstanceProfile, error) {
+			descriptions++
+			if descriptions == 1 {
+				return nil, nil
+			}
+			return &ec2types.IamInstanceProfile{Arn: aws.String("arn:aws:iam::123456789012:instance-profile/UnrelatedProfile")}, nil
+		},
+		func(context.Context) error {
+			associationAttempts++
+			return &smithy.GenericAPIError{Code: "IncorrectState", Message: "pending"}
+		},
+		func(context.Context, time.Duration) error { return nil },
+	)
+	if err == nil || err.Error() != "EC2 instance already has an unrelated instance profile; it was not replaced" {
+		t.Fatalf("retry error = %v, want unrelated-profile guard", err)
+	}
+	if associationAttempts != 1 || descriptions != 2 {
+		t.Fatalf("attempts/descriptions = %d/%d, want 1/2", associationAttempts, descriptions)
 	}
 }

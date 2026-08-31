@@ -202,7 +202,7 @@ export default function App() {
     }
 
     const existingProfile = Boolean(instance.profileArn && instance.roleName)
-    recordActivity(instance.id, instance.name, 'SSM', 'info', existingProfile ? 'Verifying the attached profile and SSM permissions.' : 'Preparing the instance profile.')
+    recordActivity(instance.id, instance.name, 'SSM', 'info', existingProfile ? 'Verifying the attached profile and SSM permissions.' : 'Preparing the instance profile. AWS attachment retries run automatically for up to one minute.')
     const startedAt = Date.now()
     setClock(startedAt)
     setSSMProgress(current => ({ ...current, [instance.id]: { phase: 'preparing', startedAt, checkCount: 0 } }))

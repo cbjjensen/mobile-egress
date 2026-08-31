@@ -38,6 +38,8 @@ type Client struct {
 	ssm *ssm.Client
 }
 
+var dedicatedProfileAttachmentDelays = []time.Duration{0, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
+
 func NewAccessKey(ctx context.Context, value AccessKeyCredentials) (*Client, error) {
 	if strings.TrimSpace(value.AccessKeyID) == "" || strings.TrimSpace(value.SecretAccessKey) == "" {
 		return nil, errors.New("AWS access key ID and secret access key are required")
@@ -247,13 +249,101 @@ func (client *Client) CreateAndAttachDedicatedSSMProfile(ctx context.Context, in
 		return "", errors.New("dedicated SSM instance profile contains unexpected roles and was not changed")
 	}
 	if !profileAlreadyAttached {
-		if _, err := client.ec2.AssociateIamInstanceProfile(ctx, &ec2.AssociateIamInstanceProfileInput{
-			InstanceId: aws.String(instanceID), IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(profileName)},
-		}); err != nil {
-			return "", errors.New("attach dedicated SSM instance profile")
+		err := retryDedicatedProfileAttachment(
+			ctx,
+			profileName,
+			dedicatedProfileAttachmentDelays,
+			func(ctx context.Context) (*ec2types.IamInstanceProfile, error) {
+				described, err := client.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instanceID}})
+				if err != nil || len(described.Reservations) != 1 || len(described.Reservations[0].Instances) != 1 {
+					return nil, errors.New("verify EC2 instance profile before attachment")
+				}
+				return described.Reservations[0].Instances[0].IamInstanceProfile, nil
+			},
+			func(ctx context.Context) error {
+				_, err := client.ec2.AssociateIamInstanceProfile(ctx, &ec2.AssociateIamInstanceProfileInput{
+					InstanceId: aws.String(instanceID), IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(profileName)},
+				})
+				return err
+			},
+			waitForAWSPropagation,
+		)
+		if err != nil {
+			return "", err
 		}
 	}
 	return roleName, nil
+}
+
+func retryDedicatedProfileAttachment(
+	ctx context.Context,
+	expectedName string,
+	delays []time.Duration,
+	describe func(context.Context) (*ec2types.IamInstanceProfile, error),
+	associate func(context.Context) error,
+	wait func(context.Context, time.Duration) error,
+) error {
+	if len(delays) == 0 || describe == nil || associate == nil || wait == nil {
+		return errors.New("attach dedicated SSM instance profile")
+	}
+	for attempt, delay := range delays {
+		if attempt > 0 {
+			if err := wait(ctx, delay); err != nil {
+				return errors.New("attach dedicated SSM instance profile: retry interrupted")
+			}
+		}
+		profile, err := describe(ctx)
+		if err != nil {
+			return err
+		}
+		attached, err := validateAttachedDedicatedProfile(profile, expectedName)
+		if err != nil {
+			return err
+		}
+		if attached {
+			return nil
+		}
+		err = associate(ctx)
+		if err == nil {
+			return nil
+		}
+		if isProfileAttachmentPermissionError(err) {
+			return errors.New("attach dedicated SSM instance profile: AWS permission denied")
+		}
+		if !isRetryableProfileAttachmentError(err) {
+			return errors.New("attach dedicated SSM instance profile")
+		}
+	}
+	return errors.New("attach dedicated SSM instance profile after waiting for AWS propagation")
+}
+
+func waitForAWSPropagation(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isRetryableProfileAttachmentError(err error) bool {
+	switch apiErrorCode(err) {
+	case "ClientInvalidParameterValue", "IncorrectState", "InvalidInstanceID.NotFound", "InvalidParameterValue":
+		return true
+	default:
+		return false
+	}
+}
+
+func isProfileAttachmentPermissionError(err error) bool {
+	switch apiErrorCode(err) {
+	case "AccessDenied", "AccessDeniedException", "AuthFailure", "UnauthorizedOperation":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAttachedDedicatedProfile(profile *ec2types.IamInstanceProfile, expectedName string) (bool, error) {
