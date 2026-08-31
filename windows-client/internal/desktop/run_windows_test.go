@@ -27,6 +27,7 @@ import (
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/client"
 	"mobile-egress/windows-client/internal/cloud"
+	"mobile-egress/windows-client/internal/localbridge"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 	"mobile-egress/windows-client/internal/tailscale"
@@ -114,6 +115,19 @@ func TestInstallTailscaleRejectsDuplicateInstallationBeforeCallingInstaller(t *t
 	}
 	if installer.calls != 0 {
 		t.Fatalf("installer calls = %d, want 0", installer.calls)
+	}
+}
+
+func TestSetupLocalBridgeIncludesTheFailingStage(t *testing.T) {
+	t.Parallel()
+
+	app := &DesktopApp{bridge: &localbridge.Manager{}}
+	_, err := app.SetupLocalBridge()
+	if err == nil {
+		t.Fatal("SetupLocalBridge() succeeded without local bridge dependencies")
+	}
+	if !strings.Contains(err.Error(), "local bridge setup dependencies are required") {
+		t.Fatalf("SetupLocalBridge() error = %q, want underlying setup stage", err.Error())
 	}
 }
 

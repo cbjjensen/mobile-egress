@@ -195,6 +195,17 @@ func (state *store) capabilityCount(ctx context.Context, role string) (int, erro
 	return count, err
 }
 
+func (state *store) activeIdentityCount(ctx context.Context, role enrollment.Role) (int, error) {
+	var count int
+	err := state.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM identities WHERE role = ? AND revoked_at IS NULL`, string(role),
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count active identities: %w", err)
+	}
+	return count, nil
+}
+
 func (state *store) createIdentity(ctx context.Context, serial string, role enrollment.Role, now time.Time) error {
 	transaction, err := state.db.BeginTx(ctx, nil)
 	if err != nil {

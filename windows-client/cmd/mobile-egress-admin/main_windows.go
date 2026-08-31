@@ -25,6 +25,8 @@ const (
 	relayStatePath     = `C:\ProgramData\MobileEgress\Relay`
 )
 
+const setupRelayRejectsExistingState = false
+
 var version = "dev"
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -200,13 +202,6 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: invalid Funnel endpoint")
 		return 2
 	}
-	if _, err := os.Stat(relayStatePath); err == nil {
-		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: relay state already exists and was not replaced")
-		return 1
-	} else if !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: unable to inspect relay state")
-		return 1
-	}
 	if err := verifyMobileEgressSignature(*relayExecutable); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: relay signature verification failed")
 		return 1
@@ -219,12 +214,8 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: install relay executable failed")
 		return 1
 	}
-	if err := os.MkdirAll(relayStatePath, 0o700); err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: create protected relay state failed")
-		return 1
-	}
-	if err := protectRelayState(); err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: protect relay state failed")
+	if err := recoverIncompleteRelayState(relayStatePath); err != nil {
+		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: recover incomplete relay state failed")
 		return 1
 	}
 	command := exec.Command(installedRelayPath,
@@ -241,6 +232,10 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result) != nil || result.Role != "owner" || result.Serial == "" || result.CertificatePEM == "" || result.CACertificatePEM == "" {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: relay returned invalid public bootstrap output")
+		return 1
+	}
+	if err := protectRelayState(); err != nil {
+		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: protect relay state failed")
 		return 1
 	}
 	if err := installRelayService(); err != nil {
@@ -315,6 +310,28 @@ func installRelayService() error {
 	}
 	_ = exec.Command("sc.exe", "failure", "MobileEgressRelay", "reset=", "86400", "actions=", "restart/5000/restart/15000/\"\"/0").Run()
 	return exec.Command("sc.exe", "start", "MobileEgressRelay").Run()
+}
+
+func recoverIncompleteRelayState(statePath string) error {
+	info, err := os.Stat(statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("relay state path is not a directory")
+	}
+	required := []string{"ca.crt", "ca.key", "relay.crt", "relay.key", "state.db"}
+	for _, name := range required {
+		if _, err := os.Stat(filepath.Join(statePath, name)); errors.Is(err, os.ErrNotExist) {
+			return os.RemoveAll(statePath)
+		} else if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeResult(path string, value any) error {

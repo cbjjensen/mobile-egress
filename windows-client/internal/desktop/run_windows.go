@@ -305,7 +305,7 @@ func (app *DesktopApp) SetupLocalBridge() (BridgeView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if _, err := app.bridge.Setup(ctx); err != nil {
-		return BridgeView{}, errors.New("Unable to finish the local relay and Funnel setup. Approve browser and UAC prompts, then try again.")
+		return BridgeView{}, fmt.Errorf("Unable to finish the local relay and Funnel setup: %w", err)
 	}
 	return app.GetBridgeStatus(), nil
 }

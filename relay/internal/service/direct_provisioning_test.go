@@ -54,6 +54,53 @@ func TestBootstrapOwnerCreatesIdentityWithoutPairingCapability(t *testing.T) {
 	}
 }
 
+func TestBootstrapOwnerCanRecoverInitializedStateBeforeOwnerExists(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if _, err := Initialize(context.Background(), InitOptions{
+		StateDir: stateDir, PublicName: "bridge.example.ts.net", PublicURL: "https://bridge.example.ts.net:8443",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ownerKey, ownerCSR := newDeviceCSR(t)
+	result, err := BootstrapOwner(context.Background(), BootstrapOwnerOptions{
+		StateDir: stateDir, PublicName: "bridge.example.ts.net", PublicURL: "https://bridge.example.ts.net:8443", CSRPEM: ownerCSR,
+	})
+	if err != nil {
+		t.Fatalf("BootstrapOwner() returned an error: %v", err)
+	}
+	assertCertificateMatchesKey(t, result.CertificatePEM, ownerKey.Public())
+
+	store, err := openStore(filepath.Join(stateDir, databaseFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	role, revoked, err := store.identityStatus(context.Background(), result.Serial)
+	if err != nil || role != "owner" || revoked {
+		t.Fatalf("recovered owner identity = %q/%t/%v, want active owner", role, revoked, err)
+	}
+}
+
+func TestBootstrapOwnerRejectsRecoveryWhenOwnerAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	_, ownerCSR := newDeviceCSR(t)
+	if _, err := BootstrapOwner(context.Background(), BootstrapOwnerOptions{
+		StateDir: stateDir, PublicName: "bridge.example.ts.net", PublicURL: "https://bridge.example.ts.net:8443", CSRPEM: ownerCSR,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, secondCSR := newDeviceCSR(t)
+	if _, err := BootstrapOwner(context.Background(), BootstrapOwnerOptions{
+		StateDir: stateDir, PublicName: "bridge.example.ts.net", PublicURL: "https://bridge.example.ts.net:8443", CSRPEM: secondCSR,
+	}); err == nil {
+		t.Fatal("BootstrapOwner() replaced an existing Owner")
+	}
+}
+
 func TestOwnerCanProvisionClientCSRDirectly(t *testing.T) {
 	t.Parallel()
 
