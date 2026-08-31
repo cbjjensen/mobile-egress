@@ -15,6 +15,31 @@ public enum TunnelProviderErrorClass: String, Equatable, Sendable {
     case tunnelSettings
     case runtimeUnavailable
     case invalidMessage
+
+    public static let providerErrorDomain = "com.mobileegress.agent.tunnel"
+
+    public var providerErrorCode: Int {
+        switch self {
+        case .none: 0
+        case .identityUnavailable: 1
+        case .invalidConfiguration: 2
+        case .tunnelSettings: 3
+        case .runtimeUnavailable: 4
+        case .invalidMessage: 5
+        }
+    }
+
+    public static func classifyDisconnectError(domain: String, code: Int) -> Self {
+        guard domain == providerErrorDomain else { return .runtimeUnavailable }
+        switch code {
+        case 1: return .identityUnavailable
+        case 2: return .invalidConfiguration
+        case 3: return .tunnelSettings
+        case 4: return .runtimeUnavailable
+        case 5: return .invalidMessage
+        default: return .runtimeUnavailable
+        }
+    }
 }
 
 public struct TunnelProviderStatus: Equatable, Sendable {

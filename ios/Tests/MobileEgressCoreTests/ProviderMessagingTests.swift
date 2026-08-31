@@ -121,6 +121,45 @@ final class ProviderMessagingTests: XCTestCase {
         }
     }
 
+    func testProviderDisconnectErrorsMapOnlyFiniteDomainAndCodes() {
+        let expected: [(TunnelProviderErrorClass, Int)] = [
+            (.identityUnavailable, 1),
+            (.invalidConfiguration, 2),
+            (.tunnelSettings, 3),
+            (.runtimeUnavailable, 4),
+            (.invalidMessage, 5),
+        ]
+
+        XCTAssertEqual(
+            TunnelProviderErrorClass.providerErrorDomain,
+            "com.mobileegress.agent.tunnel"
+        )
+        for (error, code) in expected {
+            XCTAssertEqual(error.providerErrorCode, code)
+            XCTAssertEqual(
+                TunnelProviderErrorClass.classifyDisconnectError(
+                    domain: TunnelProviderErrorClass.providerErrorDomain,
+                    code: code
+                ),
+                error
+            )
+        }
+        XCTAssertEqual(
+            TunnelProviderErrorClass.classifyDisconnectError(
+                domain: "NEVPNConnectionErrorDomain",
+                code: 17
+            ),
+            .runtimeUnavailable
+        )
+        XCTAssertEqual(
+            TunnelProviderErrorClass.classifyDisconnectError(
+                domain: TunnelProviderErrorClass.providerErrorDomain,
+                code: 999
+            ),
+            .runtimeUnavailable
+        )
+    }
+
     private func assertConfigurationError(
         _ expected: MobileEgressConfigurationError,
         operation: () throws -> MobileEgressSystemConfiguration,

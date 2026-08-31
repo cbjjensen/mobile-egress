@@ -44,6 +44,7 @@ final class AgentViewModel: ObservableObject {
     private let dependencies: MobileEgressDependencies?
     private let tunnelManager: TunnelManager?
     private var monitorTask: Task<Void, Never>?
+    private var connectionState = TunnelConnectionStateReducer()
 
     init() {
         do {
@@ -70,6 +71,8 @@ final class AgentViewModel: ObservableObject {
     }
 
     var statusTitle: String {
+        if providerStatus.providerState == .failed { return "Failed" }
+        if providerStatus.providerState == .starting && !vpnStatus.isInProgress { return "Starting" }
         switch vpnStatus {
         case .invalid: isEnrolled ? "Not configured" : "Enrollment required"
         case .disconnected: "Stopped"
@@ -165,11 +168,15 @@ final class AgentViewModel: ObservableObject {
             isEnrolled = try dependencies.hasIdentity()
             guard isEnrolled else {
                 vpnStatus = .invalid
+                connectionState = TunnelConnectionStateReducer()
                 providerStatus = Self.stoppedProviderStatus
                 return
             }
             try await tunnelManager.prepare()
-            vpnStatus = tunnelManager.status
+            providerStatus = Self.providerStatus(for: connectionState.restorePersistentIntent(
+                onDemandEnabled: tunnelManager.isOnDemandEnabled
+            ))
+            await refresh()
         } catch {
             userError = .vpnConfiguration
         }
@@ -185,7 +192,7 @@ final class AgentViewModel: ObservableObject {
             _ = try await dependencies.processScannedPayload(payload)
             isEnrolled = true
             try await tunnelManager.prepare()
-            vpnStatus = tunnelManager.status
+            await refresh()
         } catch ScanWorkflowError.migrationRejected {
             userError = .migrationRejected
         } catch ScanWorkflowError.enrollmentRejected {
@@ -203,21 +210,37 @@ final class AgentViewModel: ObservableObject {
         }
         do {
             if isTunnelActive {
+                providerStatus = Self.providerStatus(for: connectionState.stopRequested())
                 try await tunnelManager.stop()
             } else {
+                providerStatus = Self.providerStatus(for: connectionState.startRequested())
                 try await tunnelManager.start()
             }
             await refresh()
         } catch {
+            if !isTunnelActive {
+                providerStatus = Self.providerStatus(for: connectionState.observe(
+                    .disconnected,
+                    disconnectError: .runtimeUnavailable
+                ))
+            }
             userError = isTunnelActive ? .vpnConfiguration : .vpnStart
         }
     }
 
     private func refresh() async {
         guard let tunnelManager else { return }
-        vpnStatus = tunnelManager.status
+        let refresh = await tunnelManager.connectionRefresh()
+        vpnStatus = refresh.status
+        let presentation = connectionState.observe(
+            refresh.phase,
+            disconnectError: refresh.disconnectError
+        )
         guard vpnStatus == .connected else {
-            providerStatus = Self.providerStatus(for: vpnStatus)
+            providerStatus = Self.providerStatus(for: presentation)
+            if presentation.providerError != .none, userError == .statusUnavailable {
+                userError = nil
+            }
             return
         }
         do {
@@ -265,17 +288,11 @@ final class AgentViewModel: ObservableObject {
         providerError: .none
     )
 
-    private static func providerStatus(for vpnStatus: NEVPNStatus) -> TunnelProviderStatus {
-        let state: TunnelProviderLifecycleState
-        switch vpnStatus {
-        case .connecting, .reasserting: state = .starting
-        case .disconnecting: state = .stopping
-        case .connected: state = .running
-        case .invalid, .disconnected: state = .stopped
-        @unknown default: state = .failed
-        }
+    private static func providerStatus(
+        for presentation: TunnelConnectionPresentation
+    ) -> TunnelProviderStatus {
         return TunnelProviderStatus(
-            providerState: state,
+            providerState: presentation.providerState,
             runtimeSnapshot: AgentRuntimeSnapshot(
                 connectionState: .stopped,
                 activeStreamCount: 0,
@@ -283,7 +300,7 @@ final class AgentViewModel: ObservableObject {
                 bytesDownloaded: 0,
                 errorClass: .none
             ),
-            providerError: .none
+            providerError: presentation.providerError
         )
     }
 }

@@ -8,8 +8,14 @@ enum TunnelManagerError: Error {
     case invalidProviderResponse
 }
 
+struct TunnelConnectionRefresh {
+    let status: NEVPNStatus
+    let phase: TunnelConnectionPhase
+    let disconnectError: TunnelProviderErrorClass?
+}
+
 @MainActor
-final class TunnelManager {
+final class TunnelManager: TunnelPreferenceSession {
     private let configuration: MobileEgressSystemConfiguration
     private var manager: NETunnelProviderManager?
 
@@ -19,6 +25,35 @@ final class TunnelManager {
 
     var status: NEVPNStatus {
         manager?.connection.status ?? .invalid
+    }
+
+    var isOnDemandEnabled: Bool {
+        manager?.isOnDemandEnabled ?? false
+    }
+
+    func connectionRefresh() async -> TunnelConnectionRefresh {
+        guard let connection = manager?.connection else {
+            return TunnelConnectionRefresh(
+                status: .invalid,
+                phase: .invalid,
+                disconnectError: nil
+            )
+        }
+        let status = connection.status
+        let disconnectError: TunnelProviderErrorClass?
+        switch status {
+        case .invalid, .disconnected:
+            disconnectError = await finiteLastDisconnectError(from: connection)
+        case .connecting, .connected, .reasserting, .disconnecting:
+            disconnectError = nil
+        @unknown default:
+            disconnectError = .runtimeUnavailable
+        }
+        return TunnelConnectionRefresh(
+            status: status,
+            phase: status.connectionPhase,
+            disconnectError: disconnectError
+        )
     }
 
     func prepare() async throws {
@@ -42,32 +77,13 @@ final class TunnelManager {
     }
 
     func start() async throws {
-        let manager = try await preparedManager()
-        applyBaseConfiguration(to: manager)
-        manager.isOnDemandEnabled = true
-        try await manager.saveToPreferences()
-        try await manager.loadFromPreferences()
-
-        guard let session = manager.connection as? NETunnelProviderSession else {
-            throw TunnelManagerError.configurationUnavailable
-        }
-        switch session.status {
-        case .connected, .connecting, .reasserting:
-            return
-        case .invalid, .disconnected, .disconnecting:
-            try session.startTunnel(options: nil)
-        @unknown default:
-            throw TunnelManagerError.configurationUnavailable
-        }
+        _ = try await preparedManager()
+        try await TunnelPreferenceTransaction.start(using: self)
     }
 
     func stop() async throws {
-        guard let manager else { return }
-        applyBaseConfiguration(to: manager)
-        manager.isOnDemandEnabled = false
-        try await manager.saveToPreferences()
-        try await manager.loadFromPreferences()
-        manager.connection.stopVPNTunnel()
+        guard manager != nil else { return }
+        try await TunnelPreferenceTransaction.stop(using: self)
     }
 
     func providerStatus() async throws -> TunnelProviderStatus {
@@ -94,6 +110,40 @@ final class TunnelManager {
                 continuation.resume(throwing: TunnelManagerError.providerUnavailable)
             }
         }
+    }
+
+    func loadPreferences() async throws {
+        guard let manager else { throw TunnelManagerError.configurationUnavailable }
+        try await manager.loadFromPreferences()
+    }
+
+    func applyConfiguration(onDemandEnabled: Bool) {
+        guard let manager else { return }
+        applyBaseConfiguration(to: manager)
+        manager.isOnDemandEnabled = onDemandEnabled
+    }
+
+    func savePreferences() async throws {
+        guard let manager else { throw TunnelManagerError.configurationUnavailable }
+        try await manager.saveToPreferences()
+    }
+
+    func startTunnelSession() throws {
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            throw TunnelManagerError.configurationUnavailable
+        }
+        switch session.status {
+        case .connected, .connecting, .reasserting:
+            return
+        case .invalid, .disconnected, .disconnecting:
+            try session.startTunnel(options: nil)
+        @unknown default:
+            throw TunnelManagerError.configurationUnavailable
+        }
+    }
+
+    func stopTunnelSession() {
+        manager?.connection.stopVPNTunnel()
     }
 
     private func preparedManager() async throws -> NETunnelProviderManager {
@@ -125,5 +175,37 @@ final class TunnelManager {
             manager.localizedDescription != "Mobile Egress" ||
             !manager.isEnabled ||
             manager.onDemandRules?.contains(where: { $0 is NEOnDemandRuleConnect }) != true
+    }
+
+    private func finiteLastDisconnectError(
+        from connection: NEVPNConnection
+    ) async -> TunnelProviderErrorClass? {
+        await withCheckedContinuation { continuation in
+            connection.fetchLastDisconnectError { error in
+                guard let error else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let nsError = error as NSError
+                continuation.resume(returning: TunnelProviderErrorClass.classifyDisconnectError(
+                    domain: nsError.domain,
+                    code: nsError.code
+                ))
+            }
+        }
+    }
+}
+
+private extension NEVPNStatus {
+    var connectionPhase: TunnelConnectionPhase {
+        switch self {
+        case .invalid: .invalid
+        case .disconnected: .disconnected
+        case .connecting: .connecting
+        case .connected: .connected
+        case .reasserting: .reasserting
+        case .disconnecting: .disconnecting
+        @unknown default: .invalid
+        }
     }
 }

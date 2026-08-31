@@ -126,31 +126,24 @@ private enum ProviderStartFailure: Error, Sendable {
 
 private extension TunnelProviderErrorClass {
     var providerNSError: NSError {
-        let code: Int
         let description: String
         switch self {
         case .none:
-            code = 0
             description = "No provider error."
         case .identityUnavailable:
-            code = 1
             description = "Enrollment is required."
         case .invalidConfiguration:
-            code = 2
             description = "Tunnel configuration is invalid."
         case .tunnelSettings:
-            code = 3
             description = "Tunnel settings were rejected."
         case .runtimeUnavailable:
-            code = 4
             description = "Agent runtime is unavailable."
         case .invalidMessage:
-            code = 5
             description = "Provider message is invalid."
         }
         return NSError(
-            domain: "com.mobileegress.agent.tunnel",
-            code: code,
+            domain: TunnelProviderErrorClass.providerErrorDomain,
+            code: providerErrorCode,
             userInfo: [NSLocalizedDescriptionKey: description]
         )
     }

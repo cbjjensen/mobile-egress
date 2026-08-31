@@ -19,7 +19,6 @@
 		C00000000000000000000010 /* ExtensionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000020 /* ExtensionConfiguration.swift */; };
 		C00000000000000000000011 /* NoRoutesTunnelSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000021 /* NoRoutesTunnelSettings.swift */; };
 		C00000000000000000000012 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000022 /* PacketTunnelProvider.swift */; };
-		C00000000000000000000013 /* TunnelRuntimeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000023 /* TunnelRuntimeController.swift */; };
 		C00000000000000000000014 /* MobileEgressCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000003 /* MobileEgressCore */; };
 /* End PBXBuildFile section */
 
@@ -61,7 +60,6 @@
 		B00000000000000000000020 /* ExtensionConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionConfiguration.swift; sourceTree = "<group>"; };
 		B00000000000000000000021 /* NoRoutesTunnelSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoRoutesTunnelSettings.swift; sourceTree = "<group>"; };
 		B00000000000000000000022 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
-		B00000000000000000000023 /* TunnelRuntimeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelRuntimeController.swift; sourceTree = "<group>"; };
 		B00000000000000000000024 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B00000000000000000000025 /* MobileEgressTunnelExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MobileEgressTunnelExtension.entitlements; sourceTree = "<group>"; };
 		B00000000000000000000030 /* AppAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = AppAssets.xcassets; sourceTree = "<group>"; };
@@ -122,7 +120,6 @@
 				B00000000000000000000020 /* ExtensionConfiguration.swift */,
 				B00000000000000000000021 /* NoRoutesTunnelSettings.swift */,
 				B00000000000000000000022 /* PacketTunnelProvider.swift */,
-				B00000000000000000000023 /* TunnelRuntimeController.swift */,
 				B00000000000000000000024 /* Info.plist */,
 				B00000000000000000000025 /* MobileEgressTunnelExtension.entitlements */,
 			);
@@ -282,7 +279,6 @@
 				C00000000000000000000010 /* ExtensionConfiguration.swift in Sources */,
 				C00000000000000000000011 /* NoRoutesTunnelSettings.swift in Sources */,
 				C00000000000000000000012 /* PacketTunnelProvider.swift in Sources */,
-				C00000000000000000000013 /* TunnelRuntimeController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

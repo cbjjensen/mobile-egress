@@ -110,7 +110,7 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(manager.contains("providerBundleIdentifier = configuration.providerBundleIdentifier"))
         XCTAssertTrue(manager.contains("disconnectOnSleep = false"))
         XCTAssertTrue(manager.contains("NEOnDemandRuleConnect()"))
-        XCTAssertTrue(manager.contains("isOnDemandEnabled = true"))
+        XCTAssertTrue(manager.contains("manager.isOnDemandEnabled = onDemandEnabled"))
 
         let catalog = try json(at: "Assets/AppAssets.xcassets/Contents.json")
         let accent = try json(at: "Assets/AppAssets.xcassets/AccentColor.colorset/Contents.json")
@@ -128,6 +128,45 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertEqual(try swiftFiles(in: "MobileEgressTunnelExtension"), Set(expectedExtensionSources))
     }
 
+    func testAppleStatusRefreshUsesFiniteLastDisconnectErrorState() throws {
+        let manager = try text(at: "MobileEgressAgent/TunnelManager.swift")
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+        let provider = try text(at: "MobileEgressTunnelExtension/PacketTunnelProvider.swift")
+
+        XCTAssertTrue(manager.contains("fetchLastDisconnectError"))
+        XCTAssertTrue(manager.contains("TunnelProviderErrorClass.classifyDisconnectError"))
+        XCTAssertTrue(viewModel.contains("connectionState.startRequested()"))
+        XCTAssertTrue(viewModel.contains("connectionState.stopRequested()"))
+        XCTAssertTrue(viewModel.contains("connectionState.restorePersistentIntent("))
+        XCTAssertTrue(viewModel.contains("connectionState.observe("))
+        XCTAssertTrue(provider.contains("TunnelProviderErrorClass.providerErrorDomain"))
+        XCTAssertTrue(provider.contains("providerErrorCode"))
+        XCTAssertFalse(manager.contains("error.localizedDescription"))
+        XCTAssertFalse(manager.contains("nsError.localizedDescription"))
+        XCTAssertFalse(viewModel.contains("error.localizedDescription"))
+    }
+
+    func testAppleManagerConsumesPortablePreferenceTransaction() throws {
+        let manager = try text(at: "MobileEgressAgent/TunnelManager.swift")
+
+        XCTAssertTrue(manager.contains("TunnelManager: TunnelPreferenceSession"))
+        XCTAssertTrue(manager.contains("TunnelPreferenceTransaction.start(using: self)"))
+        XCTAssertTrue(manager.contains("TunnelPreferenceTransaction.stop(using: self)"))
+        XCTAssertTrue(manager.contains("func loadPreferences() async throws"))
+        XCTAssertTrue(manager.contains("func applyConfiguration(onDemandEnabled: Bool)"))
+        XCTAssertTrue(manager.contains("func savePreferences() async throws"))
+        XCTAssertTrue(manager.contains("func startTunnelSession() throws"))
+        XCTAssertTrue(manager.contains("func stopTunnelSession()"))
+    }
+
+    func testExtensionConsumesPortableRuntimeOwnershipController() throws {
+        let project = try text(at: "MobileEgressAgent.xcodeproj/project.pbxproj")
+        let provider = try text(at: "MobileEgressTunnelExtension/PacketTunnelProvider.swift")
+
+        XCTAssertTrue(provider.contains("private let runtimeController = TunnelRuntimeController()"))
+        XCTAssertFalse(project.contains("TunnelRuntimeController.swift"))
+    }
+
     private let expectedAppSources = [
         "AgentDashboardView.swift",
         "AgentViewModel.swift",
@@ -141,7 +180,6 @@ final class XcodeProjectStructureTests: XCTestCase {
         "ExtensionConfiguration.swift",
         "NoRoutesTunnelSettings.swift",
         "PacketTunnelProvider.swift",
-        "TunnelRuntimeController.swift",
     ]
 
     private var iosRoot: URL {
