@@ -20,6 +20,15 @@ struct AppleRelayWebSocketParameterBuilder {
         .url(configuration.url)
     }
 
+    func makeWebSocketOptions(
+        configuration: RelayWebSocketConfiguration
+    ) -> NWProtocolWebSocket.Options {
+        let webSocket = NWProtocolWebSocket.Options(.version13)
+        webSocket.autoReplyPing = configuration.automaticallyRepliesToWebSocketPings
+        webSocket.maximumMessageSize = configuration.maximumMessageBytes
+        return webSocket
+    }
+
     func makeParameters(configuration: RelayWebSocketConfiguration) throws -> NWParameters {
         guard configuration.requiredInterfaceType == .cellular,
               configuration.prohibitedInterfaceTypes == [.wifi, .wiredEthernet],
@@ -69,9 +78,7 @@ struct AppleRelayWebSocketParameterBuilder {
         tcp.enableKeepalive = true
         tcp.connectionTimeout = Int(timeout.rounded(.up))
         let parameters = NWParameters(tls: tls, tcp: tcp)
-        let webSocket = NWProtocolWebSocket.Options(.version13)
-        webSocket.autoReplyPing = configuration.automaticallyRepliesToWebSocketPings
-        webSocket.maximumMessageSize = configuration.maximumMessageBytes
+        let webSocket = makeWebSocketOptions(configuration: configuration)
         parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
         parameters.requiredInterfaceType = .cellular
         parameters.prohibitedInterfaceTypes = [.wifi, .wiredEthernet]

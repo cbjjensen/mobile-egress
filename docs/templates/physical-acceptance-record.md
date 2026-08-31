@@ -12,9 +12,10 @@ Save a copy of this template with the private release evidence. Do not record QR
 | Windows ZIP filename / SHA-256 | |
 | Client filename / SHA-256 | |
 | Authenticode subject / thumbprint | |
-| APK filename / SHA-256 | |
-| APK public signer digest | |
-| Android versionCode / versionName | |
+| Android APK filename / SHA-256 (if Android) | |
+| Android public signer digest (if Android) | |
+| Android versionCode / versionName (if Android) | |
+| iOS bundle ID / TestFlight build (if iOS) | |
 
 ## Sanitized environment
 
@@ -22,7 +23,7 @@ Save a copy of this template with the private release evidence. Do not record QR
 |---|---|
 | Controller Windows version | |
 | Tailscale version | |
-| Android model / OS version | |
+| Agent platform, model, and OS version | |
 | EC2 node count / Windows image family | |
 | AWS region | `us-east-1` |
 
@@ -35,10 +36,11 @@ Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable p
 | Check | Result | Sanitized note |
 |---|---|---|
 | Downloaded Windows ZIP hash/signatures match release evidence | | |
-| Downloaded APK hash/signer match release evidence | | |
+| Android APK hash/signer match release evidence (if Android) | | |
+| iOS signed archive/TestFlight build match release evidence (if iOS) | | |
 | App-only Tailscale Funnel and loopback relay setup | | |
 | Relay listens only on `127.0.0.1:8443` | | |
-| Android pairs and connects over cellular with Wi-Fi enabled | | |
+| Selected Agent pairs and connects over cellular with Wi-Fi enabled | | |
 | Two SSM-managed Clients install with distinct identities | | |
 | Each SOCKS listener is authenticated and `127.0.0.1:1080` only | | |
 | Node A direct/proxied egress differ; values not recorded | | |
@@ -52,7 +54,7 @@ Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable p
 | Rotation cancellation or timeout restores normal Agent behavior | | |
 | Controller PC reboot recovery | | |
 | EC2 node A/B reboot recovery | | |
-| Android reboot plus explicit Start recovery | | |
+| Agent restart/relaunch behavior matches its platform expectation | | |
 | Signed Client Update retains identity/credentials | | |
 | Repair restores service/config without identity change | | |
 | Tailscale-name endpoint migration out and back | | |

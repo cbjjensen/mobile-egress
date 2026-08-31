@@ -79,8 +79,9 @@ final class AppleProductionAdaptersTests: XCTestCase {
         let trustPolicy = try builder.makeTrustPolicy(configuration: configuration)
         let endpoint = builder.makeEndpoint(configuration: configuration)
         let tls = NWProtocolTLS.Options()
+        let webSocket = builder.makeWebSocketOptions(configuration: configuration)
         let parameters = builder.makePathConstrainedParameters(configuration: configuration, tls: tls)
-        let webSocket = try XCTUnwrap(
+        _ = try XCTUnwrap(
             parameters.defaultProtocolStack.applicationProtocols.first as? NWProtocolWebSocket.Options
         )
         let expectedURL = try XCTUnwrap(URL(string: "wss://relay.example:8443/v1/session"))

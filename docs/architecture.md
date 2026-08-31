@@ -2,7 +2,7 @@
 
 ## Accepted topology
 
-Every operator has one independent bridge. Their Windows 10/11 PC owns the relay and control plane, up to ten of their Windows Server 2019 EC2 instances are Clients, and one Android phone is the cellular Agent.
+Every operator has one independent bridge. Their Windows 10/11 PC owns the relay and control plane, up to ten of their Windows Server 2019 EC2 instances are Clients, and one Android or iOS device is the cellular Agent.
 
 ```text
 EC2 Refract -> loopback HTTP forward/CONNECT -> Client service --+
@@ -24,7 +24,7 @@ The Wails/React app is the only normal operator interface. It:
 - supports IAM Identity Center device login and DPAPI-encrypted access-key fallback;
 - inventories only supported `us-east-1` instances and orchestrates installation/update/repair with SSM;
 - stores encrypted node metadata and reveals proxy credentials only on an explicit HTTP-line or SOCKS-URL copy action; and
-- coordinates Funnel endpoint rotation, sealed EC2 updates, and a one-use Android migration QR.
+- coordinates Funnel endpoint rotation, sealed EC2 updates, and a one-use Agent migration QR.
 
 ### Local relay
 
@@ -44,11 +44,13 @@ The relay permits multiple simultaneous Clients, one active Agent session, four 
 
 Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080` and an HTTP forward/CONNECT proxy to `127.0.0.1:1081`, so an EC2 application must explicitly opt in. Both listeners use the same retained credentials and relay session. Ordinary HTTP requests are rewritten to origin form and carried through a relay stream to the destination; repeat requests to the same destination can reuse that stream through a bounded keep-alive pool. The pool retains at most two idle streams for 15 seconds, leaving capacity for other destinations while avoiding a full mobile connection setup for every request. HTTPS clients establish end-to-end TLS through CONNECT, and Mobile Egress does not decrypt that traffic. Proxy credentials and hop-by-hop proxy headers are removed before an ordinary HTTP request reaches the destination. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
 
-### Android Agent
+### Mobile Agents
 
 The Android app stores its P-256 identity in Android Keystore and encrypted app storage. A foreground service requests a cellular `Network` and uses that network's socket factory for the relay and every target socket. Loss of cellular closes streams; Wi-Fi is never used as fallback. Its guided IP-rotation state machine may close the relay, query ipify IPv4/IPv6 endpoints through that same cellular network, open the system Airplane Mode settings for manual toggling, observe radio loss/return, and reconnect. No relay protocol or default-route behavior changes.
 
-Admission is capped at 32 streams. Inbound and outbound queues are bounded; outbound data scheduling is round-robin across ready streams so one stream cannot monopolize the Agent.
+The iOS/iPadOS 17+ app stores its non-exportable P-256 identity in the Secure Enclave and shares its certificate and enrollment metadata with the packet-tunnel extension through the configured Keychain access group. Its Network.framework relay and target connections require cellular. The app manages an on-demand packet-tunnel configuration whose tunnel settings intentionally contain no included routes, so Mobile Egress traffic remains the only tunnel workload.
+
+Both implementations use the same enrollment/migration QR formats, binary WebSocket protocol, public-target policy, mTLS identity model, 32-stream cap, bounded queues, and finite failure behavior. Loss of cellular closes streams; Wi-Fi is never used as fallback.
 
 ## Provisioning sequence
 
@@ -64,7 +66,7 @@ Admission is capped at 32 streams. Inbound and outbound queues are bounded; outb
 
 ## Endpoint migration
 
-When Tailscale reports a different Funnel FQDN, the controller requires AWS connectivity first if nodes are managed. Under UAC it rotates only the relay leaf key/certificate and stored URL under the existing CA, restarts the service, and updates the encrypted Owner endpoint. For each node it first persists the desired endpoint/generation as `configuring`, then pushes the newly sealed endpoint-only configuration and marks it `installed` after restart. A failed node therefore remains repairable at the new endpoint. The controller then displays a versioned `agent-endpoint-migration` QR. The existing Agent authenticates to the new endpoint with its current certificate, consumes the one-use capability, and updates only `relayOrigin`; its key alias and certificate remain unchanged.
+When Tailscale reports a different Funnel FQDN, the controller requires AWS connectivity first if nodes are managed. Under UAC it rotates only the relay leaf key/certificate and stored URL under the existing CA, restarts the service, and updates the encrypted Owner endpoint. For each node it first persists the desired endpoint/generation as `configuring`, then pushes the newly sealed endpoint-only configuration and marks it `installed` after restart. A failed node therefore remains repairable at the new endpoint. The controller then displays a versioned `agent-endpoint-migration` QR. The existing Agent authenticates to the new endpoint with its current certificate, consumes the one-use capability, and updates only `relayOrigin`; its Android Keystore or iOS Secure Enclave identity and certificate remain unchanged.
 
 ## Availability and trust
 

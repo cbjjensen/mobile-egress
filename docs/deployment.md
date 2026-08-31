@@ -1,8 +1,8 @@
 # Release, deployment, and physical acceptance
 
-This is the operator runbook for producing the signed artifacts that friends download and for proving them on a real Windows PC, Android phone, and EC2 nodes. Normal friends do not perform these steps; they follow the root README after you publish an accepted release.
+This is the Windows/Android operator runbook for producing signed GitHub-release artifacts and proving them on a real Windows PC, Android phone, and EC2 nodes. Normal friends do not perform these steps; they follow the root README after you publish an accepted release. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
 
-The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
+The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
 
 ## Routine release commands
 
@@ -352,7 +352,7 @@ On Android:
 1. In **Bridge**, choose **Install Tailscale** only when the status is **Not installed**, then approve UAC. If Tailscale is already present, the controller shows **Installed · not connected** instead of offering another MSI installation.
 2. Choose **Connect Tailscale** while installed/offline and finish browser login. This starts login and unattended mode without rerunning the installer. Once the status is **Online**, choose **Set up local bridge**. On the first Funnel setup, the controller automatically opens Tailscale's official Funnel approval page while the hidden CLI waits; approve it, then approve relay UAC. Require Funnel active, relay healthy, and a `https://<machine>.<tailnet>.ts.net:8443` public origin.
 3. Confirm Windows Defender Firewall/router settings were not manually opened for port 8443.
-4. In **Phone**, generate the Agent QR. Scan it in Android and tap **Start**.
+4. In **Agent**, generate the Agent QR. Scan it in Android and tap **Start**.
 5. Keep Wi-Fi enabled on the phone while cellular data is also enabled. Require the Android UI/notification to show cellular available and relay connected.
 6. On Windows, confirm the relay is automatic/running and loopback-only:
 

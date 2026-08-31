@@ -183,7 +183,7 @@ public final class SharedKeychainIdentityStore: AgentIdentityPersisting, Securit
         guard CFGetTypeID(keyResult) == SecKeyGetTypeID() else {
             throw IdentityError.identityLookupFailed
         }
-        let privateKey = unsafeBitCast(keyResult, to: SecKey.self)
+        let privateKey = unsafeDowncast(keyResult, to: SecKey.self)
         guard let identity = SecIdentityCreate(nil, certificate, privateKey) else {
             throw IdentityError.identityLookupFailed
         }

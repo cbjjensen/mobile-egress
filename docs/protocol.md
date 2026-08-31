@@ -43,7 +43,7 @@ Endpoint migration is intentionally distinct:
 }
 ```
 
-Android requires the QR CA to byte-match its stored CA, then uses its existing mTLS identity over a cellular-bound connection to consume the capability. Only the stored endpoint changes.
+Android and iOS require the QR CA to byte-match the stored CA, then use the existing mTLS identity over a cellular-bound connection to consume the capability. Only the stored endpoint changes. Android retains its Android Keystore identity; iOS retains its Secure Enclave identity and shared-Keychain certificate material.
 
 ## Sealed node configuration
 

@@ -7,22 +7,25 @@
 - Self-contained Windows controller flow with distinct absent, installed/offline, and online Tailscale states; duplicate-MSI suppression; connect-only browser/unattended setup; raw TCP Funnel; UAC relay lifecycle; DPAPI Owner/AWS/node state; IAM Identity Center; EC2 inventory; guarded SSM IAM preparation; signed node install/update/repair; a default Refract proxy-line action; and a SOCKS5 fallback action.
 - Headless Windows Client service with on-node P-256/X25519 keys, sealed/replay-protected configuration, loopback authenticated SOCKS5 plus HTTP forward/CONNECT listeners, outbound reconnect, and Windows SCM support.
 - Android cellular-only foreground Agent, strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, 32-stream admission, and guided non-root cellular IP rotation with transient IPv4/IPv6 comparison.
+- iOS/iPadOS 17+ Agent with VisionKit scanning, Secure Enclave/shared-Keychain identity retention, cellular-required pinned/mTLS relay and target transports, an app-managed on-demand packet tunnel with no included routes, bounded runtime, and the same QR/protocol/32-stream limits as Android.
 - Signed release packaging script and app-first friend documentation.
-- Windows-to-Mac SSH build-server runbook for future iOS Agent development.
+- Windows-to-Mac SSH build-server runbook for the iOS Agent's exact-tree verification.
 
 ## Automated validation
 
 The full local gate covers Go unit/integration tests and vet, Windows builds, frontend typecheck/build, Android unit tests/lint/debug APK, PowerShell operation-script tests, strict protocol/crypto cases, AWS/IAM guards, single-controller enforcement, atomic node-capacity reservations/cancellation, partial-install and endpoint-rotation retry, encrypted-state migration, secret redaction, service command construction, hidden background Tailscale CLI launches, stream bounds/fairness, endpoint migration, cellular IP-rotation transitions, public-IP parsing/failure isolation, one-shot settings launch, and diagnostic redaction. Component release gates run the same relevant checks while omitting unrelated Android work from Windows releases and unrelated Windows work from Android releases.
 
+`scripts/test-ios.ps1` runs portable Swift tests on Windows through Docker and then reports Xcode validation as unsupported unless `-UseMacBuildServer` is selected. That selected path transfers a disposable bundle for the exact committed tree to the Mac and performs the unsigned iPhoneOS app-plus-extension build and standalone package tests there.
+
 Go's race detector is not available in the current Windows environment unless CGO and a supported C compiler are installed. Normal Go tests are still run. See the latest commit/CI output for release evidence.
 
 ## Required external acceptance
 
-The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android radio behavior on physical hardware, or carrier egress. Follow the [signed-release and physical-acceptance runbook](deployment.md) and save a sanitized copy of the [acceptance record](templates/physical-acceptance-record.md) before promoting a prerelease to stable.
+The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android or iOS radio behavior on physical hardware, carrier egress, iOS provisioning, TestFlight upload, or empty-route packet-tunnel acceptance. Follow the [signed-release and physical-acceptance runbook](deployment.md), the [iOS real-device checklist](../ios/README.md#real-device-acceptance), and save a sanitized copy of the [acceptance record](templates/physical-acceptance-record.md) before promoting a prerelease to stable.
 
 ## Known limits
 
-- One operator PC, one relay, and one active Android Agent are availability dependencies.
+- One operator PC, one relay, and one active Android or iOS Agent are availability dependencies.
 - At most ten managed EC2 nodes, four streams per Client, and 32 total streams.
 - Windows 10/11 controller and x86-64 Windows Server 2019 nodes in `us-east-1` only.
 - Funnel is beta, requires browser approval, uses public `*.ts.net` names, and has non-configurable bandwidth limits. Personal-plan use must comply with Tailscale terms; commercial/bulk use needs a supported ingress arrangement.

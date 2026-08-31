@@ -89,7 +89,7 @@ public final class SecureEnclaveIdentityKeyManager: IdentityKeyManaging, @unchec
         guard status == errSecSuccess, let result, CFGetTypeID(result) == SecKeyGetTypeID() else {
             throw IdentityError.identityLookupFailed
         }
-        return unsafeBitCast(result, to: SecKey.self)
+        return unsafeDowncast(result, to: SecKey.self)
     }
 }
 #endif
