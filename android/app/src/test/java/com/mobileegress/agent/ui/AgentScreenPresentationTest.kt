@@ -14,6 +14,15 @@ import org.junit.Test
 
 class AgentScreenPresentationTest {
     @Test
+    fun `screen header uses ZFNF mobile branding`() {
+        val presentation = presentAgentScreen(MainUiState())
+
+        assertEquals("ZF", presentation.appMark)
+        assertEquals("ZFNF MOBILE EGRESS", presentation.appTitle)
+        assertEquals("Cellular Agent", presentation.appSubtitle)
+    }
+
+    @Test
     fun `unpaired phone makes enrollment the next action`() {
         val presentation = presentAgentScreen(MainUiState())
 

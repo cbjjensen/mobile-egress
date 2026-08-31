@@ -1,5 +1,6 @@
 package com.mobileegress.agent.ui
 
+import com.mobileegress.agent.branding.AgentBranding
 import com.mobileegress.agent.status.CellularHealth
 import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
@@ -27,6 +28,9 @@ enum class AgentPrimaryAction {
 enum class RotationAction { None, Rotate, Retry }
 
 data class AgentScreenPresentation(
+    val appMark: String,
+    val appTitle: String,
+    val appSubtitle: String,
     val headline: String,
     val summary: String,
     val badge: String,
@@ -103,6 +107,9 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
     }
 
     return AgentScreenPresentation(
+        appMark = AgentBranding.appMark,
+        appTitle = AgentBranding.headerTitle,
+        appSubtitle = AgentBranding.headerSubtitle,
         headline = status.headline,
         summary = status.summary,
         badge = status.badge,

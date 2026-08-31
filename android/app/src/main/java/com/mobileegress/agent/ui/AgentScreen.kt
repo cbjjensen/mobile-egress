@@ -132,20 +132,20 @@ private fun AppHeader(presentation: AgentScreenPresentation) {
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text("ME", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(presentation.appMark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "MOBILE EGRESS",
+                        text = presentation.appTitle,
                         color = MaterialTheme.colorScheme.onBackground,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         letterSpacing = 1.4.sp,
                     )
                     Text(
-                        text = "Cellular Agent",
+                        text = presentation.appSubtitle,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
