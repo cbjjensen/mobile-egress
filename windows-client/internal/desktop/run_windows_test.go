@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"image/png"
 	"math/big"
 	"os"
@@ -123,6 +124,32 @@ func TestSSMPreparationErrorKeepsTheSafeFailingStage(t *testing.T) {
 	err := formatSSMPreparationError(errors.New("create dedicated SSM instance profile: create dedicated SSM IAM role"))
 	if err == nil || !strings.Contains(err.Error(), "create dedicated SSM IAM role") {
 		t.Fatalf("formatSSMPreparationError() = %v, want safe failing stage", err)
+	}
+}
+
+func TestNodeInstallErrorShowsOnlyTheApprovedFailureStage(t *testing.T) {
+	staged := fmt.Errorf("orchestration wrapper: %w", cloud.NewSSMCommandFailure("pretrust-signature"))
+	err := formatNodeInstallError(staged)
+	if got, want := err.Error(), "Unable to install the Client node through Systems Manager during pre-trust signature verification. No EC2 networking was changed."; got != want {
+		t.Fatalf("formatNodeInstallError() = %q, want %q", got, want)
+	}
+
+	err = formatNodeInstallError(errors.New("private-output-marker"))
+	if strings.Contains(err.Error(), "private-output-marker") || !strings.Contains(err.Error(), "Unable to install the Client node") {
+		t.Fatalf("formatNodeInstallError() exposed an unapproved error: %v", err)
+	}
+}
+
+func TestNodeUpdateErrorShowsOnlyTheApprovedFailureStage(t *testing.T) {
+	staged := fmt.Errorf("orchestration wrapper: %w", cloud.NewSSMCommandFailure("service-start"))
+	err := formatNodeUpdateError(staged)
+	if got, want := err.Error(), "Unable to update the signed Client service through Systems Manager during Client service startup."; got != want {
+		t.Fatalf("formatNodeUpdateError() = %q, want %q", got, want)
+	}
+
+	err = formatNodeUpdateError(errors.New("private-output-marker"))
+	if strings.Contains(err.Error(), "private-output-marker") || !strings.Contains(err.Error(), "Unable to update the signed Client service") {
+		t.Fatalf("formatNodeUpdateError() exposed an unapproved error: %v", err)
 	}
 }
 

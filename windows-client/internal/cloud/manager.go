@@ -17,6 +17,37 @@ const (
 
 var ErrConfirmationRequired = errors.New("explicit confirmation is required before changing the existing IAM role")
 
+type SSMCommandFailure struct{ stage string }
+
+func (failure *SSMCommandFailure) Error() string { return "SSM command failed" }
+
+func NewSSMCommandFailure(stage string) error {
+	if !safeSSMCommandFailureStage(stage) {
+		stage = ""
+	}
+	return &SSMCommandFailure{stage: stage}
+}
+
+func SSMCommandFailureStage(err error) (string, bool) {
+	var failure *SSMCommandFailure
+	if !errors.As(err, &failure) || failure.stage == "" {
+		return "", false
+	}
+	return failure.stage, true
+}
+
+func safeSSMCommandFailureStage(stage string) bool {
+	switch stage {
+	case "transaction-lock", "download", "artifact-hash", "publisher-certificate", "pretrust-signature",
+		"root-trust", "publisher-trust", "posttrust-signature", "directories", "state-acl", "service-stop",
+		"client-file", "service-configuration", "service-start", "client-bootstrap", "trust-rollback",
+		"transaction-cleanup", "result":
+		return true
+	default:
+		return false
+	}
+}
+
 type Instance struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`

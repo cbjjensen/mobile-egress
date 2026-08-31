@@ -60,6 +60,24 @@ func TestSelectedInstanceSSMStatusDistinguishesMissingAndCurrentRegistration(t *
 	}
 }
 
+func TestSSMCommandFailureStageExtractsOnlyApprovedSanitizedMarkers(t *testing.T) {
+	t.Parallel()
+
+	stderr := "Client release operation failed [MOBILE_EGRESS_STAGE=pretrust-signature]\r\nAt C:\\ProgramData\\Amazon\\SSM\\script.ps1:1 char:1"
+	if got, want := ssmCommandFailureStage(stderr), "pretrust-signature"; got != want {
+		t.Fatalf("ssmCommandFailureStage() = %q, want %q", got, want)
+	}
+	for _, unsafe := range []string{
+		"Client release operation failed [MOBILE_EGRESS_STAGE=private-output-marker]",
+		"private-output-marker",
+		"Client release operation failed [MOBILE_EGRESS_STAGE=pretrust-signature;secret]",
+	} {
+		if got := ssmCommandFailureStage(unsafe); got != "" {
+			t.Fatalf("ssmCommandFailureStage(%q) = %q, want no unapproved detail", unsafe, got)
+		}
+	}
+}
+
 func TestDedicatedIAMResourceValidationRejectsNameCollisions(t *testing.T) {
 	t.Parallel()
 

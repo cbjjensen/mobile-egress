@@ -73,6 +73,23 @@ func TestInstallNodeRedactsRunnerErrors(t *testing.T) {
 	}
 }
 
+func TestInstallNodePreservesOnlyAnApprovedSSMFailureStage(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{err: NewSSMCommandFailure("pretrust-signature")}
+	orchestrator := NewOrchestrator(runner, &fakeIssuer{}, &memoryNodeStore{})
+	_, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", testNodeRelease(t))
+	if err == nil {
+		t.Fatal("Install() succeeded despite the staged SSM failure")
+	}
+	if stage, ok := SSMCommandFailureStage(err); !ok || stage != "pretrust-signature" {
+		t.Fatalf("Install() failure stage = %q/%t, want preserved approved stage", stage, ok)
+	}
+	if strings.Contains(err.Error(), "private-output-marker") {
+		t.Fatalf("Install() error exposed private detail: %v", err)
+	}
+}
+
 func TestEndpointUpdateSealsExistingIdentityAndCredentialsToNodeKey(t *testing.T) {
 	t.Parallel()
 
@@ -340,7 +357,7 @@ func TestNodeTrustBootstrapVerifiesExactUntrustedSignerBeforeTrustAndRollsBackOn
 				release.SignerCertificateBase64,
 				release.SignerCertificateSHA256,
 				strings.ToUpper(release.SignerThumbprint),
-				"@('NotTrusted', 'Valid')",
+				"@('NotTrusted', 'UnknownError', 'Valid')",
 				"[Convert]::ToBase64String($untrustedSignature.SignerCertificate.RawData) -cne $certificateBase64",
 				"$storesAbsentAtStart.Add($StoreName)",
 				"$confirmedAddedStores.Add($StoreName)",

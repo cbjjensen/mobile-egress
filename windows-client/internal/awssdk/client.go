@@ -533,7 +533,7 @@ func (client *Client) RunPowerShell(ctx context.Context, instanceID, script stri
 				return aws.ToString(invocation.StandardOutputContent), nil
 			case ssmtypes.CommandInvocationStatusCancelled, ssmtypes.CommandInvocationStatusCancelling,
 				ssmtypes.CommandInvocationStatusFailed, ssmtypes.CommandInvocationStatusTimedOut:
-				return "", errors.New("SSM command failed")
+				return "", cloud.NewSSMCommandFailure(ssmCommandFailureStage(aws.ToString(invocation.StandardErrorContent)))
 			}
 		} else if !isInvocationPending(err) {
 			return "", errors.New("read SSM command status")
@@ -544,6 +544,26 @@ func (client *Client) RunPowerShell(ctx context.Context, instanceID, script stri
 		case <-ticker.C:
 		}
 	}
+}
+
+func ssmCommandFailureStage(stderr string) string {
+	const marker = "[MOBILE_EGRESS_STAGE="
+	start := strings.Index(stderr, marker)
+	if start < 0 {
+		return ""
+	}
+	remaining := stderr[start+len(marker):]
+	end := strings.IndexByte(remaining, ']')
+	if end <= 0 {
+		return ""
+	}
+	candidate := remaining[:end]
+	failure := cloud.NewSSMCommandFailure(candidate)
+	stage, ok := cloud.SSMCommandFailureStage(failure)
+	if !ok || stage != candidate {
+		return ""
+	}
+	return stage
 }
 
 func resourceName(rawARN, kind string) (string, error) {

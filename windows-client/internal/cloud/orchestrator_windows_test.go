@@ -79,6 +79,65 @@ func TestNodeTrustBootstrapStopsOnEveryNativeCommandFailureInWindowsPowerShell51
 	}
 }
 
+func TestNodeTrustBootstrapAcceptsServer2019UnknownErrorOnlyBeforePinnedTrust(t *testing.T) {
+	release := testNodeRelease(t)
+
+	t.Run("fresh Server 2019 pre-trust status", func(t *testing.T) {
+		result := runNodeTrustScriptInPowerShell51(t, release, updateScriptWithOptions(release, trustedReleaseScriptOptions{
+			MutexName: testNodeTrustMutexName(t), MutexWaitMilliseconds: 250, StorePrimitiveFunctions: nodeTrustInMemoryStorePrimitives,
+		}), nodeTrustPowerShellScenario{
+			InitialStores: "absent", PreTrustStatus: "UnknownError", PostTrustStatus: "Valid",
+		})
+		if result.Error != "" || !strings.Contains(result.Output, `"updated":true`) {
+			t.Fatalf("Server 2019 UnknownError pre-trust result = output %q/error %q", result.Output, result.Error)
+		}
+		if !slices.Equal(result.ImportedStores, []string{"Root", "TrustedPublisher"}) || result.RootCount != 1 || result.PublisherCount != 1 {
+			t.Fatalf("Server 2019 trust result = imported %#v, Root %d, Publisher %d", result.ImportedStores, result.RootCount, result.PublisherCount)
+		}
+	})
+
+	for _, status := range []string{"HashMismatch", "NotSigned"} {
+		status := status
+		t.Run("pre-trust "+status+" remains rejected", func(t *testing.T) {
+			result := runNodeTrustScriptInPowerShell51(t, release, updateScriptWithOptions(release, trustedReleaseScriptOptions{
+				MutexName: testNodeTrustMutexName(t), MutexWaitMilliseconds: 250, StorePrimitiveFunctions: nodeTrustInMemoryStorePrimitives,
+			}), nodeTrustPowerShellScenario{
+				InitialStores: "absent", PreTrustStatus: status, PostTrustStatus: "Valid",
+			})
+			if result.Error == "" || strings.Contains(result.Output, `"updated":true`) {
+				t.Fatalf("pre-trust status %q was accepted: output %q/error %q", status, result.Output, result.Error)
+			}
+		})
+	}
+
+	for _, status := range []string{"UnknownError", "HashMismatch", "NotSigned"} {
+		status := status
+		t.Run("post-trust "+status+" remains rejected", func(t *testing.T) {
+			result := runNodeTrustScriptInPowerShell51(t, release, updateScriptWithOptions(release, trustedReleaseScriptOptions{
+				MutexName: testNodeTrustMutexName(t), MutexWaitMilliseconds: 250, StorePrimitiveFunctions: nodeTrustInMemoryStorePrimitives,
+			}), nodeTrustPowerShellScenario{
+				InitialStores: "exact", PreTrustStatus: "Valid", PostTrustStatus: status,
+			})
+			if result.Error == "" || strings.Contains(result.Output, `"updated":true`) {
+				t.Fatalf("post-trust status %q was accepted: output %q/error %q", status, result.Output, result.Error)
+			}
+		})
+	}
+}
+
+func TestNodeTrustBootstrapReportsOnlyTheSanitizedFailureStage(t *testing.T) {
+	release := testNodeRelease(t)
+	result := runNodeTrustScriptInPowerShell51(t, release, installScript(release), nodeTrustPowerShellScenario{
+		Failure: "icacls", InitialStores: "exact", PreTrustStatus: "Valid", PostTrustStatus: "Valid",
+	})
+	if got, want := result.Error, "Client release operation failed [MOBILE_EGRESS_STAGE=state-acl]"; got != want {
+		t.Fatalf("sanitized node failure = %q, want %q", got, want)
+	}
+	if strings.Contains(result.Error, "icacls") || strings.Contains(result.Error, "exit") {
+		t.Fatalf("sanitized node failure exposed native detail: %q", result.Error)
+	}
+}
+
 func TestNodeTrustBootstrapValidatesEveryThumbprintMatchIndependentOfEnumerationOrder(t *testing.T) {
 	release := testNodeRelease(t)
 	tests := []struct {
@@ -234,11 +293,13 @@ func TestNodeTrustBootstrapRollbackIsLimitedToStoresAbsentAtTransactionStart(t *
 }
 
 type nodeTrustPowerShellScenario struct {
-	Failure       string
-	ServiceExists bool
-	InitialStores string
-	MutexName     string
-	ProbeMutex    bool
+	Failure         string
+	ServiceExists   bool
+	InitialStores   string
+	MutexName       string
+	ProbeMutex      bool
+	PreTrustStatus  string
+	PostTrustStatus string
 }
 
 type nodeTrustPowerShellResult struct {
@@ -266,6 +327,8 @@ func runNodeTrustScriptInPowerShell51(t *testing.T, release NodeRelease, script 
 		"MOBILE_EGRESS_TEST_INITIAL_STORES="+scenario.InitialStores,
 		"MOBILE_EGRESS_TEST_MUTEX_NAME="+scenario.MutexName,
 		"MOBILE_EGRESS_TEST_PROBE_MUTEX="+map[bool]string{true: "true", false: "false"}[scenario.ProbeMutex],
+		"MOBILE_EGRESS_TEST_PRETRUST_STATUS="+scenario.PreTrustStatus,
+		"MOBILE_EGRESS_TEST_POSTTRUST_STATUS="+scenario.PostTrustStatus,
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -379,6 +442,7 @@ $script:downloadCalled = $false
 $script:removedPaths = [Collections.Generic.List[string]]::new()
 $script:importedStores = [Collections.Generic.List[string]]::new()
 $script:removedStores = [Collections.Generic.List[string]]::new()
+$script:signatureChecks = 0
 $script:stores = @{
   Root = [Collections.Generic.List[object]]::new()
   TrustedPublisher = [Collections.Generic.List[object]]::new()
@@ -405,7 +469,10 @@ function Get-FileHash {
 function Get-AuthenticodeSignature {
   [CmdletBinding()]
   param([string]$LiteralPath)
-  return [pscustomobject]@{ Status = 'Valid'; SignerCertificate = $script:certificate }
+  $script:signatureChecks++
+  $status = if ($script:signatureChecks -eq 1) { $env:MOBILE_EGRESS_TEST_PRETRUST_STATUS } else { $env:MOBILE_EGRESS_TEST_POSTTRUST_STATUS }
+  if ([string]::IsNullOrWhiteSpace($status)) { $status = 'Valid' }
+  return [pscustomobject]@{ Status = $status; SignerCertificate = $script:certificate; TimeStamperCertificate = $script:certificate }
 }
 function Get-ChildItem {
   [CmdletBinding()]

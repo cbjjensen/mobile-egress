@@ -567,7 +567,7 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 	}
 	orchestrator := cloud.NewOrchestrator(awsClient, ownerCertificateIssuer{repository: app.ownerRepository}, app.cloudRepository)
 	if _, err := orchestrator.Install(ctx, instanceID, release); err != nil {
-		return cloud.ManagedNodeView{}, errors.New("Unable to install the Client node through Systems Manager. No EC2 networking was changed.")
+		return cloud.ManagedNodeView{}, formatNodeInstallError(err)
 	}
 	views, err := app.cloudRepository.NodeViews(ctx)
 	if err != nil {
@@ -579,6 +579,44 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 		}
 	}
 	return cloud.ManagedNodeView{}, errors.New("Installed node metadata is unavailable.")
+}
+
+func formatNodeInstallError(err error) error {
+	stage, ok := cloud.SSMCommandFailureStage(err)
+	if !ok {
+		return errors.New("Unable to install the Client node through Systems Manager. No EC2 networking was changed.")
+	}
+	label, exists := nodeReleaseFailureLabel(stage)
+	if !exists {
+		return errors.New("Unable to install the Client node through Systems Manager. No EC2 networking was changed.")
+	}
+	return fmt.Errorf("Unable to install the Client node through Systems Manager during %s. No EC2 networking was changed.", label)
+}
+
+func formatNodeUpdateError(err error) error {
+	stage, ok := cloud.SSMCommandFailureStage(err)
+	if !ok {
+		return errors.New("Unable to update the signed Client service through Systems Manager.")
+	}
+	label, exists := nodeReleaseFailureLabel(stage)
+	if !exists {
+		return errors.New("Unable to update the signed Client service through Systems Manager.")
+	}
+	return fmt.Errorf("Unable to update the signed Client service through Systems Manager during %s.", label)
+}
+
+func nodeReleaseFailureLabel(stage string) (string, bool) {
+	labels := map[string]string{
+		"transaction-lock": "the installer lock", "download": "the signed Client download", "artifact-hash": "Client hash verification",
+		"publisher-certificate": "publisher certificate verification", "pretrust-signature": "pre-trust signature verification",
+		"root-trust": "publisher root trust installation", "publisher-trust": "publisher trust installation",
+		"posttrust-signature": "post-trust signature verification", "directories": "Client directory creation", "state-acl": "Client state protection",
+		"service-stop": "Client service shutdown", "client-file": "Client executable installation", "service-configuration": "Client service configuration",
+		"service-start": "Client service startup", "client-bootstrap": "Client identity bootstrap", "trust-rollback": "publisher trust rollback",
+		"transaction-cleanup": "installer cleanup", "result": "Client bootstrap result validation",
+	}
+	label, exists := labels[stage]
+	return label, exists
 }
 
 func (app *DesktopApp) UpdateEC2Node(instanceID string) (cloud.ManagedNodeView, error) {
@@ -621,7 +659,7 @@ func (app *DesktopApp) updateOrRepairNode(instanceID string, repair bool) (cloud
 		_, err = orchestrator.Update(ctx, *selected, release)
 	}
 	if err != nil {
-		return cloud.ManagedNodeView{}, errors.New("Unable to update the signed Client service through Systems Manager.")
+		return cloud.ManagedNodeView{}, formatNodeUpdateError(err)
 	}
 	views, err := app.cloudRepository.NodeViews(ctx)
 	if err != nil {
