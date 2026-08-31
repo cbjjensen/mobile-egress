@@ -44,6 +44,7 @@ final class AgentViewModel: ObservableObject {
     private let dependencies: MobileEgressDependencies?
     private let tunnelManager: TunnelManager?
     private var monitorTask: Task<Void, Never>?
+    private var connectionStatusTask: Task<Void, Never>?
     private var connectionState = TunnelConnectionStateReducer()
 
     init() {
@@ -74,19 +75,19 @@ final class AgentViewModel: ObservableObject {
         if providerStatus.providerState == .failed { return "Failed" }
         if providerStatus.providerState == .starting && !vpnStatus.isInProgress { return "Starting" }
         switch vpnStatus {
-        case .invalid: isEnrolled ? "Not configured" : "Enrollment required"
-        case .disconnected: "Stopped"
-        case .connecting: "Starting"
+        case .invalid: return isEnrolled ? "Not configured" : "Enrollment required"
+        case .disconnected: return "Stopped"
+        case .connecting: return "Starting"
         case .connected:
             switch providerStatus.runtimeSnapshot.connectionState {
-            case .connecting: "Connecting to relay"
-            case .connected: "Connected"
-            case .stopping: "Stopping"
-            case .stopped: "Tunnel connected"
+            case .connecting: return "Connecting to relay"
+            case .connected: return "Connected"
+            case .stopping: return "Stopping"
+            case .stopped: return "Tunnel connected"
             }
-        case .reasserting: "Reconnecting"
-        case .disconnecting: "Stopping"
-        @unknown default: "Unavailable"
+        case .reasserting: return "Reconnecting"
+        case .disconnecting: return "Stopping"
+        @unknown default: return "Unavailable"
         }
     }
 
@@ -173,6 +174,7 @@ final class AgentViewModel: ObservableObject {
                 return
             }
             try await tunnelManager.prepare()
+            startConnectionStatusMonitoring(using: tunnelManager)
             providerStatus = Self.providerStatus(for: connectionState.restorePersistentIntent(
                 onDemandEnabled: tunnelManager.isOnDemandEnabled
             ))
@@ -192,6 +194,7 @@ final class AgentViewModel: ObservableObject {
             _ = try await dependencies.processScannedPayload(payload)
             isEnrolled = true
             try await tunnelManager.prepare()
+            startConnectionStatusMonitoring(using: tunnelManager)
             await refresh()
         } catch ScanWorkflowError.migrationRejected {
             userError = .migrationRejected
@@ -208,29 +211,57 @@ final class AgentViewModel: ObservableObject {
             userError = .configurationUnavailable
             return
         }
-        do {
-            if isTunnelActive {
-                providerStatus = Self.providerStatus(for: connectionState.stopRequested())
-                try await tunnelManager.stop()
-            } else {
-                providerStatus = Self.providerStatus(for: connectionState.startRequested())
-                try await tunnelManager.start()
-            }
-            await refresh()
-        } catch {
-            if !isTunnelActive {
-                providerStatus = Self.providerStatus(for: connectionState.observe(
-                    .disconnected,
-                    disconnectError: .runtimeUnavailable
-                ))
-            }
-            userError = isTunnelActive ? .vpnConfiguration : .vpnStart
+
+        if isTunnelActive {
+            await stopTunnel(using: tunnelManager)
+        } else {
+            await startTunnel(using: tunnelManager)
         }
     }
 
-    private func refresh() async {
+    private func startTunnel(using tunnelManager: TunnelManager) async {
+        providerStatus = Self.providerStatus(for: connectionState.startRequested())
+        do {
+            try await tunnelManager.start()
+            await refresh()
+        } catch {
+            providerStatus = Self.providerStatus(for: connectionState.startTransactionFailed(
+                .runtimeUnavailable
+            ))
+            userError = .vpnStart
+        }
+    }
+
+    private func stopTunnel(using tunnelManager: TunnelManager) async {
+        providerStatus = Self.providerStatus(for: connectionState.stopRequested())
+        do {
+            try await tunnelManager.stop()
+            providerStatus = Self.providerStatus(for:
+                connectionState.stopTransactionCompleted(persistenceSucceeded: true)
+            )
+        } catch {
+            providerStatus = Self.providerStatus(for:
+                connectionState.stopTransactionCompleted(persistenceSucceeded: false)
+            )
+            userError = .vpnConfiguration
+        }
+        await refresh()
+    }
+
+    private func startConnectionStatusMonitoring(using tunnelManager: TunnelManager) {
+        connectionStatusTask?.cancel()
+        let updates = tunnelManager.statusUpdates()
+        connectionStatusTask = Task { [weak self] in
+            for await phase in updates {
+                guard !Task.isCancelled else { return }
+                await self?.refresh(observedPhase: phase)
+            }
+        }
+    }
+
+    private func refresh(observedPhase: TunnelConnectionPhase? = nil) async {
         guard let tunnelManager else { return }
-        let refresh = await tunnelManager.connectionRefresh()
+        let refresh = await tunnelManager.connectionRefresh(observedPhase: observedPhase)
         vpnStatus = refresh.status
         let presentation = connectionState.observe(
             refresh.phase,

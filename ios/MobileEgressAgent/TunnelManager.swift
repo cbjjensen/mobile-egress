@@ -31,7 +31,30 @@ final class TunnelManager: TunnelPreferenceSession {
         manager?.isOnDemandEnabled ?? false
     }
 
-    func connectionRefresh() async -> TunnelConnectionRefresh {
+    func statusUpdates() -> AsyncStream<TunnelConnectionPhase> {
+        guard let connection = manager?.connection else {
+            return AsyncStream { continuation in continuation.finish() }
+        }
+        return AsyncStream { continuation in
+            let observer = NotificationObserverToken(
+                NotificationCenter.default.addObserver(
+                    forName: .NEVPNStatusDidChange,
+                    object: connection,
+                    queue: nil
+                ) { notification in
+                    guard let changedConnection = notification.object as? NEVPNConnection else { return }
+                    continuation.yield(changedConnection.status.connectionPhase)
+                }
+            )
+            continuation.onTermination = { _ in
+                NotificationCenter.default.removeObserver(observer.value)
+            }
+        }
+    }
+
+    func connectionRefresh(
+        observedPhase: TunnelConnectionPhase? = nil
+    ) async -> TunnelConnectionRefresh {
         guard let connection = manager?.connection else {
             return TunnelConnectionRefresh(
                 status: .invalid,
@@ -40,18 +63,17 @@ final class TunnelManager: TunnelPreferenceSession {
             )
         }
         let status = connection.status
+        let phase = observedPhase ?? status.connectionPhase
         let disconnectError: TunnelProviderErrorClass?
-        switch status {
+        switch phase {
         case .invalid, .disconnected:
             disconnectError = await finiteLastDisconnectError(from: connection)
         case .connecting, .connected, .reasserting, .disconnecting:
             disconnectError = nil
-        @unknown default:
-            disconnectError = .runtimeUnavailable
         }
         return TunnelConnectionRefresh(
             status: status,
-            phase: status.connectionPhase,
+            phase: phase,
             disconnectError: disconnectError
         )
     }
@@ -207,5 +229,13 @@ private extension NEVPNStatus {
         case .disconnecting: .disconnecting
         @unknown default: .invalid
         }
+    }
+}
+
+private final class NotificationObserverToken: @unchecked Sendable {
+    let value: NSObjectProtocol
+
+    init(_ value: NSObjectProtocol) {
+        self.value = value
     }
 }

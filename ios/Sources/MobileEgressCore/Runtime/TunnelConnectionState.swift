@@ -23,7 +23,8 @@ public struct TunnelConnectionPresentation: Equatable, Sendable {
 public struct TunnelConnectionStateReducer: Sendable {
     private enum Expectation: Sendable {
         case idle
-        case starting
+        case startingAwaitingEvidence
+        case startingWithEvidence
         case active
         case explicitStop
     }
@@ -41,15 +42,27 @@ public struct TunnelConnectionStateReducer: Sendable {
         onDemandEnabled: Bool
     ) -> TunnelConnectionPresentation {
         guard onDemandEnabled, expectation == .idle else { return current }
-        expectation = .starting
+        expectation = .startingWithEvidence
         current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
         return current
     }
 
     @discardableResult
     public mutating func startRequested() -> TunnelConnectionPresentation {
-        expectation = .starting
+        expectation = .startingAwaitingEvidence
         current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
+        return current
+    }
+
+    @discardableResult
+    public mutating func startTransactionFailed(
+        _ error: TunnelProviderErrorClass
+    ) -> TunnelConnectionPresentation {
+        guard expectation == .startingAwaitingEvidence || expectation == .startingWithEvidence else {
+            return current
+        }
+        expectation = .idle
+        current = TunnelConnectionPresentation(providerState: .failed, providerError: error)
         return current
     }
 
@@ -61,6 +74,17 @@ public struct TunnelConnectionStateReducer: Sendable {
     }
 
     @discardableResult
+    public mutating func stopTransactionCompleted(
+        persistenceSucceeded: Bool
+    ) -> TunnelConnectionPresentation {
+        guard expectation == .explicitStop else { return current }
+        if !persistenceSucceeded {
+            expectation = .active
+        }
+        return current
+    }
+
+    @discardableResult
     public mutating func observe(
         _ phase: TunnelConnectionPhase,
         disconnectError: TunnelProviderErrorClass?
@@ -68,7 +92,7 @@ public struct TunnelConnectionStateReducer: Sendable {
         switch phase {
         case .connecting:
             guard expectation != .explicitStop else { return current }
-            expectation = .starting
+            expectation = .startingWithEvidence
             current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
         case .connected:
             guard expectation != .explicitStop else { return current }
@@ -79,7 +103,10 @@ public struct TunnelConnectionStateReducer: Sendable {
             expectation = .active
             current = TunnelConnectionPresentation(providerState: .starting, providerError: .none)
         case .disconnecting:
-            if expectation != .idle && expectation != .explicitStop {
+            if expectation == .startingAwaitingEvidence {
+                return current
+            }
+            if expectation == .startingWithEvidence {
                 expectation = .active
             }
             current = TunnelConnectionPresentation(providerState: .stopping, providerError: .none)
@@ -94,7 +121,9 @@ public struct TunnelConnectionStateReducer: Sendable {
         case .explicitStop:
             expectation = .idle
             current = TunnelConnectionPresentation(providerState: .stopped, providerError: .none)
-        case .starting:
+        case .startingAwaitingEvidence:
+            return
+        case .startingWithEvidence:
             guard let disconnectError else { return }
             expectation = .idle
             current = TunnelConnectionPresentation(

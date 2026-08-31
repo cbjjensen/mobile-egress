@@ -146,6 +146,29 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertFalse(viewModel.contains("error.localizedDescription"))
     }
 
+    func testAppleStatusNotificationsPreserveCurrentAttemptLifecycleEvidence() throws {
+        let manager = try text(at: "MobileEgressAgent/TunnelManager.swift")
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+
+        XCTAssertTrue(manager.contains("NotificationCenter.default.addObserver("))
+        XCTAssertTrue(manager.contains(".NEVPNStatusDidChange"))
+        XCTAssertTrue(manager.contains("func statusUpdates()"))
+        XCTAssertTrue(viewModel.contains("tunnelManager.statusUpdates()"))
+        XCTAssertTrue(viewModel.contains("connectionStatusTask"))
+        XCTAssertTrue(viewModel.contains("refresh(observedPhase: phase)"))
+    }
+
+    func testAgentViewModelReportsBothExplicitStopTransactionOutcomes() throws {
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+
+        XCTAssertTrue(viewModel.contains(
+            "connectionState.stopTransactionCompleted(persistenceSucceeded: true)"
+        ))
+        XCTAssertTrue(viewModel.contains(
+            "connectionState.stopTransactionCompleted(persistenceSucceeded: false)"
+        ))
+    }
+
     func testAppleManagerConsumesPortablePreferenceTransaction() throws {
         let manager = try text(at: "MobileEgressAgent/TunnelManager.swift")
 
