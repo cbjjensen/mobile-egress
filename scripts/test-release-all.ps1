@@ -240,6 +240,10 @@ Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent "versionCode = 5`nversionName = `"1.0.4`"" `
     -ExpectedVersion '1.0.4' `
     -MaximumPriorVersionCode 4
+Assert-MobileEgressAndroidReleaseVersion `
+    -BuildFileContent "val androidVersionName = `"1.0.4`"`nversionCode = 5`nversionName = androidVersionName" `
+    -ExpectedVersion '1.0.4' `
+    -MaximumPriorVersionCode 4
 $staleVersionCodeRejected = $false
 try {
     Assert-MobileEgressAndroidReleaseVersion `

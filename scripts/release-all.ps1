@@ -273,9 +273,18 @@ function Assert-MobileEgressAndroidReleaseVersion {
         [int]$MaximumPriorVersionCode = 0
     )
 
-    $nameMatch = [regex]::Match($BuildFileContent, '(?m)^\s*versionName\s*=\s*"([^"]+)"\s*$')
+    $nameMatch = [regex]::Match($BuildFileContent, '(?m)^\s*versionName\s*=\s*(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*$')
     $codeMatch = [regex]::Match($BuildFileContent, '(?m)^\s*versionCode\s*=\s*([0-9]+)\s*$')
-    if (-not $nameMatch.Success -or $nameMatch.Groups[1].Value -ne $ExpectedVersion) {
+    $actualVersion = if ($nameMatch.Success -and -not [string]::IsNullOrWhiteSpace($nameMatch.Groups[1].Value)) {
+        $nameMatch.Groups[1].Value
+    } elseif ($nameMatch.Success) {
+        $constantName = [regex]::Escape($nameMatch.Groups[2].Value)
+        $constantMatch = [regex]::Match($BuildFileContent, "(?m)^\s*val\s+$constantName\s*=\s*`"([^`"]+)`"\s*$")
+        if ($constantMatch.Success) { $constantMatch.Groups[1].Value } else { '' }
+    } else {
+        ''
+    }
+    if ($actualVersion -ne $ExpectedVersion) {
         throw "android/app/build.gradle.kts versionName must equal $ExpectedVersion before release."
     }
     if (-not $codeMatch.Success) {
