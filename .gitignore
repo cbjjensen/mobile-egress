@@ -4,6 +4,7 @@
 
 # Runtime secrets and state
 data/
+.local/
 *.pem
 *.key
 *.p12
