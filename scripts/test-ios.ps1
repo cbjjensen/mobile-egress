@@ -136,6 +136,7 @@ xcodebuild -list -workspace .
 xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS"
 # Keep PowerShell's trailing carriage return inside a Bash comment.
 '@
+    $remoteScript = $remoteScript.Replace("`r`n", "`n")
 
     try {
         & git -C $repositoryRoot bundle create $bundlePath --all

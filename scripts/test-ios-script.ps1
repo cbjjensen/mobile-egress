@@ -14,7 +14,7 @@ function Assert-Condition {
 $iosTestScript = Join-Path $PSScriptRoot 'test-ios.ps1'
 Assert-Condition (Test-Path -LiteralPath $iosTestScript -PathType Leaf) 'The iOS verification entry point must exist.'
 
-$scriptContent = Get-Content -Raw $iosTestScript
+$scriptContent = (Get-Content -Raw $iosTestScript).Replace("`r`n", "`n")
 $scriptCommand = Get-Command $iosTestScript
 Assert-Condition (-not $scriptCommand.Parameters.ContainsKey('SkipPortableTests')) 'The verifier must reject portable-test continuation controls.'
 Assert-Condition (-not $scriptCommand.Parameters.ContainsKey('MacBuildServerStartAt')) 'The verifier must reject remote-phase continuation controls.'
@@ -35,6 +35,20 @@ $remoteMatch = [regex]::Match(
 )
 Assert-Condition $remoteMatch.Success 'The build-server verifier must define one inspectable remote script.'
 $remoteScript = $remoteMatch.Groups['body'].Value
+$normalizationToken = '$remoteScript = $remoteScript.Replace("`r`n", "`n")'
+$normalizationIndex = $scriptContent.IndexOf(
+    $normalizationToken,
+    $remoteMatch.Index + $remoteMatch.Length,
+    [StringComparison]::Ordinal
+)
+$remoteInvocationIndex = $scriptContent.IndexOf(
+    '$remoteScript | & ssh',
+    $remoteMatch.Index + $remoteMatch.Length,
+    [StringComparison]::Ordinal
+)
+Assert-Condition (
+    $normalizationIndex -ge 0 -and $normalizationIndex -lt $remoteInvocationIndex
+) 'The verifier must normalize CRLF checkout line endings before sending the remote Bash script.'
 Assert-Condition ($remoteScript -notmatch '(?m)^\s*if\s+\[') 'Every remote verification phase must run unconditionally.'
 $requiredRemoteCommands = @(
     'swift test',
