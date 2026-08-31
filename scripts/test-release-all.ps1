@@ -34,6 +34,81 @@ Assert-Condition (($androidDefinitions.Name -join ',') -eq 'app-release.apk') 'A
 $allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
 Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,app-release.apk') 'The full release must retain the established three-artifact set.'
 
+$windowsDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.3' -Version '1.2.3' -ReleasedArtifacts $windowsDefinitions -PublishedReleases @(
+    [pscustomobject]@{
+        tagName = 'v1.2.2'
+        isDraft = $false
+        assets = @(
+            [pscustomobject]@{ name = 'mobile-egress-windows-1.2.2.zip' },
+            [pscustomobject]@{ name = 'mobile-egress-client.exe' },
+            [pscustomobject]@{ name = 'app-release.apk' }
+        )
+    }
+))
+Assert-Condition ($windowsDownloadLinks.Count -eq 3) 'Release notes must cover Windows, Client, and Android downloads even for scoped releases.'
+Assert-Condition (($windowsDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Tag -eq 'v1.2.3') 'A scoped Windows release must link its new Windows bundle from the current tag.'
+Assert-Condition (($windowsDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.2.3') 'A scoped Windows release must link its new EC2 Client from the current tag.'
+Assert-Condition (($windowsDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.2.2') 'A scoped Windows release must link the latest published Android APK when Android was not rebuilt.'
+
+$androidDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.4' -Version '1.2.4' -ReleasedArtifacts $androidDefinitions -PublishedReleases @(
+    [pscustomobject]@{
+        tagName = 'v1.2.3'
+        isDraft = $false
+        assets = @(
+            [pscustomobject]@{ name = 'mobile-egress-windows-1.2.3.zip' },
+            [pscustomobject]@{ name = 'mobile-egress-client.exe' }
+        )
+    }
+))
+Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Name -eq 'mobile-egress-windows-1.2.3.zip') 'A scoped Android release must link the latest versioned Windows bundle when Windows was not rebuilt.'
+Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.2.3') 'A scoped Android release must link the latest EC2 Client when Windows was not rebuilt.'
+Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.2.4') 'A scoped Android release must link its new APK from the current tag.'
+
+$downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $windowsDownloadLinks
+Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'
+Assert-Condition ($downloadSection -match '\[app-release\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.2/app-release\.apk\)') 'The download section must render fallback assets as direct GitHub download links.'
+
+$updatedBody = Update-MobileEgressReleaseBodyDownloadSection -Body "Generated notes`n`n<!-- mobile-egress-downloads:start -->`nold`n<!-- mobile-egress-downloads:end -->`n" -DownloadSection $downloadSection
+Assert-Condition (($updatedBody | Select-String -Pattern '<!-- mobile-egress-downloads:start -->' -AllMatches).Matches.Count -eq 1) 'Updating release notes must replace the managed Downloads section instead of appending duplicates.'
+Assert-Condition ($updatedBody -notmatch 'old') 'Updating release notes must remove stale managed download links.'
+
+$viewedReleaseTags = [System.Collections.Generic.List[string]]::new()
+$expandedReleases = @(Get-MobileEgressGitHubReleases -ListReleases {
+    return @(
+        [pscustomobject]@{ tagName = 'v1.2.4'; isDraft = $true; isPrerelease = $true },
+        [pscustomobject]@{ tagName = 'v1.2.3'; isDraft = $false; isPrerelease = $true }
+    )
+} -ViewRelease {
+    param($Tag)
+    $viewedReleaseTags.Add($Tag)
+    return [pscustomobject]@{
+        tagName = $Tag
+        isDraft = $false
+        isPrerelease = $true
+        assets = @([pscustomobject]@{ name = 'app-release.apk' })
+    }
+})
+Assert-Condition (($viewedReleaseTags -join ',') -eq 'v1.2.3') 'GitHub release fallback discovery must view non-draft releases individually because release list does not expose assets.'
+Assert-Condition ($expandedReleases[0].assets[0].name -eq 'app-release.apk') 'Expanded GitHub releases must include asset names for fallback download links.'
+
+$noteUpdates = [System.Collections.Generic.List[string]]::new()
+Sync-MobileEgressReleaseDownloadNotes -CurrentTag 'v1.2.4' -Version '1.2.4' -ReleasedArtifacts $androidDefinitions -CurrentBody 'Generated release notes' -PublishedReleases @(
+    [pscustomobject]@{
+        tagName = 'v1.2.3'
+        isDraft = $false
+        assets = @(
+            [pscustomobject]@{ name = 'mobile-egress-windows-1.2.3.zip' },
+            [pscustomobject]@{ name = 'mobile-egress-client.exe' }
+        )
+    }
+) -UpdateReleaseBody {
+    param($Body)
+    $noteUpdates.Add($Body)
+}
+Assert-Condition ($noteUpdates.Count -eq 1) 'Release publication must write the managed Downloads section back to GitHub notes.'
+Assert-Condition ($noteUpdates[0] -match 'Generated release notes') 'Release download note updates must preserve GitHub-generated notes.'
+Assert-Condition ($noteUpdates[0] -match '\[mobile-egress-windows-1\.2\.3\.zip\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.3/mobile-egress-windows-1\.2\.3\.zip\)') 'Release download note updates must include fallback links before publication.'
+
 $windowsEntryPoint = Join-Path $PSScriptRoot 'release-windows.ps1'
 Assert-Condition (Test-Path -LiteralPath $windowsEntryPoint -PathType Leaf) 'The fast Windows release entry point must exist.'
 $windowsEntryPointContent = Get-Content -Raw -LiteralPath $windowsEntryPoint

@@ -323,7 +323,7 @@ function Get-MobileEgressGitHubRelease {
     $result = Invoke-MobileEgressNativeResult -FilePath 'gh' -Arguments @(
         'release', 'view', $Tag,
         '--repo', 'cbjjensen/mobile-egress',
-        '--json', 'tagName,isDraft,isPrerelease,url,assets'
+        '--json', 'tagName,isDraft,isPrerelease,url,body,assets'
     )
     if ($result.ExitCode -ne 0) {
         if ($result.Output -match '(?i)release not found|not found') {
@@ -332,6 +332,52 @@ function Get-MobileEgressGitHubRelease {
         throw "GitHub release lookup failed.`n$($result.Output)"
     }
     return $result.Output | ConvertFrom-Json
+}
+
+function Get-MobileEgressGitHubReleases {
+    param(
+        [scriptblock]$ListReleases = {
+            $result = Invoke-MobileEgressNativeResult -FilePath 'gh' -Arguments @(
+                'release', 'list',
+                '--repo', 'cbjjensen/mobile-egress',
+                '--limit', '100',
+                '--json', 'tagName,isDraft,isPrerelease'
+            )
+            if ($result.ExitCode -ne 0) {
+                throw "GitHub release list failed.`n$($result.Output)"
+            }
+            return @($result.Output | ConvertFrom-Json)
+        },
+        [scriptblock]$ViewRelease = {
+            param($Tag)
+            return Get-MobileEgressGitHubRelease -Tag $Tag
+        }
+    )
+
+    foreach ($release in @(& $ListReleases | Where-Object { -not $_.isDraft })) {
+        & $ViewRelease $release.tagName
+    }
+}
+
+function Set-MobileEgressGitHubReleaseBody {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Tag,
+        [AllowEmptyString()]
+        [string]$Body
+    )
+
+    $notesFile = New-TemporaryFile
+    try {
+        Set-Content -LiteralPath $notesFile.FullName -Value $Body -Encoding UTF8
+        $null = Invoke-MobileEgressNativeCommand -FilePath 'gh' -Arguments @(
+            'release', 'edit', $Tag,
+            '--repo', 'cbjjensen/mobile-egress',
+            '--notes-file', $notesFile.FullName
+        ) -Description 'Updating GitHub release download links'
+    } finally {
+        Remove-Item -LiteralPath $notesFile.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Assert-MobileEgressReleaseZipMatchesSources {
@@ -426,6 +472,178 @@ function Get-MobileEgressReleaseArtifactDefinitions {
             Path = Join-Path $RepositoryRoot 'android\app\build\outputs\apk\release\app-release.apk'
         }
     }
+}
+
+function Get-MobileEgressReleaseDownloadItemDefinitions {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    return @(
+        [pscustomobject]@{
+            Key = 'windows'
+            Label = 'Windows controller bundle'
+            CurrentName = "mobile-egress-windows-$Version.zip"
+        },
+        [pscustomobject]@{
+            Key = 'client'
+            Label = 'EC2 Client'
+            CurrentName = 'mobile-egress-client.exe'
+        },
+        [pscustomobject]@{
+            Key = 'android'
+            Label = 'Android agent APK'
+            CurrentName = 'app-release.apk'
+        }
+    )
+}
+
+function Test-MobileEgressReleaseDownloadAssetName {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Key,
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    switch ($Key) {
+        'windows' { return $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
+        'client' { return $Name -ceq 'mobile-egress-client.exe' }
+        'android' { return $Name -ceq 'app-release.apk' }
+        default { throw "Unsupported download item: $Key" }
+    }
+}
+
+function New-MobileEgressReleaseDownloadUrl {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Tag,
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    $escapedName = [System.Uri]::EscapeDataString($Name)
+    return "https://github.com/cbjjensen/mobile-egress/releases/download/$Tag/$escapedName"
+}
+
+function Resolve-MobileEgressReleaseDownloadLinks {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CurrentTag,
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [object[]]$ReleasedArtifacts,
+        [AllowEmptyCollection()]
+        [object[]]$PublishedReleases = @()
+    )
+
+    $releasedNames = @($ReleasedArtifacts | ForEach-Object { $_.Name })
+    foreach ($item in @(Get-MobileEgressReleaseDownloadItemDefinitions -Version $Version)) {
+        $currentMatch = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $_ } | Select-Object -First 1)
+        if ($currentMatch.Count -ne 0) {
+            [pscustomobject]@{
+                Key = $item.Key
+                Label = $item.Label
+                Tag = $CurrentTag
+                Name = $currentMatch[0]
+                Url = New-MobileEgressReleaseDownloadUrl -Tag $CurrentTag -Name $currentMatch[0]
+            }
+            continue
+        }
+
+        $fallback = $null
+        foreach ($release in @($PublishedReleases | Where-Object { -not $_.isDraft })) {
+            foreach ($asset in @($release.assets)) {
+                if (Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $asset.name) {
+                    $fallback = [pscustomobject]@{
+                        Tag = $release.tagName
+                        Name = $asset.name
+                    }
+                    break
+                }
+            }
+            if ($null -ne $fallback) {
+                break
+            }
+        }
+
+        [pscustomobject]@{
+            Key = $item.Key
+            Label = $item.Label
+            Tag = if ($null -ne $fallback) { $fallback.Tag } else { '' }
+            Name = if ($null -ne $fallback) { $fallback.Name } else { '' }
+            Url = if ($null -ne $fallback) { New-MobileEgressReleaseDownloadUrl -Tag $fallback.Tag -Name $fallback.Name } else { '' }
+        }
+    }
+}
+
+function Format-MobileEgressReleaseDownloadSection {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$DownloadLinks
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('## Downloads')
+    $lines.Add('')
+    foreach ($link in $DownloadLinks) {
+        if ([string]::IsNullOrWhiteSpace($link.Url)) {
+            $lines.Add("- $($link.Label): Not available yet")
+        } else {
+            $lines.Add("- $($link.Label): [$($link.Name)]($($link.Url))")
+        }
+    }
+    return ($lines -join "`n")
+}
+
+function Update-MobileEgressReleaseBodyDownloadSection {
+    param(
+        [AllowEmptyString()]
+        [string]$Body = '',
+        [Parameter(Mandatory)]
+        [string]$DownloadSection
+    )
+
+    $startMarker = '<!-- mobile-egress-downloads:start -->'
+    $endMarker = '<!-- mobile-egress-downloads:end -->'
+    $managedSection = "$startMarker`n$DownloadSection`n$endMarker"
+    $pattern = '(?s)<!-- mobile-egress-downloads:start -->.*?<!-- mobile-egress-downloads:end -->'
+    if ($Body -match $pattern) {
+        $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{ param($Match) $managedSection }
+        return [regex]::Replace($Body, $pattern, $evaluator, 1)
+    }
+    if ([string]::IsNullOrWhiteSpace($Body)) {
+        return $managedSection
+    }
+    return "$($Body.TrimEnd())`n`n$managedSection"
+}
+
+function Sync-MobileEgressReleaseDownloadNotes {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CurrentTag,
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [object[]]$ReleasedArtifacts,
+        [AllowEmptyString()]
+        [string]$CurrentBody = '',
+        [AllowEmptyCollection()]
+        [object[]]$PublishedReleases = @(),
+        [Parameter(Mandatory)]
+        [scriptblock]$UpdateReleaseBody
+    )
+
+    $downloadLinks = Resolve-MobileEgressReleaseDownloadLinks `
+        -CurrentTag $CurrentTag `
+        -Version $Version `
+        -ReleasedArtifacts $ReleasedArtifacts `
+        -PublishedReleases $PublishedReleases
+    $downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $downloadLinks
+    $updatedBody = Update-MobileEgressReleaseBodyDownloadSection -Body $CurrentBody -DownloadSection $downloadSection
+    & $UpdateReleaseBody $updatedBody
 }
 
 function Get-MobileEgressReleaseArtifacts {
@@ -716,6 +934,17 @@ function Invoke-MobileEgressRelease {
         Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -UploadAsset {
             throw 'Published release assets are immutable and cannot be uploaded or replaced.'
         }
+        $publishedReleases = @(Get-MobileEgressGitHubReleases)
+        Sync-MobileEgressReleaseDownloadNotes `
+            -CurrentTag $tag `
+            -Version $Version `
+            -ReleasedArtifacts $artifacts `
+            -CurrentBody $release.body `
+            -PublishedReleases $publishedReleases `
+            -UpdateReleaseBody {
+                param($Body)
+                Set-MobileEgressGitHubReleaseBody -Tag $tag -Body $Body
+            }
         Write-Host "$tag is already published with the verified artifacts: $($release.url)"
         return
     }
@@ -727,6 +956,18 @@ function Invoke-MobileEgressRelease {
             '--repo', 'cbjjensen/mobile-egress'
         ) -Description "Uploading $($Artifact.Name)"
     }
+    $release = Get-MobileEgressGitHubRelease -Tag $tag
+    $publishedReleases = @(Get-MobileEgressGitHubReleases)
+    Sync-MobileEgressReleaseDownloadNotes `
+        -CurrentTag $tag `
+        -Version $Version `
+        -ReleasedArtifacts $artifacts `
+        -CurrentBody $release.body `
+        -PublishedReleases $publishedReleases `
+        -UpdateReleaseBody {
+            param($Body)
+            Set-MobileEgressGitHubReleaseBody -Tag $tag -Body $Body
+        }
     $null = Invoke-MobileEgressNativeCommand -FilePath 'gh' -Arguments @(
         'release', 'edit', $tag,
         '--repo', 'cbjjensen/mobile-egress',
