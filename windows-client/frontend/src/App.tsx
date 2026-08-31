@@ -2,6 +2,30 @@ import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { AgentQr, api, AWSAccount, BridgeStatus, DeviceAuthorization, EC2Instance, EndpointMigration, ManagedNode } from './api'
 
 const emptyBridge: BridgeStatus = { tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
+const requiredPermissionsPolicy = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Sid: 'MobileEgressEC2AndSSMSetup',
+    Effect: 'Allow',
+    Action: [
+      'ec2:DescribeImages',
+      'ec2:DescribeInstances',
+      'ec2:AssociateIamInstanceProfile',
+      'iam:AddRoleToInstanceProfile',
+      'iam:AttachRolePolicy',
+      'iam:CreateInstanceProfile',
+      'iam:CreateRole',
+      'iam:GetInstanceProfile',
+      'iam:GetRole',
+      'iam:ListAttachedRolePolicies',
+      'iam:ListRolePolicies',
+      'ssm:DescribeInstanceInformation',
+      'ssm:GetCommandInvocation',
+      'ssm:SendCommand',
+    ],
+    Resource: '*',
+  }],
+}, null, 2)
 
 export default function App() {
   const [tab, setTab] = useState<'bridge' | 'phone' | 'nodes' | 'settings'>('bridge')
@@ -18,6 +42,9 @@ export default function App() {
   const [awsReady, setAWSReady] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [showPolicy, setShowPolicy] = useState(false)
+  const [showSessionToken, setShowSessionToken] = useState(false)
+  const [showSecret, setShowSecret] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -99,6 +126,10 @@ export default function App() {
     await action('iam-user-console', async () => { await api().OpenAWSIAMUserCreateConsole() })
   }
 
+  async function copyRequiredPermissions() {
+    await action('copy-policy', async () => { await navigator.clipboard.writeText(requiredPermissionsPolicy) })
+  }
+
   async function completeIdentityCenter() {
     await action('sso-complete', async () => {
       const result = await api().CompleteAWSIdentityCenter()
@@ -175,6 +206,9 @@ export default function App() {
     })
   }
 
+  const readyInstanceCount = instances.filter(instance => instance.ssmOnline).length
+  const setupInstanceCount = Math.max(instances.length - readyInstanceCount, 0)
+
   return <main className="shell">
     <header><div><p className="eyebrow">Personal cellular bridge</p><h1>Mobile Egress</h1></div><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
     <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Phone</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>EC2 Nodes</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS Login</button></nav>
@@ -188,8 +222,88 @@ export default function App() {
 
     {tab === 'phone' && <section className="stack">{!bridge.ownerReady ? <article className="card"><h2>Set up the bridge first</h2><p>The local Owner identity is required before pairing Android.</p></article> : <>{migrationQr && <article className="card"><p className="step-label">Endpoint migration</p><h2>Move the existing Android Agent</h2><p>Stop the Agent, choose Scan QR, and scan this one-use migration code. Its Android Keystore key and certificate stay unchanged.</p><div className="qr-card"><img src={migrationQr.imageDataUrl} alt="Android Agent endpoint migration QR" /><p>Expires {new Date(migrationQr.expiresAt).toLocaleTimeString()}.</p>{migrationQr.updatedNodes.length > 0 && <small>Updated EC2 nodes: {migrationQr.updatedNodes.join(', ')}</small>}{migrationQr.failedNodes.length > 0 && <p className="error">Repair these nodes after reconnecting AWS: {migrationQr.failedNodes.join(', ')}</p>}</div></article>}<article className="card"><p className="step-label">Step 3</p><h2>Pair the Android Agent</h2><p>Scan the short-lived QR in the Android app. The phone continues to bind outbound sockets to cellular with no Wi-Fi fallback.</p>{phoneQr ? <div className="qr-card"><img src={phoneQr.imageDataUrl} alt="Android Agent pairing QR" /><p>Expires {new Date(phoneQr.expiresAt).toLocaleTimeString()}.</p><button onClick={() => void issueAgentQr()} disabled={!!busy}>Replace QR</button></div> : <button className="primary" onClick={() => void issueAgentQr()} disabled={!!busy || !!migrationQr}>Generate Android QR</button>}</article></>}</section>}
 
-    {tab === 'settings' && <section className="stack">
-      <article className="card"><h2>IAM user access key</h2><p>This is the simplest AWS setup path. Sign in to AWS in your browser, create an IAM user for Mobile Egress, create an access key for that user, and paste it here. Never create or paste root access keys.</p><div className="setup-callout"><div><strong>Need an IAM user?</strong><p>Open AWS and sign in, create a user named mobile-egress, then create an access key for application use. Attach permissions that let Mobile Egress list EC2 instances and use Systems Manager.</p></div><button onClick={() => void openIAMUserCreateConsole()} disabled={!!busy}>{busy === 'iam-user-console' ? 'Opening AWS…' : 'Create IAM user'}</button></div><form onSubmit={saveAccessKeys}><label>Access key ID<input name="accessKeyId" required autoComplete="off" /></label><label>Secret access key<input name="secretAccessKey" type="password" required autoComplete="off" /></label><label>Session token (optional)<textarea name="sessionToken" rows={3} autoComplete="off" /></label><button className="primary" disabled={!!busy}>Save AWS access key</button></form></article>
+    {tab === 'settings' && <section className="stack aws-wizard">
+      <article className="card aws-connect-card">
+        <div className="aws-wizard-header">
+          <div>
+            <h2>Connect AWS</h2>
+            <p>Connect the AWS account where you normally see your EC2 instances. We&apos;ll walk you through every step.</p>
+          </div>
+          <div className="aws-badges"><span>◷ About 3 minutes</span><span>✓ No AWS CLI needed</span></div>
+        </div>
+
+        <ol className="aws-progress" aria-label="AWS setup steps">
+          {['Open AWS', 'Create user', 'Add permissions', 'Connect'].map((label, index) => <li key={label} className="active"><span>{index + 1}</span><strong>{label}</strong></li>)}
+        </ol>
+
+        <div className="wizard-panel">
+          <div className="wizard-step-number">1</div>
+          <div className="wizard-step-body">
+            <h3>Open AWS</h3>
+            <p>Sign in to the same AWS account where you normally view and manage your EC2 instances.</p>
+            <button className="primary wide" type="button" onClick={() => void openIAMUserCreateConsole()} disabled={!!busy}>{busy === 'iam-user-console' ? 'Opening AWS…' : 'Open AWS IAM ↗'}</button>
+            <p className="guardrail">🛡 Never create or paste an access key for your AWS root account.</p>
+          </div>
+        </div>
+
+        <div className="wizard-panel">
+          <div className="wizard-step-number">2</div>
+          <div className="wizard-step-body">
+            <h3>Create a Mobile Egress user</h3>
+            <ol className="micro-steps">
+              <li><span>1</span>In the AWS sidebar, click <strong>Users</strong></li>
+              <li><span>2</span>Click <strong>Create user</strong></li>
+              <li><span>3</span>Enter <strong>mobile-egress</strong> as the user name</li>
+              <li><span>4</span>Leave console access turned off, then click <strong>Next</strong></li>
+            </ol>
+            <div className="copy-name"><code>mobile-egress</code><button type="button" onClick={() => void navigator.clipboard.writeText('mobile-egress')} aria-label="Copy mobile-egress user name">⧉</button></div>
+            <div className="split-actions">
+              <button type="button" onClick={() => void openIAMUserCreateConsole()} disabled={!!busy}>Open IAM Users ↗</button>
+              <button type="button">✓ I created the user</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="wizard-panel">
+          <div className="wizard-step-number">3</div>
+          <div className="wizard-step-body">
+            <h3>Give it limited permissions</h3>
+            <p>Open the mobile-egress user, then choose Permissions → Add permissions → Create inline policy.</p>
+            <div className="permission-grid">
+              <div><h4>This app can</h4><p>✓ View your EC2 instances</p><p>✓ Check instance status</p><p>✓ Connect through Systems Manager</p></div>
+              <div><h4>This app cannot</h4><p>× Access AWS billing</p><p>× Create other AWS users</p><p>× Use services it does not need</p></div>
+            </div>
+            <div className="split-actions">
+              <button type="button" onClick={() => setShowPolicy(value => !value)}>{showPolicy ? 'Hide technical policy' : 'View technical policy'}</button>
+              <button className="primary" type="button" onClick={() => void copyRequiredPermissions()} disabled={!!busy}>{busy === 'copy-policy' ? 'Copied' : 'Copy required permissions ⧉'}</button>
+            </div>
+            {showPolicy && <pre className="policy-preview">{requiredPermissionsPolicy}</pre>}
+            <small>The technical policy is available if you want to review exactly what will be added.</small>
+          </div>
+        </div>
+
+        <div className="wizard-panel">
+          <div className="wizard-step-number">4</div>
+          <div className="wizard-step-body">
+            <h3>Create your key and connect</h3>
+            <div className="breadcrumb"><span>mobile-egress</span><span>›</span><span>Security credentials</span><span>›</span><span>Access keys</span><span>›</span><span>Create access key</span><span>›</span><span>Local code</span></div>
+            <p>AWS shows the secret only once. Paste both values below before closing the AWS page.</p>
+            <form onSubmit={saveAccessKeys}>
+              <label>Access key ID<input name="accessKeyId" required autoComplete="off" placeholder="AKIA..." /></label>
+              <label>Secret access key<div className="secret-field"><input name="secretAccessKey" type={showSecret ? 'text' : 'password'} required autoComplete="off" /><button type="button" onClick={() => setShowSecret(value => !value)} aria-label={showSecret ? 'Hide secret access key' : 'Show secret access key'}>{showSecret ? 'Hide' : '👁'}</button></div></label>
+              <button className="link-button" type="button" onClick={() => setShowSessionToken(value => !value)}>⌄ Using temporary credentials?</button>
+              {showSessionToken && <label>Session token<textarea name="sessionToken" rows={3} autoComplete="off" /></label>}
+              <button className="primary wide" disabled={!!busy}>{busy === 'access-key' ? 'Testing AWS connection…' : 'Test AWS connection'}</button>
+            </form>
+            {awsReady && <div className="success-panel"><div><strong>✓ Connected successfully</strong><p>Found {instances.length} EC2 instances in us-east-1</p></div><span>{readyInstanceCount} ready</span><span className="warn">{setupInstanceCount} need setup</span></div>}
+            {awsReady && <button className="primary wide" type="button" onClick={() => setTab('nodes')}>Finish setup</button>}
+          </div>
+        </div>
+
+        <button className="link-button centered" type="button" onClick={() => document.getElementById('manual-aws-key')?.scrollIntoView({ behavior: 'smooth' })}>Already have an access key? Enter it manually</button>
+      </article>
+
+      <details id="manual-aws-key" className="card"><summary>Manual access-key entry</summary><form onSubmit={saveAccessKeys}><label>Access key ID<input name="accessKeyId" required autoComplete="off" /></label><label>Secret access key<input name="secretAccessKey" type="password" required autoComplete="off" /></label><label>Session token (optional)<textarea name="sessionToken" rows={3} autoComplete="off" /></label><button className="primary" disabled={!!busy}>Save AWS access key</button></form></details>
       <details className="card"><summary>Advanced: IAM Identity Center</summary><p>Use this if your AWS account already has IAM Identity Center. If you only have the AWS root login, root can enable Identity Center in the browser, but Mobile Egress signs in as the Identity Center user you create.</p><div className="setup-callout"><div><strong>Need a Start URL?</strong><p>Open IAM Identity Center, choose Enable, then choose Single-Region instance in US East (N. Virginia). Create a user for yourself, assign it access to this AWS account, and copy the AWS access portal URL into the Start URL field.</p></div><button onClick={() => void openIdentityCenterConsole()} disabled={!!busy}>{busy === 'sso-console' ? 'Opening AWS…' : 'Open setup page'}</button></div><form onSubmit={beginIdentityCenter} className="form-grid"><label>Start URL<input name="startUrl" required placeholder="https://d-xxxxxxxxxx.awsapps.com/start" /></label><label>SSO region<input name="region" required defaultValue="us-east-1" /></label><button className="primary" disabled={!!busy}>Open AWS login</button></form>{authorization && <div className="issued"><code>{authorization.userCode}</code><button onClick={() => window.open(authorization.verificationUrl, '_blank')}>Open browser again</button><small>Approve in the browser, then continue.</small><button className="primary" onClick={() => void completeIdentityCenter()} disabled={!!busy}>I approved the login</button></div>}{accounts.length > 0 && <form onSubmit={selectRole} className="form-grid"><label>AWS account<select value={selectedAccount} onChange={event => void chooseAccount(event.target.value)} required><option value="">Choose account</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name || account.id}</option>)}</select></label><label>Role<select name="role" required><option value="">Choose role</option>{roles.map(role => <option key={role} value={role}>{role}</option>)}</select></label><button className="primary" disabled={!!busy}>Use this role</button></form>}</details>
     </section>}
 
