@@ -329,12 +329,16 @@ $failureStage = 'client-file'
 $executable = Join-Path $installDir 'mobile-egress-client.exe'
 Move-Item -Force -LiteralPath $download -Destination $executable
 $failureStage = 'service-configuration'
+$binaryPath = '"' + $executable + '" serve --state-dir "' + $stateDir + '"'
 if ($null -eq $service) {
-  $null = & sc.exe create MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
-  if ($LASTEXITCODE -ne 0) { throw 'Client service creation failed' }
+  $null = New-Service -Name 'MobileEgressClient' -BinaryPathName $binaryPath -StartupType Automatic
 } else {
-  $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
-  if ($LASTEXITCODE -ne 0) { throw 'Client service configuration failed' }
+  $serviceConfiguration = Get-CimInstance -ClassName Win32_Service -Filter "Name='MobileEgressClient'"
+  if ($null -eq $serviceConfiguration) { throw 'Client service configuration was not found' }
+  $changeResult = Invoke-CimMethod -InputObject $serviceConfiguration -MethodName Change -Arguments @{
+    PathName = $binaryPath; StartMode = 'Automatic'; StartName = 'LocalSystem'; StartPassword = $null
+  }
+  if ($null -eq $changeResult -or [uint32]$changeResult.ReturnValue -ne 0) { throw 'Client service configuration failed' }
 }
 $failureStage = 'service-start'
 Start-Service -Name 'MobileEgressClient'
@@ -345,12 +349,16 @@ $executable = Join-Path $installDir 'mobile-egress-client.exe'
 Move-Item -Force -LiteralPath $download -Destination $executable
 $failureStage = 'service-configuration'
 $existing = Get-Service -Name 'MobileEgressClient' -ErrorAction SilentlyContinue
+$binaryPath = '"' + $executable + '" serve --state-dir "' + $stateDir + '"'
 if ($null -eq $existing) {
-  $null = & sc.exe create MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
-  if ($LASTEXITCODE -ne 0) { throw 'Client service creation failed' }
+  $null = New-Service -Name 'MobileEgressClient' -BinaryPathName $binaryPath -StartupType Automatic
 } else {
-  $null = & sc.exe config MobileEgressClient binPath= ('"' + $executable + '" serve --state-dir "' + $stateDir + '"') start= auto obj= LocalSystem
-  if ($LASTEXITCODE -ne 0) { throw 'Client service configuration failed' }
+  $serviceConfiguration = Get-CimInstance -ClassName Win32_Service -Filter "Name='MobileEgressClient'"
+  if ($null -eq $serviceConfiguration) { throw 'Client service configuration was not found' }
+  $changeResult = Invoke-CimMethod -InputObject $serviceConfiguration -MethodName Change -Arguments @{
+    PathName = $binaryPath; StartMode = 'Automatic'; StartName = 'LocalSystem'; StartPassword = $null
+  }
+  if ($null -eq $changeResult -or [uint32]$changeResult.ReturnValue -ne 0) { throw 'Client service configuration failed' }
 }
 $failureStage = 'client-bootstrap'
 $bootstrapOutput = (& $executable bootstrap --state-dir $stateDir 2>$null | Out-String).Trim()

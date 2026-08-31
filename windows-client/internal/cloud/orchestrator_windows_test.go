@@ -54,10 +54,10 @@ func TestNodeTrustBootstrapStopsOnEveryNativeCommandFailureInWindowsPowerShell51
 	}{
 		{name: "install ACL", script: installScript(release), failure: "icacls"},
 		{name: "update ACL", script: updateScript(release), failure: "icacls"},
-		{name: "install service create", script: installScript(release), failure: "sc-create"},
-		{name: "install service config", script: installScript(release), failure: "sc-config", serviceExists: true},
-		{name: "update service create", script: updateScript(release), failure: "sc-create"},
-		{name: "update service config", script: updateScript(release), failure: "sc-config", serviceExists: true},
+		{name: "install service create", script: installScript(release), failure: "new-service"},
+		{name: "install service config", script: installScript(release), failure: "cim-change", serviceExists: true},
+		{name: "update service create", script: updateScript(release), failure: "new-service"},
+		{name: "update service config", script: updateScript(release), failure: "cim-change", serviceExists: true},
 		{name: "install bootstrap", script: installScript(release), failure: "client", clientCalled: true},
 	}
 	for _, test := range tests {
@@ -76,6 +76,37 @@ func TestNodeTrustBootstrapStopsOnEveryNativeCommandFailureInWindowsPowerShell51
 				t.Fatalf("native %s failure Client-called = %t, want %t", test.failure, result.ClientCalled, test.clientCalled)
 			}
 		})
+	}
+}
+
+func TestNodeTrustBootstrapPreservesQuotedServicePathsWithoutNativeArgumentParsing(t *testing.T) {
+	release := testNodeRelease(t)
+	wantBinaryPath := `"mobile egress client.exe" serve --state-dir "C:\ProgramData\MobileEgress\Client"`
+
+	installed := runNodeTrustScriptInPowerShell51(t, release, installScript(release), nodeTrustPowerShellScenario{
+		InitialStores: "exact", PreTrustStatus: "Valid", PostTrustStatus: "Valid",
+	})
+	if installed.Error != "" {
+		t.Fatalf("install service configuration failed: %q", installed.Error)
+	}
+	if !installed.ServiceCreated || installed.ServiceChanged {
+		t.Fatalf("install service operations = created %t/changed %t, want true/false", installed.ServiceCreated, installed.ServiceChanged)
+	}
+	if installed.ServiceBinaryPath != wantBinaryPath || installed.ServiceStartupType != "Automatic" {
+		t.Fatalf("installed service = path %q/startup %q, want %q/Automatic", installed.ServiceBinaryPath, installed.ServiceStartupType, wantBinaryPath)
+	}
+
+	updated := runNodeTrustScriptInPowerShell51(t, release, updateScript(release), nodeTrustPowerShellScenario{
+		ServiceExists: true, InitialStores: "exact", PreTrustStatus: "Valid", PostTrustStatus: "Valid",
+	})
+	if updated.Error != "" {
+		t.Fatalf("update service configuration failed: %q", updated.Error)
+	}
+	if updated.ServiceCreated || !updated.ServiceChanged {
+		t.Fatalf("update service operations = created %t/changed %t, want false/true", updated.ServiceCreated, updated.ServiceChanged)
+	}
+	if updated.ServiceBinaryPath != wantBinaryPath || updated.ServiceStartupType != "Automatic" || updated.ServiceStartName != "LocalSystem" {
+		t.Fatalf("updated service = path %q/startup %q/account %q, want %q/Automatic/LocalSystem", updated.ServiceBinaryPath, updated.ServiceStartupType, updated.ServiceStartName, wantBinaryPath)
 	}
 }
 
@@ -312,6 +343,11 @@ type nodeTrustPowerShellResult struct {
 	PublisherCount     int      `json:"publisherCount"`
 	MutexProbeAcquired bool     `json:"mutexProbeAcquired"`
 	DownloadCalled     bool     `json:"downloadCalled"`
+	ServiceCreated     bool     `json:"serviceCreated"`
+	ServiceChanged     bool     `json:"serviceChanged"`
+	ServiceBinaryPath  string   `json:"serviceBinaryPath"`
+	ServiceStartupType string   `json:"serviceStartupType"`
+	ServiceStartName   string   `json:"serviceStartName"`
 }
 
 func runNodeTrustScriptInPowerShell51(t *testing.T, release NodeRelease, script string, scenario nodeTrustPowerShellScenario) nodeTrustPowerShellResult {
@@ -439,6 +475,11 @@ const nodeTrustPowerShellHarness = `$ErrorActionPreference = 'Stop'
 $script:certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($env:MOBILE_EGRESS_TEST_CERTIFICATE_BASE64))
 $script:clientCalled = $false
 $script:downloadCalled = $false
+$script:serviceCreated = $false
+$script:serviceChanged = $false
+$script:serviceBinaryPath = ''
+$script:serviceStartupType = ''
+$script:serviceStartName = ''
 $script:removedPaths = [Collections.Generic.List[string]]::new()
 $script:importedStores = [Collections.Generic.List[string]]::new()
 $script:removedStores = [Collections.Generic.List[string]]::new()
@@ -496,7 +537,7 @@ function New-Item {
 function Join-Path {
   [CmdletBinding()]
   param([string]$Path, [string]$ChildPath)
-  if ($Path -eq 'C:\Program Files\MobileEgress' -and $ChildPath -eq 'mobile-egress-client.exe') { return 'mobile-egress-client.exe' }
+  if ($Path -eq 'C:\Program Files\MobileEgress' -and $ChildPath -eq 'mobile-egress-client.exe') { return 'mobile egress client.exe' }
   return Microsoft.PowerShell.Management\Join-Path -Path $Path -ChildPath $ChildPath
 }
 function Move-Item {
@@ -508,6 +549,33 @@ function Get-Service {
   param([string]$Name)
   if ($env:MOBILE_EGRESS_TEST_SERVICE_EXISTS -eq 'true') { return [pscustomobject]@{ Status = 'Stopped' } }
   return $null
+}
+function New-Service {
+  [CmdletBinding()]
+  param([string]$Name, [string]$BinaryPathName, [string]$StartupType)
+  if ($env:MOBILE_EGRESS_TEST_FAILURE -eq 'new-service') { throw 'simulated service creation failure' }
+  $script:serviceCreated = $true
+  $script:serviceBinaryPath = $BinaryPathName
+  $script:serviceStartupType = $StartupType
+  return [pscustomobject]@{ Name = $Name; Status = 'Stopped' }
+}
+function Get-CimInstance {
+  [CmdletBinding()]
+  param([string]$ClassName, [string]$Filter)
+  if ($ClassName -eq 'Win32_Service' -and $env:MOBILE_EGRESS_TEST_SERVICE_EXISTS -eq 'true') {
+    return [pscustomobject]@{ Name = 'MobileEgressClient' }
+  }
+  return $null
+}
+function Invoke-CimMethod {
+  [CmdletBinding()]
+  param([object]$InputObject, [string]$MethodName, [hashtable]$Arguments)
+  if ($env:MOBILE_EGRESS_TEST_FAILURE -eq 'cim-change') { return [pscustomobject]@{ ReturnValue = 5 } }
+  $script:serviceChanged = $true
+  $script:serviceBinaryPath = [string]$Arguments.PathName
+  $script:serviceStartupType = [string]$Arguments.StartMode
+  $script:serviceStartName = [string]$Arguments.StartName
+  return [pscustomobject]@{ ReturnValue = 0 }
 }
 function Stop-Service { [CmdletBinding()] param([string]$Name, [switch]$Force) }
 function Start-Service { [CmdletBinding()] param([string]$Name) }
@@ -526,7 +594,7 @@ Set-Item -Path Function:\global:sc.exe -Value {
   $exitCode = if ($env:MOBILE_EGRESS_TEST_FAILURE -eq "sc-$operation") { 9 } else { 0 }
   & "$env:SystemRoot\System32\cmd.exe" /c "exit $exitCode"
 }
-Set-Item -Path Function:\global:mobile-egress-client.exe -Value {
+Set-Item -LiteralPath 'Function:\global:mobile egress client.exe' -Value {
   $script:clientCalled = $true
   if ($env:MOBILE_EGRESS_TEST_FAILURE -eq 'client') {
     & "$env:SystemRoot\System32\cmd.exe" /c 'exit 9'
@@ -563,5 +631,10 @@ if ($env:MOBILE_EGRESS_TEST_PROBE_MUTEX -eq 'true') {
   publisherCount = $script:stores.TrustedPublisher.Count
   mutexProbeAcquired = $mutexProbeAcquired
   downloadCalled = $script:downloadCalled
+  serviceCreated = $script:serviceCreated
+  serviceChanged = $script:serviceChanged
+  serviceBinaryPath = $script:serviceBinaryPath
+  serviceStartupType = $script:serviceStartupType
+  serviceStartName = $script:serviceStartName
 } | ConvertTo-Json -Compress
 `
