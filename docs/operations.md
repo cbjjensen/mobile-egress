@@ -6,14 +6,14 @@
 
 For a best-effort cellular address change, use **Rotate cellular IP** in the running Android Agent. Confirm stream disconnection, turn Airplane Mode on in the system screen the app opens, wait for the notification countdown, then turn it off. The Agent verifies and reconnects automatically. An unchanged result means the carrier reused the address; retry with the offered 30-second reset. Do not record the displayed addresses in acceptance evidence.
 
-Refract running on a managed EC2 node opts in with that node's **Copy proxy line** value: `127.0.0.1:1081:<username>:<password>`. HTTP CONNECT carries end-to-end HTTPS without Mobile Egress decrypting it. SOCKS-aware software can instead use **Copy SOCKS5 URL** at `127.0.0.1:1080`. Both values work only on the same EC2 node; never configure an EC2 security group, Windows system proxy, or public proxy listener.
+Refract running on a managed EC2 node opts in with that node's **Copy proxy line** value: `127.0.0.1:1081:<username>:<password>`. The listener forwards ordinary HTTP and uses CONNECT to carry end-to-end HTTPS without Mobile Egress decrypting it. SOCKS-aware software can instead use **Copy SOCKS5 URL** at `127.0.0.1:1080`. Both values work only on the same EC2 node; never configure an EC2 security group, Windows system proxy, or public proxy listener.
 
 ## Controller actions
 
 - **Install Client** validates signed manifest v2 and its embedded publisher certificate, then verifies the GitHub artifact SHA-256 and exact Authenticode signer before installing a LocalSystem service and provisioning a node identity.
-- **Update** repeats the same release/trust checks and replaces the executable while retaining node keys, certificate, and proxy credentials. Nodes older than Client `1.0.22` must be updated before HTTP copying is enabled.
+- **Update** repeats the same release/trust checks and replaces the executable while retaining node keys, certificate, and proxy credentials. Nodes older than Client `1.0.24` must be updated before the full HTTP/HTTPS proxy line is enabled.
 - **Repair** performs the signed update and sends a fresh sealed copy of the existing configuration.
-- **Copy proxy line** reveals the authenticated HTTP CONNECT line for Refract; **Copy SOCKS5 URL** reveals the alternate SOCKS form. Neither copied value is written to activity logs.
+- **Copy proxy line** reveals the authenticated HTTP forward/CONNECT line for Refract; **Copy SOCKS5 URL** reveals the alternate SOCKS form. Neither copied value is written to activity logs.
 - **Rotate endpoint safely** appears when the Tailscale Funnel origin differs from the encrypted Owner origin. Connect AWS first whenever managed nodes exist.
 - **Repair local relay** re-verifies the signed sibling relay, reapplies protected state ACLs, repairs the LocalSystem service configuration, and starts it without changing the CA or identities.
 
@@ -62,7 +62,7 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | EC2 restart request denied | The AWS identity lacks `ec2:RebootInstances` | Add that action to the dedicated Mobile Egress IAM policy or use an authorized identity, then retry the explicit recovery button. The app never silently reboots, stops, terminates, or recreates an instance. |
 | Install/update rejected before SSM | Manifest v2 shape; certificate DER bound/parse; self-signature; Code Signing EKU; CA=false; validity; SHA-1/SHA-256 consistency | Rebuild from the established tracked CER and current signing identity. Do not edit the manifest or initialize a replacement identity. |
 | Install/update rejected on node | Banner's sanitized stage; GitHub artifact hash; pre-trust exact signer; `LocalMachine\Root` and `TrustedPublisher`; post-trust `Valid` | Use the stage label to identify download, trust, service, or bootstrap failure. Publish/use the exact signed artifact and retry after correcting the release or SSM health; rollback is attempt-scoped. Never bypass verification or clear certificate stores. |
-| Refract rejects the proxy line | Refract and Client run on the same EC2 node; Client version is `1.0.22` or later; port `1081` listens on loopback | Choose **Update**, then **Copy proxy line** again. Use `IP:PORT:USERNAME:PASSWORD` exactly and do not expose port 1081 through AWS or Windows Firewall. |
+| Refract rejects the proxy line | Refract and Client run on the same EC2 node; Client version is `1.0.24` or later; both an `http://` and an `https://` test work through loopback port `1081` | Choose **Update**, then **Copy proxy line** again. Use `IP:PORT:USERNAME:PASSWORD` exactly and do not expose port 1081 through AWS or Windows Firewall. |
 | Proxy authentication fails | Credentials copied for the same node; Client service running | Copy the appropriate HTTP line or SOCKS5 URL again, or use **Repair**. Do not put credentials in SSM commands. |
 | Stream rejected | Four-stream per-Client or 32-stream aggregate bound, target policy, Agent loss | Reduce concurrency or restore Agent/cellular. Do not increase queues ad hoc. |
 

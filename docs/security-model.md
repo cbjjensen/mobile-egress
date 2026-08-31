@@ -36,7 +36,7 @@ IAM Identity Center uses the browser/device authorization flow; the AWS password
 
 ## Network safeguards
 
-The relay and all proxy listeners bind loopback. Each EC2 Client exposes authenticated SOCKS5 on `127.0.0.1:1080` and authenticated HTTP CONNECT on `127.0.0.1:1081`; neither is reachable through an EC2 security group. Only Funnel publishes port 8443, which is Mobile Egress TLS relay traffic—not a public proxy. EC2 needs outbound HTTPS/SSM only. Applications opt in individually; the product does not alter the OS default route. HTTPS tunneled through CONNECT remains end-to-end encrypted between the EC2 application and destination.
+The relay and all proxy listeners bind loopback. Each EC2 Client exposes authenticated SOCKS5 on `127.0.0.1:1080` and authenticated HTTP forward/CONNECT on `127.0.0.1:1081`; neither is reachable through an EC2 security group. Only Funnel publishes port 8443, which is Mobile Egress TLS relay traffic—not a public proxy. EC2 needs outbound HTTPS/SSM only. Applications opt in individually; the product does not alter the OS default route. HTTPS tunneled through CONNECT remains end-to-end encrypted between the EC2 application and destination. Ordinary HTTP remains plaintext on the cellular-to-destination leg, as it would without Mobile Egress; the Client strips proxy authentication and hop-by-hop proxy headers before forwarding it.
 
 Android requests a cellular transport and creates relay/target sockets from that `Network`. Loss/unavailability fails closed. Destination policy is enforced in both relay and Agent. DNS names, target IPs, URLs, headers, payloads, and credentials are excluded from diagnostics.
 

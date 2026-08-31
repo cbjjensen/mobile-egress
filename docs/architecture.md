@@ -5,7 +5,7 @@
 Every operator has one independent bridge. Their Windows 10/11 PC owns the relay and control plane, up to ten of their Windows Server 2019 EC2 instances are Clients, and one Android phone is the cellular Agent.
 
 ```text
-EC2 Refract -> loopback HTTP CONNECT -> Client service --+
+EC2 Refract -> loopback HTTP forward/CONNECT -> Client service --+
                                                         +-> public *.ts.net:8443 -> Funnel raw TCP -> 127.0.0.1:8443 relay -> Agent -> cellular target
 EC2 workload -> loopback SOCKS5 -> Client service -------+
 ```
@@ -42,7 +42,7 @@ The relay permits multiple simultaneous Clients, one active Agent session, four 
 - a durable X25519 sealed-configuration private key; and
 - its authenticated proxy username and password after decrypting the Owner-supplied configuration.
 
-Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080` and HTTP CONNECT to `127.0.0.1:1081`, so an EC2 application must explicitly opt in. Both listeners use the same retained credentials and relay session. HTTPS clients establish end-to-end TLS through CONNECT; Mobile Egress does not decrypt that traffic. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
+Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080` and an HTTP forward/CONNECT proxy to `127.0.0.1:1081`, so an EC2 application must explicitly opt in. Both listeners use the same retained credentials and relay session. Ordinary HTTP requests are rewritten to origin form and carried through a relay stream to the destination; HTTPS clients establish end-to-end TLS through CONNECT, and Mobile Egress does not decrypt that traffic. Proxy credentials and hop-by-hop proxy headers are removed before an ordinary HTTP request reaches the destination. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
 
 ### Android Agent
 

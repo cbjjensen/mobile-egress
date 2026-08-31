@@ -1,4 +1,4 @@
-// Package httpconnect provides an authenticated loopback-only HTTP CONNECT listener.
+// Package httpconnect provides an authenticated loopback-only HTTP forward and CONNECT proxy.
 package httpconnect
 
 import (
@@ -64,10 +64,10 @@ func (server *Server) Start(port uint16) error {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	if server.listener != nil {
-		return errors.New("HTTP CONNECT proxy is already running")
+		return errors.New("HTTP proxy is already running")
 	}
 	if server.config.Opener == nil || server.config.Username == "" || server.config.Password == "" {
-		return errors.New("HTTP CONNECT proxy configuration is incomplete")
+		return errors.New("HTTP proxy configuration is incomplete")
 	}
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(port)})
 	if err != nil {
@@ -137,11 +137,14 @@ func (server *Server) handle(writer http.ResponseWriter, request *http.Request) 
 		writer.WriteHeader(http.StatusProxyAuthRequired)
 		return
 	}
-	if request.Method != http.MethodConnect {
-		writer.Header().Set("Allow", http.MethodConnect)
-		writer.WriteHeader(http.StatusMethodNotAllowed)
+	if request.Method == http.MethodConnect {
+		server.handleConnect(writer, request)
 		return
 	}
+	server.handleForwardHTTP(writer, request)
+}
+
+func (server *Server) handleConnect(writer http.ResponseWriter, request *http.Request) {
 	host, port, err := connectTarget(request.Host)
 	if err != nil {
 		writer.WriteHeader(http.StatusBadRequest)
@@ -215,6 +218,54 @@ func (server *Server) handle(writer http.ResponseWriter, request *http.Request) 
 	<-completed
 }
 
+func (server *Server) handleForwardHTTP(writer http.ResponseWriter, request *http.Request) {
+	host, port, err := forwardTarget(request)
+	if err != nil {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if !server.config.Opener.Healthy() {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	openContext, cancelOpen := context.WithTimeout(request.Context(), server.config.OpenTimeout)
+	stream, err := server.config.Opener.OpenStream(openContext, host, port)
+	cancelOpen()
+	if err != nil {
+		writer.WriteHeader(openFailureStatus(err))
+		return
+	}
+	tracked := &trackedConnection{stream: stream}
+	if !server.register(tracked) {
+		return
+	}
+	defer func() {
+		tracked.close()
+		server.mu.Lock()
+		delete(server.connections, tracked)
+		server.mu.Unlock()
+	}()
+
+	forwarded := request.Clone(request.Context())
+	forwarded.RequestURI = ""
+	forwarded.Close = true
+	removeHopByHopHeaders(forwarded.Header)
+	if err := forwarded.Write(stream); err != nil {
+		writer.WriteHeader(http.StatusBadGateway)
+		return
+	}
+	response, err := http.ReadResponse(bufio.NewReader(stream), forwarded)
+	if err != nil {
+		writer.WriteHeader(http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	removeHopByHopHeaders(response.Header)
+	copyHeaders(writer.Header(), response.Header)
+	writer.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(writer, response.Body)
+}
+
 func openFailureStatus(err error) int {
 	if errors.Is(err, relayclient.ErrRelayUnavailable) || errors.Is(err, relayclient.ErrStreamLimit) {
 		return http.StatusServiceUnavailable
@@ -263,6 +314,47 @@ func connectTarget(value string) (string, uint16, error) {
 		return "", 0, errors.New("invalid CONNECT target")
 	}
 	return host, uint16(portValue), nil
+}
+
+func forwardTarget(request *http.Request) (string, uint16, error) {
+	if request.URL == nil || !strings.EqualFold(request.URL.Scheme, "http") || request.URL.User != nil {
+		return "", 0, errors.New("invalid forward target")
+	}
+	host := request.URL.Hostname()
+	if host == "" {
+		return "", 0, errors.New("invalid forward target")
+	}
+	port := uint64(80)
+	if portText := request.URL.Port(); portText != "" {
+		parsed, err := strconv.ParseUint(portText, 10, 16)
+		if err != nil || parsed == 0 {
+			return "", 0, errors.New("invalid forward target")
+		}
+		port = parsed
+	}
+	return host, uint16(port), nil
+}
+
+func removeHopByHopHeaders(header http.Header) {
+	for _, name := range strings.Split(header.Get("Connection"), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			header.Del(name)
+		}
+	}
+	for _, name := range []string{
+		"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate",
+		"Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
+	} {
+		header.Del(name)
+	}
+}
+
+func copyHeaders(destination, source http.Header) {
+	for name, values := range source {
+		for _, value := range values {
+			destination.Add(name, value)
+		}
+	}
 }
 
 type preOpenResult struct {
@@ -339,7 +431,9 @@ func (connection *trackedConnection) close() {
 	client := connection.client
 	stream := connection.stream
 	connection.mu.Unlock()
-	_ = client.Close()
+	if client != nil {
+		_ = client.Close()
+	}
 	if stream != nil {
 		_ = stream.Close()
 	}

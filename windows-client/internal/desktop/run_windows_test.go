@@ -265,7 +265,7 @@ func TestManagedNodeBindingsExposeHTTPLineAndSOCKSFallback(t *testing.T) {
 	repository := cloud.NewRepository(securestore.NewMemoryStore())
 	node := cloud.ManagedNode{
 		InstanceID: "i-0123456789abcdef0", ClientSerial: "A1", ConfigurationPublicKey: "public", ConfigurationGeneration: 1,
-		ServiceVersion: "1.0.22", Health: "installed", SOCKSUsername: "node-user", SOCKSPassword: "node-password", SOCKSPort: 1080,
+		ServiceVersion: "1.0.24", Health: "installed", SOCKSUsername: "node-user", SOCKSPassword: "node-password", SOCKSPort: 1080,
 		RelayURL: "https://bridge.tail123.ts.net:8443", CertificatePEM: "certificate", CACertificatePEM: "ca",
 	}
 	if err := repository.SaveNode(context.Background(), node); err != nil {

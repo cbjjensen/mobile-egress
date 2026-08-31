@@ -133,6 +133,61 @@ func TestConnectAuthenticatesWaitsForRelayAndRoutesBytes(t *testing.T) {
 	readEqual(t, connection, []byte("downstream"))
 }
 
+func TestPlainHTTPRequestIsForwardedThroughRelay(t *testing.T) {
+	t.Parallel()
+
+	opener := &fakeOpener{healthy: true}
+	server := startTestServer(t, opener, 30*time.Second)
+	connection := dialTestServer(t, server)
+	defer connection.Close()
+	request := "POST http://example.test/status?source=refract HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\nContent-Length: 12\r\n\r\nrequest-body"
+	if _, err := io.WriteString(connection, request); err != nil {
+		t.Fatal(err)
+	}
+
+	remote := opener.latestRemote(t)
+	defer remote.Close()
+	forwarded, err := http.ReadRequest(bufio.NewReader(remote))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer forwarded.Body.Close()
+	if forwarded.Method != http.MethodPost || forwarded.URL.RequestURI() != "/status?source=refract" || forwarded.Host != "example.test" {
+		t.Fatalf("forwarded request = %s %s host %q", forwarded.Method, forwarded.URL.RequestURI(), forwarded.Host)
+	}
+	forwardedBody, err := io.ReadAll(forwarded.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(forwardedBody) != "request-body" {
+		t.Fatalf("forwarded body = %q, want request-body", forwardedBody)
+	}
+	if forwarded.Header.Get("Proxy-Authorization") != "" {
+		t.Fatal("forwarded request exposed proxy credentials to the destination")
+	}
+	opener.mu.Lock()
+	host, port := opener.targetHost, opener.targetPort
+	opener.mu.Unlock()
+	if host != "example.test" || port != 80 {
+		t.Fatalf("relay target = %s:%d, want example.test:80", host, port)
+	}
+	if _, err := io.WriteString(remote, "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nplain-ok"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "plain-ok" {
+		t.Fatalf("proxy response = %d/%q, want 200/plain-ok", response.StatusCode, body)
+	}
+}
+
 func TestServerReturnsProtocolSpecificFailures(t *testing.T) {
 	t.Parallel()
 
@@ -145,10 +200,6 @@ func TestServerReturnsProtocolSpecificFailures(t *testing.T) {
 		{
 			name: "authentication required", opener: &fakeOpener{healthy: true},
 			request: "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n", wantCode: http.StatusProxyAuthRequired,
-		},
-		{
-			name: "connect only", opener: &fakeOpener{healthy: true},
-			request: "GET https://example.test/ HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n", wantCode: http.StatusMethodNotAllowed,
 		},
 		{
 			name: "target requires port", opener: &fakeOpener{healthy: true},
@@ -165,6 +216,22 @@ func TestServerReturnsProtocolSpecificFailures(t *testing.T) {
 		{
 			name: "existing stream capacity reached", opener: &fakeOpener{healthy: true, openErr: relayclient.ErrStreamLimit},
 			request: "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n", wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name: "plain HTTP requires absolute target", opener: &fakeOpener{healthy: true},
+			request: "GET /status HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n", wantCode: http.StatusBadRequest,
+		},
+		{
+			name: "plain HTTP agent unavailable", opener: &fakeOpener{healthy: false},
+			request: "GET http://example.test/status HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n", wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name: "plain HTTP destination open failed", opener: &fakeOpener{healthy: true, openErr: errors.New("destination rejected")},
+			request: "GET http://example.test/status HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n", wantCode: http.StatusBadGateway,
+		},
+		{
+			name: "plain HTTP stream capacity reached", opener: &fakeOpener{healthy: true, openErr: relayclient.ErrStreamLimit},
+			request: "GET http://example.test/status HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n", wantCode: http.StatusServiceUnavailable,
 		},
 	}
 	for _, test := range tests {

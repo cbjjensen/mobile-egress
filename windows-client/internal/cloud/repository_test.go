@@ -44,12 +44,12 @@ func TestEncryptedRepositoryPersistsAccessKeysAndManagedNodes(t *testing.T) {
 	}
 }
 
-func TestHTTPProxyLineRequiresAClientVersionWithHTTPConnect(t *testing.T) {
+func TestHTTPProxyLineRequiresAClientVersionWithPlainHTTPForwarding(t *testing.T) {
 	t.Parallel()
 
 	repository := NewRepository(securestore.NewMemoryStore())
 	node := testManagedNode("i-0123456789abcdef0")
-	node.ServiceVersion = "1.0.21"
+	node.ServiceVersion = "1.0.22"
 	if err := repository.SaveNode(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
@@ -58,22 +58,22 @@ func TestHTTPProxyLineRequiresAClientVersionWithHTTPConnect(t *testing.T) {
 		t.Fatalf("legacy NodeViews() = %#v/%v, want HTTP proxy unavailable", views, err)
 	}
 	if _, err := repository.ProxyLine(context.Background(), node.InstanceID); err == nil {
-		t.Fatal("ProxyLine() exposed an HTTP endpoint for a pre-1.0.22 Client")
+		t.Fatal("ProxyLine() exposed a full HTTP endpoint for a CONNECT-only Client")
 	}
 	if socksURL, err := repository.SOCKSProxyURL(context.Background(), node.InstanceID); err != nil || socksURL != "socks5://user:password@127.0.0.1:1080" {
 		t.Fatalf("legacy SOCKSProxyURL() = %q/%v", socksURL, err)
 	}
 
-	node.ServiceVersion = "1.0.22"
+	node.ServiceVersion = "1.0.24"
 	if err := repository.SaveNode(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	views, err = repository.NodeViews(context.Background())
 	if err != nil || len(views) != 1 || !views[0].HTTPProxyReady {
-		t.Fatalf("1.0.22 NodeViews() = %#v/%v, want HTTP proxy ready", views, err)
+		t.Fatalf("1.0.24 NodeViews() = %#v/%v, want HTTP proxy ready", views, err)
 	}
 	if line, err := repository.ProxyLine(context.Background(), node.InstanceID); err != nil || line != "127.0.0.1:1081:user:password" {
-		t.Fatalf("1.0.22 ProxyLine() = %q/%v", line, err)
+		t.Fatalf("1.0.24 ProxyLine() = %q/%v", line, err)
 	}
 }
 

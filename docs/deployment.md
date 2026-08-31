@@ -381,11 +381,11 @@ Get-Service -Name 'MobileEgressClient' | Select-Object Name, Status, StartType
 Get-NetTCPConnection -State Listen -LocalPort 1080,1081 | Select-Object LocalAddress, LocalPort, OwningProcess
 ```
 
-The service must be automatic/running. Its only proxy listeners must be SOCKS5 at `127.0.0.1:1080` and HTTP CONNECT at `127.0.0.1:1081`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
+The service must be automatic/running. Its only proxy listeners must be SOCKS5 at `127.0.0.1:1080` and HTTP forward/CONNECT at `127.0.0.1:1081`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
 
 ### 6.4 Prove opt-in cellular egress on both nodes
 
-In the controller, choose **Copy proxy line** for node A. Client versions older than `1.0.22` show update guidance instead; choose **Update** and wait for the node card to refresh. Transfer the value only into that node's intended workload or private RDP clipboard. For a short HTTP CONNECT curl test, parse it from the clipboard so the secret is not written into PowerShell history:
+In the controller, choose **Copy proxy line** for node A. Client versions older than `1.0.24` show update guidance instead; choose **Update** and wait for the node card to refresh. Transfer the value only into that node's intended workload or private RDP clipboard. For short ordinary-HTTP and HTTPS-through-CONNECT curl tests, parse it from the clipboard so the secret is not written into PowerShell history:
 
 ```powershell
 $proxyParts = (Get-Clipboard).Trim().Split(':', 4)
@@ -396,10 +396,13 @@ $directAddress = (& curl.exe --fail --silent --show-error --noproxy '*' 'https:/
 if ($LASTEXITCODE -ne 0) { throw 'The direct egress check failed.' }
 try {
     $env:ALL_PROXY = $nodeProxy
-    $proxiedAddress = (& curl.exe --fail --silent --show-error 'https://checkip.amazonaws.com').Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'The proxied egress check failed.' }
-    if ([string]::IsNullOrWhiteSpace($proxiedAddress) -or $directAddress -eq $proxiedAddress) {
-        throw 'The proxy did not demonstrate a different egress address.'
+    $proxiedHTTPAddress = (& curl.exe --fail --silent --show-error 'http://checkip.amazonaws.com').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'The ordinary HTTP proxy check failed.' }
+    $proxiedHTTPSAddress = (& curl.exe --fail --silent --show-error 'https://checkip.amazonaws.com').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'The HTTPS CONNECT proxy check failed.' }
+    if ([string]::IsNullOrWhiteSpace($proxiedHTTPAddress) -or [string]::IsNullOrWhiteSpace($proxiedHTTPSAddress) -or
+        $directAddress -eq $proxiedHTTPAddress -or $directAddress -eq $proxiedHTTPSAddress) {
+        throw 'Both proxy modes must demonstrate cellular egress distinct from the direct route.'
     }
     Write-Host 'PASS: direct and proxied egress differ; values intentionally not printed.'
 } finally {
@@ -409,7 +412,7 @@ try {
         $env:ALL_PROXY = $previousAllProxy
     }
     Set-Clipboard -Value ''
-    Remove-Variable proxyParts, nodeProxy, previousAllProxy, directAddress, proxiedAddress -ErrorAction SilentlyContinue
+    Remove-Variable proxyParts, nodeProxy, previousAllProxy, directAddress, proxiedHTTPAddress, proxiedHTTPSAddress -ErrorAction SilentlyContinue
 }
 ```
 

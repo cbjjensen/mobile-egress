@@ -3,7 +3,7 @@
 Mobile Egress lets selected applications on Windows Server 2019 EC2 instances use an Android phone's cellular connection. One Windows 10/11 PC runs the private relay and controller; Tailscale Funnel carries raw Mobile Egress TLS to that loopback-only relay.
 
 ```text
-EC2 Refract -> authenticated HTTP CONNECT 127.0.0.1:1081 -> MobileEgressClient --+
+EC2 Refract -> authenticated HTTP/CONNECT 127.0.0.1:1081 -> MobileEgressClient --+
                                                                                  +-> Tailscale Funnel -> local Windows relay -> Android Agent -> cellular Internet
 EC2 application -> authenticated SOCKS5 127.0.0.1:1080 -> MobileEgressClient -----+
 ```
@@ -23,7 +23,7 @@ Each friend self-hosts a separate bridge:
    - Create an access key for the `mobile-egress` IAM user and paste that access key into Mobile Egress.
    - IAM Identity Center remains available under **Advanced** for people who already know their Start URL. That URL looks like `https://d-xxxxxxxxxx.awsapps.com/start`, not the normal EC2 console URL.
 7. In **EC2 Nodes**, select up to ten running x86-64 Windows Server 2019 instances. Choose **Prepare SSM** only when a node is not already SSM online. An attached profile is inspected without being replaced; the app asks before adding the SSM policy only when it is missing. For a new profile, AWS attachment propagation errors are retried automatically with bounded backoff for up to one minute. The controller then gives the already-running SSM Agent 30 seconds to refresh its credentials. If registration is still absent, choose **Restart EC2 and continue** and confirm the brief interruption; the controller requests a reboot only for that selected instance, waits for a fresh Agent ping, and installs the Client automatically. It never reboots without confirmation and never terminates or recreates the instance. On later runs, an online node shows **SSM ready** and skips profile setup entirely. **Install Client** remains available for retrying an interrupted install.
-8. For a Client version `1.0.22` or later, choose **Copy proxy line** and paste the returned `127.0.0.1:1081:<username>:<password>` line into Refract running on that same EC2 instance. Older managed nodes must be updated first. **Copy SOCKS5 URL** remains available for SOCKS-aware applications at `127.0.0.1:1080`.
+8. For a Client version `1.0.24` or later, choose **Copy proxy line** and paste the returned `127.0.0.1:1081:<username>:<password>` line into Refract running on that same EC2 instance. Port `1081` forwards ordinary HTTP requests and uses CONNECT for HTTPS destinations. Older managed nodes must be updated first. **Copy SOCKS5 URL** remains available for SOCKS-aware applications at `127.0.0.1:1080`.
 
 Friends do not clone the repository, run Docker, execute setup scripts, open inbound EC2 ports, or handle Owner invitations. They do need permission to approve Tailscale, use the selected AWS account, and install the Android APK.
 

@@ -195,7 +195,7 @@ func (repository *Repository) NodeViews(ctx context.Context) ([]ManagedNodeView,
 	for _, node := range nodes {
 		views = append(views, ManagedNodeView{
 			InstanceID: node.InstanceID, ClientSerial: node.ClientSerial, ServiceVersion: node.ServiceVersion,
-			Health: node.Health, Proxy: "127.0.0.1:1081:***:***", HTTPProxyReady: supportsHTTPConnect(node.ServiceVersion),
+			Health: node.Health, Proxy: "127.0.0.1:1081:***:***", HTTPProxyReady: supportsHTTPProxy(node.ServiceVersion),
 		})
 	}
 	return views, nil
@@ -208,7 +208,7 @@ func (repository *Repository) ProxyLine(ctx context.Context, instanceID string) 
 	}
 	for _, node := range nodes {
 		if node.InstanceID == instanceID {
-			if !supportsHTTPConnect(node.ServiceVersion) {
+			if !supportsHTTPProxy(node.ServiceVersion) {
 				return "", errors.New("managed EC2 Client must be updated before HTTP proxying")
 			}
 			return fmt.Sprintf("127.0.0.1:1081:%s:%s", node.SOCKSUsername, node.SOCKSPassword), nil
@@ -230,7 +230,7 @@ func (repository *Repository) SOCKSProxyURL(ctx context.Context, instanceID stri
 	return "", errors.New("managed EC2 node was not found")
 }
 
-func supportsHTTPConnect(version string) bool {
+func supportsHTTPProxy(version string) bool {
 	parts := strings.Split(version, ".")
 	if len(parts) != 3 {
 		return false
@@ -249,7 +249,7 @@ func supportsHTTPConnect(version string) bool {
 	if values[1] != 0 {
 		return values[1] > 0
 	}
-	return values[2] >= 22
+	return values[2] >= 24
 }
 
 func (repository *Repository) loadOrCreate(ctx context.Context) (controllerState, error) {
