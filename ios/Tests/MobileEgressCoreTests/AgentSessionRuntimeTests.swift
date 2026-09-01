@@ -260,6 +260,58 @@ final class AgentSessionRuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.activeStreamCount, 0)
     }
 
+    func testRuntimeTargetEOFWaitsForAcceptedTargetWritesBeforeClosingStream() async throws {
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let target = RecordingTargetConnection(automaticallyCompletesSends: false)
+        let runtime = AgentSessionRuntime(
+            relay: relay,
+            targetFactory: RecordingTargetConnectionFactory(target: target)
+        )
+        await runtime.start()
+        await relay.emit(.connected)
+
+        let open = try WireProtocol.encode(
+            type: .open,
+            streamID: "stream",
+            payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8)
+        )
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await target.emit(.ready)
+        await relay.completeNextSend(.success(()))
+
+        for byte in [UInt8(0x41), UInt8(0x42)] {
+            let data = try WireProtocol.encode(
+                type: .data,
+                streamID: "stream",
+                payload: Data([byte])
+            )
+            await relay.emit(.message(.init(opcode: .binary, payload: data, isComplete: true)))
+        }
+        await target.emit(.ended)
+
+        XCTAssertEqual(relay.sentBinary.count, 1, "target_closed must wait for accepted target writes")
+        XCTAssertEqual(target.sentData, [Data([0x41])])
+        XCTAssertEqual(target.cancelCount, 0)
+
+        await target.completeNextSend(.success(()))
+        XCTAssertEqual(target.sentData, [Data([0x41]), Data([0x42])])
+        XCTAssertEqual(relay.sentBinary.count, 1)
+
+        await target.completeNextSend(.success(()))
+        XCTAssertEqual(relay.sentBinary.count, 2)
+        let terminal = try WireProtocol.parseAgentOutbound(try XCTUnwrap(relay.sentBinary.last))
+        XCTAssertEqual(terminal.type, .close)
+        XCTAssertEqual(terminal.streamID, "stream")
+        XCTAssertEqual(try terminal.decodedPayload(), Data("target_closed".utf8))
+        XCTAssertEqual(target.cancelCount, 0)
+
+        await relay.completeNextSend(.success(()))
+        XCTAssertEqual(target.cancelCount, 1)
+        let snapshot = await runtime.snapshot()
+        XCTAssertEqual(snapshot.activeStreamCount, 0)
+        XCTAssertEqual(snapshot.bytesUploaded, 2)
+    }
+
     func testRuntimeTargetAndRelayFailureRaceNotifiesAndCancelsExactlyOnce() async throws {
         let relay = RecordingRelayWebSocket()
         let target = RecordingTargetConnection()
