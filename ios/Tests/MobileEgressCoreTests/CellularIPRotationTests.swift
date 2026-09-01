@@ -267,7 +267,7 @@ final class CellularIPRotationTests: XCTestCase {
         )
     }
 
-    func testAgentResumeFailureIsFiniteTerminalAndCannotRestartTheAttempt() {
+    func testTunnelResumeFailureIsFiniteTerminalAndCannotRestartTheAttempt() {
         let completed = CellularIPRotationState.completed(
             attemptID: 41,
             before: beforeSnapshot,
@@ -277,7 +277,7 @@ final class CellularIPRotationTests: XCTestCase {
         var reducer = CellularIPRotationReducer(initialState: completed)
 
         let failed = reducer.reduce(.resumeFailed(attemptID: 41))
-        XCTAssertEqual(failed.state, .failed(attemptID: 41, failure: .agentResumeFailed))
+        XCTAssertEqual(failed.state, .failed(attemptID: 41, failure: .tunnelResumeFailed))
         XCTAssertTrue(failed.effects.isEmpty)
         XCTAssertEqual(
             reducer.reduce(.resumeFailed(attemptID: 41)),
