@@ -283,7 +283,8 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
             for intent in intents {
                 let store = RotationCheckpointStoreStub(checkpoint: CellularIPRotationCheckpoint(
                     state: recoveryState,
-                    savedAt: clock.now
+                    savedAt: clock.now,
+                    pauseDisposition: .pending
                 ))
                 let tunnel = await RotationTunnelStub(
                     isRunning: intent.isRunning,
@@ -317,6 +318,116 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
                 XCTAssertEqual(snapshot.isOnDemandEnabled, intent.isOnDemandEnabled)
                 let receipt = await tunnel.resumeReceipts.first ?? nil
                 XCTAssertNotNil(receipt, "Pre-pause recovery must retain a fresh receipt")
+            }
+        }
+    }
+
+    func testPauseCompletionPersistsOriginalIntentBeforeBeforeProbeCanBegin() async {
+        let probeGate = RotationProbeGate()
+        let path = RotationPathObserverStub()
+        let store = RotationCheckpointStoreStub()
+        let tunnel = await RotationTunnelStub(isRunning: true, isOnDemandEnabled: true)
+        let coordinator = await CellularIPRotationCoordinator(
+            clock: RotationClockStub(),
+            sleeper: RotationSleeperStub(),
+            probe: RotationProbeStub(
+                snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10")],
+                gate: probeGate
+            ),
+            pathObserver: path,
+            checkpointStore: store,
+            notificationCue: RotationNotificationCueStub(),
+            tunnel: tunnel
+        )
+
+        await coordinator.resumeAfterActivation()
+        path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.updateAgentAvailability(
+            isEnrolled: true,
+            isAgentRunning: true,
+            activeStreamCount: 0
+        )
+        await coordinator.start(holdSeconds: 10)
+        await probeGate.waitUntilEntered()
+
+        let checkpoints = store.savedCheckpoints
+        XCTAssertEqual(checkpoints.count, 2)
+        XCTAssertEqual(checkpoints[0].pauseDisposition, .pending)
+        if case .paused = checkpoints[1].pauseDisposition {
+            // The original intent is durable before the probe dependency finishes.
+        } else {
+            XCTFail("Post-pause checkpoint did not persist the opaque intent")
+        }
+
+        await coordinator.cancel()
+        await probeGate.open()
+    }
+
+    func testPreparingRecoveryDistinguishesBeforePauseAndAfterStopCrashCheckpoints() async throws {
+        let clock = RotationClockStub()
+        let intents = [
+            (isRunning: false, isOnDemandEnabled: false),
+            (isRunning: true, isOnDemandEnabled: true),
+        ]
+
+        for intent in intents {
+            let receiptSource = await RotationTunnelStub(
+                isRunning: intent.isRunning,
+                isOnDemandEnabled: intent.isOnDemandEnabled
+            )
+            let originalReceipt = try await receiptSource.pauseForRotation()
+            let crashCases: [(
+                disposition: CellularIPRotationPauseDisposition,
+                recoveredRunning: Bool,
+                recoveredOnDemand: Bool,
+                expectedPauseCount: Int
+            )] = [
+                (.pending, intent.isRunning, intent.isOnDemandEnabled, 1),
+                (.paused(originalReceipt), false, false, 0),
+            ]
+
+            for crashCase in crashCases {
+                let checkpoint = CellularIPRotationCheckpoint(
+                    state: .preparing(
+                        attemptID: 41,
+                        originalNetworkToken: "cellular-1",
+                        holdSeconds: 10,
+                        cellularLost: false,
+                        returnedNetworkToken: nil
+                    ),
+                    savedAt: clock.now,
+                    pauseDisposition: crashCase.disposition
+                )
+                let tunnel = await RotationTunnelStub(
+                    isRunning: crashCase.recoveredRunning,
+                    isOnDemandEnabled: crashCase.recoveredOnDemand
+                )
+                let coordinator = await CellularIPRotationCoordinator(
+                    clock: clock,
+                    sleeper: RotationSleeperStub(),
+                    probe: RotationProbeStub(snapshots: [
+                        PublicIPSnapshot(ipv4: "198.51.100.10"),
+                    ]),
+                    pathObserver: RotationPathObserverStub(),
+                    checkpointStore: RotationCheckpointStoreStub(checkpoint: checkpoint),
+                    notificationCue: RotationNotificationCueStub(),
+                    tunnel: tunnel
+                )
+
+                await coordinator.resumeAfterActivation()
+                await waitUntil {
+                    if case .awaitingAirplaneMode = await coordinator.state { return true }
+                    return false
+                }
+                await coordinator.cancel()
+                await waitUntil { await tunnel.resumeReceipts.count == 1 }
+
+                let restoredIntent = await tunnel.intentSnapshot()
+                let pauseCount = await tunnel.pauseCount
+                XCTAssertEqual(pauseCount, crashCase.expectedPauseCount)
+                XCTAssertEqual(restoredIntent.isRunning, intent.isRunning)
+                XCTAssertEqual(restoredIntent.isOnDemandEnabled, intent.isOnDemandEnabled)
             }
         }
     }
@@ -371,6 +482,65 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         XCTAssertEqual(store.loadCount, 2)
         let secondState = await second.state
         XCTAssertEqual(secondState, .idle)
+    }
+
+    func testDoubleRetirementFailureBecomesFiniteOnlyAfterOriginalIntentRestoration() async {
+        let resumeGate = RotationResumeGate()
+        let path = RotationPathObserverStub()
+        let store = RotationCheckpointStoreStub(retirementError: .writeFailed)
+        let tunnel = await RotationTunnelStub(
+            isRunning: true,
+            isOnDemandEnabled: true,
+            resumeGate: resumeGate
+        )
+        let coordinator = await CellularIPRotationCoordinator(
+            clock: RotationClockStub(),
+            sleeper: RotationSleeperStub(),
+            probe: RotationProbeStub(snapshots: [
+                PublicIPSnapshot(ipv4: "198.51.100.10"),
+            ]),
+            pathObserver: path,
+            checkpointStore: store,
+            notificationCue: RotationNotificationCueStub(),
+            tunnel: tunnel
+        )
+
+        await coordinator.resumeAfterActivation()
+        path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.updateAgentAvailability(
+            isEnrolled: true,
+            isAgentRunning: true,
+            activeStreamCount: 0
+        )
+        await coordinator.start(holdSeconds: 10)
+        await waitUntil {
+            if case .awaitingAirplaneMode = await coordinator.state { return true }
+            return false
+        }
+
+        await coordinator.cancel()
+        await resumeGate.waitUntilEntered()
+        let stateWhileRestorationIsPending = await coordinator.state
+        XCTAssertEqual(
+            stateWhileRestorationIsPending,
+            .failed(attemptID: 1, failure: .cancelled)
+        )
+
+        await resumeGate.open()
+        await waitUntil {
+            if case .failed(1, .checkpointRetirementFailed) = await coordinator.state {
+                return true
+            }
+            return false
+        }
+
+        let restoredIntent = await tunnel.intentSnapshot()
+        let resumeCount = await tunnel.resumeReceipts.count
+        XCTAssertTrue(restoredIntent.isRunning)
+        XCTAssertTrue(restoredIntent.isOnDemandEnabled)
+        XCTAssertEqual(resumeCount, 1)
+        XCTAssertEqual(store.retireCount, 1, "Finite failure must not recurse into retirement")
     }
 
     func testCancellationRejectsLateProbeCallbackAndClearsCheckpointAndCue() async {
@@ -653,6 +823,32 @@ private actor RotationProbeGate {
     }
 }
 
+private actor RotationResumeGate {
+    private var isOpen = false
+    private var isEntered = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        isEntered = true
+        entryWaiters.forEach { $0.resume() }
+        entryWaiters.removeAll()
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !isEntered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+}
+
 private final class RotationPathObserverStub: CellularPathObserving, @unchecked Sendable {
     private let lock = NSLock()
     private var handler: CellularPathAvailabilityHandler?
@@ -676,6 +872,7 @@ private final class RotationCheckpointStoreStub: CellularIPRotationCheckpointSto
     private var checkpoint: CellularIPRotationCheckpoint?
     private let loadError: CellularIPRotationCheckpointStoreError?
     private let simulatesFailingPhysicalRetirement: Bool
+    private let retirementError: CellularIPRotationCheckpointStoreError?
     private var saved: [CellularIPRotationCheckpoint] = []
     private var loads = 0
     private var clears = 0
@@ -685,14 +882,17 @@ private final class RotationCheckpointStoreStub: CellularIPRotationCheckpointSto
     init(
         checkpoint: CellularIPRotationCheckpoint? = nil,
         loadError: CellularIPRotationCheckpointStoreError? = nil,
-        simulatesFailingPhysicalRetirement: Bool = false
+        simulatesFailingPhysicalRetirement: Bool = false,
+        retirementError: CellularIPRotationCheckpointStoreError? = nil
     ) {
         self.checkpoint = checkpoint
         self.loadError = loadError
         self.simulatesFailingPhysicalRetirement = simulatesFailingPhysicalRetirement
+        self.retirementError = retirementError
     }
 
     var lastSaved: CellularIPRotationCheckpoint? { lock.withLock { saved.last } }
+    var savedCheckpoints: [CellularIPRotationCheckpoint] { lock.withLock { saved } }
     var loadCount: Int { lock.withLock { loads } }
     var clearCount: Int { lock.withLock { clears } }
     var retireCount: Int { lock.withLock { retires } }
@@ -728,8 +928,9 @@ private final class RotationCheckpointStoreStub: CellularIPRotationCheckpointSto
     }
 
     func retire(attemptID: UInt64) throws {
-        lock.withLock {
+        try lock.withLock {
             retires += 1
+            if let retirementError { throw retirementError }
             highestRetiredAttemptID = max(highestRetiredAttemptID ?? 0, attemptID)
             if !simulatesFailingPhysicalRetirement {
                 checkpoint = nil
@@ -773,55 +974,59 @@ private actor RotationNotificationCueStub: CellularIPRotationNotificationCueing 
 }
 
 @MainActor
-private final class RotationTunnelStub: CellularIPRotationTunnelControlling {
-    struct RotationReceipt: Equatable, Sendable {
-        let identifier: Int
-        let wasRunning: Bool
-        let wasOnDemandEnabled: Bool
-    }
-
+private final class RotationTunnelStub:
+    CellularIPRotationTunnelControlling,
+    TunnelRotationPreferenceSession
+{
     private(set) var pauseCount = 0
-    private(set) var resumeReceipts: [RotationReceipt?] = []
+    private(set) var resumeReceipts: [TunnelRotationReceipt?] = []
     private let failResume: Bool
-    private var isRunning: Bool
-    private var isOnDemandEnabled: Bool
+    private let resumeGate: RotationResumeGate?
+    private(set) var isRotationTunnelRunning: Bool
+    private(set) var isOnDemandEnabled: Bool
 
     init(
         failResume: Bool = false,
         isRunning: Bool = true,
-        isOnDemandEnabled: Bool = true
+        isOnDemandEnabled: Bool = true,
+        resumeGate: RotationResumeGate? = nil
     ) {
         self.failResume = failResume
-        self.isRunning = isRunning
+        self.resumeGate = resumeGate
+        isRotationTunnelRunning = isRunning
         self.isOnDemandEnabled = isOnDemandEnabled
     }
 
-    func pauseForRotation() async throws -> RotationReceipt {
+    func pauseForRotation() async throws -> TunnelRotationReceipt {
         pauseCount += 1
-        let receipt = RotationReceipt(
-            identifier: pauseCount,
-            wasRunning: isRunning,
-            wasOnDemandEnabled: isOnDemandEnabled
-        )
-        isOnDemandEnabled = false
-        isRunning = false
-        return receipt
+        return try await TunnelRotationPreferenceTransaction.pause(using: self)
     }
 
-    func resumeAfterRotation(_ receipt: RotationReceipt?) async throws {
+    func resumeAfterRotation(_ receipt: TunnelRotationReceipt?) async throws {
         resumeReceipts.append(receipt)
-        if let receipt {
-            isRunning = receipt.wasRunning
-            isOnDemandEnabled = receipt.wasOnDemandEnabled
-        } else {
-            isRunning = true
-            isOnDemandEnabled = true
-        }
+        if let resumeGate { await resumeGate.wait() }
+        try await TunnelRotationPreferenceTransaction.resume(using: self, receipt: receipt)
         if failResume { throw RotationTestError.injected }
     }
 
     func intentSnapshot() -> (isRunning: Bool, isOnDemandEnabled: Bool) {
-        (isRunning, isOnDemandEnabled)
+        (isRotationTunnelRunning, isOnDemandEnabled)
+    }
+
+    func loadPreferences() async throws {}
+
+    func applyConfiguration(onDemandEnabled: Bool) {
+        isOnDemandEnabled = onDemandEnabled
+    }
+
+    func savePreferences() async throws {}
+
+    func startTunnelSession() throws {
+        isRotationTunnelRunning = true
+    }
+
+    func stopTunnelSession() {
+        isRotationTunnelRunning = false
     }
 }
 

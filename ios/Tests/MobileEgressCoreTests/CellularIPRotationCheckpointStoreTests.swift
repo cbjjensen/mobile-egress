@@ -156,11 +156,60 @@ final class CellularIPRotationCheckpointStoreTests: XCTestCase {
         XCTAssertNil(try relaunchedStore.load(at: now.addingTimeInterval(1)))
     }
 
+    func testRetirementFallsBackToDeletionWhenAtomicTombstoneWriteFails() throws {
+        let checkpoint = activeCheckpoint
+        try AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL).save(checkpoint)
+        let store = AppGroupCellularIPRotationCheckpointStore(
+            containerURL: containerURL,
+            atomicWriter: { _, _ in throw CheckpointFileWriteError.injected }
+        )
+
+        XCTAssertNoThrow(try store.retire(attemptID: 41))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.checkpointURL.path))
+
+        let relaunchedStore = AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL)
+        XCTAssertNil(try relaunchedStore.load(at: now.addingTimeInterval(1)))
+    }
+
+    func testRetirementFailsOnlyWhenTombstoneWriteAndPhysicalDeletionBothFail() throws {
+        let checkpoint = activeCheckpoint
+        try AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL).save(checkpoint)
+        let store = AppGroupCellularIPRotationCheckpointStore(
+            containerURL: containerURL,
+            atomicWriter: { _, _ in throw CheckpointFileWriteError.injected },
+            fileRemover: { _ in throw CheckpointFileRemovalError.injected }
+        )
+
+        XCTAssertThrowsError(try store.retire(attemptID: 41)) { error in
+            XCTAssertEqual(error as? CellularIPRotationCheckpointStoreError, .writeFailed)
+        }
+
+        let relaunchedStore = AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL)
+        XCTAssertEqual(try relaunchedStore.load(at: now.addingTimeInterval(1)), checkpoint)
+    }
+
+    private var activeCheckpoint: CellularIPRotationCheckpoint {
+        CellularIPRotationCheckpoint(
+            state: .awaitingAirplaneMode(
+                attemptID: 41,
+                originalNetworkToken: "private-network-token",
+                holdSeconds: 10,
+                before: PublicIPSnapshot(ipv4: "198.51.100.77")
+            ),
+            savedAt: now,
+            timeoutDeadline: now.addingTimeInterval(120)
+        )
+    }
+
     private var now: Date {
         Date(timeIntervalSince1970: 2_100_000_000)
     }
 }
 
 private enum CheckpointFileRemovalError: Error {
+    case injected
+}
+
+private enum CheckpointFileWriteError: Error {
     case injected
 }

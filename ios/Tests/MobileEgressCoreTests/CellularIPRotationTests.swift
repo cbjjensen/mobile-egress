@@ -428,6 +428,54 @@ final class CellularIPRotationTests: XCTestCase {
         )
     }
 
+    func testCheckpointCodablePreservesOpaquePauseIntentAndMissingDispositionFailsSafe() throws {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let receipt = TunnelRotationReceipt(
+            wasRunning: true,
+            wasOnDemandEnabled: true
+        )
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .preparing(
+                attemptID: 41,
+                originalNetworkToken: "cell-1",
+                holdSeconds: 10,
+                cellularLost: false,
+                returnedNetworkToken: nil
+            ),
+            savedAt: savedAt,
+            pauseDisposition: .paused(receipt)
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        XCTAssertEqual(
+            try decoder.decode(
+                CellularIPRotationCheckpoint.self,
+                from: encoder.encode(checkpoint)
+            ),
+            checkpoint
+        )
+
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoder.encode(checkpoint)) as? [String: Any]
+        )
+        legacyObject.removeValue(forKey: "pauseDisposition")
+        let legacyCheckpoint = try decoder.decode(
+            CellularIPRotationCheckpoint.self,
+            from: JSONSerialization.data(withJSONObject: legacyObject)
+        )
+        XCTAssertEqual(legacyCheckpoint.pauseDisposition, .legacyUnknown)
+
+        var reducer = CellularIPRotationReducer()
+        XCTAssertEqual(
+            reducer.reduce(.recover(checkpoint: legacyCheckpoint, at: savedAt)),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .recoveryExpired),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
     func testExpiredCheckpointFailsFiniteAndAttemptsAgentResume() {
         let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
         let checkpoint = CellularIPRotationCheckpoint(
