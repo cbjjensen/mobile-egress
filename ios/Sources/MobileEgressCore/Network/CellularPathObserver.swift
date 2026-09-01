@@ -26,12 +26,12 @@ struct AppleCellularPathMonitorFactory {
 
 public final class CellularPathObserver: CellularPathObserving, @unchecked Sendable {
     private let monitor: any CellularPathMonitoring
+    private let lock = NSRecursiveLock()
     private let monitorQueue = DispatchQueue(label: "com.mobileegress.agent.cellular-path-monitor")
-    private let deliveryQueue = DispatchQueue(label: "com.mobileegress.agent.cellular-path-delivery")
-    private let deliveryQueueKey = DispatchSpecificKey<UInt8>()
     private var handler: CellularPathAvailabilityHandler?
     private var active = false
     private var started = false
+    private var cancelled = false
 
     public convenience init() {
         self.init(monitor: AppleCellularPathMonitorFactory().makeMonitor())
@@ -39,35 +39,32 @@ public final class CellularPathObserver: CellularPathObserving, @unchecked Senda
 
     init(monitor: any CellularPathMonitoring) {
         self.monitor = monitor
-        deliveryQueue.setSpecific(key: deliveryQueueKey, value: 1)
     }
 
     public func start(handler: @escaping CellularPathAvailabilityHandler) {
-        deliveryQueue.sync {
-            guard !started else { return }
-            started = true
-            active = true
-            self.handler = handler
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !started, !cancelled else { return }
+        started = true
+        active = true
+        self.handler = handler
         monitor.pathUpdateHandler = { [weak self] available in
-            self?.deliveryQueue.async { [weak self] in
-                guard let self, self.active else { return }
-                self.handler?(available)
-            }
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.active else { return }
+            self.handler?(available)
         }
         monitor.start(queue: monitorQueue)
     }
 
     public func cancel() {
-        let detach = {
-            self.active = false
-            self.handler = nil
-        }
-        if DispatchQueue.getSpecific(key: deliveryQueueKey) != nil {
-            detach()
-        } else {
-            deliveryQueue.sync(execute: detach)
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled else { return }
+        cancelled = true
+        active = false
+        handler = nil
         monitor.pathUpdateHandler = nil
         monitor.cancel()
     }

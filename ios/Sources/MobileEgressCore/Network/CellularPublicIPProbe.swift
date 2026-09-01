@@ -177,6 +177,10 @@ private final class NWCellularPublicIPExchange: @unchecked Sendable {
     }
 
     private func start(continuation: CheckedContinuation<Data, any Error>) {
+        guard !finished else {
+            continuation.resume(throwing: PublicIPProbeFailure(.cancelled))
+            return
+        }
         guard !started else {
             continuation.resume(throwing: PublicIPProbeFailure(.unavailable))
             return

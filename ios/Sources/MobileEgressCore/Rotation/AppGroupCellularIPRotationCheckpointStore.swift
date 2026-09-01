@@ -38,6 +38,7 @@ public final class AppGroupCellularIPRotationCheckpointStore:
             }
         )
     }
+    #endif
 
     convenience init(
         appGroupIdentifier: String,
@@ -50,7 +51,6 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         }
         self.init(containerURL: containerURL)
     }
-    #endif
 
     init(containerURL: URL, encoder: JSONEncoder = .init(), decoder: JSONDecoder = .init()) {
         checkpointURL = containerURL.appendingPathComponent(Self.filename, isDirectory: false)
