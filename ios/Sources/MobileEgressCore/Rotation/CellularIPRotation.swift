@@ -203,10 +203,7 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
     ) {
         self.state = state
         self.savedAt = savedAt
-        self.timeoutDeadline = timeoutDeadline ?? Self.defaultTimeoutDeadline(
-            for: state,
-            savedAt: savedAt
-        )
+        self.timeoutDeadline = timeoutDeadline
     }
 
     public func isExpired(at date: Date) -> Bool {
@@ -218,25 +215,6 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
         let remaining = timeoutDeadline.timeIntervalSince(date)
         guard remaining > 0 else { return 0 }
         return Int(remaining.rounded(.up))
-    }
-
-    private static func defaultTimeoutDeadline(
-        for state: CellularIPRotationState,
-        savedAt: Date
-    ) -> Date? {
-        switch state {
-        case .awaitingAirplaneMode:
-            savedAt.addingTimeInterval(
-                TimeInterval(CellularIPRotationPolicy.cellularLossTimeoutSeconds)
-            )
-        case .awaitingCellularReturn:
-            savedAt.addingTimeInterval(
-                TimeInterval(CellularIPRotationPolicy.cellularReturnTimeoutSeconds)
-            )
-        case .idle, .awaitingConfirmation, .preparing, .holding, .verifying,
-             .completed, .failed:
-            nil
-        }
     }
 }
 
