@@ -41,6 +41,8 @@ final class CellularIPRotationCheckpointStoreTests: XCTestCase {
         try store.save(first)
         try store.save(replacement)
 
+        XCTAssertEqual(try store.load(at: now.addingTimeInterval(2)), replacement)
+
         XCTAssertEqual(
             try store.load(expectedAttemptID: 42, at: now.addingTimeInterval(2)),
             replacement
