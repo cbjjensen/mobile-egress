@@ -306,3 +306,159 @@ wire, security, scan, and ordinary preference paths.
 - Atomic tombstone replacement protects against the requested physical deletion failure. A total App Group write failure cannot provide durable on-disk retirement; the coordinator remains best-effort for that fundamental storage outage.
 - The existing standalone `xcodebuild test` host-service invalidation and existing unsigned-build orientation/AppIntents warnings remain as documented above; neither was changed by this round.
 - Physical-device NetworkExtension timing and foreground/background acceptance remain required before release.
+
+## Round 2/5 review remediation (2026-09-01)
+
+### Scope and commits
+
+This round starts from the Round 1 implementation commit
+`699cf3713c0846dfae89066bb34f2766720c3d07` and addresses only the two requested
+durability gaps: distinguishing a crash before versus after tunnel pause, and making
+checkpoint retirement fall back safely when an atomic tombstone write fails.
+
+- `4d2df7e3971cfb3e013ca89328d149a6066ef8e5` — deterministic RED coverage for pause disposition, original-intent recovery matrices, and the two retirement mechanisms.
+- `af27569b5d0f026d937ddaf4f8f7929787be124b` — presentation RED requiring a finite, privacy-safe checkpoint-retirement failure.
+- `2cf025813f8c26e825c97b5f7f21b2adbb0e43d8` — durable pause intent, retirement fallback, coordinator failure mapping, and all focused GREENs.
+
+### Exact Mac RED evidence
+
+Both test-only commits were bundled from Windows, checked out detached on the exact
+Mac, and confirmed with `git rev-parse HEAD` before executing the focused commands.
+
+At `4d2df7e3971cfb3e013ca89328d149a6066ef8e5`:
+
+```text
+swift test --filter CellularIPRotation
+
+error: extra argument 'pauseDisposition' in call
+error: cannot find 'CellularIPRotationPauseDisposition' in scope
+error: 'TunnelRotationReceipt' initializer is inaccessible due to 'fileprivate' protection level
+error: type 'TunnelRotationReceipt' does not conform to protocol 'Equatable'
+error: type 'CellularIPRotationFailure' has no member 'checkpointRetirementFailed'
+error: extra argument 'atomicWriter' in call
+```
+
+At `af27569b5d0f026d937ddaf4f8f7929787be124b`:
+
+```text
+swift test --filter AgentDashboardPresentationTests.testCheckpointRetirementFailureHasFiniteSafePresentation
+
+error: type 'CellularIPRotationFailure' has no member 'checkpointRetirementFailed'
+```
+
+These compile REDs are intentional: the tests named the required durable checkpoint
+phase, opaque receipt round trip, dual retirement seams, and finite presentation before
+any production API existed.
+
+### Behavior corrected
+
+- `CellularIPRotationCheckpoint` now persists a `pending` or `paused(receipt)`
+  disposition. The receipt's running and on-demand fields and initializer remain
+  module-internal; the serialized values are non-secret tunnel intent only.
+- A new attempt writes `pending`. After `pauseForRotation()` completes, the coordinator
+  captures the opaque receipt, switches to `paused`, and synchronously saves that active
+  checkpoint before the dependent public-IP probe can begin.
+- Recovery of a pending `awaitingConfirmation` or `preparing` checkpoint performs the
+  pause and preserves the newly captured original intent. Recovery of a paused
+  `preparing` checkpoint skips pause entirely and resumes from its persisted receipt.
+  The stopped/on-demand-off and running/on-demand-on matrices prove exact restoration
+  and one resume for both sides of the crash boundary.
+- A legacy checkpoint with no disposition decodes as `legacyUnknown`. Legacy
+  `awaitingConfirmation` remains safe to pause later; ambiguous legacy `preparing`
+  fails finite with best-effort restoration instead of guessing and potentially
+  overwriting original intent.
+- App Group retirement now attempts atomic tombstone replacement and physical deletion
+  independently. A failed tombstone write plus successful deletion succeeds with no
+  replay. Only failure of both mechanisms throws `writeFailed`; the active checkpoint
+  remains available for diagnosis rather than being falsely reported retired.
+- The coordinator maps that double failure to finite `checkpointRetirementFailed` only
+  after best-effort original-intent resume settles. This direct terminal transition does
+  not invoke retirement again, so no recursive retirement work is scheduled. Dashboard
+  copy contains no checkpoint contents.
+
+### Exact Mac focused GREEN
+
+At detached exact source commit `2cf025813f8c26e825c97b5f7f21b2adbb0e43d8`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 15 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationCheckpointStoreTests
+Executed 7 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationTests
+Executed 24 tests, with 0 failures (0 unexpected)
+
+swift test --filter AgentDashboardPresentationTests.testCheckpointRetirementFailureHasFiniteSafePresentation
+Executed 1 test, with 0 failures (0 unexpected)
+```
+
+### Full required Mac verification
+
+The detached checkout printed exact source HEAD
+`2cf025813f8c26e825c97b5f7f21b2adbb0e43d8` before the commands:
+
+```text
+swift test
+Test Suite 'All tests' passed
+Executed 232 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+swift test -Xswiftc -warnings-as-errors
+Test Suite 'All tests' passed
+Executed 232 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+Targets: MobileEgressAgent, MobileEgressTunnelExtension
+Schemes: MobileEgressAgent, MobileEgressCore
+
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent \
+  -configuration Debug -sdk iphoneos \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+** BUILD SUCCEEDED **
+```
+
+The unsigned device build compiled both targets and embedded
+`MobileEgressTunnelExtension.appex`. An initial verification invocation named the
+nonexistent `MobileEgress.xcodeproj` and failed before compilation; the corrected
+tracked project command above exited zero. No signing, account, or Mac configuration
+was changed. The two Swift skips remain the pre-existing physical-device Secure
+Enclave and entitled Keychain acceptance tests.
+
+### Round changed files and self-review
+
+Production:
+
+- `ios/Sources/MobileEgressCore/Runtime/TunnelPreferenceTransaction.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift`
+- `ios/Sources/MobileEgressCore/Rotation/AppGroupCellularIPRotationCheckpointStore.swift`
+- `ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift`
+
+Focused tests:
+
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCheckpointStoreTests.swift`
+- `ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift`
+
+`git diff --check 699cf37..2cf0258` passed, and the implementation checkout was clean.
+The changed-file inventory contains only the checkpoint/coordinator/tunnel transaction,
+safe presentation mapping, and focused tests. App glue, Xcode project, visual assets,
+ordinary start/stop, relay, wire, security, extension runtime, and scanner files are
+unchanged. Source scans found no Settings URL/API, clipboard mutation, automatic
+Airplane Mode claim, private key, raw checkpoint copy, or public receipt field. No
+dependency, signing team, account, Mac software, or external system state changed.
+
+### Round concerns
+
+- When both App Group mutation mechanisms are unavailable (for example, a total volume
+  outage that blocks both atomic replacement and deletion), software cannot truthfully
+  guarantee durable retirement. The coordinator now exposes that bounded storage
+  failure only after restoration is attempted; device recovery still requires fixing
+  the underlying storage outage before another rotation.
+- The existing standalone `xcodebuild test` host-service invalidation and existing
+  unsigned-build orientation/AppIntents warnings remain as previously documented and
+  were not changed by this round.
+- Physical-device NetworkExtension timing, process termination at the pause/checkpoint
+  boundary, and foreground/background acceptance remain required before release.
