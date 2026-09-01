@@ -230,3 +230,92 @@ edit was required. The new header asset is discovered through the existing asset
   accessibility text sizes/VoiceOver/Reduce Motion, scanner permission states, real
   NetworkExtension start/stop, Control Center cellular rotation, background recovery,
   and safe clipboard inspection. No simulator or device screenshot is claimed here.
+
+## Round 1/5 review remediation — stop-confirmation state drift
+
+### Scope and commits
+
+This round fixes the destructive stop dialog's time-of-check/time-of-use defect without
+changing ordinary primary-action toggle behavior, presentation policy, assets, scanner,
+rotation, relay, wire, security, or tunnel transaction semantics.
+
+- `34b1be9caa570261a117c27df402854c571a10b4` — pure stop-confirmation drift test and supplemental app-wiring structure RED.
+- `34cc9912662b1a543b6321c1a51ab7d5ae11753b` — stop-only command resolver, guarded view-model action, and destructive-dialog wiring.
+
+### Root cause and RED
+
+The destructive dialog called `toggleTunnel()`. That method intentionally resolves the
+ordinary primary command from current state at invocation time. If the Agent became
+stopped while the dialog remained open, resolution changed from `.stop` to `.start`, so
+confirming destructive copy could restart the Agent.
+
+At detached exact Mac commit `34b1be9caa570261a117c27df402854c571a10b4`:
+
+```text
+swift test --filter "MobileEgressCoreTests.TunnelCommandDecisionTests/testConfirmedStopCommandBecomesNoOpWhenCurrentStateNoLongerPermitsStop"
+
+error: type 'TunnelCommandDecision' has no member 'confirmedStopCommand'
+```
+
+This is a real pure behavior test, not a source-text-only assertion. It independently
+requires `.stop` for a currently running/connected Agent and `nil`—never `.start`—after
+stopped/disconnected, failed/invalid, or stopping/disconnecting drift. A supplemental
+project-structure assertion requires the dialog to call the explicit view-model action.
+
+### Behavior corrected
+
+- `TunnelCommandDecision.confirmedStopCommand(...)` re-resolves current provider/phase
+  state, returns only enabled `.stop`, and returns `nil` for every non-stoppable result.
+- `AgentViewModel.confirmStopAgent()` also rechecks enrollment and conflicting scan/
+  tunnel transactions, then submits only that stop-only command. A stale confirmation is
+  a no-op and cannot reach the start transaction.
+- The destructive confirmation button now calls `confirmStopAgent()`.
+- The ordinary primary action still calls `toggleTunnel()`, preserving normal Start and
+  Stop behavior outside the confirmation boundary.
+
+### Focused and full exact-Mac GREEN
+
+At detached exact source commit `34cc9912662b1a543b6321c1a51ab7d5ae11753b`:
+
+```text
+swift test --filter "MobileEgressCoreTests.TunnelCommandDecisionTests/testConfirmedStopCommandBecomesNoOpWhenCurrentStateNoLongerPermitsStop"
+Executed 1 test, with 0 failures (0 unexpected)
+
+swift test --filter "MobileEgressCoreTests.XcodeProjectStructureTests/testAppCommandExecutionConsumesPortableDecisionWhileDashboardUsesPortablePresentation"
+Executed 1 test, with 0 failures (0 unexpected)
+
+swift test
+Executed 240 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+swift test -Xswiftc -warnings-as-errors
+Executed 240 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent \
+  -configuration Debug -sdk iphoneos \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
+** BUILD SUCCEEDED **
+```
+
+All 13 project-structure tests passed in the full runs. The unsigned build compiled and
+embedded the app and `MobileEgressTunnelExtension` and retained only the previously
+documented interface-orientation and AppIntents warnings. The two Swift skips remain the
+existing physical-device Secure Enclave and entitled Keychain acceptance tests.
+
+An initial full-suite orchestration attempt did not reach Swift because PowerShell
+expanded a remote command substitution locally. The corrected literal SSH invocation
+printed exact HEAD `34cc9912662b1a543b6321c1a51ab7d5ae11753b` and produced the green
+results above; this was not a source or test failure.
+
+### Round self-review and concerns
+
+- Changed files are limited to `TunnelConnectionState.swift`, `AgentViewModel.swift`,
+  `AgentDashboardView.swift`, the pure command-decision test, and its supplemental
+  structure assertions.
+- Mutation review: returning the generic current command, omitting `isEnabled`, allowing
+  any stopped/failed/disconnecting case, calling `toggleTunnel()` from the dialog, or
+  removing the explicit view-model action breaks the focused tests.
+- `git diff --check` is clean. No signing, account, Mac software/configuration,
+  dependency, asset, private Settings URL, clipboard, provider, or external runtime
+  state changed.
+- Physical-device stop-dialog timing remains part of release acceptance, but the exact
+  command inversion is now deterministic and covered in the portable pure model.
