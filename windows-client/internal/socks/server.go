@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"mobile-egress/windows-client/internal/relayclient"
 )
 
 var ErrRelayUnavailable = errors.New("healthy relay agent unavailable")
@@ -414,7 +416,7 @@ func writeReply(writer io.Writer, reply byte) error {
 func (server *Server) reserveStream() bool {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if server.active >= 4 || server.listener == nil {
+	if server.active >= relayclient.MaxConcurrentStreams || server.listener == nil {
 		return false
 	}
 	server.active++

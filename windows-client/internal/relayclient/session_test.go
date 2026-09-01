@@ -1,6 +1,7 @@
 package relayclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -196,6 +198,118 @@ func TestRelayStreamLocalTerminalDoesNotDrainBufferedInbound(t *testing.T) {
 
 	if count, err := stream.Read(make([]byte, 1)); count != 0 || err != io.EOF {
 		t.Fatalf("local terminal read = (%d, %v), want (0, EOF)", count, err)
+	}
+}
+
+func TestSessionLocallyAdmitsThirtyTwoStreamsAndRejectsTheThirtyThird(t *testing.T) {
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		for {
+			open := readTestWireEnvelope(t, connection)
+			if open.Type != "open" {
+				return
+			}
+			writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: open.StreamID})
+		}
+	})
+	defer fixture.Close()
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	streams := make([]io.ReadWriteCloser, 0, 32)
+	for index := 0; index < 32; index++ {
+		stream, openErr := session.OpenStream(context.Background(), "capacity.example", 443)
+		if openErr != nil {
+			t.Fatalf("stream %d open error = %v", index+1, openErr)
+		}
+		streams = append(streams, stream)
+	}
+	if _, openErr := session.OpenStream(context.Background(), "over-capacity.example", 443); !errors.Is(openErr, ErrStreamLimit) {
+		t.Fatalf("stream 33 open error = %v, want ErrStreamLimit", openErr)
+	}
+	for _, stream := range streams {
+		_ = stream.Close()
+	}
+}
+
+func TestSessionBoundsLateFrameTombstonesAtOneHundredTwentyEight(t *testing.T) {
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		for index := 0; index < 129; index++ {
+			open := readTestWireEnvelope(t, connection)
+			writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: open.StreamID})
+			_ = readTestWireEnvelope(t, connection)
+		}
+	})
+	defer fixture.Close()
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	for index := 0; index < 129; index++ {
+		stream, openErr := session.OpenStream(context.Background(), "late-frame.example", 443)
+		if openErr != nil {
+			t.Fatalf("stream %d open error = %v", index+1, openErr)
+		}
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Fatalf("stream %d close error = %v", index+1, closeErr)
+		}
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if got := len(session.closedStreams); got != 128 {
+		t.Fatalf("late-frame tombstones = %d, want 128", got)
+	}
+	if got := len(session.closedOrder); got != 128 {
+		t.Fatalf("late-frame tombstone order = %d, want 128", got)
+	}
+}
+
+func TestRelayStreamFramesOutboundPayloadsAtSixteenKiB(t *testing.T) {
+	frames := make(chan [][]byte, 1)
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		open := readTestWireEnvelope(t, connection)
+		writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: open.StreamID})
+		var received [][]byte
+		for total := 0; total < 32<<10+1; {
+			data := readTestWireEnvelope(t, connection)
+			payload, err := decodeWirePayload(data.Payload)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			received = append(received, payload)
+			total += len(payload)
+		}
+		frames <- received
+	})
+	defer fixture.Close()
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	stream, err := session.OpenStream(context.Background(), "frames.example", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	payload := bytes.Repeat([]byte("x"), 32<<10+1)
+	if written, writeErr := stream.Write(payload); writeErr != nil || written != len(payload) {
+		t.Fatalf("stream Write() = (%d, %v), want (%d, nil)", written, writeErr, len(payload))
+	}
+	got := <-frames
+	wantSizes := []int{16 << 10, 16 << 10, 1}
+	if len(got) != len(wantSizes) {
+		t.Fatalf("outbound data frame count = %d, want %d", len(got), len(wantSizes))
+	}
+	for index, want := range wantSizes {
+		if len(got[index]) != want {
+			t.Fatalf("outbound data frame %d = %d bytes, want %d", index+1, len(got[index]), want)
+		}
 	}
 }
 

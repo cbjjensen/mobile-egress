@@ -173,13 +173,13 @@ func TestServerRejectsConnectWhenRelayAgentIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestServerCapsActiveStreamsAtFourAndStopClosesEveryConnection(t *testing.T) {
+func TestServerCapsActiveStreamsAtThirtyTwoAndStopClosesEveryConnection(t *testing.T) {
 	t.Parallel()
 
 	opener := &fakeOpener{healthy: true}
 	server := startTestServer(t, opener)
-	connections := make([]net.Conn, 0, 5)
-	for index := 0; index < 4; index++ {
+	connections := make([]net.Conn, 0, 33)
+	for index := 0; index < 32; index++ {
 		connection := authenticatedConnection(t, server)
 		writeAll(t, connection, connectDomainRequest(1, "stream.example", 443))
 		readEqual(t, connection, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
@@ -190,8 +190,8 @@ func TestServerCapsActiveStreamsAtFourAndStopClosesEveryConnection(t *testing.T)
 	readEqual(t, fifth, []byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
 	_ = fifth.Close()
 
-	if status := server.Status(); status.ActiveStreams != 4 {
-		t.Fatalf("active streams = %d, want 4", status.ActiveStreams)
+	if status := server.Status(); status.ActiveStreams != 32 {
+		t.Fatalf("active streams = %d, want 32", status.ActiveStreams)
 	}
 	if err := server.Stop(); err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestConcurrentStopAndAcceptNeverLeavesAuthenticationSocket(t *testing.T) {
 	}
 }
 
-func TestAbandonedPreOpenConnectionsReleaseAllFourSlots(t *testing.T) {
+func TestAbandonedPreOpenConnectionsReleaseAllThirtyTwoSlots(t *testing.T) {
 	gate := make(chan struct{})
 	opener := &fakeOpener{healthy: true, openGate: gate}
 	server := NewServer(Config{Username: "user", Password: "password", Opener: opener, OpenTimeout: 30 * time.Second})
@@ -282,8 +282,8 @@ func TestAbandonedPreOpenConnectionsReleaseAllFourSlots(t *testing.T) {
 	}
 	defer server.Stop()
 
-	clients := make([]net.Conn, 0, 4)
-	for index := 0; index < 4; index++ {
+	clients := make([]net.Conn, 0, 32)
+	for index := 0; index < 32; index++ {
 		connection := authenticatedConnection(t, server)
 		writeAll(t, connection, connectDomainRequest(1, "abandoned.example", 443))
 		clients = append(clients, connection)
@@ -293,7 +293,7 @@ func TestAbandonedPreOpenConnectionsReleaseAllFourSlots(t *testing.T) {
 		opener.mu.Lock()
 		calls := opener.openCalls
 		opener.mu.Unlock()
-		if calls == 4 {
+		if calls == 32 {
 			break
 		}
 		time.Sleep(time.Millisecond)

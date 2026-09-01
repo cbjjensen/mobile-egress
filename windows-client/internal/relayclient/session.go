@@ -22,6 +22,12 @@ var (
 	ErrStreamLimit      = errors.New("local relay stream limit reached")
 )
 
+const (
+	MaxConcurrentStreams      = 32
+	maxClosedStreamTombstones = 128
+	maxOutboundDataChunkSize  = 16 << 10
+)
+
 type RelayError struct{ Code string }
 
 func (err RelayError) Error() string { return "relay rejected stream: " + err.Code }
@@ -140,7 +146,7 @@ func (session *Session) OpenStream(ctx context.Context, host string, port uint16
 		session.mu.Unlock()
 		return nil, ErrRelayUnavailable
 	}
-	if len(session.streams) >= 4 {
+	if len(session.streams) >= MaxConcurrentStreams {
 		session.mu.Unlock()
 		return nil, ErrStreamLimit
 	}
@@ -330,7 +336,6 @@ func (session *Session) claimLocalClose(stream *relayStream) bool {
 }
 
 func (session *Session) rememberClosedLocked(id string) {
-	const maxClosedStreamTombstones = 16
 	if _, exists := session.closedStreams[id]; exists {
 		return
 	}
@@ -399,7 +404,7 @@ func (stream *relayStream) Write(value []byte) (int, error) {
 	}
 	written := 0
 	for len(value) > 0 {
-		length := min(len(value), 32<<10)
+		length := min(len(value), maxOutboundDataChunkSize)
 		chunk := value[:length]
 		if err := stream.session.send(wireEnvelope{
 			Version: 1, Type: "data", StreamID: stream.id,
