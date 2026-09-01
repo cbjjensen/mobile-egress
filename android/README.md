@@ -4,7 +4,7 @@ The Android app is the one cellular egress Agent for an operator's local relay. 
 
 ## Enrollment
 
-In the Windows controller, choose **Phone → Generate Android QR**. In Android choose **Scan QR**. The strict version-1 payload pins the relay CA and carries a short-lived one-use Agent capability. The app creates a non-exportable P-256 key in Android Keystore, enrolls over a cellular-bound pinned TLS connection, and stores only the resulting identity in encrypted app storage.
+In the Windows or macOS desktop controller, choose **Agent → Generate Agent QR**. In Android choose **Scan QR**. The strict version-1 payload pins the relay CA and carries a short-lived one-use Agent capability. The app creates a non-exportable P-256 key in Android Keystore, enrolls over a cellular-bound pinned TLS connection, and stores only the resulting identity in encrypted app storage.
 
 Tap **Start** to request a cellular network and connect. The relay uses that cellular `Network`, and every still-unconnected target channel is bound to it before connect. If cellular disappears while Wi-Fi remains available, streams close and reconnection waits for cellular; there is no Wi-Fi fallback.
 
@@ -15,7 +15,7 @@ On a paired, running Agent with cellular available, choose **Rotate cellular IP*
 1. Turn Airplane Mode **on**. Android requires this manual system-setting action; ZFNF Mobile Egress cannot toggle it for you.
 2. Keep it on until the Agent notification's ten-second countdown finishes.
 3. Turn Airplane Mode **off**. You may then return to ZFNF Mobile Egress.
-4. The Agent waits for cellular, checks the address again, reconnects the relay, and shows **Changed**, **Unchanged**, or **Could not verify** with transient before/after values.
+4. The Agent waits for cellular, checks the address again, reconnects the relay, and shows **Changed**, **Unchanged**, or **Unverified** with transient before/after values.
 
 If the carrier reused the address, choose **Retry with 30-second reset**. Rotation is best effort: a carrier may return the same public or CGNAT address repeatedly. **Cancel IP rotation** restores the current relay where cellular is still available. If cellular does not disconnect within two minutes, the Agent cancels automatically; if it does not return within three minutes, the Agent continues waiting normally.
 
@@ -23,7 +23,7 @@ Address checks use the public HTTPS endpoints `api.ipify.org` and `api6.ipify.or
 
 ## Endpoint migration
 
-If the Windows controller rotates to a new Funnel name, it displays an `agent-endpoint-migration` QR. Stop the Agent, choose **Scan QR**, and scan it. Android requires the same stored CA, authenticates to the new endpoint with its existing Agent certificate, consumes the one-use capability, and changes only the stored relay origin. The Android Keystore alias/private key and Agent certificate are retained.
+If the desktop controller rotates to a new Funnel name, it displays an `agent-endpoint-migration` QR. Stop the Agent, choose **Scan QR**, and scan it. Android requires the same stored CA, authenticates to the new endpoint with its existing Agent certificate, consumes the one-use capability, and changes only the stored relay origin. The Android Keystore alias/private key and Agent certificate are retained.
 
 Enrollment and migration payloads are distinct and strict. Unknown fields, insecure/non-origin URLs, invalid/expired capabilities, invalid CAs, different CAs, malformed base64url, and trailing data are rejected.
 

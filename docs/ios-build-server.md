@@ -1,12 +1,14 @@
-# iOS build server over SSH
+# Mac build server over SSH
 
-Windows is the Mobile Egress editing and orchestration workstation. The configured Mac performs every iOS compile, simulator, device, signing, archive, TestFlight, and App Store action. Do not attempt to produce iOS artifacts on Windows.
+This runbook covers the Windows-orchestrated macOS Desktop build/sign/notary path and the separate Mobile Egress iOS Agent development path. Windows remains the main editing/publishing workstation; the Apple Silicon Mac produces the macOS PKG and performs every iOS compile, simulator, device, signing, archive, TestFlight, and App Store action. Do not attempt to produce iOS artifacts on Windows.
 
-The current goal is reproducible development verification. A paid Apple Developer Program membership is not required for the portable Swift suites or unsigned compilation. It is required for TestFlight, App Store, Ad Hoc distribution, and likely any production-grade entitlement path.
+Production Desktop distribution requires Apple Developer Program membership, approved Developer ID Application/Installer identities, a matching distribution profile, and notary credentials. Current iOS development begins with portable Swift suites and unsigned compilation, which do not require paid membership. TestFlight, App Store, Ad Hoc distribution, and production entitlements require the applicable paid enrollment.
 
 ## Known hosts
 
-Current local setup:
+Desktop releases use the ignored/untracked PowerShell data file `.local/mac-build-server/release-desktop.psd1`. It has exactly eight keys: `SshTarget`, `SshKeyPath`, `RepositoryPath`, `TeamID`, `ApplicationIdentity`, `InstallerIdentity`, `NotaryKeychainProfile`, and `ProvisioningProfilePath`. `ssh` and `scp` use the configured key and the standard OpenSSH `known_hosts`.
+
+The following values are retained for the separate iOS development path:
 
 - Windows workstation: `Raidmax-Fix`
 - Windows Wi-Fi address on `Rockchalk`: `10.0.0.55`
@@ -17,18 +19,16 @@ Current local setup:
 - Project-local ignored SSH key: `.local/mac-build-server/id_ed25519`
 - SSH setup skill: `.agents/skills/mobile-egress-mac-build-server`
 
-Local IP addresses can change. Prefer `Y9YD7JN54M.local` when it resolves; otherwise use the current Mac LAN address.
-
 ## Secret boundary
 
-The SSH private key may live in the repository checkout under `.local/`, but `.local/` is ignored and must remain untracked. Never commit, print, copy, release, or place the private key in a report. Xcode signing identities, provisioning profiles, Apple credentials, and team-specific export options are local secrets too.
+The Desktop PSD1 and SSH private key live under ignored `.local/` and must remain untracked. Never commit, print, paste, copy, release, log, or place them in a report. Developer ID/iOS signing private keys, provisioning profiles, Apple/notary credentials, and export options with team-specific values are also private.
 
 Before any SSH use, run this from the checkout that owns the key:
 
 ```powershell
-git check-ignore -q -- .local/mac-build-server/id_ed25519
-if ($LASTEXITCODE -ne 0) { throw 'Mac build-server SSH private key is not ignored.' }
-git ls-files -- .local/mac-build-server/id_ed25519
+git check-ignore -q -- .local/mac-build-server/release-desktop.psd1 .local/mac-build-server/id_ed25519
+if ($LASTEXITCODE -ne 0) { throw 'Mac Desktop config or SSH private key is not ignored.' }
+git ls-files -- .local/mac-build-server/release-desktop.psd1 .local/mac-build-server/id_ed25519
 ```
 
 The final command must print nothing. Do not use the key until both checks pass.
@@ -63,7 +63,17 @@ Y9YD7JN54M.local
 
 ## Mac prerequisites
 
-Install full Xcode on the Mac, not just Command Line Tools. After installation, open Xcode once and approve any additional component prompts. The selected developer directory must point at full Xcode:
+### Desktop release
+
+The Mac must be Apple Silicon. The release bootstrap installs the pinned user-local Go 1.26.7, Node 24.20.0, and Wails 2.14.0 toolchain from `windows-client/macos/toolchain.lock` under the dedicated build root without Homebrew.
+
+The Mac Keychain must contain the configured Developer ID Application and Installer identities. The distribution profile must authorize `com.cbjjensen.mobile-egress.controller` and its Keychain access group, and the configured `notarytool` profile must work. These production prerequisites require Apple Developer Program enrollment.
+
+### iOS development
+
+Install full Xcode on the Mac, not just Command Line Tools. After installation, open Xcode once and approve any additional component prompts.
+
+The selected developer directory must point at full Xcode:
 
 ```bash
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -75,9 +85,9 @@ Installing an iOS simulator runtime in `Xcode -> Settings -> Platforms` is an op
 
 ## Readiness check from Windows
 
-The tracked verifier defaults to the configured local Mac host and account, but accepts `-MacHost`, `-MacUser`, and `-SshKeyPath` when the network changes. Its first remote action requires noninteractive SSH with the ignored key, `IdentitiesOnly=yes`, and a matching existing `known_hosts` entry through `StrictHostKeyChecking=yes`. Verify the Mac host key out of band before trusting it. The Mac needs full Xcode and the iPhoneOS SDK. The tracked package-test destination is `platform=macOS`, so this gate does not select a simulator model or require a simulator boot.
+Desktop readiness is checked by `release-desktop.ps1` from the PSD1. The tracked iOS verifier defaults to the configured local Mac host and account, but accepts `-MacHost`, `-MacUser`, and `-SshKeyPath` when the network changes. Its first remote action requires noninteractive SSH with the ignored key, `IdentitiesOnly=yes`, and a matching existing `known_hosts` entry through `StrictHostKeyChecking=yes`. Verify the Mac host key out of band before trusting it. The Mac needs full Xcode and the iPhoneOS SDK. The tracked package-test destination is `platform=macOS`, so this gate does not select a simulator model or require a simulator boot.
 
-The tracked Mac gate needs full Xcode and the iPhoneOS SDK. These checks inspect those prerequisites only. Do not install software, change the selected Xcode developer directory, accept licenses, add signing identities, change Apple account state, or publish a build as part of verification:
+The commands below inspect those iOS prerequisites only. Do not install software, change the selected Xcode developer directory, accept licenses, add signing identities, change Apple account state, or publish a build as part of verification:
 
 ```powershell
 $mac = 'diana@10.0.0.77'
@@ -103,11 +113,13 @@ Optional simulator build readiness requires passwordless SSH, `/Applications/Xco
 
 ## Current verified state
 
-As of the initial setup, Windows can reach the Mac over SSH with the project-local key. Xcode 26.6 is installed and selected, iOS SDK 26.5 is present, and the iOS 26.5 simulator runtime has available iPhone/iPad devices. The last readiness check reported no valid code-signing identities from `security find-identity -v -p codesigning`.
+As of the initial iOS setup, Windows reached the Mac with the project-local key, Xcode 26.6 was selected, iOS SDK 26.5 was present, and the iOS 26.5 simulator runtime listed available iPhone/iPad devices. The last readiness check reported no valid code-signing identities from `security find-identity -v -p codesigning`. This is not current Desktop release evidence.
 
 That state supports source work and the unsigned checks for the tracked `ios/MobileEgressAgent.xcodeproj`. It does not produce signed device builds. Re-run the readiness check after any separately authorized signing configuration.
 
 ## Exact-tree verification
+
+The initial iOS state described above does not prove Developer ID identities, the Desktop distribution profile, or notarization readiness.
 
 From a clean, committed Windows checkout:
 
@@ -127,6 +139,12 @@ Only the final package-test phase retries, once, when output identifies a known 
 
 ## Source sync and project commands
 
+### Desktop release
+
+The Windows build freezes the source commit and raw Windows node manifest first. The Desktop orchestrator transfers one exact-commit Git bundle plus that manifest, builds the detached Mac checkout at the same commit, and invokes `scripts/release-macos.sh`.
+
+### iOS development
+
 Git remains the source-of-truth transfer mechanism for interactive Mac development. An optional persistent Mac checkout should be on the same branch and commit as the Windows worktree; stop before building when its `git rev-parse HEAD` differs from the Windows commit. For an exact local-only tree, prefer `scripts/test-ios.ps1 -UseMacBuildServer` instead of copying source directories over SSH.
 
 The real tracked project is `ios/MobileEgressAgent.xcodeproj` with scheme `MobileEgressAgent`. The verification script uses this unsigned iPhoneOS command shape:
@@ -142,6 +160,25 @@ swift test
 swift test -Xswiftc -warnings-as-errors
 xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS"
 ```
+
+## Desktop release orchestration
+
+The public entry point is:
+
+```powershell
+& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
+```
+
+Without `-Publish`, this command still builds/signs both platforms and freezes a local annotated tag. Add `-Publish` only to push source/tag state and change GitHub.
+
+The Windows stage passes its exact node manifest and source commit. The Mac returns:
+
+```text
+mobile-egress-macos-<version>-arm64.pkg
+mobile-egress-macos-<version>-arm64.verification.json
+```
+
+Windows validates the returned record and compares the remote/local PKG SHA-256. Only the PKG is a GitHub asset; the verification JSON stays private/local.
 
 ## Signing and distribution
 
