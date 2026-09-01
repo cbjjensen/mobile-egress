@@ -164,6 +164,215 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         XCTAssertEqual(resumeCount, 1)
     }
 
+    func testCancelWaitsForEveryAwaitedPauseStageAndNeverAllowsLateStop() async {
+        for stage in SuspendedPauseStage.allCases {
+            let gate = PauseStageGate()
+            let path = RotationPathObserverStub()
+            let tunnel = await StageControlledRotationTunnel(stage: stage, gate: gate)
+            let coordinator = await CellularIPRotationCoordinator(
+                clock: RotationClockStub(),
+                sleeper: RotationSleeperStub(),
+                probe: RotationProbeStub(snapshots: [
+                    PublicIPSnapshot(ipv4: "198.51.100.10"),
+                ]),
+                pathObserver: path,
+                checkpointStore: RotationCheckpointStoreStub(),
+                notificationCue: RotationNotificationCueStub(),
+                tunnel: tunnel
+            )
+
+            await coordinator.resumeAfterActivation()
+            path.emit(true)
+            await waitUntil { await coordinator.isCellularAvailable }
+            await coordinator.updateAgentAvailability(
+                isEnrolled: true,
+                isAgentRunning: true,
+                activeStreamCount: 0
+            )
+            await coordinator.start(holdSeconds: 10)
+            await gate.waitUntilEntered()
+
+            let cancelTask = Task { @MainActor in await coordinator.cancel() }
+            await gate.waitUntilCancellationObserved()
+            let stateBeforeRelease = await coordinator.state
+            if !stateBeforeRelease.isActive {
+                await waitUntil { await tunnel.resumeCallCount == 1 }
+            }
+            XCTAssertTrue(
+                stateBeforeRelease.isActive,
+                "Cancel must await the suspended \(stage) pause stage"
+            )
+
+            await gate.release()
+            await cancelTask.value
+            await waitUntil { await tunnel.pauseInvocationFinished }
+            await waitUntil {
+                if case .failed(_, .cancelled) = await coordinator.state { return true }
+                return false
+            }
+
+            let snapshot = await tunnel.snapshot()
+            XCTAssertTrue(snapshot.isRunning, "Running intent lost at \(stage)")
+            XCTAssertTrue(snapshot.isOnDemandEnabled, "On-demand intent lost at \(stage)")
+            XCTAssertEqual(snapshot.stopCount, 0, "Late stop escaped at \(stage)")
+            XCTAssertEqual(snapshot.resumeCallCount, 0, "Coordinator restored twice at \(stage)")
+            XCTAssertEqual(
+                snapshot.restoreApplicationCount,
+                stage == .initialLoad ? 0 : 1,
+                "Pause rollback did not restore exactly once at \(stage)"
+            )
+        }
+    }
+
+    func testRecoveredAwaitingAirplaneModeConsumesFirstUnavailablePathSample() async {
+        let clock = RotationClockStub()
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingAirplaneMode(
+                attemptID: 41,
+                originalNetworkToken: "cellular-1",
+                holdSeconds: 10,
+                before: PublicIPSnapshot(ipv4: "198.51.100.10")
+            ),
+            savedAt: clock.now,
+            timeoutDeadline: clock.now.addingTimeInterval(120)
+        )
+        let path = RotationPathObserverStub()
+        let coordinator = await CellularIPRotationCoordinator(
+            clock: clock,
+            sleeper: RotationSleeperStub(),
+            probe: RotationProbeStub(),
+            pathObserver: path,
+            checkpointStore: RotationCheckpointStoreStub(checkpoint: checkpoint),
+            notificationCue: RotationNotificationCueStub(),
+            tunnel: RotationTunnelStub()
+        )
+
+        await coordinator.resumeAfterActivation()
+        path.emit(false)
+        await waitUntil {
+            if case .holding(41, 10, _, nil) = await coordinator.state { return true }
+            return false
+        }
+
+        await coordinator.cancel()
+    }
+
+    func testPrePauseRecoveryPreservesFreshStoppedAndRunningIntentReceipts() async {
+        let clock = RotationClockStub()
+        let recoveryStates: [CellularIPRotationState] = [
+            .awaitingConfirmation(
+                attemptID: 41,
+                originalNetworkToken: "cellular-1",
+                holdSeconds: 10,
+                activeStreamCount: 1
+            ),
+            .preparing(
+                attemptID: 41,
+                originalNetworkToken: "cellular-1",
+                holdSeconds: 10,
+                cellularLost: false,
+                returnedNetworkToken: nil
+            ),
+        ]
+        let intents = [
+            (isRunning: false, isOnDemandEnabled: false),
+            (isRunning: true, isOnDemandEnabled: true),
+        ]
+
+        for recoveryState in recoveryStates {
+            for intent in intents {
+                let store = RotationCheckpointStoreStub(checkpoint: CellularIPRotationCheckpoint(
+                    state: recoveryState,
+                    savedAt: clock.now
+                ))
+                let tunnel = await RotationTunnelStub(
+                    isRunning: intent.isRunning,
+                    isOnDemandEnabled: intent.isOnDemandEnabled
+                )
+                let coordinator = await CellularIPRotationCoordinator(
+                    clock: clock,
+                    sleeper: RotationSleeperStub(),
+                    probe: RotationProbeStub(snapshots: [
+                        PublicIPSnapshot(ipv4: "198.51.100.10"),
+                    ]),
+                    pathObserver: RotationPathObserverStub(),
+                    checkpointStore: store,
+                    notificationCue: RotationNotificationCueStub(),
+                    tunnel: tunnel
+                )
+
+                await coordinator.resumeAfterActivation()
+                if case .awaitingConfirmation = recoveryState {
+                    await coordinator.confirm(proceed: true)
+                }
+                await waitUntil {
+                    if case .awaitingAirplaneMode = await coordinator.state { return true }
+                    return false
+                }
+                await coordinator.cancel()
+                await waitUntil { await tunnel.resumeReceipts.count == 1 }
+
+                let snapshot = await tunnel.intentSnapshot()
+                XCTAssertEqual(snapshot.isRunning, intent.isRunning)
+                XCTAssertEqual(snapshot.isOnDemandEnabled, intent.isOnDemandEnabled)
+                let receipt = await tunnel.resumeReceipts.first ?? nil
+                XCTAssertNotNil(receipt, "Pre-pause recovery must retain a fresh receipt")
+            }
+        }
+    }
+
+    func testTerminalRetirementPreventsReplayWhenPhysicalCheckpointDeletionFails() async {
+        let clock = RotationClockStub()
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingAirplaneMode(
+                attemptID: 41,
+                originalNetworkToken: "cellular-1",
+                holdSeconds: 10,
+                before: PublicIPSnapshot(ipv4: "198.51.100.10")
+            ),
+            savedAt: clock.now.addingTimeInterval(-30),
+            timeoutDeadline: clock.now.addingTimeInterval(90)
+        )
+        let store = RotationCheckpointStoreStub(
+            checkpoint: checkpoint,
+            simulatesFailingPhysicalRetirement: true
+        )
+        let sleeper = RotationSleeperStub()
+        let first = await CellularIPRotationCoordinator(
+            clock: clock,
+            sleeper: sleeper,
+            probe: RotationProbeStub(),
+            pathObserver: RotationPathObserverStub(),
+            checkpointStore: store,
+            notificationCue: RotationNotificationCueStub(),
+            tunnel: RotationTunnelStub()
+        )
+
+        await first.resumeAfterActivation()
+        await waitUntil { await sleeper.pendingSeconds.contains(90) }
+        await sleeper.fire(seconds: 90)
+        await waitUntil {
+            if case .failed(41, .cellularDidNotDisconnect) = await first.state { return true }
+            return false
+        }
+
+        let second = await CellularIPRotationCoordinator(
+            clock: clock,
+            sleeper: RotationSleeperStub(),
+            probe: RotationProbeStub(),
+            pathObserver: RotationPathObserverStub(),
+            checkpointStore: store,
+            notificationCue: RotationNotificationCueStub(),
+            tunnel: RotationTunnelStub()
+        )
+        await second.resumeAfterActivation()
+
+        XCTAssertEqual(store.retireCount, 1)
+        XCTAssertEqual(store.loadCount, 2)
+        let secondState = await second.state
+        XCTAssertEqual(secondState, .idle)
+    }
+
     func testCancellationRejectsLateProbeCallbackAndClearsCheckpointAndCue() async {
         let gate = RotationProbeGate()
         let path = RotationPathObserverStub()
@@ -466,21 +675,27 @@ private final class RotationCheckpointStoreStub: CellularIPRotationCheckpointSto
     private let lock = NSLock()
     private var checkpoint: CellularIPRotationCheckpoint?
     private let loadError: CellularIPRotationCheckpointStoreError?
+    private let simulatesFailingPhysicalRetirement: Bool
     private var saved: [CellularIPRotationCheckpoint] = []
     private var loads = 0
     private var clears = 0
+    private var retires = 0
+    private var highestRetiredAttemptID: UInt64?
 
     init(
         checkpoint: CellularIPRotationCheckpoint? = nil,
-        loadError: CellularIPRotationCheckpointStoreError? = nil
+        loadError: CellularIPRotationCheckpointStoreError? = nil,
+        simulatesFailingPhysicalRetirement: Bool = false
     ) {
         self.checkpoint = checkpoint
         self.loadError = loadError
+        self.simulatesFailingPhysicalRetirement = simulatesFailingPhysicalRetirement
     }
 
     var lastSaved: CellularIPRotationCheckpoint? { lock.withLock { saved.last } }
     var loadCount: Int { lock.withLock { loads } }
     var clearCount: Int { lock.withLock { clears } }
+    var retireCount: Int { lock.withLock { retires } }
 
     func save(_ checkpoint: CellularIPRotationCheckpoint) throws {
         lock.withLock {
@@ -493,14 +708,32 @@ private final class RotationCheckpointStoreStub: CellularIPRotationCheckpointSto
         try lock.withLock {
             loads += 1
             if let loadError { throw loadError }
+            if let attemptID = checkpoint?.state.attemptID,
+               let highestRetiredAttemptID,
+               attemptID <= highestRetiredAttemptID {
+                return nil
+            }
             return checkpoint
         }
     }
 
     func clear() throws {
-        lock.withLock {
+        try lock.withLock {
             clears += 1
+            if simulatesFailingPhysicalRetirement {
+                throw CellularIPRotationCheckpointStoreError.writeFailed
+            }
             checkpoint = nil
+        }
+    }
+
+    func retire(attemptID: UInt64) throws {
+        lock.withLock {
+            retires += 1
+            highestRetiredAttemptID = max(highestRetiredAttemptID ?? 0, attemptID)
+            if !simulatesFailingPhysicalRetirement {
+                checkpoint = nil
+            }
         }
     }
 }
@@ -543,24 +776,189 @@ private actor RotationNotificationCueStub: CellularIPRotationNotificationCueing 
 private final class RotationTunnelStub: CellularIPRotationTunnelControlling {
     struct RotationReceipt: Equatable, Sendable {
         let identifier: Int
+        let wasRunning: Bool
+        let wasOnDemandEnabled: Bool
     }
 
     private(set) var pauseCount = 0
     private(set) var resumeReceipts: [RotationReceipt?] = []
     private let failResume: Bool
+    private var isRunning: Bool
+    private var isOnDemandEnabled: Bool
 
-    init(failResume: Bool = false) {
+    init(
+        failResume: Bool = false,
+        isRunning: Bool = true,
+        isOnDemandEnabled: Bool = true
+    ) {
         self.failResume = failResume
+        self.isRunning = isRunning
+        self.isOnDemandEnabled = isOnDemandEnabled
     }
 
     func pauseForRotation() async throws -> RotationReceipt {
         pauseCount += 1
-        return RotationReceipt(identifier: pauseCount)
+        let receipt = RotationReceipt(
+            identifier: pauseCount,
+            wasRunning: isRunning,
+            wasOnDemandEnabled: isOnDemandEnabled
+        )
+        isOnDemandEnabled = false
+        isRunning = false
+        return receipt
     }
 
     func resumeAfterRotation(_ receipt: RotationReceipt?) async throws {
         resumeReceipts.append(receipt)
+        if let receipt {
+            isRunning = receipt.wasRunning
+            isOnDemandEnabled = receipt.wasOnDemandEnabled
+        } else {
+            isRunning = true
+            isOnDemandEnabled = true
+        }
         if failResume { throw RotationTestError.injected }
+    }
+
+    func intentSnapshot() -> (isRunning: Bool, isOnDemandEnabled: Bool) {
+        (isRunning, isOnDemandEnabled)
+    }
+}
+
+private enum SuspendedPauseStage: String, CaseIterable, Sendable {
+    case initialLoad
+    case save
+    case reload
+}
+
+private actor PauseStageGate {
+    private var didEnter = false
+    private var didObserveCancellation = false
+    private var isReleased = false
+    private var suspension: CheckedContinuation<Void, Never>?
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspend() async {
+        didEnter = true
+        entryWaiters.forEach { $0.resume() }
+        entryWaiters.removeAll()
+
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if isReleased {
+                    continuation.resume()
+                } else {
+                    suspension = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.recordCancellation() }
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !didEnter else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func waitUntilCancellationObserved() async {
+        guard !didObserveCancellation else { return }
+        await withCheckedContinuation { cancellationWaiters.append($0) }
+    }
+
+    func release() {
+        isReleased = true
+        suspension?.resume()
+        suspension = nil
+    }
+
+    private func recordCancellation() {
+        didObserveCancellation = true
+        cancellationWaiters.forEach { $0.resume() }
+        cancellationWaiters.removeAll()
+    }
+}
+
+@MainActor
+private final class StageControlledRotationTunnel:
+    CellularIPRotationTunnelControlling,
+    TunnelRotationPreferenceSession
+{
+    struct Snapshot: Sendable {
+        let isRunning: Bool
+        let isOnDemandEnabled: Bool
+        let stopCount: Int
+        let resumeCallCount: Int
+        let restoreApplicationCount: Int
+    }
+
+    private let stage: SuspendedPauseStage
+    private let gate: PauseStageGate
+    private var loadCount = 0
+    private var saveCount = 0
+    private(set) var isRotationTunnelRunning = true
+    private(set) var isOnDemandEnabled = true
+    private(set) var stopCount = 0
+    private(set) var resumeCallCount = 0
+    private(set) var restoreApplicationCount = 0
+    private(set) var pauseInvocationFinished = false
+
+    init(stage: SuspendedPauseStage, gate: PauseStageGate) {
+        self.stage = stage
+        self.gate = gate
+    }
+
+    func pauseForRotation() async throws -> TunnelRotationReceipt {
+        defer { pauseInvocationFinished = true }
+        return try await TunnelRotationPreferenceTransaction.pause(using: self)
+    }
+
+    func resumeAfterRotation(_ receipt: TunnelRotationReceipt?) async throws {
+        resumeCallCount += 1
+        try await TunnelRotationPreferenceTransaction.resume(using: self, receipt: receipt)
+    }
+
+    func loadPreferences() async throws {
+        loadCount += 1
+        if stage == .initialLoad, loadCount == 1 {
+            await gate.suspend()
+        } else if stage == .reload, loadCount == 2 {
+            await gate.suspend()
+        }
+    }
+
+    func applyConfiguration(onDemandEnabled: Bool) {
+        isOnDemandEnabled = onDemandEnabled
+        if onDemandEnabled {
+            restoreApplicationCount += 1
+        }
+    }
+
+    func savePreferences() async throws {
+        saveCount += 1
+        if stage == .save, saveCount == 1 {
+            await gate.suspend()
+        }
+    }
+
+    func startTunnelSession() throws {
+        isRotationTunnelRunning = true
+    }
+
+    func stopTunnelSession() {
+        stopCount += 1
+        isRotationTunnelRunning = false
+    }
+
+    func snapshot() -> Snapshot {
+        Snapshot(
+            isRunning: isRotationTunnelRunning,
+            isOnDemandEnabled: isOnDemandEnabled,
+            stopCount: stopCount,
+            resumeCallCount: resumeCallCount,
+            restoreApplicationCount: restoreApplicationCount
+        )
     }
 }
 
