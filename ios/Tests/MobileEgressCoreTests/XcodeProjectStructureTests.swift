@@ -221,6 +221,37 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(manager.contains("func stopTunnelSession()"))
     }
 
+    func testAppleRotationCoordinatorWiresTunnelLifecycleActivationAndSafeActions() throws {
+        let manager = try text(at: "MobileEgressAgent/TunnelManager.swift")
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+        let app = try text(at: "MobileEgressAgent/MobileEgressAgentApp.swift")
+
+        XCTAssertTrue(manager.contains("TunnelRotationPreferenceSession"))
+        XCTAssertTrue(manager.contains("CellularIPRotationTunnelControlling"))
+        XCTAssertTrue(manager.contains("func pauseForRotation()"))
+        XCTAssertTrue(manager.contains("TunnelRotationPreferenceTransaction.pause(using: self)"))
+        XCTAssertTrue(manager.contains("func resumeAfterRotation("))
+        XCTAssertTrue(manager.contains("TunnelRotationPreferenceTransaction.resume("))
+
+        XCTAssertTrue(viewModel.contains("@Published private(set) var cellularHealth"))
+        XCTAssertTrue(viewModel.contains("@Published private(set) var rotationState"))
+        XCTAssertTrue(viewModel.contains("CellularIPRotationAvailability("))
+        XCTAssertTrue(viewModel.contains("func requestRotation()"))
+        XCTAssertTrue(viewModel.contains("func confirmRotationStart()"))
+        XCTAssertTrue(viewModel.contains("func declineRotation()"))
+        XCTAssertTrue(viewModel.contains("func cancelRotation()"))
+        XCTAssertTrue(viewModel.contains("func retryRotation()"))
+        XCTAssertTrue(viewModel.contains("func resumeAfterActivation()"))
+        XCTAssertTrue(viewModel.contains("func safeStatusForCopy() -> String"))
+        XCTAssertTrue(viewModel.contains("safeCopiedStatus(isEnrolled:"))
+        XCTAssertFalse(viewModel.contains("UIPasteboard"))
+
+        XCTAssertTrue(app.contains("scenePhase == .active"))
+        XCTAssertTrue(app.contains("model.resumeAfterActivation()"))
+        XCTAssertFalse(manager.contains("prefs:root="))
+        XCTAssertFalse(viewModel.contains("prefs:root="))
+    }
+
     func testExtensionConsumesPortableRuntimeOwnershipController() throws {
         let project = try text(at: "MobileEgressAgent.xcodeproj/project.pbxproj")
         let provider = try text(at: "MobileEgressTunnelExtension/PacketTunnelProvider.swift")
