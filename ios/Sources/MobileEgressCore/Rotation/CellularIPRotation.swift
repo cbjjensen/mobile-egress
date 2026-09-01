@@ -190,12 +190,14 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
 
     public let state: CellularIPRotationState
     public let savedAt: Date
-    public let expiresAt: Date
+
+    public var expiresAt: Date {
+        savedAt.addingTimeInterval(Self.validityDuration)
+    }
 
     public init(state: CellularIPRotationState, savedAt: Date) {
         self.state = state
         self.savedAt = savedAt
-        expiresAt = savedAt.addingTimeInterval(Self.validityDuration)
     }
 
     public func isExpired(at date: Date) -> Bool {
