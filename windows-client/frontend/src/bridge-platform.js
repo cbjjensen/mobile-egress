@@ -36,12 +36,12 @@ const relayServiceStates = Object.freeze({
   enabled: { label: 'Relay service enabled', guidance: '', ready: true },
   'version-mismatch': {
     label: 'Relay service update required',
-    guidance: 'Repair the local bridge to register the relay version bundled with this controller.',
+    guidance: 'Repair the local bridge to update and restart the bundled relay helper.',
     ready: false,
   },
   unavailable: {
     label: 'Relay service unavailable',
-    guidance: 'Service Management is unavailable. Confirm this Mac is running macOS 13 or later.',
+    guidance: 'Verify Service Management approval and that the signed relay is running, then try again.',
     ready: false,
   },
 })
