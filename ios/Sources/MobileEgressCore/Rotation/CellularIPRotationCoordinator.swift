@@ -425,12 +425,15 @@ public final class CellularIPRotationCoordinator<
         pauseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let receipt: TunnelRotationReceipt
+            let usesRecoveredPausingReceipt: Bool
             do {
                 if self.recoveringAttemptID == attemptID,
                    case let .pausing(persistedReceipt) = self.checkpointPauseDisposition {
                     receipt = persistedReceipt
+                    usesRecoveredPausingReceipt = true
                 } else {
                     receipt = try await self.tunnel.captureRotationIntent()
+                    usesRecoveredPausingReceipt = false
                     guard self.isCurrent(attemptID: attemptID, generation: generation) else {
                         return
                     }
@@ -455,7 +458,7 @@ public final class CellularIPRotationCoordinator<
                 try await self.tunnel.pauseForRotation(using: receipt)
             } catch {
                 guard self.isCurrent(attemptID: attemptID, generation: generation) else { return }
-                self.requiresTerminalTunnelResume = false
+                self.requiresTerminalTunnelResume = usesRecoveredPausingReceipt
                 if Task.isCancelled { return }
                 await self.apply(
                     .cancelled(attemptID: attemptID),
