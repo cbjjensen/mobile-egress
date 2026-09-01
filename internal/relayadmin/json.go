@@ -107,12 +107,16 @@ func MarshalRequest(requestID string, operation Operation, params any) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(struct {
+	raw, err := json.Marshal(struct {
 		Version   int       `json:"version"`
 		RequestID string    `json:"requestId"`
 		Operation Operation `json:"operation"`
 		Params    any       `json:"params"`
 	}{Version: Version, RequestID: requestID, Operation: operation, Params: normalized})
+	if err != nil || len(raw) > MaximumFrameSize {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
 }
 
 func ParseRequest(raw []byte) (Request, error) {
@@ -265,13 +269,17 @@ func MarshalSuccessResponse(requestID string, operation Operation, result any) (
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(struct {
+	raw, err := json.Marshal(struct {
 		Version   int       `json:"version"`
 		RequestID string    `json:"requestId"`
 		Operation Operation `json:"operation"`
 		OK        bool      `json:"ok"`
 		Result    any       `json:"result"`
 	}{Version: Version, RequestID: requestID, Operation: operation, OK: true, Result: normalized})
+	if err != nil || len(raw) > MaximumFrameSize {
+		return nil, ErrInvalidResponse
+	}
+	return raw, nil
 }
 
 func MarshalErrorResponse(requestID string, operation Operation, code ErrorCode) ([]byte, error) {
@@ -285,13 +293,17 @@ func marshalErrorResponseUnchecked(requestID string, operation Operation, code E
 	if ValidateRequestID(requestID) != nil || !code.Valid() {
 		return nil, ErrInvalidResponse
 	}
-	return json.Marshal(struct {
+	raw, err := json.Marshal(struct {
 		Version   int       `json:"version"`
 		RequestID string    `json:"requestId"`
 		Operation Operation `json:"operation"`
 		OK        bool      `json:"ok"`
 		ErrorCode ErrorCode `json:"errorCode"`
 	}{Version: Version, RequestID: requestID, Operation: operation, OK: false, ErrorCode: code})
+	if err != nil || len(raw) > MaximumFrameSize {
+		return nil, ErrInvalidResponse
+	}
+	return raw, nil
 }
 
 func ParseResponse(raw []byte) (Response, error) {

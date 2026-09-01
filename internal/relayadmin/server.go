@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const replayCleanupTimeout = 250 * time.Millisecond
+
 // Peer is an immutable copy of kernel-authenticated connection credentials.
 type Peer struct {
 	uid    uint32
@@ -50,10 +52,17 @@ type Server struct {
 	IOLimit        time.Duration
 }
 
+// ServeOutcome exposes only the post-flush process action needed by the relay
+// daemon. A true value is returned after a successful restarting repair frame
+// has been fully written and the connection-close defer has run.
+type ServeOutcome struct {
+	RepairRestartReady bool
+}
+
 // ServeConn handles exactly one request and at most one response, then closes
 // the connection. The request peer must write-half-close; EOF is required
 // before parsing, authorization, replay reservation, or dispatch.
-func (server *Server) ServeConn(parent context.Context, connection net.Conn, peer Peer) {
+func (server *Server) ServeConn(parent context.Context, connection net.Conn, peer Peer) (outcome ServeOutcome) {
 	if connection == nil {
 		return
 	}
@@ -112,7 +121,7 @@ func (server *Server) ServeConn(parent context.Context, connection net.Conn, pee
 		return
 	}
 	if operationContext.Err() != nil {
-		server.abandonBeforeExecution(operationContext, key, reservation)
+		server.abandonBeforeExecution(key, reservation)
 		return
 	}
 	switch reservation.Decision {
@@ -122,8 +131,8 @@ func (server *Server) ServeConn(parent context.Context, connection net.Conn, pee
 			server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorUnavailable)
 			return
 		}
-		if operationContext.Err() == nil {
-			server.writeBody(operationContext, connection, reservation.Response)
+		if operationContext.Err() == nil && server.writeBody(operationContext, connection, reservation.Response) {
+			return flushedResponseOutcome(cached)
 		}
 		return
 	case ReplayDuplicate:
@@ -142,7 +151,7 @@ func (server *Server) ServeConn(parent context.Context, connection net.Conn, pee
 		server.executeStatus(operationContext, connection, immutablePeer, request, key)
 		return
 	}
-	server.executeMutation(operationContext, connection, immutablePeer, request, key, reservation.Mutation)
+	return server.executeMutation(operationContext, connection, immutablePeer, request, key, reservation.Mutation)
 }
 
 func (server *Server) executeStatus(ctx context.Context, connection net.Conn, peer Peer, request Request, key ReplayKey) {
@@ -160,7 +169,7 @@ func (server *Server) executeStatus(ctx context.Context, connection net.Conn, pe
 	select {
 	case result := <-resultChannel:
 		if ctx.Err() != nil {
-			_ = server.Replay.AbandonStatus(ctx, key)
+			server.abandonStatus(key)
 			return
 		}
 		if result.err != nil {
@@ -172,11 +181,11 @@ func (server *Server) executeStatus(ctx context.Context, connection net.Conn, pe
 			}
 		}
 	case <-ctx.Done():
-		_ = server.Replay.AbandonStatus(ctx, key)
+		server.abandonStatus(key)
 		return
 	}
 	if err := server.Replay.CompleteStatus(ctx, key, responseBody); err != nil {
-		_ = server.Replay.AbandonStatus(ctx, key)
+		server.abandonStatus(key)
 		if ctx.Err() == nil {
 			server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
 		}
@@ -187,13 +196,13 @@ func (server *Server) executeStatus(ctx context.Context, connection net.Conn, pe
 	}
 }
 
-func (server *Server) executeMutation(ctx context.Context, connection net.Conn, peer Peer, request Request, key ReplayKey, reservation MutationReservation) {
+func (server *Server) executeMutation(ctx context.Context, connection net.Conn, peer Peer, request Request, key ReplayKey, reservation MutationReservation) (outcome ServeOutcome) {
 	if reservation == nil || reservation.Key() != key {
 		server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
 		return
 	}
 	if ctx.Err() != nil {
-		_ = reservation.Abandon(ctx)
+		server.abandonMutationBeforeExecution(reservation)
 		return
 	}
 	type executionResult struct {
@@ -210,16 +219,20 @@ func (server *Server) executeMutation(ctx context.Context, connection net.Conn, 
 			if executionContext.Err() != nil {
 				return nil, executionContext.Err()
 			}
-			if handlerErr != nil && (errors.Is(handlerErr, context.Canceled) || errors.Is(handlerErr, context.DeadlineExceeded)) {
-				return nil, handlerErr
-			}
 			if handlerErr != nil {
-				response, _ := MarshalErrorResponse(request.RequestID, request.Operation, publicHandlerCode(handlerErr))
+				code, determinate := determinateMutationErrorCode(handlerErr)
+				if !determinate {
+					return nil, ErrMutationIndeterminate
+				}
+				response, marshalErr := MarshalErrorResponse(request.RequestID, request.Operation, code)
+				if marshalErr != nil {
+					return nil, ErrMutationIndeterminate
+				}
 				return response, nil
 			}
 			response, marshalErr := MarshalSuccessResponse(request.RequestID, request.Operation, result)
 			if marshalErr != nil {
-				response, _ = MarshalErrorResponse(request.RequestID, request.Operation, ErrorOperationFailed)
+				return nil, ErrMutationIndeterminate
 			}
 			return response, nil
 		})
@@ -229,8 +242,13 @@ func (server *Server) executeMutation(ctx context.Context, connection net.Conn, 
 	select {
 	case result := <-resultChannel:
 		if result.err != nil {
+			server.abandonMutationBeforeExecution(reservation)
 			if ctx.Err() == nil {
-				server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
+				code := ErrorUnavailable
+				if errors.Is(result.err, ErrMutationIndeterminate) {
+					code = ErrorOperationFailed
+				}
+				server.writeError(ctx, connection, request.RequestID, request.Operation, code)
 			}
 			return
 		}
@@ -242,12 +260,24 @@ func (server *Server) executeMutation(ctx context.Context, connection net.Conn, 
 			server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
 			return
 		}
-		server.writeBody(ctx, connection, result.response)
+		if server.writeBody(ctx, connection, result.response) {
+			return flushedResponseOutcome(response)
+		}
 	case <-ctx.Done():
-		// Execute owns a durable reservation now. It must remain retained even
-		// if the handler finishes after ServeConn closes.
+		// Abandon removes only a reservation that Execute has not started. An
+		// executing mutation remains durable and becomes indeterminate.
+		server.abandonMutationBeforeExecution(reservation)
 		return
 	}
+	return
+}
+
+func flushedResponseOutcome(response Response) ServeOutcome {
+	if !response.OK || response.Operation != OperationRepair {
+		return ServeOutcome{}
+	}
+	result, ok := response.Result.(RepairResult)
+	return ServeOutcome{RepairRestartReady: ok && result.Restarting}
 }
 
 func (server *Server) dispatchMutation(ctx context.Context, peer Peer, mutation Mutation, request Request) (any, error) {
@@ -271,14 +301,32 @@ func (server *Server) dispatchMutation(ctx context.Context, peer Peer, mutation 
 	}
 }
 
-func (server *Server) abandonBeforeExecution(ctx context.Context, key ReplayKey, reservation ReplayReservation) {
+func (server *Server) abandonBeforeExecution(key ReplayKey, reservation ReplayReservation) {
+	if reservation.Decision != ReplayExecute {
+		return
+	}
 	if key.Operation == OperationStatus {
-		_ = server.Replay.AbandonStatus(ctx, key)
+		server.abandonStatus(key)
 		return
 	}
 	if reservation.Mutation != nil && reservation.Mutation.Key() == key {
-		_ = reservation.Mutation.Abandon(ctx)
+		server.abandonMutationBeforeExecution(reservation.Mutation)
 	}
+}
+
+func (server *Server) abandonStatus(key ReplayKey) {
+	cleanupContext, cancel := context.WithTimeout(context.Background(), replayCleanupTimeout)
+	defer cancel()
+	_ = server.Replay.AbandonStatus(cleanupContext, key)
+}
+
+func (server *Server) abandonMutationBeforeExecution(reservation MutationReservation) {
+	if reservation == nil {
+		return
+	}
+	cleanupContext, cancel := context.WithTimeout(context.Background(), replayCleanupTimeout)
+	defer cancel()
+	_ = reservation.Abandon(cleanupContext)
 }
 
 func publicHandlerCode(err error) ErrorCode {
@@ -286,10 +334,18 @@ func publicHandlerCode(err error) ErrorCode {
 		return ErrorDeadlineExceeded
 	}
 	var publicError *PublicError
-	if errors.As(err, &publicError) && publicError.Code.Valid() {
+	if errors.As(err, &publicError) && publicError != nil && publicError.Code.Valid() {
 		return publicError.Code
 	}
 	return ErrorOperationFailed
+}
+
+func determinateMutationErrorCode(err error) (ErrorCode, bool) {
+	var publicError *PublicError
+	if !errors.As(err, &publicError) || publicError == nil || !publicError.Code.Valid() {
+		return "", false
+	}
+	return publicError.Code, true
 }
 
 func (server *Server) writeError(ctx context.Context, connection net.Conn, requestID string, operation Operation, code ErrorCode) {
@@ -303,14 +359,14 @@ func (server *Server) writeError(ctx context.Context, connection net.Conn, reque
 	server.writeBody(ctx, connection, body)
 }
 
-func (server *Server) writeBody(ctx context.Context, connection net.Conn, body []byte) {
+func (server *Server) writeBody(ctx context.Context, connection net.Conn, body []byte) bool {
 	if ctx.Err() != nil || !setConnectionDeadline(connection, ctx, server.ioLimit()) {
-		return
+		return false
 	}
 	if ctx.Err() != nil {
-		return
+		return false
 	}
-	_ = WriteFrame(connection, body)
+	return WriteFrame(connection, body) == nil
 }
 
 func (server *Server) operationLimit() time.Duration { return cappedLimit(server.OperationLimit) }

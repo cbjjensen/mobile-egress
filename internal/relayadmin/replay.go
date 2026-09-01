@@ -15,7 +15,10 @@ const (
 	InFlightReplayCapacity = 4096
 )
 
-var ErrReplayState = errors.New("invalid relay admin replay state")
+var (
+	ErrReplayState           = errors.New("invalid relay admin replay state")
+	ErrMutationIndeterminate = errors.New("relay admin mutation indeterminate")
+)
 
 type ReplayKey struct {
 	RequestID string
@@ -47,8 +50,10 @@ type MutationTransaction interface {
 }
 
 // MutationExecution runs only after the store has durably committed the
-// reservation. Its returned, already-redacted response is committed by the
-// store before Execute succeeds.
+// reservation. Its returned, already-redacted response must be nonempty and no
+// larger than MaximumFrameSize, and is committed by the store before Execute
+// succeeds. Unexpected callback failures use the fixed ErrMutationIndeterminate
+// sentinel and must be returned without raw details.
 type MutationExecution func(context.Context, MutationTransaction) ([]byte, error)
 
 // MutationReservation is a fail-closed transaction lifecycle. Reserve must
@@ -211,7 +216,7 @@ func (store *MemoryReplayStore) CompleteStatus(ctx context.Context, key ReplayKe
 		return err
 	}
 	entry, ok := store.entries[key.RequestID]
-	if !ok || key.Operation != OperationStatus || entry.state != memoryStatusInFlight || entry.key != key || len(response) == 0 {
+	if !ok || key.Operation != OperationStatus || entry.state != memoryStatusInFlight || entry.key != key || len(response) == 0 || len(response) > MaximumFrameSize {
 		return ErrReplayState
 	}
 	entry.state = memoryStatusCompleted
@@ -279,7 +284,7 @@ func (reservation *memoryMutationReservation) Execute(ctx context.Context, execu
 	if !ok || entry.key != reservation.key || entry.token != reservation.token || entry.state != memoryMutationExecuting {
 		return nil, ErrReplayState
 	}
-	if executionErr != nil || ctx.Err() != nil || len(response) == 0 {
+	if executionErr != nil || ctx.Err() != nil || len(response) == 0 || len(response) > MaximumFrameSize {
 		entry.state = memoryMutationIndeterminate
 		store.inFlight--
 		if executionErr != nil {

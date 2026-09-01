@@ -514,6 +514,7 @@ type durableStyleReplayStore struct {
 	failCompletion                bool
 	waitForCompletionCancellation bool
 	commitEntered                 chan struct{}
+	executionError                chan error
 }
 
 func (store *durableStyleReplayStore) Reserve(ctx context.Context, key ReplayKey) (ReplayReservation, error) {
@@ -573,6 +574,9 @@ func (reservation *durableStyleMutationReservation) Execute(ctx context.Context,
 	backend.mu.Unlock()
 
 	response, err := execution(ctx, durableStyleTransaction{key: reservation.key})
+	if reservation.store.executionError != nil {
+		reservation.store.executionError <- err
+	}
 	if reservation.store.commitEntered != nil {
 		close(reservation.store.commitEntered)
 	}
