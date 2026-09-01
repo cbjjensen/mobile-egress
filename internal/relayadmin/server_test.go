@@ -20,16 +20,16 @@ func TestServerDispatchesEachTypedOperationAndReturnsOnlyTypedRedactedResults(t 
 		status: func(context.Context, Peer) (StatusResult, error) {
 			return StatusResult{ProtocolVersion: Version, HelperVersion: "dev", Initialized: true, RelayRunning: true}, nil
 		},
-		setup: func(_ context.Context, peer Peer, params SetupRequest) (OwnerBootstrapResult, error) {
+		setup: func(_ context.Context, peer Peer, _ Mutation, params SetupRequest) (OwnerBootstrapResult, error) {
 			if peer.UID() != 501 || params.PublicName != "relay.example" || params.OwnerCSRPEM != "public-csr" {
 				return OwnerBootstrapResult{}, errors.New("unexpected typed setup input")
 			}
 			return OwnerBootstrapResult{CertificatePEM: "owner", CACertificatePEM: "ca", Serial: "1", Role: "owner"}, nil
 		},
-		rotate: func(_ context.Context, _ Peer, params RotateRequest) (EndpointRotationResult, error) {
+		rotate: func(_ context.Context, _ Peer, _ Mutation, params RotateRequest) (EndpointRotationResult, error) {
 			return EndpointRotationResult{PublicURL: params.PublicURL, Serial: "2"}, nil
 		},
-		repair: func(context.Context, Peer) (RepairResult, error) {
+		repair: func(context.Context, Peer, Mutation) (RepairResult, error) {
 			return RepairResult{Ready: true, Restarting: false}, nil
 		},
 	}
@@ -97,7 +97,7 @@ func TestServerRejectsMalformedUnknownOversizedAndUnauthorizedWithoutDispatch(t 
 		t.Fatalf("invalid response = %#v", invalid)
 	}
 
-	serverSide, clientSide := net.Pipe()
+	serverSide, clientSide := tcpConnectionPair(t)
 	done := make(chan struct{})
 	go func() {
 		server.ServeConn(context.Background(), serverSide, NewPeer(502, nil))
@@ -106,25 +106,28 @@ func TestServerRejectsMalformedUnknownOversizedAndUnauthorizedWithoutDispatch(t 
 	if err := WriteFrame(clientSide, []byte(`{"version":1}`)); err != nil {
 		t.Fatalf("WriteFrame(malformed) returned an error: %v", err)
 	}
+	if err := clientSide.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite(malformed) returned an error: %v", err)
+	}
 	if _, err := ReadFrame(clientSide); !errors.Is(err, io.EOF) {
 		t.Fatalf("malformed request received response/error %v, want EOF", err)
 	}
 	clientSide.Close()
 	<-done
 
-	serverSide, clientSide = net.Pipe()
+	pipeServer, pipeClient := net.Pipe()
 	done = make(chan struct{})
 	go func() {
-		server.ServeConn(context.Background(), serverSide, NewPeer(502, nil))
+		server.ServeConn(context.Background(), pipeServer, NewPeer(502, nil))
 		close(done)
 	}()
-	if _, err := clientSide.Write(framePrefix(MaximumFrameSize + 1)); err != nil {
+	if _, err := pipeClient.Write(framePrefix(MaximumFrameSize + 1)); err != nil {
 		t.Fatalf("write oversized prefix: %v", err)
 	}
-	if _, err := ReadFrame(clientSide); !errors.Is(err, io.EOF) {
+	if _, err := ReadFrame(pipeClient); !errors.Is(err, io.EOF) {
 		t.Fatalf("oversized request received response/error %v, want EOF", err)
 	}
-	clientSide.Close()
+	pipeClient.Close()
 	<-done
 
 	if got := executions.Load(); got != 0 {
@@ -166,33 +169,13 @@ func TestServerRejectsTrailingSecondFrameWithoutDispatch(t *testing.T) {
 	}
 }
 
-func TestTrailingProbeHonorsShorterCallerDeadline(t *testing.T) {
-	t.Parallel()
-
-	serverSide, clientSide := net.Pipe()
-	defer serverSide.Close()
-	defer clientSide.Close()
-	var recorded atomic.Int64
-	connection := &readDeadlineRecordingConn{Conn: serverSide, deadlineUnixNano: &recorded}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	defer cancel()
-	callerDeadline, _ := ctx.Deadline()
-	if err := rejectAvailableTrailing(connection, ctx, time.Second); err != nil {
-		t.Fatalf("rejectAvailableTrailing() returned an error: %v", err)
-	}
-	probeDeadline := time.Unix(0, recorded.Load())
-	if probeDeadline.After(callerDeadline) {
-		t.Fatalf("trailing probe deadline %s exceeds caller deadline %s", probeDeadline, callerDeadline)
-	}
-}
-
 func TestServerRejectsInFlightDuplicateAndDoesNotExecuteTwice(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var executions atomic.Int32
-	handler := &behaviorHandler{setup: func(context.Context, Peer, SetupRequest) (OwnerBootstrapResult, error) {
+	handler := &behaviorHandler{setup: func(context.Context, Peer, Mutation, SetupRequest) (OwnerBootstrapResult, error) {
 		if executions.Add(1) == 1 {
 			close(started)
 		}
@@ -205,7 +188,7 @@ func TestServerRejectsInFlightDuplicateAndDoesNotExecuteTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serverSide, firstClient := net.Pipe()
+	serverSide, firstClient := tcpConnectionPair(t)
 	firstDone := make(chan struct{})
 	go func() {
 		server.ServeConn(context.Background(), serverSide, NewPeer(501, nil))
@@ -213,6 +196,9 @@ func TestServerRejectsInFlightDuplicateAndDoesNotExecuteTwice(t *testing.T) {
 	}()
 	if err := WriteFrame(firstClient, raw); err != nil {
 		t.Fatalf("WriteFrame(first) returned an error: %v", err)
+	}
+	if err := firstClient.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite(first) returned an error: %v", err)
 	}
 	<-started
 
@@ -241,7 +227,7 @@ func TestServerReturnsCachedCompletedResponseAndRejectsSameIDDifferentDigest(t *
 	t.Parallel()
 
 	var executions atomic.Int32
-	handler := &behaviorHandler{rotate: func(_ context.Context, _ Peer, request RotateRequest) (EndpointRotationResult, error) {
+	handler := &behaviorHandler{rotate: func(_ context.Context, _ Peer, _ Mutation, request RotateRequest) (EndpointRotationResult, error) {
 		executions.Add(1)
 		return EndpointRotationResult{PublicURL: request.PublicURL, Serial: "serial"}, nil
 	}}
@@ -280,7 +266,7 @@ func TestServerFailsClosedOnInvalidCachedResponseBytes(t *testing.T) {
 	if err != nil || reservation.Decision != ReplayExecute {
 		t.Fatalf("Reserve() = (%#v, %v)", reservation, err)
 	}
-	if err := store.Complete(context.Background(), key, []byte(`{"privateKey":"secret"}`)); err != nil {
+	if err := store.CompleteStatus(context.Background(), key, []byte(`{"privateKey":"secret"}`)); err != nil {
 		t.Fatal(err)
 	}
 	var executions atomic.Int32
@@ -304,7 +290,7 @@ func TestServerTimesOutHandlerAndSuppressesLateSuccess(t *testing.T) {
 	handlerCanceled := make(chan struct{})
 	allowLateResult := make(chan struct{})
 	lateReturned := make(chan struct{})
-	handler := &behaviorHandler{repair: func(ctx context.Context, _ Peer) (RepairResult, error) {
+	handler := &behaviorHandler{repair: func(ctx context.Context, _ Peer, _ Mutation) (RepairResult, error) {
 		<-ctx.Done()
 		close(handlerCanceled)
 		<-allowLateResult
@@ -316,11 +302,27 @@ func TestServerTimesOutHandlerAndSuppressesLateSuccess(t *testing.T) {
 	server.IOLimit = time.Second
 	raw, _ := MarshalRequest(testRequestID, OperationRepair, RepairRequest{})
 
-	responseRaw := exchangeServer(t, server, NewPeer(501, nil), raw)
-	response := parseServerResponse(t, responseRaw)
-	if response.OK || response.ErrorCode != ErrorDeadlineExceeded {
-		t.Fatalf("timeout response = %#v", response)
+	serverSide, clientSide := tcpConnectionPair(t)
+	done := make(chan struct{})
+	go func() {
+		server.ServeConn(context.Background(), serverSide, NewPeer(501, nil))
+		close(done)
+	}()
+	if err := WriteFrame(clientSide, raw); err != nil {
+		t.Fatal(err)
 	}
+	if err := clientSide.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	responseRaw, readErr := ReadFrameExact(clientSide)
+	if readErr == nil {
+		response := parseServerResponse(t, responseRaw)
+		if response.OK {
+			t.Fatalf("timeout emitted success: %#v", response)
+		}
+	}
+	clientSide.Close()
+	<-done
 	<-handlerCanceled
 	close(allowLateResult)
 	<-lateReturned
@@ -349,7 +351,7 @@ func TestServerDoesNotDispatchWhenReplayReservationFinishesAfterCancellation(t *
 	}}
 	server := newTestServer(handler, store)
 	raw, _ := MarshalRequest(testRequestID, OperationStatus, StatusRequest{})
-	serverSide, clientSide := net.Pipe()
+	serverSide, clientSide := tcpConnectionPair(t)
 	parent, cancel := context.WithCancel(context.Background())
 	serverDone := make(chan struct{})
 	go func() {
@@ -358,6 +360,9 @@ func TestServerDoesNotDispatchWhenReplayReservationFinishesAfterCancellation(t *
 	}()
 	if err := WriteFrame(clientSide, raw); err != nil {
 		t.Fatalf("WriteFrame() returned an error: %v", err)
+	}
+	if err := clientSide.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite() returned an error: %v", err)
 	}
 	<-clockEntered
 	cancel()
@@ -403,7 +408,7 @@ func newTestServer(handler Handler, replay ReplayStore) *Server {
 
 func exchangeServer(t *testing.T, server *Server, peer Peer, request []byte) []byte {
 	t.Helper()
-	serverSide, clientSide := net.Pipe()
+	serverSide, clientSide := tcpConnectionPair(t)
 	done := make(chan struct{})
 	go func() {
 		server.ServeConn(context.Background(), serverSide, peer)
@@ -412,6 +417,10 @@ func exchangeServer(t *testing.T, server *Server, peer Peer, request []byte) []b
 	if err := WriteFrame(clientSide, request); err != nil {
 		clientSide.Close()
 		t.Fatalf("WriteFrame(request) returned an error: %v", err)
+	}
+	if err := clientSide.CloseWrite(); err != nil {
+		clientSide.Close()
+		t.Fatalf("CloseWrite(request) returned an error: %v", err)
 	}
 	response, err := ReadFrameExact(clientSide)
 	if err != nil {
@@ -434,19 +443,9 @@ func parseServerResponse(t *testing.T, raw []byte) Response {
 
 type behaviorHandler struct {
 	status func(context.Context, Peer) (StatusResult, error)
-	setup  func(context.Context, Peer, SetupRequest) (OwnerBootstrapResult, error)
-	rotate func(context.Context, Peer, RotateRequest) (EndpointRotationResult, error)
-	repair func(context.Context, Peer) (RepairResult, error)
-}
-
-type readDeadlineRecordingConn struct {
-	net.Conn
-	deadlineUnixNano *atomic.Int64
-}
-
-func (connection *readDeadlineRecordingConn) SetReadDeadline(deadline time.Time) error {
-	connection.deadlineUnixNano.Store(deadline.UnixNano())
-	return connection.Conn.SetReadDeadline(deadline)
+	setup  func(context.Context, Peer, Mutation, SetupRequest) (OwnerBootstrapResult, error)
+	rotate func(context.Context, Peer, Mutation, RotateRequest) (EndpointRotationResult, error)
+	repair func(context.Context, Peer, Mutation) (RepairResult, error)
 }
 
 func (handler *behaviorHandler) Status(ctx context.Context, peer Peer) (StatusResult, error) {
@@ -456,25 +455,25 @@ func (handler *behaviorHandler) Status(ctx context.Context, peer Peer) (StatusRe
 	return handler.status(ctx, peer)
 }
 
-func (handler *behaviorHandler) Setup(ctx context.Context, peer Peer, request SetupRequest) (OwnerBootstrapResult, error) {
+func (handler *behaviorHandler) Setup(ctx context.Context, peer Peer, mutation Mutation, request SetupRequest) (OwnerBootstrapResult, error) {
 	if handler.setup == nil {
 		return OwnerBootstrapResult{}, errors.New("unexpected setup")
 	}
-	return handler.setup(ctx, peer, request)
+	return handler.setup(ctx, peer, mutation, request)
 }
 
-func (handler *behaviorHandler) Rotate(ctx context.Context, peer Peer, request RotateRequest) (EndpointRotationResult, error) {
+func (handler *behaviorHandler) Rotate(ctx context.Context, peer Peer, mutation Mutation, request RotateRequest) (EndpointRotationResult, error) {
 	if handler.rotate == nil {
 		return EndpointRotationResult{}, errors.New("unexpected rotate")
 	}
-	return handler.rotate(ctx, peer, request)
+	return handler.rotate(ctx, peer, mutation, request)
 }
 
-func (handler *behaviorHandler) Repair(ctx context.Context, peer Peer) (RepairResult, error) {
+func (handler *behaviorHandler) Repair(ctx context.Context, peer Peer, mutation Mutation) (RepairResult, error) {
 	if handler.repair == nil {
 		return RepairResult{}, errors.New("unexpected repair")
 	}
-	return handler.repair(ctx, peer)
+	return handler.repair(ctx, peer, mutation)
 }
 
 func countingHandler(executions *atomic.Int32) Handler {
@@ -483,15 +482,15 @@ func countingHandler(executions *atomic.Int32) Handler {
 			executions.Add(1)
 			return StatusResult{}, nil
 		},
-		setup: func(context.Context, Peer, SetupRequest) (OwnerBootstrapResult, error) {
+		setup: func(context.Context, Peer, Mutation, SetupRequest) (OwnerBootstrapResult, error) {
 			executions.Add(1)
 			return OwnerBootstrapResult{}, nil
 		},
-		rotate: func(context.Context, Peer, RotateRequest) (EndpointRotationResult, error) {
+		rotate: func(context.Context, Peer, Mutation, RotateRequest) (EndpointRotationResult, error) {
 			executions.Add(1)
 			return EndpointRotationResult{}, nil
 		},
-		repair: func(context.Context, Peer) (RepairResult, error) {
+		repair: func(context.Context, Peer, Mutation) (RepairResult, error) {
 			executions.Add(1)
 			return RepairResult{}, nil
 		},

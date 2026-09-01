@@ -18,9 +18,10 @@ const (
 )
 
 var (
-	ErrInvalidRequest      = errors.New("invalid relay admin request")
-	ErrInvalidResponse     = errors.New("invalid relay admin response")
-	ErrRequestIDGeneration = errors.New("relay admin request ID generation failed")
+	ErrInvalidRequest        = errors.New("invalid relay admin request")
+	ErrInvalidResponse       = errors.New("invalid relay admin response")
+	ErrRequestIDGeneration   = errors.New("relay admin request ID generation failed")
+	ErrStrictMarshalRequired = errors.New("relay admin strict marshal function required")
 )
 
 // Operation is one of the four protocol v1 administrative operations.
@@ -201,4 +202,16 @@ type Response struct {
 	OK        bool      `json:"-"`
 	Result    any       `json:"-"`
 	ErrorCode ErrorCode `json:"-"`
+}
+
+// MarshalJSON prevents the generic JSON encoder from bypassing operation-
+// specific validation. Use MarshalRequest instead.
+func (Request) MarshalJSON() ([]byte, error) {
+	return nil, ErrStrictMarshalRequired
+}
+
+// MarshalJSON prevents the generic JSON encoder from bypassing operation-
+// specific validation. Use MarshalSuccessResponse or MarshalErrorResponse.
+func (Response) MarshalJSON() ([]byte, error) {
+	return nil, ErrStrictMarshalRequired
 }

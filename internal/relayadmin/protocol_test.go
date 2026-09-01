@@ -362,8 +362,8 @@ func TestValidatedCarrierTypesCannotBypassStrictMarshalWithArbitraryJSON(t *test
 		Operation: OperationSetup,
 		Params:    map[string]any{"ownerPrivateKey": "secret"},
 	})
-	if err != nil {
-		t.Fatalf("json.Marshal(Request) returned an error: %v", err)
+	if !errors.Is(err, ErrStrictMarshalRequired) {
+		t.Fatalf("json.Marshal(Request) = (%q, %v), want ErrStrictMarshalRequired", requestRaw, err)
 	}
 	responseRaw, err := json.Marshal(Response{
 		Version:   Version,
@@ -372,8 +372,8 @@ func TestValidatedCarrierTypesCannotBypassStrictMarshalWithArbitraryJSON(t *test
 		OK:        true,
 		Result:    map[string]any{"stderr": "secret"},
 	})
-	if err != nil {
-		t.Fatalf("json.Marshal(Response) returned an error: %v", err)
+	if !errors.Is(err, ErrStrictMarshalRequired) {
+		t.Fatalf("json.Marshal(Response) = (%q, %v), want ErrStrictMarshalRequired", responseRaw, err)
 	}
 	if strings.Contains(string(requestRaw), "ownerPrivateKey") || strings.Contains(string(requestRaw), "secret") {
 		t.Fatalf("Request default JSON bypassed the strict schema: %s", requestRaw)

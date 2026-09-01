@@ -122,16 +122,20 @@ func (client *Client) attempt(ctx context.Context, requestID string, operation O
 		return Response{}, true, ErrTransport
 	}
 	defer connection.Close()
+	halfCloser, ok := connection.(interface{ CloseWrite() error })
+	if !ok {
+		return Response{}, false, ErrTransport
+	}
+	stopInterrupt := interruptConnectionOnCancellation(ctx, connection)
+	defer stopInterrupt()
 	if !setConnectionDeadline(connection, ctx, cappedLimit(client.IOLimit)) {
 		return Response{}, true, ErrTransport
 	}
 	if err := WriteFrame(connection, requestBody); err != nil {
 		return Response{}, true, ErrTransport
 	}
-	if halfCloser, ok := connection.(interface{ CloseWrite() error }); ok {
-		if err := halfCloser.CloseWrite(); err != nil {
-			return Response{}, true, ErrTransport
-		}
+	if err := halfCloser.CloseWrite(); err != nil {
+		return Response{}, true, ErrTransport
 	}
 	responseBody, err := ReadFrameExact(connection)
 	if err != nil {

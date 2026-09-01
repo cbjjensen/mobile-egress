@@ -35,14 +35,46 @@ const (
 type ReplayReservation struct {
 	Decision ReplayDecision
 	Response []byte
+	Mutation MutationReservation
 }
 
-// ReplayStore is the narrow reservation/completion contract implemented by
-// the in-memory store here and by Task 3B's durable SQLite journal.
+// MutationTransaction is an opaque transaction token supplied by a replay
+// store while it finalizes a mutation. A durable implementation may expose
+// additional methods on its concrete token so a handler in the same owning
+// package can coordinate SQL state changes with replay completion.
+type MutationTransaction interface {
+	ReplayKey() ReplayKey
+}
+
+// MutationExecution runs only after the store has durably committed the
+// reservation. Its returned, already-redacted response is committed by the
+// store before Execute succeeds.
+type MutationExecution func(context.Context, MutationTransaction) ([]byte, error)
+
+// MutationReservation is a fail-closed transaction lifecycle. Reserve must
+// durably persist it before returning ReplayExecute. Execute must retain the
+// reservation as indeterminate on callback, cancellation, or completion
+// failure. Abandon may remove only a reservation whose execution has not
+// started; uncertainty must retain it.
+//
+// A Task 3B SQLite store can begin a second transaction in Execute, pass a
+// concrete MutationTransaction that also exposes its state mutation methods,
+// and commit the response in that same transaction. Filesystem mutations are
+// not SQL-atomic: their durable pre-reservation remains indeterminate on any
+// uncertain outcome, preventing automatic reexecution and allowing repair.
+type MutationReservation interface {
+	Key() ReplayKey
+	Execute(context.Context, MutationExecution) ([]byte, error)
+	Abandon(context.Context) error
+}
+
+// ReplayStore separates nonmutating status cleanup from durable mutation
+// reservations so a server cannot accidentally release a mutation after its
+// handler starts.
 type ReplayStore interface {
 	Reserve(context.Context, ReplayKey) (ReplayReservation, error)
-	Complete(context.Context, ReplayKey, []byte) error
-	Release(context.Context, ReplayKey)
+	CompleteStatus(context.Context, ReplayKey, []byte) error
+	AbandonStatus(context.Context, ReplayKey) error
 }
 
 type MemoryReplayConfig struct {
@@ -53,9 +85,21 @@ type MemoryReplayConfig struct {
 	InFlightCapacity int
 }
 
+type memoryReplayState uint8
+
+const (
+	memoryStatusInFlight memoryReplayState = iota + 1
+	memoryStatusCompleted
+	memoryMutationReserved
+	memoryMutationExecuting
+	memoryMutationCompleted
+	memoryMutationIndeterminate
+)
+
 type memoryReplayEntry struct {
 	key       ReplayKey
-	inFlight  bool
+	state     memoryReplayState
+	token     uint64
 	response  []byte
 	expiresAt time.Time
 	lru       *list.Element
@@ -75,6 +119,7 @@ type MemoryReplayStore struct {
 	statusLRU     list.List
 	inFlight      int
 	mutationSlots int
+	nextToken     uint64
 }
 
 func NewMemoryReplayStore(config MemoryReplayConfig) *MemoryReplayStore {
@@ -121,13 +166,17 @@ func (store *MemoryReplayStore) Reserve(ctx context.Context, key ReplayKey) (Rep
 		if entry.key.Digest != key.Digest || entry.key.Operation != key.Operation {
 			return ReplayReservation{Decision: ReplayDuplicate}, nil
 		}
-		if entry.inFlight {
+		switch entry.state {
+		case memoryStatusCompleted, memoryMutationCompleted:
+			if entry.lru != nil {
+				store.statusLRU.MoveToBack(entry.lru)
+			}
+			return ReplayReservation{Decision: ReplayCached, Response: append([]byte(nil), entry.response...)}, nil
+		case memoryMutationIndeterminate:
+			return ReplayReservation{Decision: ReplayBusy}, nil
+		default:
 			return ReplayReservation{Decision: ReplayDuplicate}, nil
 		}
-		if entry.lru != nil {
-			store.statusLRU.MoveToBack(entry.lru)
-		}
-		return ReplayReservation{Decision: ReplayCached, Response: append([]byte(nil), entry.response...)}, nil
 	}
 	if store.inFlight >= store.inFlightCapacity {
 		return ReplayReservation{Decision: ReplayBusy}, nil
@@ -135,51 +184,141 @@ func (store *MemoryReplayStore) Reserve(ctx context.Context, key ReplayKey) (Rep
 	if key.Operation.mutation() && store.mutationSlots >= store.mutationCapacity {
 		return ReplayReservation{Decision: ReplayBusy}, nil
 	}
-	entry := &memoryReplayEntry{key: key, inFlight: true}
+
+	store.nextToken++
+	entry := &memoryReplayEntry{key: key, token: store.nextToken}
 	store.entries[key.RequestID] = entry
 	store.inFlight++
 	if key.Operation.mutation() {
+		entry.state = memoryMutationReserved
 		store.mutationSlots++
+		return ReplayReservation{
+			Decision: ReplayExecute,
+			Mutation: &memoryMutationReservation{store: store, key: key, token: entry.token},
+		}, nil
 	}
+	entry.state = memoryStatusInFlight
 	return ReplayReservation{Decision: ReplayExecute}, nil
 }
 
-func (store *MemoryReplayStore) Complete(ctx context.Context, key ReplayKey, response []byte) error {
+func (store *MemoryReplayStore) CompleteStatus(ctx context.Context, key ReplayKey, response []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entry, ok := store.entries[key.RequestID]
-	if !ok || !entry.inFlight || entry.key.Digest != key.Digest || entry.key.Operation != key.Operation {
+	if !ok || key.Operation != OperationStatus || entry.state != memoryStatusInFlight || entry.key != key || len(response) == 0 {
 		return ErrReplayState
 	}
-	entry.inFlight = false
+	entry.state = memoryStatusCompleted
 	entry.response = append([]byte(nil), response...)
+	entry.expiresAt = store.now().Add(store.statusTTL)
+	entry.lru = store.statusLRU.PushBack(key.RequestID)
 	store.inFlight--
-	if key.Operation == OperationStatus {
-		entry.expiresAt = store.now().Add(store.statusTTL)
-		entry.lru = store.statusLRU.PushBack(key.RequestID)
-		for store.statusLRU.Len() > store.statusCapacity {
-			store.removeStatusLocked(store.statusLRU.Front())
-		}
+	for store.statusLRU.Len() > store.statusCapacity {
+		store.removeStatusLocked(store.statusLRU.Front())
 	}
 	return nil
 }
 
-func (store *MemoryReplayStore) Release(_ context.Context, key ReplayKey) {
+func (store *MemoryReplayStore) AbandonStatus(ctx context.Context, key ReplayKey) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entry, ok := store.entries[key.RequestID]
-	if !ok || !entry.inFlight || entry.key.Digest != key.Digest || entry.key.Operation != key.Operation {
-		return
+	if !ok || key.Operation != OperationStatus || entry.state != memoryStatusInFlight || entry.key != key {
+		return ErrReplayState
 	}
 	delete(store.entries, key.RequestID)
 	store.inFlight--
-	if key.Operation.mutation() {
-		store.mutationSlots--
-	}
+	return nil
 }
+
+type memoryMutationReservation struct {
+	store *MemoryReplayStore
+	key   ReplayKey
+	token uint64
+}
+
+func (reservation *memoryMutationReservation) Key() ReplayKey { return reservation.key }
+
+func (reservation *memoryMutationReservation) Execute(ctx context.Context, execution MutationExecution) ([]byte, error) {
+	if execution == nil {
+		return nil, ErrReplayState
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	store := reservation.store
+	store.mu.Lock()
+	entry, ok := store.entries[reservation.key.RequestID]
+	if !ok || entry.key != reservation.key || entry.token != reservation.token || entry.state != memoryMutationReserved {
+		store.mu.Unlock()
+		return nil, ErrReplayState
+	}
+	if err := ctx.Err(); err != nil {
+		store.mu.Unlock()
+		return nil, err
+	}
+	entry.state = memoryMutationExecuting
+	store.mu.Unlock()
+
+	response, executionErr := execution(ctx, memoryMutationTransaction{key: reservation.key})
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	entry, ok = store.entries[reservation.key.RequestID]
+	if !ok || entry.key != reservation.key || entry.token != reservation.token || entry.state != memoryMutationExecuting {
+		return nil, ErrReplayState
+	}
+	if executionErr != nil || ctx.Err() != nil || len(response) == 0 {
+		entry.state = memoryMutationIndeterminate
+		store.inFlight--
+		if executionErr != nil {
+			return nil, executionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, ErrReplayState
+	}
+	entry.state = memoryMutationCompleted
+	entry.response = append([]byte(nil), response...)
+	store.inFlight--
+	return append([]byte(nil), response...), nil
+}
+
+func (reservation *memoryMutationReservation) Abandon(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	store := reservation.store
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	entry, ok := store.entries[reservation.key.RequestID]
+	if !ok || entry.key != reservation.key || entry.token != reservation.token || entry.state != memoryMutationReserved {
+		return ErrReplayState
+	}
+	delete(store.entries, reservation.key.RequestID)
+	store.inFlight--
+	store.mutationSlots--
+	return nil
+}
+
+type memoryMutationTransaction struct{ key ReplayKey }
+
+func (transaction memoryMutationTransaction) ReplayKey() ReplayKey { return transaction.key }
 
 func (store *MemoryReplayStore) pruneExpiredLocked(now time.Time) {
 	for element := store.statusLRU.Front(); element != nil; {
@@ -199,7 +338,7 @@ func (store *MemoryReplayStore) removeStatusLocked(element *list.Element) {
 	}
 	requestID, _ := element.Value.(string)
 	entry := store.entries[requestID]
-	if entry != nil && entry.lru == element && !entry.inFlight && entry.key.Operation == OperationStatus {
+	if entry != nil && entry.lru == element && entry.state == memoryStatusCompleted && entry.key.Operation == OperationStatus {
 		delete(store.entries, requestID)
 	}
 	store.statusLRU.Remove(element)

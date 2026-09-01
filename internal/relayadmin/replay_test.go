@@ -18,14 +18,20 @@ func TestReplayTracksInFlightCompletedAndDifferentDigests(t *testing.T) {
 	if err != nil || reservation.Decision != ReplayExecute {
 		t.Fatalf("Reserve(first) = (%#v, %v), want execute", reservation, err)
 	}
-	reservation, err = store.Reserve(context.Background(), key)
-	if err != nil || reservation.Decision != ReplayDuplicate {
-		t.Fatalf("Reserve(in flight) = (%#v, %v), want duplicate", reservation, err)
+	firstReservation := reservation
+	duplicateReservation, err := store.Reserve(context.Background(), key)
+	if err != nil || duplicateReservation.Decision != ReplayDuplicate {
+		t.Fatalf("Reserve(in flight) = (%#v, %v), want duplicate", duplicateReservation, err)
 	}
 
 	cachedResponse := []byte(`{"redacted":true}`)
-	if err := store.Complete(context.Background(), key, cachedResponse); err != nil {
-		t.Fatalf("Complete() returned an error: %v", err)
+	if _, err := firstReservation.Mutation.Execute(context.Background(), func(_ context.Context, transaction MutationTransaction) ([]byte, error) {
+		if transaction.ReplayKey() != key {
+			t.Fatalf("mutation transaction key = %#v, want %#v", transaction.ReplayKey(), key)
+		}
+		return cachedResponse, nil
+	}); err != nil {
+		t.Fatalf("Mutation.Execute() returned an error: %v", err)
 	}
 	reservation, err = store.Reserve(context.Background(), key)
 	if err != nil || reservation.Decision != ReplayCached || string(reservation.Response) != string(cachedResponse) {
@@ -69,7 +75,9 @@ func TestStatusReplayUsesTTLAndLRUCapacity(t *testing.T) {
 	if got, _ := store.Reserve(context.Background(), b); got.Decision != ReplayExecute {
 		t.Fatalf("Reserve(evicted LRU b) = %#v, want execute", got)
 	}
-	store.Release(context.Background(), b)
+	if err := store.AbandonStatus(context.Background(), b); err != nil {
+		t.Fatalf("AbandonStatus(b) returned an error: %v", err)
+	}
 	if got, _ := store.Reserve(context.Background(), a); got.Decision != ReplayCached {
 		t.Fatalf("Reserve(recent a) = %#v, want cached", got)
 	}
@@ -106,7 +114,7 @@ func TestMutationReplayNeverEvictsAndReturnsBusyBeforeExecutionAtCapacity(t *tes
 	}
 }
 
-func TestMutationCapacityCountsInFlightAndReleaseFreesTheSlot(t *testing.T) {
+func TestMutationCapacityCountsReservedAndAbandonFreesTheSlot(t *testing.T) {
 	t.Parallel()
 
 	store := NewMemoryReplayStore(MemoryReplayConfig{
@@ -117,13 +125,16 @@ func TestMutationCapacityCountsInFlightAndReleaseFreesTheSlot(t *testing.T) {
 	})
 	first := replayTestKey("first", "first", OperationSetup)
 	second := replayTestKey("second", "second", OperationRotate)
-	if got, _ := store.Reserve(context.Background(), first); got.Decision != ReplayExecute {
-		t.Fatalf("Reserve(first) = %#v, want execute", got)
+	firstReservation, _ := store.Reserve(context.Background(), first)
+	if firstReservation.Decision != ReplayExecute || firstReservation.Mutation == nil {
+		t.Fatalf("Reserve(first) = %#v, want mutation execute", firstReservation)
 	}
 	if got, _ := store.Reserve(context.Background(), second); got.Decision != ReplayBusy {
 		t.Fatalf("Reserve(second) = %#v, want busy before execution", got)
 	}
-	store.Release(context.Background(), first)
+	if err := firstReservation.Mutation.Abandon(context.Background()); err != nil {
+		t.Fatalf("Abandon(first) returned an error: %v", err)
+	}
 	if got, _ := store.Reserve(context.Background(), second); got.Decision != ReplayExecute {
 		t.Fatalf("Reserve(second after release) = %#v, want execute", got)
 	}
@@ -156,8 +167,19 @@ func reserveAndComplete(t *testing.T, store ReplayStore, key ReplayKey, response
 	if reservation.Decision != ReplayExecute {
 		t.Fatalf("Reserve(%q) = %#v, want execute", key.RequestID, reservation)
 	}
-	if err := store.Complete(context.Background(), key, response); err != nil {
-		t.Fatalf("Complete(%q) returned an error: %v", key.RequestID, err)
+	if key.Operation == OperationStatus {
+		if err := store.CompleteStatus(context.Background(), key, response); err != nil {
+			t.Fatalf("CompleteStatus(%q) returned an error: %v", key.RequestID, err)
+		}
+		return
+	}
+	if reservation.Mutation == nil {
+		t.Fatalf("Reserve(%q) returned no mutation reservation", key.RequestID)
+	}
+	if _, err := reservation.Mutation.Execute(context.Background(), func(context.Context, MutationTransaction) ([]byte, error) {
+		return response, nil
+	}); err != nil {
+		t.Fatalf("Mutation.Execute(%q) returned an error: %v", key.RequestID, err)
 	}
 }
 

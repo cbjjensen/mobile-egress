@@ -26,13 +26,20 @@ func (peer Peer) clone() Peer { return NewPeer(peer.uid, peer.groups) }
 
 type AuthorizeFunc func(context.Context, Peer, Operation) bool
 
-// Handler is the typed relay lifecycle boundary. Implementations map their
-// internal errors to PublicError when a more specific public code is safe.
+// Mutation gives a mutation handler its durably reserved replay identity and
+// the store-owned transaction token used for coordinated state/replay work.
+type Mutation struct {
+	Key         ReplayKey           `json:"-"`
+	Transaction MutationTransaction `json:"-"`
+}
+
+// Handler is the typed relay lifecycle boundary. Mutation methods run only
+// inside MutationReservation.Execute after durable pre-reservation.
 type Handler interface {
 	Status(context.Context, Peer) (StatusResult, error)
-	Setup(context.Context, Peer, SetupRequest) (OwnerBootstrapResult, error)
-	Rotate(context.Context, Peer, RotateRequest) (EndpointRotationResult, error)
-	Repair(context.Context, Peer) (RepairResult, error)
+	Setup(context.Context, Peer, Mutation, SetupRequest) (OwnerBootstrapResult, error)
+	Rotate(context.Context, Peer, Mutation, RotateRequest) (EndpointRotationResult, error)
+	Repair(context.Context, Peer, Mutation) (RepairResult, error)
 }
 
 type Server struct {
@@ -44,7 +51,8 @@ type Server struct {
 }
 
 // ServeConn handles exactly one request and at most one response, then closes
-// the connection. Framing/JSON without a validated request ID is silent.
+// the connection. The request peer must write-half-close; EOF is required
+// before parsing, authorization, replay reservation, or dispatch.
 func (server *Server) ServeConn(parent context.Context, connection net.Conn, peer Peer) {
 	if connection == nil {
 		return
@@ -53,20 +61,24 @@ func (server *Server) ServeConn(parent context.Context, connection net.Conn, pee
 	if parent == nil {
 		parent = context.Background()
 	}
-	if !setConnectionDeadline(connection, parent, server.ioLimit()) {
+	operationContext, cancelOperation := context.WithDeadline(parent, boundedDeadline(parent, server.operationLimit()))
+	defer cancelOperation()
+	stopInterrupt := interruptConnectionOnCancellation(operationContext, connection)
+	defer stopInterrupt()
+	if !setConnectionDeadline(connection, operationContext, server.ioLimit()) {
 		return
 	}
 	requestRaw, err := ReadFrame(connection)
-	if err != nil || rejectAvailableTrailing(connection, parent, server.ioLimit()) != nil {
+	if err != nil || requireRequestEOF(connection) != nil {
 		return
 	}
-	if !setConnectionDeadline(connection, parent, server.ioLimit()) {
+	if !setConnectionDeadline(connection, operationContext, server.ioLimit()) {
 		return
 	}
 
 	request, err := ParseRequest(requestRaw)
 	if err != nil {
-		if request.RequestID == "" {
+		if request.RequestID == "" || !request.Operation.Valid() {
 			return
 		}
 		code := ErrorInvalidRequest
@@ -74,129 +86,198 @@ func (server *Server) ServeConn(parent context.Context, connection net.Conn, pee
 		if errors.As(err, &protocolError) && protocolError.Code.Valid() {
 			code = protocolError.Code
 		}
-		server.writeError(parent, connection, request.RequestID, request.Operation, code)
+		server.writeError(operationContext, connection, request.RequestID, request.Operation, code)
 		return
 	}
 
-	operationContext, cancelOperation := context.WithDeadline(parent, boundedDeadline(parent, server.operationLimit()))
-	defer cancelOperation()
 	immutablePeer := peer.clone()
 	if server.Authorize == nil || !server.Authorize(operationContext, immutablePeer.clone(), request.Operation) {
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorUnauthorized)
+		server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorUnauthorized)
 		return
 	}
 	if operationContext.Err() != nil {
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorDeadlineExceeded)
 		return
 	}
 	if server.Replay == nil || server.Handler == nil {
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorUnavailable)
+		server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorUnavailable)
 		return
 	}
 
 	key := ReplayKey{RequestID: request.RequestID, Digest: request.Digest, Operation: request.Operation}
 	reservation, err := server.Replay.Reserve(operationContext, key)
 	if err != nil {
-		if operationContext.Err() != nil {
-			server.writeError(parent, connection, request.RequestID, request.Operation, ErrorDeadlineExceeded)
-		} else {
-			server.writeError(parent, connection, request.RequestID, request.Operation, ErrorUnavailable)
+		if operationContext.Err() == nil {
+			server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorUnavailable)
 		}
 		return
 	}
 	if operationContext.Err() != nil {
-		if reservation.Decision == ReplayExecute {
-			server.Replay.Release(context.Background(), key)
-		}
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorDeadlineExceeded)
+		server.abandonBeforeExecution(operationContext, key, reservation)
 		return
 	}
 	switch reservation.Decision {
 	case ReplayCached:
 		cached, parseErr := ParseResponse(reservation.Response)
 		if parseErr != nil || cached.RequestID != request.RequestID || cached.Operation != request.Operation || cached.Version != Version {
-			server.writeError(parent, connection, request.RequestID, request.Operation, ErrorUnavailable)
+			server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorUnavailable)
 			return
 		}
-		server.writeBody(parent, connection, reservation.Response)
+		if operationContext.Err() == nil {
+			server.writeBody(operationContext, connection, reservation.Response)
+		}
 		return
 	case ReplayDuplicate:
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorDuplicateRequest)
+		server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorDuplicateRequest)
 		return
 	case ReplayBusy:
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorBusy)
+		server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorBusy)
 		return
 	case ReplayExecute:
 	default:
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorUnavailable)
+		server.writeError(operationContext, connection, request.RequestID, request.Operation, ErrorUnavailable)
 		return
 	}
 
-	completed := false
-	defer func() {
-		if !completed {
-			server.Replay.Release(context.Background(), key)
-		}
-	}()
+	if request.Operation == OperationStatus {
+		server.executeStatus(operationContext, connection, immutablePeer, request, key)
+		return
+	}
+	server.executeMutation(operationContext, connection, immutablePeer, request, key, reservation.Mutation)
+}
 
+func (server *Server) executeStatus(ctx context.Context, connection net.Conn, peer Peer, request Request, key ReplayKey) {
 	type handlerResult struct {
-		result any
+		result StatusResult
 		err    error
 	}
 	resultChannel := make(chan handlerResult, 1)
 	go func() {
-		result, handlerErr := server.dispatch(operationContext, immutablePeer.clone(), request)
-		resultChannel <- handlerResult{result: result, err: handlerErr}
+		result, err := server.Handler.Status(ctx, peer.clone())
+		resultChannel <- handlerResult{result: result, err: err}
 	}()
 
 	var responseBody []byte
 	select {
 	case result := <-resultChannel:
-		if operationContext.Err() != nil {
-			responseBody, _ = MarshalErrorResponse(request.RequestID, request.Operation, ErrorDeadlineExceeded)
-		} else if result.err != nil {
+		if ctx.Err() != nil {
+			_ = server.Replay.AbandonStatus(ctx, key)
+			return
+		}
+		if result.err != nil {
 			responseBody, _ = MarshalErrorResponse(request.RequestID, request.Operation, publicHandlerCode(result.err))
 		} else {
-			responseBody, err = MarshalSuccessResponse(request.RequestID, request.Operation, result.result)
-			if err != nil {
+			responseBody, _ = MarshalSuccessResponse(request.RequestID, request.Operation, result.result)
+			if len(responseBody) == 0 {
 				responseBody, _ = MarshalErrorResponse(request.RequestID, request.Operation, ErrorOperationFailed)
 			}
 		}
-	case <-operationContext.Done():
-		responseBody, _ = MarshalErrorResponse(request.RequestID, request.Operation, ErrorDeadlineExceeded)
-	}
-
-	completeContext, cancelComplete := context.WithTimeout(context.Background(), server.operationLimit())
-	err = server.Replay.Complete(completeContext, key, responseBody)
-	cancelComplete()
-	if err != nil {
-		server.writeError(parent, connection, request.RequestID, request.Operation, ErrorUnavailable)
+	case <-ctx.Done():
+		_ = server.Replay.AbandonStatus(ctx, key)
 		return
 	}
-	completed = true
-	server.writeBody(parent, connection, responseBody)
+	if err := server.Replay.CompleteStatus(ctx, key, responseBody); err != nil {
+		_ = server.Replay.AbandonStatus(ctx, key)
+		if ctx.Err() == nil {
+			server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
+		}
+		return
+	}
+	if ctx.Err() == nil {
+		server.writeBody(ctx, connection, responseBody)
+	}
 }
 
-func (server *Server) dispatch(ctx context.Context, peer Peer, request Request) (any, error) {
+func (server *Server) executeMutation(ctx context.Context, connection net.Conn, peer Peer, request Request, key ReplayKey, reservation MutationReservation) {
+	if reservation == nil || reservation.Key() != key {
+		server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
+		return
+	}
+	if ctx.Err() != nil {
+		_ = reservation.Abandon(ctx)
+		return
+	}
+	type executionResult struct {
+		response []byte
+		err      error
+	}
+	resultChannel := make(chan executionResult, 1)
+	go func() {
+		response, err := reservation.Execute(ctx, func(executionContext context.Context, transaction MutationTransaction) ([]byte, error) {
+			if transaction == nil || transaction.ReplayKey() != key || executionContext.Err() != nil {
+				return nil, ErrReplayState
+			}
+			result, handlerErr := server.dispatchMutation(executionContext, peer.clone(), Mutation{Key: key, Transaction: transaction}, request)
+			if executionContext.Err() != nil {
+				return nil, executionContext.Err()
+			}
+			if handlerErr != nil && (errors.Is(handlerErr, context.Canceled) || errors.Is(handlerErr, context.DeadlineExceeded)) {
+				return nil, handlerErr
+			}
+			if handlerErr != nil {
+				response, _ := MarshalErrorResponse(request.RequestID, request.Operation, publicHandlerCode(handlerErr))
+				return response, nil
+			}
+			response, marshalErr := MarshalSuccessResponse(request.RequestID, request.Operation, result)
+			if marshalErr != nil {
+				response, _ = MarshalErrorResponse(request.RequestID, request.Operation, ErrorOperationFailed)
+			}
+			return response, nil
+		})
+		resultChannel <- executionResult{response: response, err: err}
+	}()
+
+	select {
+	case result := <-resultChannel:
+		if result.err != nil {
+			if ctx.Err() == nil {
+				server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		response, parseErr := ParseResponse(result.response)
+		if parseErr != nil || response.RequestID != key.RequestID || response.Operation != key.Operation {
+			server.writeError(ctx, connection, request.RequestID, request.Operation, ErrorUnavailable)
+			return
+		}
+		server.writeBody(ctx, connection, result.response)
+	case <-ctx.Done():
+		// Execute owns a durable reservation now. It must remain retained even
+		// if the handler finishes after ServeConn closes.
+		return
+	}
+}
+
+func (server *Server) dispatchMutation(ctx context.Context, peer Peer, mutation Mutation, request Request) (any, error) {
 	switch request.Operation {
-	case OperationStatus:
-		return server.Handler.Status(ctx, peer)
 	case OperationSetup:
 		params, ok := request.Params.(SetupRequest)
 		if !ok {
 			return nil, &PublicError{Code: ErrorInvalidRequest}
 		}
-		return server.Handler.Setup(ctx, peer, params)
+		return server.Handler.Setup(ctx, peer, mutation, params)
 	case OperationRotate:
 		params, ok := request.Params.(RotateRequest)
 		if !ok {
 			return nil, &PublicError{Code: ErrorInvalidRequest}
 		}
-		return server.Handler.Rotate(ctx, peer, params)
+		return server.Handler.Rotate(ctx, peer, mutation, params)
 	case OperationRepair:
-		return server.Handler.Repair(ctx, peer)
+		return server.Handler.Repair(ctx, peer, mutation)
 	default:
 		return nil, &PublicError{Code: ErrorUnsupportedOperation}
+	}
+}
+
+func (server *Server) abandonBeforeExecution(ctx context.Context, key ReplayKey, reservation ReplayReservation) {
+	if key.Operation == OperationStatus {
+		_ = server.Replay.AbandonStatus(ctx, key)
+		return
+	}
+	if reservation.Mutation != nil && reservation.Mutation.Key() == key {
+		_ = reservation.Mutation.Abandon(ctx)
 	}
 }
 
@@ -212,7 +293,10 @@ func publicHandlerCode(err error) ErrorCode {
 }
 
 func (server *Server) writeError(ctx context.Context, connection net.Conn, requestID string, operation Operation, code ErrorCode) {
-	body, err := marshalErrorResponseUnchecked(requestID, operation, code)
+	if ctx.Err() != nil || !operation.Valid() {
+		return
+	}
+	body, err := MarshalErrorResponse(requestID, operation, code)
 	if err != nil {
 		return
 	}
@@ -220,19 +304,18 @@ func (server *Server) writeError(ctx context.Context, connection net.Conn, reque
 }
 
 func (server *Server) writeBody(ctx context.Context, connection net.Conn, body []byte) {
-	if !setConnectionDeadline(connection, ctx, server.ioLimit()) {
+	if ctx.Err() != nil || !setConnectionDeadline(connection, ctx, server.ioLimit()) {
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	_ = WriteFrame(connection, body)
 }
 
-func (server *Server) operationLimit() time.Duration {
-	return cappedLimit(server.OperationLimit)
-}
+func (server *Server) operationLimit() time.Duration { return cappedLimit(server.OperationLimit) }
 
-func (server *Server) ioLimit() time.Duration {
-	return cappedLimit(server.IOLimit)
-}
+func (server *Server) ioLimit() time.Duration { return cappedLimit(server.IOLimit) }
 
 func cappedLimit(configured time.Duration) time.Duration {
 	if configured <= 0 || configured > OperationTimeout {
@@ -250,32 +333,38 @@ func boundedDeadline(ctx context.Context, limit time.Duration) time.Time {
 }
 
 func setConnectionDeadline(connection net.Conn, ctx context.Context, limit time.Duration) bool {
+	if ctx.Err() != nil {
+		_ = connection.SetDeadline(time.Now())
+		return false
+	}
 	return connection.SetDeadline(boundedDeadline(ctx, limit)) == nil
 }
 
-func rejectAvailableTrailing(connection net.Conn, ctx context.Context, limit time.Duration) error {
-	// A short probe window lets already-issued bytes rendezvous on unbuffered
-	// streams such as net.Pipe while keeping ordinary request latency bounded.
-	probeDeadline := time.Now().Add(5 * time.Millisecond)
-	maximumDeadline := boundedDeadline(ctx, limit)
-	if maximumDeadline.Before(probeDeadline) {
-		probeDeadline = maximumDeadline
-	}
-	if err := connection.SetReadDeadline(probeDeadline); err != nil {
-		return err
-	}
+func requireRequestEOF(connection net.Conn) error {
 	var trailing [1]byte
 	n, err := connection.Read(trailing[:])
 	if n != 0 || err == nil {
 		return ErrTrailingFrameData
 	}
-	var networkError net.Error
-	if errors.As(err, &networkError) && networkError.Timeout() {
-		return nil
-	}
-	// EOF is a valid half-close: the peer can still read the response.
 	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	return err
+}
+
+func interruptConnectionOnCancellation(ctx context.Context, connection net.Conn) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			_ = connection.SetDeadline(time.Now())
+		case <-stop:
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }

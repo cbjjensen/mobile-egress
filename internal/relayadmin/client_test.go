@@ -19,13 +19,13 @@ func TestClientTypedMethodsRoundTripAllOperations(t *testing.T) {
 		status: func(context.Context, Peer) (StatusResult, error) {
 			return StatusResult{ProtocolVersion: 1, HelperVersion: "dev", Initialized: true, RelayRunning: true}, nil
 		},
-		setup: func(context.Context, Peer, SetupRequest) (OwnerBootstrapResult, error) {
+		setup: func(context.Context, Peer, Mutation, SetupRequest) (OwnerBootstrapResult, error) {
 			return OwnerBootstrapResult{CertificatePEM: "owner", CACertificatePEM: "ca", Serial: "1", Role: "owner"}, nil
 		},
-		rotate: func(_ context.Context, _ Peer, request RotateRequest) (EndpointRotationResult, error) {
+		rotate: func(_ context.Context, _ Peer, _ Mutation, request RotateRequest) (EndpointRotationResult, error) {
 			return EndpointRotationResult{PublicURL: request.PublicURL, Serial: "2"}, nil
 		},
-		repair: func(context.Context, Peer) (RepairResult, error) {
+		repair: func(context.Context, Peer, Mutation) (RepairResult, error) {
 			return RepairResult{Ready: true}, nil
 		},
 	}
@@ -35,7 +35,7 @@ func TestClientTypedMethodsRoundTripAllOperations(t *testing.T) {
 		random[index] = byte(index)
 	}
 	client := Client{
-		Dial:           serverDialer(server, NewPeer(501, nil), nil),
+		Dial:           serverDialer(t, server, NewPeer(501, nil), nil),
 		Random:         bytes.NewReader(random),
 		OperationLimit: time.Second,
 		IOLimit:        time.Second,
@@ -93,7 +93,7 @@ func TestClientRequiresExactResponseIDOperationAndVersion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			client := Client{
-				Dial: singleResponseDialer(test.response),
+				Dial: singleResponseDialer(t, test.response),
 				Random: bytes.NewReader([]byte{
 					0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 					0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
@@ -112,7 +112,7 @@ func TestClientRetriesTransportOnceWithByteIdenticalRequestAndSameID(t *testing.
 	t.Parallel()
 
 	var executions atomic.Int32
-	handler := &behaviorHandler{setup: func(context.Context, Peer, SetupRequest) (OwnerBootstrapResult, error) {
+	handler := &behaviorHandler{setup: func(context.Context, Peer, Mutation, SetupRequest) (OwnerBootstrapResult, error) {
 		executions.Add(1)
 		return OwnerBootstrapResult{CertificatePEM: "owner", CACertificatePEM: "ca", Serial: "1", Role: "owner"}, nil
 	}}
@@ -124,7 +124,7 @@ func TestClientRetriesTransportOnceWithByteIdenticalRequestAndSameID(t *testing.
 	var servers sync.WaitGroup
 	dial := func(context.Context) (net.Conn, error) {
 		attempt := attempts.Add(1)
-		serverSide, clientSide := net.Pipe()
+		serverSide, clientSide := tcpConnectionPair(t)
 		recorder := &recordingConn{Conn: serverSide}
 		var connection net.Conn = recorder
 		if attempt == 1 {
@@ -174,7 +174,7 @@ func TestClientCapsLongDeadlineAtFiveMinutesAndHonorsShorterCancellation(t *test
 
 	var recorded atomic.Int64
 	dial := func(context.Context) (net.Conn, error) {
-		serverSide, clientSide := net.Pipe()
+		serverSide, clientSide := tcpConnectionPair(t)
 		go serveOneClientResponse(serverSide, func(id string) []byte {
 			raw, _ := MarshalSuccessResponse(id, OperationStatus, StatusResult{})
 			return raw
@@ -203,7 +203,7 @@ func TestClientCapsLongDeadlineAtFiveMinutesAndHonorsShorterCancellation(t *test
 	var openConnections []net.Conn
 	shortClient := Client{
 		Dial: func(ctx context.Context) (net.Conn, error) {
-			serverSide, clientSide := net.Pipe()
+			serverSide, clientSide := tcpConnectionPair(t)
 			openConnectionsMu.Lock()
 			openConnections = append(openConnections, serverSide)
 			openConnectionsMu.Unlock()
@@ -274,7 +274,7 @@ func TestClientRejectsMalformedOversizedUnknownAndNonAllowlistedResponsesWithout
 			client := Client{
 				Dial: func(context.Context) (net.Conn, error) {
 					attempts.Add(1)
-					serverSide, clientSide := net.Pipe()
+					serverSide, clientSide := tcpConnectionPair(t)
 					go func() {
 						defer serverSide.Close()
 						requestRaw, err := ReadFrame(serverSide)
@@ -307,7 +307,7 @@ func TestClientReturnsOnlyAllowlistedRemoteError(t *testing.T) {
 	t.Parallel()
 
 	client := Client{
-		Dial: singleResponseDialer(func(id string) []byte {
+		Dial: singleResponseDialer(t, func(id string) []byte {
 			raw, _ := MarshalErrorResponse(id, OperationRepair, ErrorStateIncompatible)
 			return raw
 		}),
@@ -322,9 +322,10 @@ func TestClientReturnsOnlyAllowlistedRemoteError(t *testing.T) {
 	}
 }
 
-func singleResponseDialer(response func(string) []byte) DialFunc {
+func singleResponseDialer(t *testing.T, response func(string) []byte) DialFunc {
+	t.Helper()
 	return func(context.Context) (net.Conn, error) {
-		serverSide, clientSide := net.Pipe()
+		serverSide, clientSide := tcpConnectionPair(t)
 		go serveOneClientResponse(serverSide, response)
 		return clientSide, nil
 	}
@@ -343,9 +344,10 @@ func serveOneClientResponse(connection net.Conn, response func(string) []byte) {
 	_ = WriteFrame(connection, response(request.RequestID))
 }
 
-func serverDialer(server *Server, peer Peer, done *sync.WaitGroup) DialFunc {
+func serverDialer(t *testing.T, server *Server, peer Peer, done *sync.WaitGroup) DialFunc {
+	t.Helper()
 	return func(context.Context) (net.Conn, error) {
-		serverSide, clientSide := net.Pipe()
+		serverSide, clientSide := tcpConnectionPair(t)
 		if done != nil {
 			done.Add(1)
 		}
@@ -393,4 +395,12 @@ type deadlineRecordingConn struct {
 func (connection *deadlineRecordingConn) SetDeadline(deadline time.Time) error {
 	connection.deadlineUnixNano.Store(deadline.UnixNano())
 	return connection.Conn.SetDeadline(deadline)
+}
+
+func (connection *deadlineRecordingConn) CloseWrite() error {
+	halfCloser, ok := connection.Conn.(interface{ CloseWrite() error })
+	if !ok {
+		return ErrTransport
+	}
+	return halfCloser.CloseWrite()
 }
