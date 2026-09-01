@@ -139,9 +139,14 @@ public enum CellularIPRotationState: Codable, Equatable, Sendable {
         }
     }
 
-    fileprivate var blocksNewAttempt: Bool {
-        if case .failed(_, .checkpointRetirementFailed) = self { return true }
-        return false
+    public var requiresRecoveryReconstruction: Bool {
+        switch self {
+        case .failed(_, .tunnelResumeFailed), .failed(_, .checkpointRetirementFailed):
+            true
+        case .idle, .awaitingConfirmation, .preparing, .awaitingAirplaneMode, .holding,
+             .awaitingCellularReturn, .verifying, .restoring, .completed, .failed:
+            false
+        }
     }
 
     fileprivate var nextHoldSeconds: Int {
@@ -175,7 +180,7 @@ public struct CellularIPRotationAvailability: Codable, Equatable, Sendable {
             isAgentRunning &&
             isCellularAvailable &&
             !state.isActive &&
-            !state.blocksNewAttempt
+            !state.requiresRecoveryReconstruction
     }
 
     public func requiresConfirmation(for state: CellularIPRotationState) -> Bool {
@@ -884,16 +889,15 @@ public struct CellularIPRotationReducer: Sendable {
     }
 
     private func reset() -> CellularIPRotationTransition {
+        guard !state.requiresRecoveryReconstruction else { return unchanged() }
         switch state {
         case .completed:
-            CellularIPRotationTransition(state: .idle)
-        case .failed(_, .checkpointRetirementFailed):
-            unchanged()
+            return CellularIPRotationTransition(state: .idle)
         case .failed:
-            CellularIPRotationTransition(state: .idle)
+            return CellularIPRotationTransition(state: .idle)
         case .idle, .awaitingConfirmation, .preparing, .awaitingAirplaneMode, .holding,
              .awaitingCellularReturn, .verifying, .restoring:
-            unchanged()
+            return unchanged()
         }
     }
 

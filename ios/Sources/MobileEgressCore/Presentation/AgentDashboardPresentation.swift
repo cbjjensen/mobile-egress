@@ -554,7 +554,7 @@ private func failedRotationPresentation(
     case .tunnelResumeFailed:
         DashboardStatusPresentation(
             headline: "Agent needs attention",
-            summary: "IP rotation ended, but the Agent could not resume. Start the Agent again.",
+            summary: "Saved Agent recovery is still pending after IP rotation; close and reopen the app before another rotation.",
             badge: "Resume failed",
             tone: .error
         )
@@ -632,7 +632,7 @@ private func resolveRotationAction(for state: AgentDashboardState) -> CellularIP
           !state.status.rotation.isActive else {
         return .none
     }
-    if case .failed(_, .checkpointRetirementFailed) = state.status.rotation {
+    if state.status.rotation.requiresRecoveryReconstruction {
         return .none
     }
     if case .completed(_, _, _, .unchanged) = state.status.rotation {
@@ -686,6 +686,8 @@ private func resolveRotationLabel(for rotation: CellularIPRotationState) -> Stri
         "Restoring Agent…"
     case .completed(_, _, _, .unchanged):
         "Retry with 30-second reset"
+    case .failed(_, .tunnelResumeFailed):
+        "Reopen app before rotating"
     case .failed(_, .checkpointRetirementFailed):
         "Restart Agent before rotating"
     case .idle, .completed, .failed:

@@ -130,7 +130,7 @@ public final class CellularIPRotationCoordinator<
             activeStreamCount: activeStreamCount
         )
         guard pendingTerminalOutcome == nil,
-              !isRetirementLockedOut,
+              !state.requiresRecoveryReconstruction,
               holdSeconds == expectedHoldSeconds,
               availability.isEligible(for: state),
               let currentNetworkToken else { return }
@@ -271,11 +271,6 @@ public final class CellularIPRotationCoordinator<
             recoveredPauseAlreadyCompleted = false
             requiresTerminalTunnelResume = true
         }
-    }
-
-    private var isRetirementLockedOut: Bool {
-        if case .failed(_, .checkpointRetirementFailed) = state { return true }
-        return false
     }
 
     private func startPathObservationIfNeeded() {
