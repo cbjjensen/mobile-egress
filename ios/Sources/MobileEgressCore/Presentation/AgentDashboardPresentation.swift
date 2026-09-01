@@ -241,6 +241,8 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
     public let isRotationEnabled: Bool
     public let requiresActiveStreamConfirmation: Bool
     public let rotationConfirmation: CellularIPRotationConfirmationPresentation?
+    public let rotationCountdownSeconds: Int?
+    public let showsRotationCancellation: Bool
     public let cellularHealth: AgentHealthPresentation
     public let relayHealth: AgentHealthPresentation
     public let metrics: [AgentMetricPresentation]
@@ -274,6 +276,8 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
                 rotation: state.status.rotation
             ),
             rotationConfirmation: resolveRotationConfirmation(for: state.status.rotation),
+            rotationCountdownSeconds: resolveRotationCountdown(for: state.status.rotation),
+            showsRotationCancellation: state.status.rotation.isActive,
             cellularHealth: cellularPresentation(state.status.cellular),
             relayHealth: relayPresentation(state.status.relay),
             metrics: [
@@ -610,6 +614,11 @@ private func resolveRotationConfirmation(
         confirmLabel: "Disconnect and rotate",
         declineLabel: "Keep current connection"
     )
+}
+
+private func resolveRotationCountdown(for rotation: CellularIPRotationState) -> Int? {
+    guard case let .holding(_, remainingSeconds, _, _) = rotation else { return nil }
+    return max(0, remainingSeconds)
 }
 
 private func resolveRotationLabel(for rotation: CellularIPRotationState) -> String {
