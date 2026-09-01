@@ -224,6 +224,148 @@
           ]
         }
       }
+    },
+    {
+      "id": "agent.cellular-ip-rotation",
+      "title": "Guided cellular IP rotation with Agent restoration",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/network/CellularIpRotationController.kt",
+            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/network/CellularIpRotationControllerTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores the packet-tunnel Agent instead of opening Android system settings; both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes.",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift",
+            "ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/CellularIPRotationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.oled-status-presentation",
+      "title": "Accessible OLED Agent dashboard",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentTheme.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentThemeTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses a SwiftUI NavigationStack and Apple accessibility APIs instead of Jetpack Compose while preserving the true-black OLED hierarchy, finite status presentation, native confirmations, Dynamic Type, VoiceOver, reduced-motion behavior, and 44-point actions.",
+          "sourceEvidence": [
+            "ios/MobileEgressAgent/AgentDashboardView.swift",
+            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.zfnf-branding",
+      "title": "ZFNF Mobile Egress product branding",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/branding/AgentBranding.kt",
+            "android/app/src/main/res/drawable-xxxhdpi/ic_mobile_egress_foreground.png"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/branding/AgentBrandingTest.kt",
+            "scripts/test-brand-assets.ps1"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses checked-in Apple asset-catalog AppIcon and header images generated from the selected ZFNF source, with the same approved user-facing product names as Android.",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift",
+            "ios/Assets/AppAssets.xcassets/ZFNFHeader.imageset/ZFNFHeader.png"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",
+            "scripts/test-brand-assets.ps1"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.safe-diagnostics",
+      "title": "Safe copied Agent diagnostics",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift",
+            "ios/Sources/MobileEgressCore/Network/SafeNetworkDiagnostics.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/CellularPublicIPProbeAdapterTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.cellular-relay-visibility",
+      "title": "Separate cellular and relay health visibility",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Combines an Apple cellular-path observer with packet-tunnel provider state and presents them as independent health tiles, matching Android's distinct cellular and relay visibility without coupling the two signals.",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Network/CellularPathObserver.swift",
+            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/CellularPathObserverTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift"
+          ]
+        }
+      }
     }
   ]
 }

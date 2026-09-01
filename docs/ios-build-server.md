@@ -75,7 +75,7 @@ Install at least one iOS simulator runtime in `Xcode -> Settings -> Platforms`. 
 
 ## Readiness check from Windows
 
-The tracked verifier defaults to the configured local Mac host and account, but accepts `-MacHost`, `-MacUser`, and `-SshKeyPath` when the network changes. Its first remote action requires noninteractive SSH with the ignored key, `IdentitiesOnly=yes`, and a matching existing `known_hosts` entry through `StrictHostKeyChecking=yes`. Verify the Mac host key out of band before trusting it. The Mac needs full Xcode, an available iOS Simulator runtime and destination, and the iPhoneOS/iPhoneSimulator SDKs.
+The tracked verifier defaults to the configured local Mac host and account, but accepts `-MacHost`, `-MacUser`, and `-SshKeyPath` when the network changes. Its first remote action requires noninteractive SSH with the ignored key, `IdentitiesOnly=yes`, and a matching existing `known_hosts` entry through `StrictHostKeyChecking=yes`. Verify the Mac host key out of band before trusting it. The Mac needs full Xcode and the iPhoneOS SDK. The tracked package-test destination is `platform=macOS`, so this gate does not select a simulator model or require a simulator boot.
 
 The following checks inspect readiness only. Do not install software, change the selected Xcode developer directory, accept licenses, add signing identities, change Apple account state, or publish a build as part of verification:
 
@@ -104,7 +104,7 @@ From a clean, committed Windows checkout:
 & .\scripts\test-ios.ps1 -UseMacBuildServer
 ```
 
-The script requires a clean committed tree, records its exact `HEAD`, runs both portable Docker Swift suites on Windows, and refuses to continue if the tree or `HEAD` changed. It then verifies the ignored key in its owning checkout, creates a temporary `git bundle` for that commit, transfers the bundle with strict host-key and identity selection, and creates a detached disposable checkout on the Mac. The remote process verifies the checkout commit before running every phase:
+The script requires a clean committed tree, records its exact `HEAD`, verifies the ignored key in its owning checkout, creates a temporary `git bundle` for that commit, transfers the bundle with strict host-key and identity selection, and creates a detached disposable checkout on the Mac. Mac-server mode runs both Swift suites directly in that checkout and does not require Windows Docker. The remote process verifies the checkout commit before running every phase:
 
 1. `swift test`
 2. `swift test -Xswiftc -warnings-as-errors`
@@ -112,7 +112,7 @@ The script requires a clean committed tree, records its exact `HEAD`, runs both 
 4. An unsigned iPhoneOS `MobileEgressAgent` app-plus-extension build
 5. `xcodebuild test -workspace . -scheme MobileEgressCore -destination platform=macOS` for the standalone package workspace
 
-The transferred bundle and disposable checkout are removed after the command. Existing Mac checkouts, branches, and refs are not updated, so a local-only branch does not need a push for reproducible Mac verification.
+Only the final package-test phase retries, once, when output identifies a known `com.apple.testmanagerd.control` invalidation/unavailability and contains no concrete XCTest failure. A failed retry remains a failed Mac environment result. The transferred bundle and disposable checkout are removed after the command. Existing Mac checkouts, branches, and refs are not updated, so a local-only branch does not need a push for reproducible Mac verification.
 
 ## Source sync and project commands
 
@@ -177,6 +177,10 @@ Open Xcode on the Mac, approve additional components, then install an iOS simula
 `security find-identity` reports `0 valid identities found`:
 
 Portable tests and unsigned builds can continue. Device or distribution work requires separate authorization to add an Apple ID, configure a development team, and establish the required signing path.
+
+The final package test reports `com.apple.testmanagerd.control` invalidation:
+
+The verifier retries that final phase once when no concrete XCTest failure is present. If the retry fails, record the Mac environment gate as failed and preserve the sanitized output. Do not restart or reconfigure Mac services as part of source verification.
 
 The Mac checkout is stale:
 
