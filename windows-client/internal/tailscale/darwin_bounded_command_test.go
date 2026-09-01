@@ -214,8 +214,22 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 		{
 			name:             "registration failure",
 			registerErr:      errors.New("registration failed"),
-			wantEvents:       []string{"register", "signal", "wait"},
+			status:           darwinBoundedCommandLeaderLive,
+			wantEvents:       []string{"register", "status", "signal", "wait"},
 			wantLifecycleErr: true,
+		},
+		{
+			name:             "registration and status failure",
+			registerErr:      errors.New("registration failed"),
+			statusErr:        errors.New("status failed"),
+			wantEvents:       []string{"register", "status", "signal", "wait"},
+			wantLifecycleErr: true,
+		},
+		{
+			name:        "registration loses exit race",
+			registerErr: unix.ESRCH,
+			status:      darwinBoundedCommandLeaderZombie,
+			wantEvents:  []string{"register", "status", "signal", "wait"},
 		},
 		{
 			name:             "monitor failure",
@@ -250,7 +264,8 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 			reaped := false
 			monitor := &darwinBoundedCommandTestMonitor{
 				events: &events, registerErr: test.registerErr, status: test.status,
-				statusErr: test.statusErr, polls: append([]darwinBoundedCommandTestPoll(nil), test.polls...),
+				statusErr: test.statusErr,
+				polls:     append([]darwinBoundedCommandTestPoll(nil), test.polls...),
 			}
 			ctx := context.Background()
 			if test.cancelContext {
@@ -376,6 +391,60 @@ func TestDarwinBoundedCommandLeaderStatusClassificationIsExact(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDarwinBoundedCommandResolvesOnlyVerifiedZombieGroupEPERM(t *testing.T) {
+	member := func(pid, pgid int32, status int8) unix.KinfoProc {
+		return unix.KinfoProc{
+			Proc:  unix.ExternProc{P_pid: pid, P_stat: status},
+			Eproc: unix.Eproc{Pgid: pgid},
+		}
+	}
+	permissionErr := unix.EPERM
+	inspectionErr := errors.New("process group inspection failed")
+	for _, test := range []struct {
+		name          string
+		signalErr     error
+		leader        *unix.KinfoProc
+		leaderErr     error
+		inspectionErr error
+		members       []unix.KinfoProc
+		wantNil       bool
+	}{
+		{name: "successful signal", wantNil: true},
+		{name: "missing group", signalErr: unix.ESRCH, wantNil: true},
+		{name: "zombie leader only", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie)}, wantNil: true},
+		{name: "zombie leader and zombie descendant", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie), member(4108, 4107, darwinProcessStatusZombie)}, wantNil: true},
+		{name: "leader lookup failure", signalErr: permissionErr, leaderErr: inspectionErr, members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie)}},
+		{name: "leader lookup missing", signalErr: permissionErr, members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie)}},
+		{name: "live leader", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusRunning)), members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusRunning)}},
+		{name: "live descendant", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie), member(4108, 4107, darwinProcessStatusSleeping)}},
+		{name: "missing leader", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4108, 4107, darwinProcessStatusZombie)}},
+		{name: "invalid member pid", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie), member(0, 4107, darwinProcessStatusZombie)}},
+		{name: "wrong group", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4108, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4107, 4108, darwinProcessStatusZombie)}},
+		{name: "unknown status", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, 6)), members: []unix.KinfoProc{member(4107, 4107, 6)}},
+		{name: "inspection failure", signalErr: permissionErr, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), inspectionErr: inspectionErr, members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie)}},
+		{name: "unrelated signal error", signalErr: unix.EINVAL, leader: darwinKinfoProcPointer(member(4107, 4107, darwinProcessStatusZombie)), members: []unix.KinfoProc{member(4107, 4107, darwinProcessStatusZombie)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := resolveNativeDarwinProcessGroupSignalError(
+				4107, test.signalErr, test.leader, test.leaderErr, test.members, test.inspectionErr,
+			)
+			if test.wantNil {
+				if got != nil {
+					t.Fatalf("resolved error = %v, want nil", got)
+				}
+				return
+			}
+			if !errors.Is(got, test.signalErr) {
+				t.Fatalf("resolved error = %v, want original %v", got, test.signalErr)
+			}
+		})
+	}
+}
+
+func darwinKinfoProcPointer(value unix.KinfoProc) *unix.KinfoProc {
+	return &value
 }
 
 type darwinBoundedCommandTestPoll struct {

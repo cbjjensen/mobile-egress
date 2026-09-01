@@ -238,7 +238,23 @@ func superviseDarwinBoundedCommandWithClock(
 			}
 		}
 	}
+	reapObservedZombie := func() (error, error) {
+		signalWhileAnchored()
+		waitErr := process.wait()
+		if cleanupFailure {
+			return waitErr, errDarwinBoundedCommandProcessTree
+		}
+		return waitErr, nil
+	}
 	if err := monitor.Register(process.pid); err != nil {
+		// The direct child can become a zombie before EVFILT_PROC attaches;
+		// XNU then reports ESRCH even though the unreaped child still anchors
+		// the exact PID and process group. An independent exact-zombie
+		// observation makes the missing future exit edge irrelevant.
+		status, statusErr := monitor.Status(process.pid)
+		if statusErr == nil && status == darwinBoundedCommandLeaderZombie {
+			return reapObservedZombie()
+		}
 		cleanupFailure = true
 		signalWhileAnchored()
 		waitErr = process.wait()
@@ -258,12 +274,7 @@ func superviseDarwinBoundedCommandWithClock(
 		return waitErr, errDarwinBoundedCommandProcessTree
 	}
 	if status == darwinBoundedCommandLeaderZombie {
-		signalWhileAnchored()
-		waitErr = process.wait()
-		if cleanupFailure {
-			return waitErr, errDarwinBoundedCommandProcessTree
-		}
-		return waitErr, nil
+		return reapObservedZombie()
 	}
 
 	terminationRequested := false
@@ -326,11 +337,56 @@ func (nativeDarwinBoundedCommandSystem) SignalProcessGroup(pid int) error {
 	if pid <= 0 {
 		return errDarwinBoundedCommandProcessTree
 	}
-	err := unix.Kill(-pid, unix.SIGKILL)
-	if errors.Is(err, unix.ESRCH) {
+	signalErr := unix.Kill(-pid, unix.SIGKILL)
+	if !errors.Is(signalErr, unix.EPERM) {
+		return resolveNativeDarwinProcessGroupSignalError(pid, signalErr, nil, nil, nil, nil)
+	}
+	// XNU excludes zombies when iterating a process group for POSIX kill(2),
+	// so a group containing only the unreaped zombie anchor returns EPERM.
+	// Preserve EPERM unless two independent sysctl views prove the exact
+	// leader and every remaining member are already zombies.
+	leader, leaderErr := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	members, inspectionErr := unix.SysctlKinfoProcSlice("kern.proc.pgrp", pid)
+	return resolveNativeDarwinProcessGroupSignalError(
+		pid, signalErr, leader, leaderErr, members, inspectionErr,
+	)
+}
+
+func resolveNativeDarwinProcessGroupSignalError(
+	pid int,
+	signalErr error,
+	leader *unix.KinfoProc,
+	leaderErr error,
+	members []unix.KinfoProc,
+	inspectionErr error,
+) error {
+	if signalErr == nil || errors.Is(signalErr, unix.ESRCH) {
 		return nil
 	}
-	return err
+	if pid <= 0 || !errors.Is(signalErr, unix.EPERM) || leaderErr != nil || leader == nil ||
+		inspectionErr != nil || len(members) == 0 {
+		return signalErr
+	}
+	leaderStatus, err := classifyDarwinBoundedCommandLeaderStatus(
+		pid, int(leader.Proc.P_pid), leader.Proc.P_stat,
+	)
+	if err != nil || leaderStatus != darwinBoundedCommandLeaderZombie || int(leader.Eproc.Pgid) != pid {
+		return signalErr
+	}
+	sawLeader := false
+	for _, member := range members {
+		if member.Proc.P_pid <= 0 || int(member.Eproc.Pgid) != pid ||
+			member.Proc.P_stat != darwinProcessStatusZombie {
+			return signalErr
+		}
+		if int(member.Proc.P_pid) == pid {
+			sawLeader = true
+		}
+	}
+	if !sawLeader {
+		return signalErr
+	}
+	return nil
 }
 
 func newDarwinBoundedCommandExitRegistration(pid int) unix.Kevent_t {
@@ -355,7 +411,7 @@ func (monitor *nativeDarwinBoundedCommandExitMonitor) Register(pid int) error {
 }
 
 func (monitor *nativeDarwinBoundedCommandExitMonitor) Status(pid int) (darwinBoundedCommandLeaderStatus, error) {
-	if monitor == nil || monitor.descriptor < 0 || pid <= 0 || monitor.pid != pid {
+	if monitor == nil || monitor.descriptor < 0 || pid <= 0 || (monitor.pid != 0 && monitor.pid != pid) {
 		return 0, errDarwinBoundedCommandProcessTree
 	}
 	return observeNativeDarwinBoundedCommandLeaderStatus(pid)
