@@ -126,6 +126,44 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         XCTAssertEqual(pauseCount, 1)
     }
 
+    func testReturnTimeoutFailsFiniteAndResumesExactlyOnce() async {
+        let sleeper = RotationSleeperStub(immediateUnitSleeps: true)
+        let path = RotationPathObserverStub()
+        let tunnel = await RotationTunnelStub()
+        let coordinator = await makeCoordinator(
+            sleeper: sleeper,
+            path: path,
+            tunnel: tunnel,
+            probe: RotationProbeStub(snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10")])
+        )
+
+        await coordinator.resumeAfterActivation()
+        path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.updateAgentAvailability(
+            isEnrolled: true,
+            isAgentRunning: true,
+            activeStreamCount: 0
+        )
+        await coordinator.start(holdSeconds: 10)
+        await waitUntil {
+            if case .awaitingAirplaneMode = await coordinator.state { return true }
+            return false
+        }
+
+        path.emit(false)
+        await waitUntil { await sleeper.pendingSeconds.contains(180) }
+        await sleeper.fire(seconds: 180)
+        await waitUntil {
+            if case .failed(_, .cellularDidNotReturn) = await coordinator.state { return true }
+            return false
+        }
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
+
+        let resumeCount = await tunnel.resumeReceipts.count
+        XCTAssertEqual(resumeCount, 1)
+    }
+
     func testCancellationRejectsLateProbeCallbackAndClearsCheckpointAndCue() async {
         let gate = RotationProbeGate()
         let path = RotationPathObserverStub()
