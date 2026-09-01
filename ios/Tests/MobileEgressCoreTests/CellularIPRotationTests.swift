@@ -480,6 +480,43 @@ final class CellularIPRotationTests: XCTestCase {
         )
     }
 
+    func testLateLossCheckpointPreservesTheOriginalPhaseDeadline() {
+        let phaseStartedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingAirplaneMode(
+                attemptID: 41,
+                originalNetworkToken: "cell-1",
+                holdSeconds: 10,
+                before: beforeSnapshot
+            ),
+            savedAt: phaseStartedAt.addingTimeInterval(90),
+            timeoutDeadline: phaseStartedAt.addingTimeInterval(120)
+        )
+        var recovering = CellularIPRotationReducer()
+
+        XCTAssertEqual(
+            recovering.reduce(
+                .recover(checkpoint: checkpoint, at: phaseStartedAt.addingTimeInterval(110))
+            ).effects,
+            [
+                .pauseAgentAndStreams(attemptID: 41),
+                .presentAirplaneModeGuidance(attemptID: 41),
+                .scheduleCellularLossTimeout(attemptID: 41, seconds: 10),
+            ]
+        )
+
+        var elapsed = CellularIPRotationReducer()
+        XCTAssertEqual(
+            elapsed.reduce(
+                .recover(checkpoint: checkpoint, at: phaseStartedAt.addingTimeInterval(120))
+            ),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .cellularDidNotDisconnect),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
     func testReturnTimeoutRecoveryUsesOnlyTheRemainingThreeMinuteWindow() {
         let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
         let checkpoint = CellularIPRotationCheckpoint(
@@ -506,6 +543,77 @@ final class CellularIPRotationTests: XCTestCase {
                 state: .failed(attemptID: 41, failure: .cellularDidNotReturn),
                 effects: [.resumeAgent(attemptID: 41)]
             )
+        )
+    }
+
+    func testLateReturnCheckpointPreservesTheOriginalPhaseDeadline() {
+        let phaseStartedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
+            savedAt: phaseStartedAt.addingTimeInterval(150),
+            timeoutDeadline: phaseStartedAt.addingTimeInterval(180)
+        )
+        var recovering = CellularIPRotationReducer()
+
+        XCTAssertEqual(
+            recovering.reduce(
+                .recover(checkpoint: checkpoint, at: phaseStartedAt.addingTimeInterval(175))
+            ).effects,
+            [
+                .pauseAgentAndStreams(attemptID: 41),
+                .scheduleCellularReturnTimeout(attemptID: 41, seconds: 5),
+            ]
+        )
+
+        var elapsed = CellularIPRotationReducer()
+        XCTAssertEqual(
+            elapsed.reduce(
+                .recover(checkpoint: checkpoint, at: phaseStartedAt.addingTimeInterval(180))
+            ),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .cellularDidNotReturn),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
+    func testCheckpointCodablePreservesDeadlineAndDecodesLegacySchema() throws {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
+            savedAt: savedAt,
+            timeoutDeadline: savedAt.addingTimeInterval(80)
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        XCTAssertEqual(
+            try decoder.decode(
+                CellularIPRotationCheckpoint.self,
+                from: encoder.encode(checkpoint)
+            ),
+            checkpoint
+        )
+
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoder.encode(checkpoint)) as? [String: Any]
+        )
+        legacyObject.removeValue(forKey: "timeoutDeadline")
+        let legacyCheckpoint = try decoder.decode(
+            CellularIPRotationCheckpoint.self,
+            from: JSONSerialization.data(withJSONObject: legacyObject)
+        )
+
+        XCTAssertNil(legacyCheckpoint.timeoutDeadline)
+        var reducer = CellularIPRotationReducer()
+        XCTAssertEqual(
+            reducer.reduce(
+                .recover(checkpoint: legacyCheckpoint, at: savedAt.addingTimeInterval(65))
+            ).effects,
+            [
+                .pauseAgentAndStreams(attemptID: 41),
+                .scheduleCellularReturnTimeout(attemptID: 41, seconds: 115),
+            ]
         )
     }
 
