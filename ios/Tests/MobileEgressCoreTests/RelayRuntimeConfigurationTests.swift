@@ -3,6 +3,22 @@ import XCTest
 @testable import MobileEgressCore
 
 final class RelayRuntimeConfigurationTests: XCTestCase {
+    func testProductionAgentLimitsMatchSharedCapacityContract() {
+        XCTAssertEqual(
+            AgentRuntimeLimits.production,
+            AgentRuntimeLimits(
+                maximumStreams: 256,
+                tombstones: 1_024,
+                outboundControls: 512,
+                outboundData: 256,
+                outboundDataPerStream: 2,
+                targetInbound: 2,
+                targetReadChunkBytes: 16 * 1_024,
+                maximumInboundDataBytes: 32 * 1_024
+            )
+        )
+    }
+
     func testRelayConfigurationDerivesExactPinnedMTLSCellularSessionEndpoint() throws {
         let configuration = try RelayWebSocketConfiguration(identity: Task2Fixtures.identity())
 
@@ -55,8 +71,8 @@ final class RelayRuntimeConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.requiredInterfaceType, .cellular)
         XCTAssertEqual(configuration.prohibitedInterfaceTypes, [.wifi, .wiredEthernet])
         XCTAssertFalse(configuration.allowsProxyFallback)
-        XCTAssertEqual(configuration.readChunkBytes, 32 * 1024)
-        XCTAssertEqual(configuration.inboundQueueCapacity, 4)
+        XCTAssertEqual(configuration.readChunkBytes, 16 * 1024)
+        XCTAssertEqual(configuration.inboundQueueCapacity, 2)
         XCTAssertEqual(configuration.connectTimeout, 30)
 
         XCTAssertThrowsError(try TargetConnectionConfiguration(ipLiteral: "example.com", port: 443))

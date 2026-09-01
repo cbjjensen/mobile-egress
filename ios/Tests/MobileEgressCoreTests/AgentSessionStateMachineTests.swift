@@ -173,82 +173,126 @@ final class AgentSessionStateMachineTests: XCTestCase {
         }
     }
 
-    func testAdmissionRejectsThirtyThirdConcurrentOpen() throws {
-        var machine = connectedMachine()
+    func testInjectedStateMachineLimitsFlowIntoCreatedTargetConfiguration() throws {
+        let limits = AgentRuntimeLimits(
+            maximumStreams: 7,
+            tombstones: 11,
+            outboundControls: 13,
+            outboundData: 5,
+            outboundDataPerStream: 2,
+            targetInbound: 1,
+            targetReadChunkBytes: 4 * 1_024,
+            maximumInboundDataBytes: 8 * 1_024
+        )
+        var machine = connectedMachine(limits: limits)
 
-        for index in 0 ..< 32 {
-            let effects = machine.receiveRelay(try openMessage(streamID: "stream-\(index)", ip: "8.8.8.8", port: 443))
-            XCTAssertTrue(effects.containsTargetCreation)
-        }
+        let target = try openTarget(&machine, streamID: "stream", ip: "8.8.8.8", port: 443)
 
-        let overflow = machine.receiveRelay(try openMessage(streamID: "stream-32", ip: "8.8.8.8", port: 443))
-        XCTAssertFalse(overflow.containsTargetCreation)
-        try assertOutbound(&machine, type: .rejected, streamID: "stream-32", payload: Data("agent_stream_limit".utf8))
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 32)
+        XCTAssertEqual(target.configuration.readChunkBytes, 4 * 1_024)
+        XCTAssertEqual(target.configuration.inboundQueueCapacity, 1)
+        XCTAssertEqual(target.configuration.connectTimeout, 30)
     }
 
-    func testInboundWriteQueueOverflowFailsOnlyThatStreamWithBackpressure() throws {
+    func testProductionAdmissionAcceptsTwoHundredFiftySixRejectsNextAndImmediatelyReusesReleasedSlot() throws {
+        var machine = connectedMachine()
+        var firstToken: UInt64?
+
+        for index in 0 ..< 256 {
+            let effects = machine.receiveRelay(try openMessage(streamID: "stream-\(index)", ip: "8.8.8.8", port: 443))
+            XCTAssertTrue(effects.containsTargetCreation)
+            if index == 0 {
+                firstToken = effects.singleTargetCreation?.token
+            }
+        }
+
+        let overflow = machine.receiveRelay(try openMessage(streamID: "stream-256", ip: "8.8.8.8", port: 443))
+        XCTAssertFalse(overflow.containsTargetCreation)
+        try assertOutbound(&machine, type: .rejected, streamID: "stream-256", payload: Data("agent_stream_limit".utf8))
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 256)
+
+        let close = try binary(type: .close, streamID: "stream-0", payload: Data("client_closed".utf8))
+        XCTAssertTrue(machine.receiveRelay(close).isEmpty)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 255)
+
+        let reused = machine.receiveRelay(try openMessage(streamID: "stream-0", ip: "1.1.1.1", port: 443))
+        let reusedTarget = try XCTUnwrap(reused.singleTargetCreation)
+        let originalToken = try XCTUnwrap(firstToken)
+        XCTAssertNotEqual(reusedTarget.token, originalToken)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 256)
+
+        machine.targetWasCreated(streamID: "stream-0", token: originalToken)
+        XCTAssertTrue(machine.targetCreationFailed(
+            streamID: "stream-0",
+            token: originalToken
+        ).isEmpty)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 256)
+        machine.targetWasCreated(streamID: "stream-0", token: reusedTarget.token)
+        XCTAssertTrue(machine.targetConnected(streamID: "stream-0", token: reusedTarget.token).isEmpty)
+        try assertOutbound(&machine, type: .opened, streamID: "stream-0", payload: Data())
+    }
+
+    func testTargetBoundOutstandingLimitCountsInFlightAndQueuedFrames() throws {
         var machine = connectedMachine()
         let opened = try openReadyTarget(&machine, streamID: "stream")
 
         let first = machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([0])))
         XCTAssertNotNil(first.singleTargetWrite)
-        for value in 1 ... 4 {
-            XCTAssertTrue(machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([UInt8(value)]))).isEmpty)
-        }
+        XCTAssertTrue(machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([1]))).isEmpty)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 2)
 
-        let overflow = machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([5])))
+        let overflow = machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([2])))
 
         XCTAssertEqual(overflow, [.cancelTarget(streamID: "stream", token: opened.token)])
         try assertOutbound(&machine, type: .close, streamID: "stream", payload: Data("agent_unavailable".utf8))
         XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
         XCTAssertEqual(machine.snapshot.errorClass, .backpressure)
         XCTAssertEqual(machine.snapshot.connectionState, .connected)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"] ?? 0, 0)
     }
 
     func testPerStreamOutboundOverflowDiscardsDataAndPrioritizesForcedClose() throws {
         var machine = connectedMachine()
         let opened = try openReadyTarget(&machine, streamID: "stream")
 
-        for value in 0 ..< 8 {
+        for value in 0 ..< 2 {
             XCTAssertTrue(machine.targetReceived(streamID: "stream", token: opened.token, data: Data([UInt8(value)])).isEmpty)
         }
-        let overflow = machine.targetReceived(streamID: "stream", token: opened.token, data: Data([8]))
+        let overflow = machine.targetReceived(streamID: "stream", token: opened.token, data: Data([2]))
 
         XCTAssertEqual(overflow, [.cancelTarget(streamID: "stream", token: opened.token)])
         try assertOutbound(&machine, type: .close, streamID: "stream", payload: Data("agent_unavailable".utf8))
         XCTAssertNil(machine.nextOutbound())
-        XCTAssertEqual(machine.snapshot.bytesDownloaded, 8)
+        XCTAssertEqual(machine.snapshot.bytesDownloaded, 2)
         XCTAssertEqual(machine.snapshot.errorClass, .backpressure)
     }
 
     func testTotalOutboundOverflowFailsContributingStreamAndLeavesOthersActive() throws {
         var machine = connectedMachine()
         var opened: [(String, UInt64)] = []
-        for index in 0 ..< 9 {
+        for index in 0 ..< 129 {
             let streamID = "stream-\(index)"
             let target = try openReadyTarget(&machine, streamID: streamID)
             opened.append((streamID, target.token))
         }
 
-        for (streamID, token) in opened.prefix(8) {
-            for value in 0 ..< 8 {
+        for (streamID, token) in opened.prefix(128) {
+            for value in 0 ..< 2 {
                 XCTAssertTrue(machine.targetReceived(streamID: streamID, token: token, data: Data([UInt8(value)])).isEmpty)
             }
         }
-        let ninth = try XCTUnwrap(opened.last)
-        let overflow = machine.targetReceived(streamID: ninth.0, token: ninth.1, data: Data([0xFF]))
+        let last = try XCTUnwrap(opened.last)
+        let overflow = machine.targetReceived(streamID: last.0, token: last.1, data: Data([0xFF]))
 
-        XCTAssertEqual(overflow, [.cancelTarget(streamID: ninth.0, token: ninth.1)])
-        try assertOutbound(&machine, type: .close, streamID: ninth.0, payload: Data("agent_unavailable".utf8))
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 8)
-        XCTAssertEqual(machine.snapshot.bytesDownloaded, 64)
+        XCTAssertEqual(overflow, [.cancelTarget(streamID: last.0, token: last.1)])
+        try assertOutbound(&machine, type: .close, streamID: last.0, payload: Data("agent_unavailable".utf8))
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 128)
+        XCTAssertEqual(machine.snapshot.bytesDownloaded, 256)
     }
 
     func testRequiredControlSaturationTerminatesWholeSession() throws {
         var machine = connectedMachine()
 
-        for _ in 0 ..< 32 {
+        for _ in 0 ..< 512 {
             XCTAssertTrue(machine.receiveRelay(try binary(type: .ping)).isEmpty)
         }
         let overflow = machine.receiveRelay(try binary(type: .ping))
@@ -415,6 +459,169 @@ final class AgentSessionStateMachineTests: XCTestCase {
         XCTAssertNil(machine.nextOutbound())
     }
 
+    func testCanceledInFlightFrameCannotAffectReusedStreamID() throws {
+        var machine = connectedMachine()
+        let original = try openReadyTarget(&machine, streamID: "stream")
+        XCTAssertTrue(machine.targetReceived(
+            streamID: "stream",
+            token: original.token,
+            data: Data([0x41])
+        ).isEmpty)
+        let oldFrame = try popOutbound(
+            &machine,
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x41])
+        )
+
+        XCTAssertEqual(
+            machine.receiveRelay(try binary(
+                type: .close,
+                streamID: "stream",
+                payload: Data("client_closed".utf8)
+            )),
+            [.cancelTarget(streamID: "stream", token: original.token)]
+        )
+        let replacement = try openReadyTarget(&machine, streamID: "stream")
+        XCTAssertNotEqual(replacement.token, original.token)
+        XCTAssertTrue(machine.targetReceived(
+            streamID: "stream",
+            token: replacement.token,
+            data: Data([0x42])
+        ).isEmpty)
+
+        XCTAssertTrue(machine.completeOutbound(oldFrame, accepted: true).isEmpty)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1)
+        try assertOutbound(&machine, type: .data, streamID: "stream", payload: Data([0x42]))
+    }
+
+    func testStaleTargetWriteCompletionCannotAffectReusedStreamID() throws {
+        var machine = connectedMachine()
+        let original = try openReadyTarget(&machine, streamID: "stream")
+        let oldWrite = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x41])
+        )).singleTargetWrite)
+
+        XCTAssertEqual(
+            machine.receiveRelay(try binary(
+                type: .close,
+                streamID: "stream",
+                payload: Data("client_closed".utf8)
+            )),
+            [.cancelTarget(streamID: "stream", token: original.token)]
+        )
+        let replacement = try openReadyTarget(&machine, streamID: "stream")
+
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: original.token,
+            writeID: oldWrite.writeID,
+            succeeded: true
+        ).isEmpty)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1)
+        XCTAssertEqual(machine.snapshot.bytesUploaded, 0)
+
+        let replacementWrite = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x42])
+        )).singleTargetWrite)
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: replacement.token,
+            writeID: replacementWrite.writeID,
+            succeeded: true
+        ).isEmpty)
+        XCTAssertEqual(machine.snapshot.bytesUploaded, 1)
+    }
+
+    func testInboundDataAcceptsThirtyTwoKiBOnceAndRejectsOneByteMore() throws {
+        var machine = connectedMachine()
+        let opened = try openReadyTarget(&machine, streamID: "stream")
+        let acceptedPayload = Data(repeating: 0x41, count: 32 * 1_024)
+
+        let accepted = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: acceptedPayload
+        )).singleTargetWrite)
+        XCTAssertEqual(accepted.data, acceptedPayload)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 1)
+
+        let oversized = Data(repeating: 0x42, count: 32 * 1_024 + 1)
+        XCTAssertEqual(
+            machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: oversized)),
+            [
+                .closeRelay(code: 1008, reason: "protocol_error"),
+                .cancelTarget(streamID: "stream", token: opened.token),
+            ]
+        )
+        XCTAssertEqual(machine.snapshot.errorClass, .protocol)
+    }
+
+    func testTargetReadsPreferSixteenKiBOutboundFrames() throws {
+        var machine = connectedMachine()
+        let opened = try openReadyTarget(&machine, streamID: "stream")
+        let payload = Data(repeating: 0x5A, count: 16 * 1_024)
+
+        XCTAssertTrue(machine.targetReceived(
+            streamID: "stream",
+            token: opened.token,
+            data: payload
+        ).isEmpty)
+        try assertOutbound(&machine, type: .data, streamID: "stream", payload: payload)
+
+        XCTAssertEqual(
+            machine.targetReceived(
+                streamID: "stream",
+                token: opened.token,
+                data: Data(repeating: 0x5B, count: 16 * 1_024 + 1)
+            ),
+            [.cancelTarget(streamID: "stream", token: opened.token)]
+        )
+        try assertOutbound(
+            &machine,
+            type: .close,
+            streamID: "stream",
+            payload: Data("target_failure".utf8)
+        )
+    }
+
+    func testRejectTombstoneChurnRetainsOnlyNewestOneThousandTwentyFour() throws {
+        var machine = connectedMachine()
+
+        for index in 0 ... 1_024 {
+            XCTAssertFalse(machine.receiveRelay(try openMessage(
+                streamID: "reject-\(index)",
+                ip: "10.0.0.1",
+                port: 443
+            )).containsTargetCreation)
+            try assertOutbound(
+                &machine,
+                type: .rejected,
+                streamID: "reject-\(index)",
+                payload: Data("policy_denied".utf8)
+            )
+        }
+
+        XCTAssertEqual(machine.capacitySnapshot.tombstones, 1_024)
+        XCTAssertTrue(machine.receiveRelay(try binary(
+            type: .close,
+            streamID: "reject-1024",
+            payload: Data("client_closed".utf8)
+        )).isEmpty)
+        XCTAssertEqual(
+            machine.receiveRelay(try binary(
+                type: .close,
+                streamID: "reject-0",
+                payload: Data("client_closed".utf8)
+            )),
+            [.closeRelay(code: 1008, reason: "protocol_error")]
+        )
+    }
+
     func testStopClearsQueuesAdmissionAndCancelsRelayAndTargetsExactlyOnce() throws {
         var machine = connectedMachine()
         let first = try openTarget(&machine, streamID: "first", ip: "8.8.8.8", port: 443)
@@ -441,8 +648,10 @@ final class AgentSessionStateMachineTests: XCTestCase {
         XCTAssertTrue(machine.start().isEmpty)
     }
 
-    private func connectedMachine() -> AgentSessionStateMachine {
-        var machine = AgentSessionStateMachine()
+    private func connectedMachine(
+        limits: AgentRuntimeLimits = .production
+    ) -> AgentSessionStateMachine {
+        var machine = AgentSessionStateMachine(limits: limits)
         XCTAssertEqual(machine.start(), [.startRelay])
         machine.relayConnected()
         XCTAssertEqual(machine.snapshot.connectionState, .connected)

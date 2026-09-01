@@ -58,6 +58,10 @@ final class XcodeProjectStructureTests: XCTestCase {
             extensionInfo["CFBundleDisplayName"] as? String,
             "ZFNF Mobile Egress Agent"
         )
+        for info in [appInfo, extensionInfo] {
+            XCTAssertEqual(info["CFBundleShortVersionString"] as? String, "$(MARKETING_VERSION)")
+            XCTAssertEqual(info["CFBundleVersion"] as? String, "$(CURRENT_PROJECT_VERSION)")
+        }
 
         XCTAssertEqual(
             appInfo["UISupportedInterfaceOrientations"] as? [String],
@@ -101,9 +105,13 @@ final class XcodeProjectStructureTests: XCTestCase {
 
         let debug = try resolvedXCConfig(at: "Configuration/Debug.xcconfig")
         let release = try resolvedXCConfig(at: "Configuration/Release.xcconfig")
+        XCTAssertTrue(try text(at: "Configuration/Debug.xcconfig").contains(#"#include "Shared.xcconfig""#))
+        XCTAssertTrue(try text(at: "Configuration/Release.xcconfig").contains(#"#include "Shared.xcconfig""#))
         for configuration in [debug, release] {
             XCTAssertEqual(configuration["IPHONEOS_DEPLOYMENT_TARGET"], "17.0")
             XCTAssertEqual(configuration["SWIFT_VERSION"], "6.0")
+            XCTAssertEqual(configuration["MARKETING_VERSION"], "1.1.0")
+            XCTAssertEqual(configuration["CURRENT_PROJECT_VERSION"], "2")
             XCTAssertEqual(configuration["MOBILE_EGRESS_PROVIDER_BUNDLE_IDENTIFIER"], "com.mobileegress.agent.tunnel")
             XCTAssertEqual(configuration["MOBILE_EGRESS_APP_GROUP_IDENTIFIER"], "group.com.mobileegress.agent")
             XCTAssertEqual(configuration["MOBILE_EGRESS_KEYCHAIN_GROUP_SUFFIX"], "com.mobileegress.agent.shared")
@@ -111,6 +119,12 @@ final class XcodeProjectStructureTests: XCTestCase {
         }
         XCTAssertEqual(debug["SWIFT_ACTIVE_COMPILATION_CONDITIONS"], "$(inherited) DEBUG")
         XCTAssertEqual(release["SWIFT_COMPILATION_MODE"], "wholemodule")
+
+        let project = try text(at: "MobileEgressAgent.xcodeproj/project.pbxproj")
+        XCTAssertEqual(project.occurrences(of: "baseConfigurationReference = B00000000000000000000031 /* Debug.xcconfig */;"), 3)
+        XCTAssertEqual(project.occurrences(of: "baseConfigurationReference = B00000000000000000000032 /* Release.xcconfig */;"), 3)
+        XCTAssertFalse(project.contains("MARKETING_VERSION ="))
+        XCTAssertFalse(project.contains("CURRENT_PROJECT_VERSION ="))
     }
 
     func testWorkspaceAssetCatalogAndSourceInventoryAreComplete() throws {

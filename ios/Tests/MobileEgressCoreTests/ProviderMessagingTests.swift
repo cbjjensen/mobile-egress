@@ -103,6 +103,43 @@ final class ProviderMessagingTests: XCTestCase {
         XCTAssertLessThanOrEqual(encoded.count, TunnelProviderMessageCodec.maximumMessageBytes)
     }
 
+    func testStatusCodecAcceptsProductionStreamCapacityAndRejectsOneMore() throws {
+        let maximum = TunnelProviderStatus(
+            providerState: .running,
+            runtimeSnapshot: AgentRuntimeSnapshot(
+                connectionState: .connected,
+                activeStreamCount: 256,
+                bytesUploaded: 1,
+                bytesDownloaded: 2,
+                errorClass: .none
+            ),
+            providerError: .none
+        )
+
+        let encoded = try TunnelProviderMessageCodec.encodeStatus(maximum)
+        XCTAssertEqual(try TunnelProviderMessageCodec.decodeStatus(encoded), maximum)
+
+        let overflow = TunnelProviderStatus(
+            providerState: .running,
+            runtimeSnapshot: AgentRuntimeSnapshot(
+                connectionState: .connected,
+                activeStreamCount: 257,
+                bytesUploaded: 1,
+                bytesDownloaded: 2,
+                errorClass: .none
+            ),
+            providerError: .none
+        )
+        XCTAssertThrowsError(try TunnelProviderMessageCodec.encodeStatus(overflow)) {
+            XCTAssertEqual($0 as? TunnelProviderMessageError, .invalidMessage)
+        }
+
+        let decodedOverflow = #"{"version":1,"type":"status","providerState":"running","connectionState":"connected","activeStreamCount":257,"bytesUploaded":1,"bytesDownloaded":2,"providerError":"none","runtimeError":"none"}"#
+        XCTAssertThrowsError(try TunnelProviderMessageCodec.decodeStatus(Data(decodedOverflow.utf8))) {
+            XCTAssertEqual($0 as? TunnelProviderMessageError, .invalidMessage)
+        }
+    }
+
     func testStatusDecoderRejectsUnknownExtraDuplicateAndInvalidMetricValues() {
         let valid = #"{"version":1,"type":"status","providerState":"running","connectionState":"connected","activeStreamCount":0,"bytesUploaded":0,"bytesDownloaded":0,"providerError":"none","runtimeError":"none"}"#
         let withExtraField = String(valid.dropLast()) + #", "relayUrl":"https://secret.example"}"#
