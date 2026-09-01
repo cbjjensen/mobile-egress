@@ -187,3 +187,122 @@ No new app-target source file was added, so no `project.pbxproj` entry was neces
 - The unsigned Xcode build retains existing warnings about interface-orientation coverage and skipped AppIntents metadata; it exits zero and reports `BUILD SUCCEEDED`.
 - Physical-device acceptance still needs to exercise real NetworkExtension preference timing, on-demand reconnection, cellular loss/return, Control Center background/foreground transitions, App Group recovery, local notification delivery/denial, and public-IP change. Those Apple side effects were intentionally covered through injected seams here without changing signing, accounts, or Mac software.
 - Visual exposure of these actions belongs to the later SwiftUI task; this task wires the model and lifecycle only, as required.
+
+## Round 1/5 review remediation (2026-09-01)
+
+### Scope and commits
+
+This review round starts from the original Task 3B report commit
+`21256b7999f8488e0e3b047c3f6693d0db3f430f` and addresses the four requested
+coordinator/lifecycle findings without changing the dashboard, assets, ordinary
+start/stop implementation, relay, wire, security, extension runtime, or scanner.
+
+- `5fd903642dbb6cf6d9b08e70e333a7a85eb1871c` — deterministic coordinator REDs for suspended pause cancellation, first unavailable path delivery, pre-pause recovery intent, and retirement replay.
+- `2790999e0ddf1f7eefc698850cdb44b0b105dcf2` — transaction RED requiring failed-pause compensation.
+- `da2c24235e518df37e88de9d2d73a97beef4a8f5` — real App Group store RED for physical deletion failure and tombstone privacy.
+- `caeed147566ba4e69c80d7b7748fa18b5f1d41a4` — serialized cancellation, compensated pause transaction, observed-path state, recovery receipt classification, and durable checkpoint retirement.
+
+### Exact Mac RED evidence
+
+Each test-only tree was bundled and checked out detached on the Mac; `git rev-parse
+HEAD` was asserted in command output before the focused command.
+
+At `5fd903642dbb6cf6d9b08e70e333a7a85eb1871c`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 12 tests, with 23 failures (0 unexpected)
+```
+
+The deterministic failures showed all three suspended awaited stages (`initialLoad`,
+`save`, and `reload`) reaching terminal state before release, a late `stop`, duplicate
+fallback resume, lost running/on-demand intent, the first unavailable path timing out,
+stopped/off pre-pause recovery being restored as running/on, nil recovery receipts,
+and a physically undeleted checkpoint replaying in a new coordinator.
+
+At `2790999e0ddf1f7eefc698850cdb44b0b105dcf2`:
+
+```text
+swift test --filter TunnelPreferenceTransactionTests.testRotationPauseFailureRestoresOnDemandIntentWithoutStopping
+Executed 1 test, with 1 failure (0 unexpected)
+```
+
+The actual operations ended at `load, apply(false), save`; the RED required the
+missing compensating `apply(true), save, load` and no stop.
+
+At `da2c24235e518df37e88de9d2d73a97beef4a8f5`:
+
+```text
+swift test --filter CellularIPRotationCheckpointStoreTests.testRetirementPreventsReplayWhenPhysicalDeletionFailsWithoutLeakingCheckpointData
+error: extra argument 'fileRemover' in call
+```
+
+This compile RED established that the production App Group store had neither a
+deterministic physical-deletion seam nor durable retirement API.
+
+### Exact Mac focused GREEN
+
+At detached exact source commit `caeed147566ba4e69c80d7b7748fa18b5f1d41a4`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 12 tests, with 0 failures (0 unexpected)
+
+swift test --filter TunnelPreferenceTransactionTests
+Executed 8 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationCheckpointStoreTests
+Executed 5 tests, with 0 failures (0 unexpected)
+```
+
+### Behavior corrected
+
+- `cancel()` now cancels and awaits the owned pause task before reducing the terminal event. The portable pause transaction checks cancellation around every awaited preference stage and compensates any applied on-demand mutation before it throws. The controllable stage test proves no terminal transition occurs before release, no late stop escapes, no coordinator fallback resume duplicates compensation, and prior running/on-demand intent is retained.
+- Cellular availability now stores an optional last observation separately from the public false default. The first real false sample is therefore reduced as cellular loss during recovered Airplane Mode guidance instead of being treated as a duplicate.
+- Recovery classifies `awaitingConfirmation` and `preparing` as pre-pause checkpoints, retaining a newly captured opaque receipt. Later checkpoints continue to discard a newly observed receipt and use recovery fallback because their original pre-pause intent was already lost. The matrix covers stopped/on-demand-off and running/on-demand-on for both pre-pause states.
+- Terminal retirement atomically replaces the sensitive active checkpoint with a versioned tombstone containing only the retired attempt ID, then performs best-effort physical deletion. A failing injected deletion leaves the tombstone, and a newly constructed store/coordinator returns idle without replay. The file test verifies the tombstone contains neither the original network token nor public IP.
+
+### Full required Mac verification
+
+The exact source commit printed before the commands was
+`caeed147566ba4e69c80d7b7748fa18b5f1d41a4`:
+
+```text
+swift test
+Test Suite 'All tests' passed
+Executed 225 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+swift test -Xswiftc -warnings-as-errors
+Test Suite 'All tests' passed
+Executed 225 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
+** BUILD SUCCEEDED **
+```
+
+Both app and `MobileEgressTunnelExtension` were compiled and the extension was embedded
+in the unsigned iPhoneOS app. The two skips remain the existing physical-device Secure
+Enclave and entitled Keychain acceptance tests.
+
+### Round changed files and self-review
+
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift`
+- `ios/Sources/MobileEgressCore/Rotation/AppGroupCellularIPRotationCheckpointStore.swift`
+- `ios/Sources/MobileEgressCore/Runtime/TunnelPreferenceTransaction.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCheckpointStoreTests.swift`
+- `ios/Tests/MobileEgressCoreTests/TunnelPreferenceTransactionTests.swift`
+
+`git diff --check 21256b7..caeed14` passed. The changed-file inventory is limited to
+the three MobileEgressCore lifecycle files and focused tests. Source scans found no
+private Settings URL, Settings-opening API, clipboard mutation, Airplane Mode toggle
+claim, injected secret/IP fixture in production, or tracked SSH identity. The full suite
+and Xcode build provide regression coverage for the unchanged app, extension, relay,
+wire, security, scan, and ordinary preference paths.
+
+### Round concerns
+
+- Atomic tombstone replacement protects against the requested physical deletion failure. A total App Group write failure cannot provide durable on-disk retirement; the coordinator remains best-effort for that fundamental storage outage.
+- The existing standalone `xcodebuild test` host-service invalidation and existing unsigned-build orientation/AppIntents warnings remain as documented above; neither was changed by this round.
+- Physical-device NetworkExtension timing and foreground/background acceptance remain required before release.
