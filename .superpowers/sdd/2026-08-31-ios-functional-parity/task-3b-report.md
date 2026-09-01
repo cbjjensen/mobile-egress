@@ -1,0 +1,633 @@
+# Task 3B report — Apple rotation coordinator, tunnel lifecycle, and view-model integration
+
+## Status
+
+Implemented Task 3B on `codex/ios-agent`, based on exact starting commit `4509f01b2ff959aabd3ce76326664950f351a0a6`. The app now has a main-actor rotation coordinator, portable tunnel pause/resume transaction with an opaque intent receipt, foreground/checkpoint recovery, cellular-path and probe orchestration, finite resume failures, and `AgentViewModel` publication/actions. Ordinary tunnel start/stop, scan, relay, wire, and security behavior remains in place. No SwiftUI redesign, asset, signing, Apple-account, Mac-software, or provider change was made.
+
+The exact source commit used for final required Mac verification was:
+
+```text
+edf9d9855981b5841952fa1773d5d14653f4284e
+```
+
+## Commits
+
+- `068e36a` — initial coordinator/lifecycle behavior tests.
+- `3af3158` — corrected only the probe gate in the test fixture; authoritative initial RED.
+- `21fe792` — coordinator and portable rotation preference transaction implementation.
+- `f4c7069` — app-integration structure test; authoritative app-glue RED.
+- `54830f0` — `TunnelManager`, `AgentViewModel`, and scene-activation integration.
+- `83f0cfa` — deterministic waiting for asynchronous resume side effects in tests.
+- `cefbab4` — duplicate-start ownership regression test; authoritative self-review RED.
+- `b7a23ad` — reject ineligible/duplicate requests before mutating owned tasks.
+- `0f4a0b0` — explicit cellular-return-timeout coordinator coverage.
+- `edf9d98` — accept direct or refined tunnel-session conformance in the legacy source-structure test.
+
+## TDD evidence
+
+### Initial coordinator RED
+
+Commit `3af3158db4f3bb50084ea47ad60619ae69b4b9a1` was bundled, transferred with the project-local ignored SSH identity, checked out detached on the Mac, and verified as exact HEAD before running:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+```
+
+The command exited 1 as expected because production had not been added. Key errors were:
+
+```text
+cannot find 'CellularIPRotationCoordinator' in scope
+cannot find type 'CellularIPRotationClock' in scope
+cannot find type 'CellularIPRotationSleeping' in scope
+cannot find type 'CellularIPRotationTunnelControlling' in scope
+cannot find type 'TunnelRotationPreferenceSession' in scope
+cannot find 'TunnelRotationPreferenceTransaction' in scope
+value of type 'RotationCheckpointStoreStub' has no member 'load(at:)'
+```
+
+### App-integration RED
+
+At exact commit `f4c706928794384fb392f9a915e2f0e817f3e770`:
+
+```text
+swift test --filter XcodeProjectStructureTests.testAppleRotationCoordinatorWiresTunnelLifecycleActivationAndSafeActions
+```
+
+The one selected test failed on 19 assertions because `TunnelManager`, `AgentViewModel`, and scene activation had not yet been wired. Those expected failures covered tunnel rotation protocol conformance, pause/resume calls, published cellular/rotation state, all requested actions, safe status copy, and foreground activation.
+
+### Ownership regression RED
+
+Self-review found that a second request during an active attempt reached the reducer only after the coordinator had cancelled the first attempt's timeout. The test-only exact commit `cefbab44bf90957f3b455954d3b514cd4984c58c` ran:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests.testDuplicateStartDuringActiveAttemptDoesNotCancelOwnedLossTimeout
+```
+
+Expected output:
+
+```text
+Executed 1 test, with 2 failures (0 unexpected)
+Timed out waiting for coordinator state
+TASK3B_RED_EXIT=1
+```
+
+Commit `b7a23ad` moved pure eligibility validation ahead of attempt-ID, generation, and task mutation. Exact-commit GREEN then reported:
+
+```text
+CellularIPRotationCoordinatorTests.testDuplicateStartDuringActiveAttemptDoesNotCancelOwnedLossTimeout: 1 test, 0 failures
+CellularIPRotationCoordinatorTests: 7 tests, 0 failures
+TunnelPreferenceTransactionTests: 8 tests, 0 failures
+```
+
+The later return-timeout case at `0f4a0b0` also passed as one selected test with zero failures. The final coordinator suite contains eight tests, including loss timeout, return timeout, cancellation/stale probe rejection, notification denial, early return, recovery, resume failure, and duplicate-start ownership.
+
+### Structure compatibility RED/GREEN
+
+The return-timeout test passed at `0f4a0b0`, after which the existing structure test reproduced one expected self-review failure:
+
+```text
+swift test --filter XcodeProjectStructureTests.testAppleManagerConsumesPortablePreferenceTransaction
+Executed 1 test, with 1 failure (0 unexpected)
+```
+
+The assertion required the old literal direct conformance even though `TunnelRotationPreferenceSession` refines `TunnelPreferenceSession`. Commit `edf9d98` accepts either spelling; Swift compilation still enforces the refinement. The full final run passed all 12 project-structure tests.
+
+## Behavior delivered
+
+### Coordinator
+
+- Added generic, main-actor `CellularIPRotationCoordinator` with injected clock, sleeper, public-IP probe, cellular-path observer, checkpoint store, notification cue, and tunnel controller.
+- `start(holdSeconds:)`, confirmation, cancellation, and `resumeAfterActivation()` interpret Task 2 reducer effects and own pause, probe, loss-timeout, hold, return-timeout, and resume tasks.
+- Attempt generations and IDs reject stale callbacks. A duplicate/ineligible request is rejected before it can cancel the current attempt's owned work.
+- Every active transition saves a checkpoint. Loss/return states retain the originally scheduled deadline instead of granting a fresh 120/180-second window.
+- Terminal transitions cancel owned timers, clear the checkpoint, cancel only the attempt-specific cue, and resume the tunnel exactly once. A resume error becomes finite `tunnelResumeFailed` without replay.
+- Activation starts cellular observation once, republishes current state, and attempts checkpoint recovery once. Valid recovery preserves the saved deadline; expired/malformed recovery clears data, fails finite, and performs best-effort fallback resume without an activation loop.
+
+### Tunnel lifecycle
+
+- Added `TunnelRotationPreferenceSession`, opaque public `TunnelRotationReceipt`, and `TunnelRotationPreferenceTransaction` in `MobileEgressCore`.
+- Pause loads preferences, captures prior running/on-demand intent, persists disabled on-demand state, reloads it, and only then stops the session.
+- Resume restores prior on-demand intent and explicitly starts only when the receipt records prior running intent. A missing recovery receipt uses the existing ordinary start transaction as best-effort restoration.
+- `TunnelManager` adopts the injected coordinator and portable transaction protocols. Its ordinary `start()` and `stop()` implementations remain unchanged.
+
+### App integration
+
+- `AgentViewModel` publishes `cellularHealth` and `rotationState`, computes eligibility/confirmation through Task 2's pure `CellularIPRotationAvailability`, and synchronizes enrolled/running/stream availability.
+- Added request, confirm, decline, cancel, 30-second retry, foreground resume, and privacy-safe copied-status actions.
+- Live construction uses Task 3A's probe, cellular path, App Group checkpoint, Apple notification center, and first-use store adapters.
+- `MobileEgressAgentApp` calls foreground recovery when `scenePhase == .active`.
+- Safe-copy code returns Task 2's finite `safeCopiedStatus`; no `UIPasteboard` mutation or raw error/string surface was added.
+- Existing Task 2 presentation copy guides manual Control Center use. No private Settings URL or claim that the app toggles Airplane Mode exists.
+
+## Final required Mac verification
+
+The clean local tree was bundled, and detached Mac checkout HEAD was asserted equal to `edf9d9855981b5841952fa1773d5d14653f4284e` before each phase.
+
+Commands:
+
+```text
+swift test
+swift test -Xswiftc -warnings-as-errors
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
+```
+
+Results:
+
+```text
+Test Suite 'All tests' passed
+Executed 220 tests, with 2 tests skipped and 0 failures (0 unexpected)
+TASK3B_FULL_SWIFT=PASSED
+
+Test Suite 'All tests' passed
+Executed 220 tests, with 2 tests skipped and 0 failures (0 unexpected)
+TASK3B_WARNINGS_AS_ERRORS=PASSED
+
+Targets: MobileEgressAgent, MobileEgressTunnelExtension
+Schemes: MobileEgressAgent, MobileEgressCore
+** BUILD SUCCEEDED **
+TASK3B_UNSIGNED_IPHONEOS_BUILD=PASSED
+```
+
+The two skips are the existing physical-device Secure Enclave and entitled Keychain acceptance tests. `scripts/validate-mobile-feature-manifest.ps1` also passed locally. Windows Docker was unavailable, so no Windows portable result is claimed; the required Mac Swift and Xcode phases are authoritative.
+
+## Changed files
+
+Production/app:
+
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift` (new)
+- `ios/Sources/MobileEgressCore/Rotation/AppGroupCellularIPRotationCheckpointStore.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift`
+- `ios/Sources/MobileEgressCore/Runtime/TunnelPreferenceTransaction.swift`
+- `ios/MobileEgressAgent/TunnelManager.swift`
+- `ios/MobileEgressAgent/AgentViewModel.swift`
+- `ios/MobileEgressAgent/MobileEgressAgentApp.swift`
+
+Tests:
+
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift` (new)
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCheckpointStoreTests.swift`
+- `ios/Tests/MobileEgressCoreTests/TunnelPreferenceTransactionTests.swift`
+- `ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift`
+
+No new app-target source file was added, so no `project.pbxproj` entry was necessary.
+
+## Self-review
+
+- `git diff --check 4509f01..edf9d98` reported no whitespace errors, and the verified source tree was clean.
+- The changed-file inventory contains only rotation, tunnel preference, app lifecycle/view-model integration, and focused tests. `AgentDashboardView`, assets, `project.pbxproj`, plists, entitlements, relay, wire, security, extension runtime, and scanner source did not change.
+- Source scans found no `prefs:root=`, Settings-opening API, `UIPasteboard`, Airplane Mode toggle claim, or tracked SSH identity.
+- Ordinary `TunnelPreferenceTransaction.start/stop` code is unchanged; focused tests cover both its prior behaviors and the new rotation transaction ordering/intent restoration.
+- No dependency, signing team, account, Mac configuration, provider inventory, or external system state was changed.
+- Mutation review: removing coordinator generation/attempt checks, pre-mutation eligibility, either timeout, original deadline preservation, recovery-once guard, terminal checkpoint/cue cleanup, resume failure mapping, on-demand-before-stop ordering, prior-intent restoration, or a view-model action breaks focused tests or app compilation.
+
+## Concerns and device acceptance
+
+- The tracked standalone Xcode package-test command builds the test bundle but cannot launch it on the configured Mac because `com.apple.testmanagerd.control` is invalidated (`xcodebuild` exit 65). The identical host-service failure reproduced on exact baseline `4509f01` and exact final source commit `edf9d98`; it is not a Task 3B source regression. `swift test` and warnings-as-errors execute all 220 tests successfully.
+- The unsigned Xcode build retains existing warnings about interface-orientation coverage and skipped AppIntents metadata; it exits zero and reports `BUILD SUCCEEDED`.
+- Physical-device acceptance still needs to exercise real NetworkExtension preference timing, on-demand reconnection, cellular loss/return, Control Center background/foreground transitions, App Group recovery, local notification delivery/denial, and public-IP change. Those Apple side effects were intentionally covered through injected seams here without changing signing, accounts, or Mac software.
+- Visual exposure of these actions belongs to the later SwiftUI task; this task wires the model and lifecycle only, as required.
+
+## Round 1/5 review remediation (2026-09-01)
+
+### Scope and commits
+
+This review round starts from the original Task 3B report commit
+`21256b7999f8488e0e3b047c3f6693d0db3f430f` and addresses the four requested
+coordinator/lifecycle findings without changing the dashboard, assets, ordinary
+start/stop implementation, relay, wire, security, extension runtime, or scanner.
+
+- `5fd903642dbb6cf6d9b08e70e333a7a85eb1871c` — deterministic coordinator REDs for suspended pause cancellation, first unavailable path delivery, pre-pause recovery intent, and retirement replay.
+- `2790999e0ddf1f7eefc698850cdb44b0b105dcf2` — transaction RED requiring failed-pause compensation.
+- `da2c24235e518df37e88de9d2d73a97beef4a8f5` — real App Group store RED for physical deletion failure and tombstone privacy.
+- `caeed147566ba4e69c80d7b7748fa18b5f1d41a4` — serialized cancellation, compensated pause transaction, observed-path state, recovery receipt classification, and durable checkpoint retirement.
+
+### Exact Mac RED evidence
+
+Each test-only tree was bundled and checked out detached on the Mac; `git rev-parse
+HEAD` was asserted in command output before the focused command.
+
+At `5fd903642dbb6cf6d9b08e70e333a7a85eb1871c`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 12 tests, with 23 failures (0 unexpected)
+```
+
+The deterministic failures showed all three suspended awaited stages (`initialLoad`,
+`save`, and `reload`) reaching terminal state before release, a late `stop`, duplicate
+fallback resume, lost running/on-demand intent, the first unavailable path timing out,
+stopped/off pre-pause recovery being restored as running/on, nil recovery receipts,
+and a physically undeleted checkpoint replaying in a new coordinator.
+
+At `2790999e0ddf1f7eefc698850cdb44b0b105dcf2`:
+
+```text
+swift test --filter TunnelPreferenceTransactionTests.testRotationPauseFailureRestoresOnDemandIntentWithoutStopping
+Executed 1 test, with 1 failure (0 unexpected)
+```
+
+The actual operations ended at `load, apply(false), save`; the RED required the
+missing compensating `apply(true), save, load` and no stop.
+
+At `da2c24235e518df37e88de9d2d73a97beef4a8f5`:
+
+```text
+swift test --filter CellularIPRotationCheckpointStoreTests.testRetirementPreventsReplayWhenPhysicalDeletionFailsWithoutLeakingCheckpointData
+error: extra argument 'fileRemover' in call
+```
+
+This compile RED established that the production App Group store had neither a
+deterministic physical-deletion seam nor durable retirement API.
+
+### Exact Mac focused GREEN
+
+At detached exact source commit `caeed147566ba4e69c80d7b7748fa18b5f1d41a4`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 12 tests, with 0 failures (0 unexpected)
+
+swift test --filter TunnelPreferenceTransactionTests
+Executed 8 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationCheckpointStoreTests
+Executed 5 tests, with 0 failures (0 unexpected)
+```
+
+### Behavior corrected
+
+- `cancel()` now cancels and awaits the owned pause task before reducing the terminal event. The portable pause transaction checks cancellation around every awaited preference stage and compensates any applied on-demand mutation before it throws. The controllable stage test proves no terminal transition occurs before release, no late stop escapes, no coordinator fallback resume duplicates compensation, and prior running/on-demand intent is retained.
+- Cellular availability now stores an optional last observation separately from the public false default. The first real false sample is therefore reduced as cellular loss during recovered Airplane Mode guidance instead of being treated as a duplicate.
+- Recovery classifies `awaitingConfirmation` and `preparing` as pre-pause checkpoints, retaining a newly captured opaque receipt. Later checkpoints continue to discard a newly observed receipt and use recovery fallback because their original pre-pause intent was already lost. The matrix covers stopped/on-demand-off and running/on-demand-on for both pre-pause states.
+- Terminal retirement atomically replaces the sensitive active checkpoint with a versioned tombstone containing only the retired attempt ID, then performs best-effort physical deletion. A failing injected deletion leaves the tombstone, and a newly constructed store/coordinator returns idle without replay. The file test verifies the tombstone contains neither the original network token nor public IP.
+
+### Full required Mac verification
+
+The exact source commit printed before the commands was
+`caeed147566ba4e69c80d7b7748fa18b5f1d41a4`:
+
+```text
+swift test
+Test Suite 'All tests' passed
+Executed 225 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+swift test -Xswiftc -warnings-as-errors
+Test Suite 'All tests' passed
+Executed 225 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
+** BUILD SUCCEEDED **
+```
+
+Both app and `MobileEgressTunnelExtension` were compiled and the extension was embedded
+in the unsigned iPhoneOS app. The two skips remain the existing physical-device Secure
+Enclave and entitled Keychain acceptance tests.
+
+### Round changed files and self-review
+
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift`
+- `ios/Sources/MobileEgressCore/Rotation/AppGroupCellularIPRotationCheckpointStore.swift`
+- `ios/Sources/MobileEgressCore/Runtime/TunnelPreferenceTransaction.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCheckpointStoreTests.swift`
+- `ios/Tests/MobileEgressCoreTests/TunnelPreferenceTransactionTests.swift`
+
+`git diff --check 21256b7..caeed14` passed. The changed-file inventory is limited to
+the three MobileEgressCore lifecycle files and focused tests. Source scans found no
+private Settings URL, Settings-opening API, clipboard mutation, Airplane Mode toggle
+claim, injected secret/IP fixture in production, or tracked SSH identity. The full suite
+and Xcode build provide regression coverage for the unchanged app, extension, relay,
+wire, security, scan, and ordinary preference paths.
+
+### Round concerns
+
+- Atomic tombstone replacement protects against the requested physical deletion failure. A total App Group write failure cannot provide durable on-disk retirement; the coordinator remains best-effort for that fundamental storage outage.
+- The existing standalone `xcodebuild test` host-service invalidation and existing unsigned-build orientation/AppIntents warnings remain as documented above; neither was changed by this round.
+- Physical-device NetworkExtension timing and foreground/background acceptance remain required before release.
+
+## Round 2/5 review remediation (2026-09-01)
+
+### Scope and commits
+
+This round starts from the Round 1 implementation commit
+`699cf3713c0846dfae89066bb34f2766720c3d07` and addresses only the two requested
+durability gaps: distinguishing a crash before versus after tunnel pause, and making
+checkpoint retirement fall back safely when an atomic tombstone write fails.
+
+- `4d2df7e3971cfb3e013ca89328d149a6066ef8e5` — deterministic RED coverage for pause disposition, original-intent recovery matrices, and the two retirement mechanisms.
+- `af27569b5d0f026d937ddaf4f8f7929787be124b` — presentation RED requiring a finite, privacy-safe checkpoint-retirement failure.
+- `2cf025813f8c26e825c97b5f7f21b2adbb0e43d8` — durable pause intent, retirement fallback, coordinator failure mapping, and all focused GREENs.
+
+### Exact Mac RED evidence
+
+Both test-only commits were bundled from Windows, checked out detached on the exact
+Mac, and confirmed with `git rev-parse HEAD` before executing the focused commands.
+
+At `4d2df7e3971cfb3e013ca89328d149a6066ef8e5`:
+
+```text
+swift test --filter CellularIPRotation
+
+error: extra argument 'pauseDisposition' in call
+error: cannot find 'CellularIPRotationPauseDisposition' in scope
+error: 'TunnelRotationReceipt' initializer is inaccessible due to 'fileprivate' protection level
+error: type 'TunnelRotationReceipt' does not conform to protocol 'Equatable'
+error: type 'CellularIPRotationFailure' has no member 'checkpointRetirementFailed'
+error: extra argument 'atomicWriter' in call
+```
+
+At `af27569b5d0f026d937ddaf4f8f7929787be124b`:
+
+```text
+swift test --filter AgentDashboardPresentationTests.testCheckpointRetirementFailureHasFiniteSafePresentation
+
+error: type 'CellularIPRotationFailure' has no member 'checkpointRetirementFailed'
+```
+
+These compile REDs are intentional: the tests named the required durable checkpoint
+phase, opaque receipt round trip, dual retirement seams, and finite presentation before
+any production API existed.
+
+### Behavior corrected
+
+- `CellularIPRotationCheckpoint` now persists a `pending` or `paused(receipt)`
+  disposition. The receipt's running and on-demand fields and initializer remain
+  module-internal; the serialized values are non-secret tunnel intent only.
+- A new attempt writes `pending`. After `pauseForRotation()` completes, the coordinator
+  captures the opaque receipt, switches to `paused`, and synchronously saves that active
+  checkpoint before the dependent public-IP probe can begin.
+- Recovery of a pending `awaitingConfirmation` or `preparing` checkpoint performs the
+  pause and preserves the newly captured original intent. Recovery of a paused
+  `preparing` checkpoint skips pause entirely and resumes from its persisted receipt.
+  The stopped/on-demand-off and running/on-demand-on matrices prove exact restoration
+  and one resume for both sides of the crash boundary.
+- A legacy checkpoint with no disposition decodes as `legacyUnknown`. Legacy
+  `awaitingConfirmation` remains safe to pause later; ambiguous legacy `preparing`
+  fails finite with best-effort restoration instead of guessing and potentially
+  overwriting original intent.
+- App Group retirement now attempts atomic tombstone replacement and physical deletion
+  independently. A failed tombstone write plus successful deletion succeeds with no
+  replay. Only failure of both mechanisms throws `writeFailed`; the active checkpoint
+  remains available for diagnosis rather than being falsely reported retired.
+- The coordinator maps that double failure to finite `checkpointRetirementFailed` only
+  after best-effort original-intent resume settles. This direct terminal transition does
+  not invoke retirement again, so no recursive retirement work is scheduled. Dashboard
+  copy contains no checkpoint contents.
+
+### Exact Mac focused GREEN
+
+At detached exact source commit `2cf025813f8c26e825c97b5f7f21b2adbb0e43d8`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 15 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationCheckpointStoreTests
+Executed 7 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationTests
+Executed 24 tests, with 0 failures (0 unexpected)
+
+swift test --filter AgentDashboardPresentationTests.testCheckpointRetirementFailureHasFiniteSafePresentation
+Executed 1 test, with 0 failures (0 unexpected)
+```
+
+### Full required Mac verification
+
+The detached checkout printed exact source HEAD
+`2cf025813f8c26e825c97b5f7f21b2adbb0e43d8` before the commands:
+
+```text
+swift test
+Test Suite 'All tests' passed
+Executed 232 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+swift test -Xswiftc -warnings-as-errors
+Test Suite 'All tests' passed
+Executed 232 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+Targets: MobileEgressAgent, MobileEgressTunnelExtension
+Schemes: MobileEgressAgent, MobileEgressCore
+
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent \
+  -configuration Debug -sdk iphoneos \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+** BUILD SUCCEEDED **
+```
+
+The unsigned device build compiled both targets and embedded
+`MobileEgressTunnelExtension.appex`. An initial verification invocation named the
+nonexistent `MobileEgress.xcodeproj` and failed before compilation; the corrected
+tracked project command above exited zero. No signing, account, or Mac configuration
+was changed. The two Swift skips remain the pre-existing physical-device Secure
+Enclave and entitled Keychain acceptance tests.
+
+### Round changed files and self-review
+
+Production:
+
+- `ios/Sources/MobileEgressCore/Runtime/TunnelPreferenceTransaction.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift`
+- `ios/Sources/MobileEgressCore/Rotation/AppGroupCellularIPRotationCheckpointStore.swift`
+- `ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift`
+
+Focused tests:
+
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCheckpointStoreTests.swift`
+- `ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift`
+
+`git diff --check 699cf37..2cf0258` passed, and the implementation checkout was clean.
+The changed-file inventory contains only the checkpoint/coordinator/tunnel transaction,
+safe presentation mapping, and focused tests. App glue, Xcode project, visual assets,
+ordinary start/stop, relay, wire, security, extension runtime, and scanner files are
+unchanged. Source scans found no Settings URL/API, clipboard mutation, automatic
+Airplane Mode claim, private key, raw checkpoint copy, or public receipt field. No
+dependency, signing team, account, Mac software, or external system state changed.
+
+### Round concerns
+
+- When both App Group mutation mechanisms are unavailable (for example, a total volume
+  outage that blocks both atomic replacement and deletion), software cannot truthfully
+  guarantee durable retirement. The coordinator now exposes that bounded storage
+  failure only after restoration is attempted; device recovery still requires fixing
+  the underlying storage outage before another rotation.
+- The existing standalone `xcodebuild test` host-service invalidation and existing
+  unsigned-build orientation/AppIntents warnings remain as previously documented and
+  were not changed by this round.
+- Physical-device NetworkExtension timing, process termination at the pause/checkpoint
+  boundary, and foreground/background acceptance remain required before release.
+
+## Round 3/5 review remediation (2026-09-01)
+
+### Scope and commits
+
+This round starts from the Round 2 report commit
+`98429591f7f2cfed479b1e183e16e8657a600599`. It closes the remaining crash window by
+durably recording original tunnel intent before any pause mutation, and it rejects every
+active legacy checkpoint that lacks a trustworthy receipt.
+
+- `5cfdbeb264cec8797bf69c708401da0ffd34322c` — initial two-phase contract, crash-boundary matrix, legacy-recovery, app-wiring, and transaction REDs.
+- `1235580f65c086d00a11be2081972eeb6f684f1d` — read-only receipt capture, durable `pausing(receipt)`, receipt-parameterized pause, recovery validation, and Apple adapter glue.
+- `d924d601470e1c86831814f4e273838e08533b65` — asserts the complete `pending -> pausing -> paused` checkpoint sequence and receipt continuity.
+- `3bbec12839511aeb964b2591f40b5959b0984059` — self-review RED for cancellation before applying a recovered pause.
+- `af73606e814f30195b3d81c33957fc2c67fdf9c2` — retains original-intent restoration ownership for that recovered-cancellation edge.
+
+### Exact Mac RED evidence
+
+At detached test-only commit `5cfdbeb264cec8797bf69c708401da0ffd34322c`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests
+
+error: type 'TunnelRotationPreferenceTransaction' has no member 'captureIntent'
+error: extra argument 'receipt' in call
+error: type 'RotationTunnelStub' does not conform to protocol
+      'CellularIPRotationTunnelControlling'
+error: type 'CellularIPRotationPauseDisposition' has no member 'pausing'
+```
+
+This compile RED was produced only after correcting a test-helper naming collision; it
+therefore identifies the missing production contract rather than a malformed test.
+
+Self-review added a second deterministic RED at
+`3bbec12839511aeb964b2591f40b5959b0984059`:
+
+```text
+swift test --filter \
+  CellularIPRotationCoordinatorTests.testCancelBeforeRecoveredPauseApplicationRestoresPersistedIntentExactlyOnce
+
+Executed 1 test, with 6 failures (0 unexpected)
+actual resume receipts: []
+expected resume receipts: [persisted receipt]
+running/on-demand intent remained false/false instead of true/true
+```
+
+That RED proves cancellation before application of a recovered `.pausing` receipt could
+otherwise strand tunnel intent captured by the prior process.
+
+### Behavior corrected
+
+- `TunnelRotationPreferenceTransaction.captureIntent(using:)` performs cancellation
+  checks around one preference load and returns the opaque running/on-demand receipt. It
+  performs no configuration application, save, start, or stop operation.
+- `pause(using:receipt:)` accepts that exact receipt. It disables on-demand, saves and
+  reloads preferences, then stops the session; cancellation or failure before stop uses
+  the supplied receipt for serialized on-demand compensation.
+- The coordinator saves active `pending`, then captures intent, saves
+  `pausing(receipt)` to the real checkpoint abstraction, and only after that durable save
+  invokes pause mutation. It saves `paused(receipt)` before the dependent IP probe can
+  begin. The same receipt is asserted across both saved phases.
+- Recovery of `.pausing(receipt)` never recaptures live stopped/off state. It reapplies
+  the idempotent pause with the persisted receipt; recovery of `.paused(receipt)` skips
+  pause. Both ultimately restore the persisted original intent exactly once.
+- Deterministic recovery fixtures cover crashes immediately after the receipt
+  checkpoint, after disable/save/reload, and after stop but before the paused checkpoint,
+  for stopped/on-demand-off and running/on-demand-on intent.
+- Cancellation still awaits the owned pause task. If a recovered `.pausing` operation is
+  cancelled before application, terminal resume retains the stored receipt; for a fresh
+  pause whose transaction already compensated, duplicate coordinator restoration remains
+  suppressed.
+- Recovery validation allows `pending` only in genuinely pre-pause states,
+  `pausing(receipt)` only in `preparing`, and receipt-bearing `paused` recovery. Any
+  `legacyUnknown` active state, plus a later active `pending` state with no receipt,
+  terminates finite as `recoveryExpired` and performs only best-effort restoration.
+- `TunnelManager.captureRotationIntent()` requires the already prepared manager and uses
+  only the read-only capture transaction. Pause application retains the existing Apple
+  manager preparation path and passes the exact stored receipt.
+
+### Exact Mac focused GREEN
+
+At detached commit `d924d601470e1c86831814f4e273838e08533b65`:
+
+```text
+swift test --filter TunnelPreferenceTransactionTests
+Executed 8 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 18 tests, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationTests
+Executed 24 tests, with 0 failures (0 unexpected)
+
+swift test --filter XcodeProjectStructureTests.testAppleRotationCoordinatorWiresTunnelLifecycleActivationAndSafeActions
+Executed 1 test, with 0 failures (0 unexpected)
+```
+
+At exact final source commit `af73606e814f30195b3d81c33957fc2c67fdf9c2`:
+
+```text
+swift test --filter CellularIPRotationCoordinatorTests.testCancelBeforeRecoveredPauseApplicationRestoresPersistedIntentExactlyOnce
+Executed 1 test, with 0 failures (0 unexpected)
+
+swift test --filter CellularIPRotationCoordinatorTests
+Executed 19 tests, with 0 failures (0 unexpected)
+```
+
+### Full required Mac verification
+
+The final detached source checkout printed
+`af73606e814f30195b3d81c33957fc2c67fdf9c2` before each command:
+
+```text
+swift test
+Test Suite 'All tests' passed
+Executed 236 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+swift test -Xswiftc -warnings-as-errors
+Test Suite 'All tests' passed
+Executed 236 tests, with 2 tests skipped and 0 failures (0 unexpected)
+
+xcodebuild -list -project MobileEgressAgent.xcodeproj
+Targets: MobileEgressAgent, MobileEgressTunnelExtension
+Schemes: MobileEgressAgent, MobileEgressCore
+
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent \
+  -configuration Debug -sdk iphoneos \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+** BUILD SUCCEEDED **
+```
+
+The extension was compiled, embedded, and validated inside the unsigned iPhoneOS app.
+The two skips remain the pre-existing physical-device Secure Enclave and entitled
+Keychain acceptance tests. No signing, account, or Mac configuration changed.
+
+### Round changed files and self-review
+
+Production/app:
+
+- `ios/Sources/MobileEgressCore/Runtime/TunnelPreferenceTransaction.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift`
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift`
+- `ios/MobileEgressAgent/TunnelManager.swift`
+
+Tests:
+
+- `ios/Tests/MobileEgressCoreTests/TunnelPreferenceTransactionTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift`
+- `ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift`
+
+`git diff --check 9842959..af73606` passed and the source worktree was clean. Receipt
+fields and initializer remain module-internal Boolean intent only. Mutation review shows
+that making capture apply/save, moving the `pausing` save after pause, recapturing on
+`.pausing` recovery, allowing legacy later states, changing either stored receipt, or
+dropping recovered-cancellation restoration breaks focused tests. Changed-file and source
+scans found no visual asset/view change, Settings URL/API, clipboard mutation, private
+key, raw checkpoint copy, new dependency, or change to ordinary start/stop, relay, wire,
+security, extension runtime, or scanner behavior.
+
+### Round concerns
+
+- Physical-device process termination at each pause boundary remains the release-level
+  validation for real NetworkExtension preference timing; deterministic core tests cover
+  the same state and intent matrices without changing signing or accounts.
+- The existing standalone `xcodebuild test` host-service invalidation and unsigned-build
+  orientation/AppIntents warnings remain as previously documented and unchanged.
+- A total App Group outage that defeats both atomic replacement and deletion remains a
+  finite surfaced storage failure, as documented in Round 2.

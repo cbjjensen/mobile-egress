@@ -2,9 +2,13 @@
 
 ## Normal use
 
-`MobileEgressRelay` and each `MobileEgressClient` run as automatic LocalSystem services. Closing the controller window leaves it in the tray; quitting the controller does not stop those services. Start/stop the Android Agent only through its visible UI or foreground notification.
+`MobileEgressRelay` and each `MobileEgressClient` run as automatic LocalSystem services. Closing the controller window leaves it in the tray; quitting the controller does not stop those services. Start or stop a mobile Agent only through its visible app UI; Android also provides its foreground notification.
 
-For a best-effort cellular address change, use **Rotate cellular IP** in the running Android Agent. Confirm stream disconnection, turn Airplane Mode on in the system screen the app opens, wait for the notification countdown, then turn it off. The Agent verifies and reconnects automatically. An unchanged result means the carrier reused the address; retry with the offered 30-second reset. Do not record the displayed addresses in acceptance evidence.
+For a best-effort cellular address change, use **Rotate cellular IP** while the Agent is enrolled, running, and cellular is available. Confirm the warning if active streams must be disconnected. A normal attempt uses a 10-second reset; an unchanged result means the carrier reused the comparable address and offers one 30-second retry. Record only changed, unchanged, or unverified—never the addresses themselves.
+
+On Android, the app opens the public system Airplane Mode settings screen for the two manual toggles. On iOS, follow the dashboard guidance to open Control Center yourself, turn Airplane Mode on, wait for the cue/countdown, then turn it off. The iOS app does not toggle Airplane Mode and does not deep-link to a private Settings URL. Return to the app if it entered the background so foreground recovery can observe the current phase and restore the Agent. Cancellation, timeout, and recoverable failure all attempt to restore the previous Agent/on-demand intent; if restoration is reported as failed, start the Agent again before retrying.
+
+**Copy diagnostic status** is safe for a sanitized support record: it contains branded enrollment, Agent, cellular, relay, stream/byte, finite error, and rotation state. It intentionally excludes public addresses, relay origins, certificates, capabilities, and raw errors.
 
 Refract running on a managed EC2 node opts in with that node's **Copy proxy line** value: `127.0.0.1:1081:<username>:<password>`. The listener forwards ordinary HTTP and uses CONNECT to carry end-to-end HTTPS without Mobile Egress decrypting it. SOCKS-aware software can instead use **Copy SOCKS5 URL** at `127.0.0.1:1080`. Both values work only on the same EC2 node; never configure an EC2 security group, Windows system proxy, or public proxy listener.
 
@@ -37,7 +41,7 @@ The public publisher DER/fingerprints and signed-release URL/hash may appear in 
 2. Connect AWS in the controller if any nodes are managed.
 3. Choose **Rotate endpoint safely** and approve UAC. The helper rotates the relay leaf certificate under the existing CA and restarts `MobileEgressRelay`.
 4. Review the returned updated/failed node list. Use **Repair** for failures after SSM is online.
-5. On the existing Android app, stop the Agent, choose **Scan QR**, and scan the displayed endpoint-migration QR. Restart the Agent.
+5. On the existing Android or iOS app, stop the Agent, choose **Scan QR**, and scan the displayed endpoint-migration QR. Restart the Agent.
 6. Confirm workloads reconnect. No device key, Client serial, Agent certificate, or SOCKS credential should change.
 
 The QR is one-use and expires after ten minutes. It is distinct from enrollment and cannot migrate an Agent belonging to a different CA.
@@ -54,10 +58,11 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | Tailscale reports Windows Installer code 1632 | Verify the user/System temp directories and `%windir%\Installer` exist and are writable; preserve the MSI verbose log | Treat a missing Windows Installer cache as an operating-system repair issue. Do not have Mobile Egress silently recreate or repopulate it; cached packages are machine-specific and require supported recovery or system-state restoration. |
 | Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes; Repair reuses the persisted desired endpoint/generation. Scan the migration QR. |
 | Interrupted reservation | Controller exited before recoverable node metadata was committed | Retry Install on the same instance, or explicitly cancel the reservation only if that instance is gone/unrecoverable. |
-| Agent offline | Android foreground service, cellular availability, battery restrictions | Start from visible UI; restore cellular. Wi-Fi is intentionally not a fallback. |
+| Agent offline | Android foreground service or iOS packet-tunnel status; cellular availability; platform background restrictions | Start from visible UI and restore cellular. Wi-Fi is intentionally not a fallback. |
 | Cellular IP unchanged | Rotation completed but the carrier reused the comparable IPv4/IPv6 address | Use the offered 30-second retry. Reassignment is carrier-controlled and cannot be guaranteed. |
-| Rotation waiting for Airplane Mode | System settings is open but cellular never disappeared | Turn Airplane Mode on manually or return to the Agent and cancel. It cancels automatically after two minutes. |
+| Rotation waiting for Airplane Mode | Cellular never disappeared after the platform guidance | Turn Airplane Mode on manually in Android system settings or iOS Control Center, or return to the Agent and cancel. It cancels automatically after two minutes. |
 | Rotation waiting for cellular | Airplane Mode remains on, mobile data is unavailable, or carrier attachment is slow | Turn Airplane Mode off and restore cellular. After three minutes the Agent returns to normal waiting behavior and reconnects whenever cellular appears. |
+| iOS rotation resumes in the foreground | The app was backgrounded or suspended during Control Center use | Return to the dashboard and let checkpoint recovery reconcile the phase. Do not begin another attempt until the current attempt is terminal and Agent/relay state is visible. |
 | IP result unverified | ipify was unreachable or no address family succeeded both before and after | Proxy traffic still remains cellular-only. Retry later; do not treat the result as proof that the address changed. |
 | Node missing | Region, running Windows Server 2019 x86-64 image, AWS authorization | Use `us-east-1`; the app intentionally filters other nodes. |
 | SSM remains unregistered after profile setup | An already-running SSM Agent can retain its earlier no-credential state after a profile is attached | Allow the 30-second passive check. If the card offers **Restart EC2 and continue**, confirm only when a brief server interruption is acceptable. The controller reboots only the selected instance, waits for a fresh Agent ping, then installs automatically. If it still times out, inspect the sanitized registration/Agent-version/last-ping events and check the Windows `AmazonSSMAgent` service plus outbound HTTPS/DNS. Do not open inbound ports. |

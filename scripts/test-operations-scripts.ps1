@@ -84,7 +84,7 @@ Assert-Condition ($releaseScript -match 'Get-MobileEgressAndroidSdkRoot -Reposit
 Assert-Condition ($releaseScript -notmatch '(?i)write-(host|output|information).*?(storePassword|keyPassword|keyAlias|storeFile)') 'The release script must not print signing properties.'
 Assert-Condition ($releaseScript -match 'check-ignore -q -- android/keystore.properties') 'The release script must require the signing properties file to remain ignored.'
 $gitIgnore = Get-Content -Raw (Join-Path $repositoryRoot '.gitignore')
-Assert-Condition ($gitIgnore -match '(?m)^android/mobile-egress-release\.jks$') 'The reusable Android release keystore must have an explicit ignore rule.'
+Assert-Condition ($gitIgnore -match '(?m)^android/mobile-egress-release\.jks\r?$') 'The reusable Android release keystore must have an explicit ignore rule.'
 $releaseCertificateRecordPath = Join-Path $repositoryRoot 'android\release-signing-certificate.txt'
 Assert-Condition (Test-Path -LiteralPath $releaseCertificateRecordPath -PathType Leaf) 'The public Android release certificate identity must be tracked for future comparisons.'
 $releaseCertificateRecord = Get-Content -Raw $releaseCertificateRecordPath
@@ -127,6 +127,7 @@ Assert-Condition ($missingKeystoreOutput -notmatch '(?i)storePassword|keyPasswor
 
 $testAllScript = Get-Content -Raw (Join-Path $PSScriptRoot 'test-all.ps1')
 Assert-Condition ($testAllScript -match 'Initialize-MobileEgressTestAllToolchain') 'test-all must bootstrap local toolchain paths before preflight.'
+Assert-Condition ($testAllScript -match 'validate-mobile-feature-manifest\.ps1') 'test-all must validate the mobile feature parity manifest for full and Android component gates.'
 Assert-Condition ($testAllScript -match 'AppData\\Roaming\\nvm\\nodejs') 'test-all must prefer the active NVM Node.js symlink over stale global nodejs paths.'
 Assert-Condition ($testAllScript -match 'AppData\\Local\\Programs\\Go') 'test-all must include the local Go installation when the inherited PATH omits go.exe.'
 Assert-Condition ($testAllScript -match 'Eclipse Adoptium\\jdk-17') 'test-all must set the known JDK 17 home for Android checks in clean shells.'

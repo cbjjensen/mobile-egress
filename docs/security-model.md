@@ -40,7 +40,7 @@ The relay and all proxy listeners bind loopback. Each EC2 Client exposes authent
 
 Android requests a cellular transport and creates relay/target sockets from that `Network`. Loss/unavailability fails closed. Destination policy is enforced in both relay and Agent. DNS names, target IPs, URLs, headers, payloads, and credentials are excluded from diagnostics.
 
-Guided IP rotation queries `api.ipify.org` and `api6.ipify.org` through the selected cellular network, including network-specific DNS. ipify therefore observes the public source address and normal request metadata. Before/after addresses exist only in transient runtime/UI state and are excluded from storage, application logs, copied diagnostics, and physical-acceptance records. Failure of one address family is isolated, and failure of both produces an unverified result rather than a false success. The app opens system settings but has no privileged ability to change Airplane Mode, mobile data, APNs, or SIM state.
+Guided IP rotation queries `api.ipify.org` and `api6.ipify.org` through the selected cellular network, including network-specific DNS. ipify therefore observes the public source address and normal request metadata. Before/after addresses exist only in transient runtime/UI state and are excluded from storage, application logs, copied diagnostics, and physical-acceptance records. Failure of one address family is isolated, and failure of both produces an unverified result rather than a false success. Android opens the public system Airplane Mode settings; iOS guides the user to Control Center without a private Settings URL. Neither app has privileged ability to change Airplane Mode, mobile data, APNs, or SIM state.
 
 ## Signing and supply chain
 

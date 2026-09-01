@@ -18,7 +18,7 @@ test('Windows bridge copy preserves MSI, UAC, tray, and service behavior', () =>
     relayDescription: 'This installs MobileEgressRelay as LocalSystem, binds it to 127.0.0.1:8443, and publishes raw TLS through Funnel. On first use, the app opens Tailscale’s Funnel approval page automatically. No router or firewall port is opened.',
     relaySetupBusyLabel: 'Waiting for Funnel approval / UAC…',
     relayRepairBusyLabel: 'Repairing through UAC…',
-    availability: 'Your PC and phone must stay powered on and connected. Funnel is intended here for light, interruption-tolerant personal traffic.',
+    availability: 'Your PC and Agent device must stay powered on and connected. Funnel is intended here for light, interruption-tolerant personal traffic.',
     footer: 'Closing the window keeps the controller available in the tray. The relay and EC2 Clients run as Windows services.',
   })
 })
@@ -38,7 +38,7 @@ test('macOS bridge copy explains PKG, system-extension, Service Management, and 
     relayDescription: 'This registers the signed relay with macOS Service Management, binds it to 127.0.0.1:8443, and publishes raw TLS through Funnel. No router or firewall port is opened.',
     relaySetupBusyLabel: 'Waiting for Service Management approval…',
     relayRepairBusyLabel: 'Repairing background service…',
-    availability: 'Your Mac must stay powered on with its controller user logged in, and your phone must stay connected. Funnel is intended here for light, interruption-tolerant personal traffic.',
+    availability: 'Your Mac must stay powered on with its controller user logged in, and your Agent device must stay connected. Funnel is intended here for light, interruption-tolerant personal traffic.',
     footer: 'Closing the window keeps the controller available in the menu bar. The relay runs as a macOS background service; EC2 Clients remain Windows services.',
   })
 })

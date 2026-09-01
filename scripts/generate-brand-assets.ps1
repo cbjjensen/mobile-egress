@@ -1,8 +1,14 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$RepositoryRoot = '',
+    [switch]$Check
+)
 
 $ErrorActionPreference = 'Stop'
-$repositoryRoot = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+}
+$repositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 $sourcePath = Join-Path $repositoryRoot 'assets\branding\zfnf-logo-source.png'
 
 Add-Type -AssemblyName System.Drawing
@@ -21,13 +27,19 @@ function New-LogoBitmap {
         [Parameter(Mandatory)][System.Drawing.Image]$Source,
         [Parameter(Mandatory)][int]$Size,
         [Parameter(Mandatory)][bool]$Transparent,
-        [double]$Scale = 1.0
+        [double]$Scale = 1.0,
+        [bool]$OpaqueRGB = $false
     )
 
+    $pixelFormat = if ($OpaqueRGB) {
+        [System.Drawing.Imaging.PixelFormat]::Format24bppRgb
+    } else {
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+    }
     $bitmap = [System.Drawing.Bitmap]::new(
         $Size,
         $Size,
-        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+        $pixelFormat
     )
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
@@ -54,12 +66,13 @@ function New-LogoBitmap {
     $data = $bitmap.LockBits(
         $rectangle,
         [System.Drawing.Imaging.ImageLockMode]::ReadWrite,
-        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+        $pixelFormat
     )
     try {
         $bytes = [byte[]]::new([math]::Abs($data.Stride) * $data.Height)
         [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
-        for ($index = 0; $index -lt $bytes.Length; $index += 4) {
+        $bytesPerPixel = if ($OpaqueRGB) { 3 } else { 4 }
+        for ($index = 0; $index -le $bytes.Length - $bytesPerPixel; $index += $bytesPerPixel) {
             $luminance = [math]::Max($bytes[$index], [math]::Max($bytes[$index + 1], $bytes[$index + 2]))
             $coverage = if ($luminance -le 24) {
                 0
@@ -74,6 +87,10 @@ function New-LogoBitmap {
                 $bytes[$index + 1] = 255
                 $bytes[$index + 2] = 255
                 $bytes[$index + 3] = $coverage
+            } elseif ($OpaqueRGB) {
+                $bytes[$index] = $coverage
+                $bytes[$index + 1] = $coverage
+                $bytes[$index + 2] = $coverage
             } else {
                 $bytes[$index] = $coverage
                 $bytes[$index + 1] = $coverage
@@ -95,11 +112,12 @@ function Save-LogoPng {
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][int]$Size,
         [Parameter(Mandatory)][bool]$Transparent,
-        [double]$Scale = 1.0
+        [double]$Scale = 1.0,
+        [bool]$OpaqueRGB = $false
     )
 
     New-DirectoryForFile -Path $Path
-    $bitmap = New-LogoBitmap -Source $Source -Size $Size -Transparent $Transparent -Scale $Scale
+    $bitmap = New-LogoBitmap -Source $Source -Size $Size -Transparent $Transparent -Scale $Scale -OpaqueRGB $OpaqueRGB
     try {
         $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
     } finally {
@@ -161,15 +179,62 @@ if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
     throw "Canonical logo source is missing: $sourcePath"
 }
 
+$outputRelativePaths = @(
+    'assets\branding\zfnf-logo.png',
+    'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_foreground.png',
+    'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_notification.png',
+    'windows-client\frontend\public\zfnf-logo.png',
+    'windows-client\internal\desktop\zfnf-logo.ico',
+    'ios\Assets\AppAssets.xcassets\AppIcon.appiconset\MobileEgressAppIcon.png',
+    'ios\Assets\AppAssets.xcassets\ZFNFHeader.imageset\ZFNFHeader.png'
+)
+$generationRoot = $repositoryRoot
+$checkRoot = $null
+if ($Check) {
+    $checkRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-brand-check-" + [guid]::NewGuid().ToString('N'))
+    $generationRoot = $checkRoot
+}
+
 $source = [System.Drawing.Image]::FromFile($sourcePath)
 try {
-    Save-LogoPng -Source $source -Path (Join-Path $repositoryRoot 'assets\branding\zfnf-logo.png') -Size 1024 -Transparent $false
-    Save-LogoPng -Source $source -Path (Join-Path $repositoryRoot 'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_foreground.png') -Size 432 -Transparent $true -Scale 0.88
-    Save-LogoPng -Source $source -Path (Join-Path $repositoryRoot 'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_notification.png') -Size 96 -Transparent $true -Scale 0.9
-    Save-LogoPng -Source $source -Path (Join-Path $repositoryRoot 'windows-client\frontend\public\zfnf-logo.png') -Size 512 -Transparent $false
-    Save-LogoIco -Source $source -Path (Join-Path $repositoryRoot 'windows-client\internal\desktop\zfnf-logo.ico')
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[0]) -Size 1024 -Transparent $false
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[1]) -Size 432 -Transparent $true -Scale 0.88
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[2]) -Size 96 -Transparent $true -Scale 0.9
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[3]) -Size 512 -Transparent $false
+    Save-LogoIco -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[4])
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[5]) -Size 1024 -Transparent $false -Scale 0.84 -OpaqueRGB $true
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[6]) -Size 256 -Transparent $true -Scale 0.9
 } finally {
     $source.Dispose()
 }
 
-Write-Host 'Generated Android and Windows branding assets from assets\branding\zfnf-logo-source.png.'
+if ($Check) {
+    try {
+        foreach ($relativePath in $outputRelativePaths) {
+            $trackedPath = Join-Path $repositoryRoot $relativePath
+            $generatedPath = Join-Path $generationRoot $relativePath
+            if (-not (Test-Path -LiteralPath $trackedPath -PathType Leaf)) {
+                throw "Generated brand asset is missing: $relativePath"
+            }
+            $trackedHash = (Get-FileHash -LiteralPath $trackedPath -Algorithm SHA256).Hash
+            $generatedHash = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
+            if ($trackedHash -ne $generatedHash) {
+                throw "Generated brand asset is stale: $relativePath"
+            }
+        }
+    } finally {
+        if ($null -ne $checkRoot -and (Test-Path -LiteralPath $checkRoot -PathType Container)) {
+            $resolvedCheckRoot = (Resolve-Path -LiteralPath $checkRoot).Path
+            $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+            if (-not $resolvedCheckRoot.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                (Split-Path -Leaf $resolvedCheckRoot) -notmatch '^mobile-egress-brand-check-[0-9a-f]{32}$') {
+                throw "Refusing to remove unexpected brand-check path: $resolvedCheckRoot"
+            }
+            Remove-Item -LiteralPath $resolvedCheckRoot -Recurse -Force
+        }
+    }
+    Write-Host 'Generated Android, Windows, and iOS branding assets are current.'
+    exit 0
+}
+
+Write-Host 'Generated Android, Windows, and iOS branding assets from assets\branding\zfnf-logo-source.png.'
