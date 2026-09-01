@@ -8,7 +8,7 @@ EC2 Refract -> authenticated HTTP/CONNECT 127.0.0.1:1081 -> MobileEgressClient -
 EC2 application -> authenticated SOCKS5 127.0.0.1:1080 -> MobileEgressClient -----+
 ```
 
-There is no relay EC2 instance, inbound EC2 security-group rule, Elastic IP, router change, local port-forward, or public proxy listener. The local PC and Agent device must remain powered on and connected.
+Ordinary HTTP, HTTPS through CONNECT, and SOCKS are browser/application opt-ins on the same EC2 node as `MobileEgressClient`. They do not change the EC2 default route or Windows system proxy and are not controller-host, VPN, public, UDP, or QUIC proxy behavior. There is no relay EC2 instance, inbound EC2 security-group rule, Elastic IP, router change, local port-forward, or public proxy listener. The local PC and Agent device must remain powered on and connected.
 
 ## Friend quick start
 
@@ -24,15 +24,15 @@ Each friend self-hosts a separate bridge:
    - Create an access key for the `mobile-egress` IAM user and paste that access key into Mobile Egress.
    - IAM Identity Center remains available under **Advanced** for people who already know their Start URL. That URL looks like `https://d-xxxxxxxxxx.awsapps.com/start`, not the normal EC2 console URL.
 7. In **EC2 Nodes**, select up to ten running x86-64 Windows Server 2019 instances. Choose **Prepare SSM** only when a node is not already SSM online. An attached profile is inspected without being replaced; the app asks before adding the SSM policy only when it is missing. For a new profile, AWS attachment propagation errors are retried automatically with bounded backoff for up to one minute. The controller then gives the already-running SSM Agent 30 seconds to refresh its credentials. If registration is still absent, choose **Restart EC2 and continue** and confirm the brief interruption; the controller requests a reboot only for that selected instance, waits for a fresh Agent ping, and installs the Client automatically. It never reboots without confirmation and never terminates or recreates the instance. On later runs, an online node shows **SSM ready** and skips profile setup entirely. **Install Client** remains available for retrying an interrupted install.
-8. For a Client version `1.0.24` or later, choose **Copy proxy line** and paste the returned `127.0.0.1:1081:<username>:<password>` line into Refract running on that same EC2 instance. Port `1081` forwards ordinary HTTP requests and uses CONNECT for HTTPS destinations. Older managed nodes must be updated first. **Copy SOCKS5 URL** remains available for SOCKS-aware applications at `127.0.0.1:1080`.
+8. For a Client version `1.0.24` or later, choose **Copy proxy line** and paste the returned `127.0.0.1:1081:<username>:<password>` line into Refract running on that same EC2 instance. Port `1081` forwards ordinary HTTP requests and uses CONNECT for HTTPS destinations. Older managed nodes must be updated first. **Copy SOCKS5 URL** remains available for SOCKS-aware applications at `127.0.0.1:1080`. Configure only the intended application; do not set a Windows system proxy, default route, VPN, firewall exposure, or EC2 ingress rule.
 
 Friends do not clone the repository, run Docker, execute setup scripts, open inbound EC2 ports, or handle Owner invitations. They do need permission to approve Tailscale, use the selected AWS account, and install the Android APK or TestFlight iOS build.
 
 ## Capacity and safety boundaries
 
 - At most ten managed EC2 Clients per controller.
-- At most four active streams per Client and 32 active streams through the one active Agent.
-- Bounded, fair per-stream and aggregate queues; overload fails individual streams closed.
+- At most 32 active streams per Client identity and 256 active streams through the one active Agent; admission is first-come within both limits.
+- Bounded, fair per-stream and aggregate queues. Data saturation closes only the affected stream; required-control saturation or writer failure closes the affected session. Senders prefer 16 KiB data frames while accepting valid frames up to 32 KiB.
 - Mobile Egress mTLS authenticates Owner, Client, and Agent identities. Tailscale supplies ingress, not application identity.
 - EC2 Client private keys and configuration private keys are generated on-node and never returned through SSM.
 - SSM receives only signed-install commands, public CSR/bootstrap output, and sealed configuration ciphertext. Proxy credentials and raw certificate/configuration values are not placed in SSM input, output, or logs.

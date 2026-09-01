@@ -60,8 +60,12 @@ The node's durable X25519 public key is returned at bootstrap. The controller cr
 
 Plaintext contains version, a monotonically increasing configuration generation, relay URL, Client role/serial/certificate chain/CA, and SOCKS credentials/port. The node persists the highest accepted generation and a bounded window of accepted-envelope fingerprints for that generation. It rejects replays in that window plus all stale, skipped, or reordered generations. Any valid current-generation envelope outside that window is an idempotent no-op only when its authenticated plaintext exactly matches the persisted configuration; this keeps ambiguous SSM/service-restart retries recoverable without permitting content changes or unbounded state growth. Non-canonical encoding, wrong keys, GCM failure, changed identity material, and invalid certificates fail closed. Endpoint-only updates advance the generation and change only the relay URL while retaining identity and credentials.
 
+## Client application adapters
+
+The EC2 Client exposes authenticated loopback-only SOCKS5 and ordinary-HTTP/HTTPS-CONNECT adapters on the same node. A browser or application opts in locally; these adapters are not controller-host, system-wide, VPN, public, UDP, or QUIC protocol behavior. SOCKS streams, ordinary HTTP requests, HTTPS CONNECT tunnels, and the ordinary-HTTP pool's at most two idle destination streams all multiplex over the Client identity's one 32-slot relay session.
+
 ## Tunnel session
 
 Binary WebSocket envelopes have finite types: `ping`, `pong`, `open`, `opened`, `data`, and `close`. Clients request public destinations; the relay resolves and rejects private, loopback, link-local, multicast, reserved, and otherwise disallowed addresses before forwarding `open` to the Agent. The Agent independently validates the resolved target.
 
-Every Client has at most four streams. The single Agent/relay aggregate has at most 32. Session maps, queues, frame sizes, tombstones, open timeouts, and idle timeouts are bounded. Agent outbound data is scheduled fairly across ready streams. Close processing is idempotent and backpressure fails the affected stream closed.
+Every Client identity has at most 32 streams. The single Agent/relay aggregate has at most 256, with first-come admission at both boundaries. Session maps, queues, frame sizes, tombstones, open timeouts, and idle timeouts are bounded. Outbound senders prefer 16 KiB data frames and receivers accept valid data frames up to 32 KiB. Agent outbound data is scheduled fairly across ready streams. Close processing is idempotent. Data saturation closes only the affected stream with `agent_unavailable`; required-control saturation or writer failure closes the affected session.

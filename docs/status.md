@@ -3,11 +3,11 @@
 ## Implemented
 
 - Loopback-only Windows relay service, direct CSR Owner bootstrap, Owner-authorized Client CSR provisioning, endpoint leaf rotation, one-use Agent migration, revocation, and multi-Client routing.
-- Four-stream per-Client and 32-stream aggregate enforcement with bounded session state.
+- First-come 32-stream per-Client and 256-stream aggregate enforcement with bounded session state and backpressure.
 - Self-contained Windows controller flow with distinct absent, installed/offline, and online Tailscale states; duplicate-MSI suppression; connect-only browser/unattended setup; raw TCP Funnel; UAC relay lifecycle; DPAPI Owner/AWS/node state; IAM Identity Center; EC2 inventory; guarded SSM IAM preparation; signed node install/update/repair; a default Refract proxy-line action; and a SOCKS5 fallback action.
-- Headless Windows Client service with on-node P-256/X25519 keys, sealed/replay-protected configuration, loopback authenticated SOCKS5 plus HTTP forward/CONNECT listeners, outbound reconnect, and Windows SCM support.
-- Android cellular-only foreground Agent with strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, 32-stream admission, guided non-root cellular IP rotation, ZFNF OLED status presentation, safe copied diagnostics, and separate cellular/relay visibility.
-- iOS/iPadOS 17+ Agent with VisionKit scanning, Secure Enclave/shared-Keychain identity retention, cellular-required pinned/mTLS relay and target transports, an app-managed on-demand packet tunnel with no included routes, bounded runtime, guided Control Center cellular-IP rotation, ZFNF OLED dashboard/assets, safe copied diagnostics, separate cellular/relay visibility, and the same QR/protocol/32-stream limits as Android.
+- Headless Windows Client service with on-node P-256/X25519 keys, sealed/replay-protected configuration, outbound reconnect, Windows SCM support, and authenticated loopback SOCKS5 plus ordinary-HTTP/HTTPS-CONNECT application opt-ins on the same EC2 node. All modes and two retained idle HTTP streams share one 32-slot relay session; none is a controller-host, system-wide, VPN, public, UDP, or QUIC proxy.
+- Android cellular-only foreground Agent with strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, 256-stream aggregate admission, guided non-root cellular IP rotation, ZFNF OLED status presentation, safe copied diagnostics, and separate cellular/relay visibility.
+- iOS/iPadOS 17+ Agent with VisionKit scanning, Secure Enclave/shared-Keychain identity retention, cellular-required pinned/mTLS relay and target transports, an app-managed on-demand packet tunnel with no included routes, bounded runtime, guided Control Center cellular-IP rotation, ZFNF OLED dashboard/assets, safe copied diagnostics, separate cellular/relay visibility, and the same QR/protocol 32-stream per-Client and 256-stream aggregate limits as Android.
 - Versioned mobile parity manifest with tracked Android/iOS source and test evidence for every recorded user-facing capability.
 - Signed release packaging script and app-first friend documentation.
 - Windows-to-Mac SSH build-server runbook for the iOS Agent's exact-tree verification.
@@ -24,12 +24,12 @@ Go's race detector is not available in the current Windows environment unless CG
 
 ## Required external acceptance
 
-The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android or iOS radio behavior on physical hardware, carrier egress, iOS active-stream rotation and foreground recovery, iOS provisioning, TestFlight upload, or empty-route packet-tunnel acceptance. Follow the [signed-release and physical-acceptance runbook](deployment.md), the [iOS real-device checklist](../ios/README.md#real-device-acceptance), and save a sanitized copy of the [acceptance record](templates/physical-acceptance-record.md) before promoting a prerelease to stable.
+The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android or iOS radio behavior on physical hardware, carrier egress, iOS active-stream rotation and foreground recovery, iOS provisioning, TestFlight upload, or empty-route packet-tunnel acceptance. Android's 256-stream/15-minute physical gates are `PENDING` separately for Windows-hosted and macOS-hosted bridges. iOS capacity remains `unverified—no device`, and TestFlight promotion is deferred. Follow the [signed-release and physical-acceptance runbook](deployment.md), the [iOS real-device checklist](../ios/README.md#real-device-acceptance), and save a sanitized copy of the [acceptance record](templates/physical-acceptance-record.md) before promoting a prerelease to stable.
 
 ## Known limits
 
 - One operator PC, one relay, and one active Android or iOS Agent are availability dependencies.
-- At most ten managed EC2 nodes, four streams per Client, and 32 total streams.
+- At most ten managed EC2 nodes, 32 streams per Client identity, and 256 total streams through the active Agent.
 - Windows 10/11 controller and x86-64 Windows Server 2019 nodes in `us-east-1` only.
 - Funnel is beta, requires browser approval, uses public `*.ts.net` names, and has non-configurable bandwidth limits. Personal-plan use must comply with Tailscale terms; commercial/bulk use needs a supported ingress arrangement.
 - No automatic GitHub updater. The operator deliberately downloads a signed controller bundle; node update/repair uses release metadata embedded in that signed controller.

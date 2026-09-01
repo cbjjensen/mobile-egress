@@ -31,7 +31,7 @@ Use lab labels such as node A/node B instead of instance IDs.
 
 ## Required results
 
-Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable promotion.
+Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Android capacity-host rows as `PENDING` until actually run. A required `FAIL`, `NOT RUN`, or `PENDING` blocks the affected stable promotion.
 
 | Check | Result | Sanitized note |
 |---|---|---|
@@ -42,11 +42,12 @@ Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable p
 | Relay listens only on `127.0.0.1:8443` | | |
 | Selected Agent pairs and connects over cellular with Wi-Fi enabled | | |
 | Two SSM-managed Clients install with distinct identities | | |
-| Each SOCKS listener is authenticated and `127.0.0.1:1080` only | | |
+| Each SOCKS listener is authenticated and `127.0.0.1:1080` only | | Application opt-in on the same EC2 node; not system-wide/VPN/public/UDP/QUIC. |
+| Each ordinary-HTTP/HTTPS-CONNECT listener is authenticated and `127.0.0.1:1081` only | | Application opt-in on the same EC2 node; not controller-host or system-wide. |
 | Node A direct/proxied egress differ; values not recorded | | |
 | Node B direct/proxied egress differ; values not recorded | | |
 | Both Clients route simultaneously without changing default routes | | |
-| Fifth held-open stream on one Client fails closed | | |
+| Stream 33 on one Client identity fails closed with `client_stream_limit` | | The first 32 share the same session across SOCKS, HTTP, CONNECT, and retained idle HTTP streams. |
 | Cellular loss with Wi-Fi available fails closed | | |
 | Guided IP rotation warns before disconnecting active streams | | Record only the stream count and confirmation outcome. |
 | Platform guidance supports the required manual Airplane Mode changes | | Android opens public system settings; iOS instructs the operator to use Control Center. |
@@ -63,9 +64,18 @@ Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable p
 | No EC2/public-IP/inbound-rule mutation | | |
 | Relay/node ProgramData ACL review | | |
 
+## Android 256-stream physical acceptance
+
+Keep these as two separate evidence rows. For each desktop host, all 256 streams must verify an exact 16 KiB echo and then remain live for 15 minutes; the ninth legitimate Client identity's aggregate stream 257 must reject with `agent_stream_limit`; closing one held stream must permit one verified replacement. This is not a throughput benchmark and has no throughput floor.
+
+| Desktop bridge host | Result | Sanitized evidence |
+|---|---|---|
+| Windows-hosted bridge | PENDING | |
+| macOS-hosted bridge | PENDING | |
+
 ## iOS physical acceptance
 
-Complete every row for an iOS release on signed physical iPhone and iPad hardware as applicable. Package tests, an unsigned build, a simulator, Archive validation, or TestFlight upload cannot substitute for these results. Keep Wi-Fi enabled unless a row explicitly changes cellular state, and never record public addresses or private connection material.
+Current status is `unverified—no device`, and TestFlight promotion is deferred. Complete every row for an iOS release on signed physical iPhone and iPad hardware as applicable. Package tests, an unsigned build, a simulator, Archive validation, or TestFlight upload cannot substitute for these results. Keep Wi-Fi enabled unless a row explicitly changes cellular state, and never record public addresses or private connection material.
 
 | Check | Result | Sanitized note |
 |---|---|---|
@@ -85,14 +95,15 @@ Complete every row for an iOS release on signed physical iPhone and iPad hardwar
 | Scanner camera-permission denial presents finite recovery guidance; granting permission later restores native scanning | | Do not record QR contents. |
 | Signed physical iPad preserves readable dashboard layout and reachable actions in portrait, upside-down portrait, landscape left, and landscape right | | Exercise rotation/restoration copy in every orientation. |
 
-## Optional extended capacity
+## Optional cross-check capacity
 
 | Check | Result | Sanitized note |
 |---|---|---|
-| Eight Clients hold 32 fair aggregate streams | | |
-| Aggregate stream 33 fails closed | | |
+| Eight Client identities hold 256 fair aggregate streams for 15 minutes after verified 16 KiB echoes | | |
+| Ninth identity's aggregate stream 257 fails closed | | |
+| Close one held stream and immediately open one verified replacement | | |
 
-The optional checks require at least eight Client identities because each Client is capped at four streams. Automated tests cover the 32/33 aggregate boundary when the physical lab has only two nodes.
+The cross-check requires eight holding Client identities because each is capped at 32 streams, plus a ninth legitimate probe identity for aggregate stream 257. Automated tests cover the 256/257 aggregate boundary when the physical lab has only two nodes. There is no throughput floor.
 
 ## Exceptions and sign-off
 

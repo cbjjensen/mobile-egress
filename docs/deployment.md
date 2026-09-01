@@ -11,22 +11,24 @@ Commit the intended code on clean `main`, choose the smallest compatible compone
 For Windows controller, setup, relay, or EC2 Client changes, use the Windows path. The controller embeds the signed Client version/hash/URL, so these Windows artifacts are intentionally released together; Android is not built or uploaded:
 
 ```powershell
-& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7'
-& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7' -Publish
+& .\scripts\release-windows.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-windows.ps1 -ReleaseVersion '1.1.0' -Publish
 ```
+
+The mandatory `-ReleaseVersion '1.1.0'` input is the existing Windows version authority: it drives the ZIP name, Go executable versions, embedded Client version/download URL, and release tag. Node-release manifest schema remains version 2; do not introduce a second tracked Windows version field.
 
 For an Android-only change, first set Android `versionName` to the release version and increase `versionCode`, then use the Android path. Go, the Windows frontend, and Authenticode packaging are not run:
 
 ```powershell
-& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8'
-& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8' -Publish
+& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0' -Publish
 ```
 
 Use the full path only when a protocol, shared compatibility boundary, or coordinated Windows/Android change requires all three artifacts:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9'
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9' -Publish
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Publish
 ```
 
 All three paths use the same deterministic orchestrator. It resolves only the selected component's tools, runs the matching gate, reuses and validates only the required established signing identity, verifies signed artifacts, tags the verified commit, creates an empty GitHub draft, uploads only the expected assets sequentially, waits for matching remote SHA-256 digests, and publishes only a prerelease. `-Publish` always requires explicit approval. Rerun the same command and component scope after an interruption; resume is allowed only when the commit, tag, local artifacts, draft asset set, and hashes agree.
@@ -124,10 +126,10 @@ The selected thumbprint must be 40 hexadecimal characters. Check that its expiry
 
 ## Part 2: Choose and freeze a version
 
-Use one semantic version everywhere. The examples below use `1.0.0`; replace it with the real version.
+Use one semantic version everywhere. This release uses `1.1.0`.
 
 ```powershell
-$releaseVersion = '1.0.0'
+$releaseVersion = '1.1.0'
 $releaseTag = "v$releaseVersion"
 ```
 
@@ -381,7 +383,7 @@ Get-Service -Name 'MobileEgressClient' | Select-Object Name, Status, StartType
 Get-NetTCPConnection -State Listen -LocalPort 1080,1081 | Select-Object LocalAddress, LocalPort, OwningProcess
 ```
 
-The service must be automatic/running. Its only proxy listeners must be SOCKS5 at `127.0.0.1:1080` and HTTP forward/CONNECT at `127.0.0.1:1081`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
+The service must be automatic/running. Its only proxy listeners must be SOCKS5 at `127.0.0.1:1080` and HTTP forward/CONNECT at `127.0.0.1:1081`. They are application opt-ins on that EC2 node, not controller-host, system-wide, VPN, public, UDP, or QUIC proxies. Confirm the Windows system proxy, default route, and EC2 security groups are unchanged before and after setup.
 
 ### 6.4 Prove opt-in cellular egress on both nodes
 
@@ -416,11 +418,17 @@ try {
 }
 ```
 
-Choose **Copy proxy line** again, paste it directly into a Refract proxy list on that same EC2 node, and run Refract's proxy test. For SOCKS regression coverage, choose **Copy SOCKS5 URL** and repeat the existing `socks5h://` curl check. Repeat with node B's own credentials. While both proxied requests work, run a direct request on each node and confirm it still uses its normal EC2 route. This proves per-application opt-in rather than a system-wide proxy.
+Choose **Copy proxy line** again, paste it directly into a Refract proxy list on that same EC2 node, and run Refract's proxy test. For SOCKS regression coverage, choose **Copy SOCKS5 URL** and repeat the existing `socks5h://` curl check. Repeat with node B's own credentials. While both proxied requests work, run a direct request on each node and confirm it still uses its normal EC2 route. This proves per-application opt-in rather than controller-host, system-wide, VPN, public, UDP, or QUIC proxy behavior.
 
-The two-node run proves simultaneous multi-Client routing, but two Clients can open only eight streams because each is capped at four. The 32-stream aggregate is covered by automated tests. A physical 32-stream capacity run requires at least eight managed Clients, four held-open streams each; treat that as an extended test, not a claim that two nodes can reach 32.
+The two-node run proves simultaneous multi-Client routing, but two Client identities can open only 64 streams because each is capped at 32. The 256-stream aggregate is covered by automated tests. A physical 256-stream run requires eight holding Client identities with 32 held-open streams each, plus a ninth legitimate probe identity to attempt aggregate stream 257; treat it as a separate capacity gate, not a claim that two nodes can reach 256.
 
-To test the four-stream Client cap physically, use a controlled HTTPS endpoint that deliberately streams slowly. Start four transfers through one node's proxy and hold them open; a fifth concurrent transfer must fail closed. Do not use an uncontrolled third-party large download or record the proxy URL. Stop the four test transfers afterward. Repeat across eight Clients only when performing the optional 32/33 aggregate capacity run.
+To test the per-Client cap physically, use a controlled HTTPS endpoint that deliberately holds connections. Start 32 transfers through one Client identity and hold them open; its 33rd concurrent stream must fail closed with `client_stream_limit`. Do not use an uncontrolled third-party large download or record the proxy URL. Stop the held transfers afterward.
+
+### 6.4a Prove the 256-stream capacity gate on each desktop bridge
+
+Record Windows-hosted and macOS-hosted bridge results separately and leave each `PENDING` unless it was actually run. Use only the authenticated developer capacity tooling against a dedicated, resettable relay and a WebPKI-valid TLS 1.3 echo target. For each host, require eight legitimate holding Client identities with 32 streams each. Every stream must first verify an exact 16 KiB echo and then remain live for 15 minutes. With all 256 held, the ninth legitimate probe identity's first stream must fail with `agent_stream_limit`; after one held stream closes, one replacement must open and verify successfully. This is a capacity/liveness gate, not a benchmark: there is no throughput floor. Senders prefer 16 KiB data frames, while valid 32 KiB data frames remain accepted.
+
+iOS 256-stream physical acceptance remains `unverified—no device`; defer TestFlight promotion until it is run on signed hardware. Do not substitute package, unsigned-build, simulator, Archive, or upload evidence.
 
 ### 6.5 Prove cellular-only fail-closed behavior
 

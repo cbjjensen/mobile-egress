@@ -29,7 +29,7 @@ Enrollment and migration payloads are distinct and strict. Unknown fields, insec
 
 ## Capacity and queueing
 
-The Agent admits at most 32 active streams. Each stream has a bounded inbound queue; outbound control, aggregate data, and per-stream data queues are bounded. Data frames are scheduled round-robin across ready streams. Saturation closes the affected stream or session with a finite error instead of allocating without bound.
+The Agent admits at most 256 active streams across all Client identities; each Client identity can hold at most 32. Admission is first-come within both limits. Each stream has a bounded inbound queue; outbound control, aggregate data, and per-stream data queues are bounded. Data frames are scheduled round-robin across ready streams. Senders prefer 16 KiB data frames and accept valid frames up to 32 KiB. Data saturation closes only the affected stream; required-control saturation or writer failure closes the affected session instead of allocating without bound.
 
 Public-destination policy is applied before opening a cellular target socket. Private, loopback, link-local, multicast, reserved, and otherwise disallowed addresses fail closed.
 

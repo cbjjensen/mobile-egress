@@ -10,9 +10,9 @@ On Android, the app opens the public system Airplane Mode settings screen for th
 
 **Copy diagnostic status** is safe for a sanitized support record: it contains branded enrollment, Agent, cellular, relay, stream/byte, finite error, and rotation state. It intentionally excludes public addresses, relay origins, certificates, capabilities, and raw errors.
 
-Refract running on a managed EC2 node opts in with that node's **Copy proxy line** value: `127.0.0.1:1081:<username>:<password>`. The listener forwards ordinary HTTP and uses CONNECT to carry end-to-end HTTPS without Mobile Egress decrypting it. SOCKS-aware software can instead use **Copy SOCKS5 URL** at `127.0.0.1:1080`. Both values work only on the same EC2 node; never configure an EC2 security group, Windows system proxy, or public proxy listener.
+Refract or another browser-style application running on a managed EC2 node opts in with that node's **Copy proxy line** value: `127.0.0.1:1081:<username>:<password>`. The listener forwards ordinary HTTP and uses CONNECT to carry end-to-end HTTPS without Mobile Egress decrypting it. SOCKS-aware software can instead use **Copy SOCKS5 URL** at `127.0.0.1:1080`. Both values work only for applications on that same EC2 node. Mobile Egress does not install a controller-host or Windows system-wide proxy, change a default route, or provide VPN, public, UDP, or QUIC proxy behavior; never add an EC2 ingress rule or public listener.
 
-For ordinary HTTP, the Client reuses healthy destination connections instead of opening a new phone/relay stream for every request. It keeps no more than two idle destination streams and expires them after 15 seconds. These pooled and active connections still count toward the existing four-stream Client limit; there is no additional capacity tier.
+For ordinary HTTP, the Client reuses healthy destination connections instead of opening a new phone/relay stream for every request. It keeps no more than two idle destination streams and expires them after 15 seconds. SOCKS, active ordinary HTTP, HTTPS CONNECT, and retained idle HTTP streams all count toward the same 32-slot Client relay session; there is no separate capacity tier. Across Clients, the active Agent admits 256 streams first-come.
 
 ## Controller actions
 
@@ -71,7 +71,7 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | Install/update rejected on node | Banner's sanitized stage; GitHub artifact hash; pre-trust exact signer; `LocalMachine\Root` and `TrustedPublisher`; post-trust `Valid` | Use the stage label to identify download, trust, service, or bootstrap failure. Publish/use the exact signed artifact and retry after correcting the release or SSM health; rollback is attempt-scoped. Never bypass verification or clear certificate stores. |
 | Refract rejects the proxy line | Refract and Client run on the same EC2 node; Client version is `1.0.24` or later; both an `http://` and an `https://` test work through loopback port `1081` | Choose **Update**, then **Copy proxy line** again. Use `IP:PORT:USERNAME:PASSWORD` exactly and do not expose port 1081 through AWS or Windows Firewall. |
 | Proxy authentication fails | Credentials copied for the same node; Client service running | Copy the appropriate HTTP line or SOCKS5 URL again, or use **Repair**. Do not put credentials in SSM commands. |
-| Stream rejected | Four-stream per-Client or 32-stream aggregate bound, target policy, Agent loss | Reduce concurrency or restore Agent/cellular. Do not increase queues ad hoc. |
+| Stream rejected | 32-stream per-Client or 256-stream aggregate bound, target policy, Agent loss | Reduce concurrency or restore Agent/cellular. Admission is first-come; do not increase queues ad hoc. |
 
 ## IAM behavior
 

@@ -32,7 +32,7 @@ The Wails/React app is the only normal operator interface. It:
 
 The Windows SCM execution path is separate from foreground CLI behavior. Public commands are `bootstrap-owner`, `rotate-endpoint`, `serve`, and `--version`. Direct Owner bootstrap signs a locally generated CSR and never creates an Owner invitation.
 
-The relay permits multiple simultaneous Clients, one active Agent session, four streams per Client, and 32 streams total. A rejected or revoked identity cannot open new sessions. Destination policy rejects non-public targets after resolution.
+The relay permits multiple simultaneous Clients, one active Agent session, 32 streams per Client identity, and 256 streams total. Admission is first-come within both limits. A rejected or revoked identity cannot open new sessions. Destination policy rejects non-public targets after resolution.
 
 ### Headless EC2 Client
 
@@ -42,7 +42,7 @@ The relay permits multiple simultaneous Clients, one active Agent session, four 
 - a durable X25519 sealed-configuration private key; and
 - its authenticated proxy username and password after decrypting the Owner-supplied configuration.
 
-Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080` and an HTTP forward/CONNECT proxy to `127.0.0.1:1081`, so an EC2 application must explicitly opt in. Both listeners use the same retained credentials and relay session. Ordinary HTTP requests are rewritten to origin form and carried through a relay stream to the destination; repeat requests to the same destination can reuse that stream through a bounded keep-alive pool. The pool retains at most two idle streams for 15 seconds, leaving capacity for other destinations while avoiding a full mobile connection setup for every request. HTTPS clients establish end-to-end TLS through CONNECT, and Mobile Egress does not decrypt that traffic. Proxy credentials and hop-by-hop proxy headers are removed before an ordinary HTTP request reaches the destination. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
+Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.1:1080` and an HTTP forward/CONNECT proxy to `127.0.0.1:1081`, so a browser or application on that same EC2 node must explicitly opt in. These are not controller-host, system-wide, VPN, public, UDP, or QUIC proxies. Both listeners use the same retained credentials and one 32-slot relay session. Ordinary HTTP requests are rewritten to origin form and carried through a relay stream to the destination; repeat requests to the same destination can reuse that stream through a bounded keep-alive pool. SOCKS, active HTTP requests, HTTPS CONNECT, and the pool's at most two idle streams all consume those same slots. Idle streams expire after 15 seconds, leaving capacity for other destinations while avoiding a full mobile connection setup for every request. HTTPS clients establish end-to-end TLS through CONNECT, and Mobile Egress does not decrypt that traffic. Proxy credentials and hop-by-hop proxy headers are removed before an ordinary HTTP request reaches the destination. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
 
 ### Mobile Agents
 
@@ -52,7 +52,7 @@ The iOS/iPadOS 17+ app stores its non-exportable P-256 identity in the Secure En
 
 iOS guided rotation pauses the packet tunnel and its on-demand intent, confirms before disconnecting active streams, probes comparable IPv4/IPv6 families only through cellular, and guides the user to change Airplane Mode manually in Control Center. The app neither changes Airplane Mode nor opens a private Settings URL. A normal attempt holds for 10 seconds; an unchanged result can be retried for 30 seconds. The coordinator observes cellular loss and return, resumes when the app enters the foreground, and uses a bounded App Group checkpoint to restore the Agent after completion, cancellation, or recoverable failure. Copied status and unified logging use finite classifications and exclude public addresses, relay origins, certificates, capabilities, and raw errors.
 
-Both implementations use the same enrollment/migration QR formats, binary WebSocket protocol, public-target policy, mTLS identity model, 32-stream cap, bounded queues, and finite failure behavior. Loss of cellular closes streams; Wi-Fi is never used as fallback.
+Both implementations use the same enrollment/migration QR formats, binary WebSocket protocol, public-target policy, mTLS identity model, 32-stream per-Client and 256-stream aggregate caps, bounded queues, and finite failure behavior. Outbound senders prefer 16 KiB data frames while accepting valid data frames up to 32 KiB. Loss of cellular closes streams; Wi-Fi is never used as fallback.
 
 The versioned [mobile feature manifest](mobile-feature-manifest.json) is the tracked parity ledger for user-facing Android and iOS behavior. Every entry cites tracked source and test evidence; Apple-specific mechanisms are identified as native equivalents rather than treated as missing Android behavior.
 
