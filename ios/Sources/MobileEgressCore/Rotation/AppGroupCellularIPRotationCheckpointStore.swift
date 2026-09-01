@@ -140,9 +140,11 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         guard date >= checkpoint.savedAt else {
             throw CellularIPRotationCheckpointStoreError.malformed
         }
-        guard !checkpoint.isExpired(at: date) else {
-            try? FileManager.default.removeItem(at: checkpointURL)
-            throw CellularIPRotationCheckpointStoreError.expired
+        if checkpoint.isExpired(at: date) {
+            guard checkpoint.pauseDisposition.hasRestorationReceipt else {
+                try? FileManager.default.removeItem(at: checkpointURL)
+                throw CellularIPRotationCheckpointStoreError.expired
+            }
         }
         return checkpoint
     }
@@ -213,6 +215,17 @@ public final class AppGroupCellularIPRotationCheckpointStore:
             guard checkpoint.timeoutDeadline == nil else {
                 throw CellularIPRotationCheckpointStoreError.malformed
             }
+        }
+    }
+}
+
+private extension CellularIPRotationPauseDisposition {
+    var hasRestorationReceipt: Bool {
+        switch self {
+        case .pausing, .paused:
+            true
+        case .legacyUnknown, .pending:
+            false
         }
     }
 }
