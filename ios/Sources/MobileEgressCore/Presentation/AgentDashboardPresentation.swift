@@ -246,13 +246,13 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
             summary: statusPresentation.summary,
             badge: statusPresentation.badge,
             tone: statusPresentation.tone,
-            pairingTone: pairingTone(for: state),
+            pairingTone: resolvePairingTone(for: state),
             scanLabel: state.pairingInProgress ? "Pairing…" : "Scan QR",
             isScanEnabled: !state.pairingInProgress && state.status.agentState != .running,
             primaryAgentAction: primaryAction(for: state),
-            inactiveAgentMessage: inactiveAgentMessage(for: state),
-            rotationAction: rotationAction(for: state),
-            rotationLabel: rotationLabel(for: state.status.rotation),
+            inactiveAgentMessage: resolveInactiveAgentMessage(for: state),
+            rotationAction: resolveRotationAction(for: state),
+            rotationLabel: resolveRotationLabel(for: state.status.rotation),
             isRotationEnabled: availability.isEligible(for: state.status.rotation),
             requiresActiveStreamConfirmation: availability.requiresConfirmation(
                 for: state.status.rotation
@@ -496,7 +496,7 @@ private func failedRotationPresentation(
     }
 }
 
-private func pairingTone(for state: AgentDashboardState) -> AgentDashboardTone {
+private func resolvePairingTone(for state: AgentDashboardState) -> AgentDashboardTone {
     if state.pairingInProgress { return .accent }
     switch state.pairingState {
     case .cameraPermissionRequired, .scannerUnavailable, .qrNotRecognized, .failed:
@@ -513,7 +513,7 @@ private func primaryAction(for state: AgentDashboardState) -> AgentPrimaryAction
     return state.status.agentState == .running ? .stop : .start
 }
 
-private func inactiveAgentMessage(for state: AgentDashboardState) -> String {
+private func resolveInactiveAgentMessage(for state: AgentDashboardState) -> String {
     if state.pairingInProgress && state.isEnrolled {
         return "Finish the endpoint update before starting the Agent."
     }
@@ -523,7 +523,7 @@ private func inactiveAgentMessage(for state: AgentDashboardState) -> String {
     return "Pair this phone before starting the Agent."
 }
 
-private func rotationAction(for state: AgentDashboardState) -> CellularIPRotationAction {
+private func resolveRotationAction(for state: AgentDashboardState) -> CellularIPRotationAction {
     guard state.isEnrolled, state.status.agentState == .running else { return .none }
     if case .completed(_, _, _, .unchanged) = state.status.rotation {
         return .retry
@@ -531,7 +531,7 @@ private func rotationAction(for state: AgentDashboardState) -> CellularIPRotatio
     return .rotate
 }
 
-private func rotationLabel(for rotation: CellularIPRotationState) -> String {
+private func resolveRotationLabel(for rotation: CellularIPRotationState) -> String {
     switch rotation {
     case .awaitingConfirmation:
         "Confirm rotation"
