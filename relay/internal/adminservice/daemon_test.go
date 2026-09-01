@@ -18,6 +18,117 @@ import (
 	"mobile-egress/relay/internal/service"
 )
 
+func TestDaemonCleanCancellationIsQuiescent(t *testing.T) {
+	t.Parallel()
+
+	listener := newQueuedAdminListener()
+	daemon := mustNewDaemonForTest(t, listener, newDaemonTestServer(&daemonTestHandler{}), newDaemonTestSupervisor(t), 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := startDaemonForTest(ctx, daemon)
+	cancel()
+	outcome := waitDaemonRun(t, runDone)
+	if outcome.err != nil || outcome.result.RestartRequested || !outcome.result.Quiescent {
+		t.Fatalf("Run() = %#v, %v, want ordinary quiescent cancellation", outcome.result, outcome.err)
+	}
+}
+
+func TestDaemonAcceptOrListenerFailureCanStillBeQuiescent(t *testing.T) {
+	t.Parallel()
+
+	acceptFailure := errors.New("accept failure")
+	daemon := mustNewDaemonForTest(t, &immediateAdminErrorListener{err: acceptFailure},
+		newDaemonTestServer(&daemonTestHandler{}), newDaemonTestSupervisor(t), 1)
+	result, err := daemon.Run(context.Background())
+	if !errors.Is(err, acceptFailure) || result.RestartRequested || !result.Quiescent {
+		t.Fatalf("Run() = %#v, %v, want independent quiescence with accept failure", result, err)
+	}
+}
+
+func TestDaemonDrainOrSupervisorStopFailureIsNotQuiescent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("drain", func(t *testing.T) {
+		handler := &daemonTestHandler{
+			entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{}), waitForCancellation: true,
+		}
+		server := newDaemonTestServer(handler)
+		listener := newQueuedAdminListener()
+		listener.push(newScriptedAdminConn(t, mustAdminRequest(t,
+			"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1", relayadmin.OperationStatus, relayadmin.StatusRequest{}), -1))
+		daemon := mustNewDaemonForTest(t, listener, server, newDaemonTestSupervisor(t), 1)
+		daemon.drainLimit = 20 * time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		runDone := startDaemonForTest(ctx, daemon)
+		<-handler.entered
+		cancel()
+		<-handler.canceled
+		outcome := waitDaemonRun(t, runDone)
+		if outcome.err == nil || outcome.result.Quiescent {
+			t.Fatalf("Run() = %#v, %v, want non-quiescent drain failure", outcome.result, outcome.err)
+		}
+		close(handler.release)
+		drainContext, cancelDrain := context.WithTimeout(context.Background(), time.Second)
+		defer cancelDrain()
+		if err := server.Drain(drainContext); err != nil {
+			t.Fatalf("test cleanup Drain() error = %v", err)
+		}
+	})
+
+	t.Run("supervisor stop", func(t *testing.T) {
+		closeFailure := errors.New("relay close uncertainty")
+		instance := &recordingRelayInstance{
+			handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), closeErr: closeFailure,
+		}
+		supervisor, err := NewSupervisor(SupervisorConfig{
+			StateDir: "state", Address: "127.0.0.1:0", Listen: net.Listen,
+			Open: func(string) (RelayInstance, error) { return instance, nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := supervisor.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		listener := newQueuedAdminListener()
+		daemon := mustNewDaemonForTest(t, listener, newDaemonTestServer(&daemonTestHandler{}), supervisor, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		runDone := startDaemonForTest(ctx, daemon)
+		cancel()
+		outcome := waitDaemonRun(t, runDone)
+		if !errors.Is(outcome.err, closeFailure) || outcome.result.Quiescent {
+			t.Fatalf("Run() = %#v, %v, want non-quiescent supervisor stop failure", outcome.result, outcome.err)
+		}
+	})
+}
+
+func TestDaemonRestartRequestedSurvivesLaterCleanupError(t *testing.T) {
+	t.Parallel()
+
+	closeFailure := errors.New("relay close uncertainty")
+	instance := &recordingRelayInstance{
+		handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), closeErr: closeFailure,
+	}
+	supervisor, err := NewSupervisor(SupervisorConfig{
+		StateDir: "state", Address: "127.0.0.1:0", Listen: net.Listen,
+		Open: func(string) (RelayInstance, error) { return instance, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	listener := newQueuedAdminListener()
+	connection := newScriptedAdminConn(t, mustAdminRequest(t,
+		"c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2", relayadmin.OperationRepair, relayadmin.RepairRequest{}), -1)
+	listener.push(connection)
+	daemon := mustNewDaemonForTest(t, listener, newDaemonTestServer(&daemonTestHandler{}), supervisor, 1)
+	outcome := waitDaemonRun(t, startDaemonForTest(context.Background(), daemon))
+	if !errors.Is(outcome.err, closeFailure) || !outcome.result.RestartRequested || outcome.result.Quiescent {
+		t.Fatalf("Run() = %#v, %v, want restart=true independent of non-quiescent cleanup", outcome.result, outcome.err)
+	}
+}
+
 func TestDaemonClosesPeerFailuresWithoutDispatch(t *testing.T) {
 	t.Parallel()
 
@@ -43,7 +154,7 @@ func TestDaemonClosesPeerFailuresWithoutDispatch(t *testing.T) {
 	waitClosedAdminConn(t, connection)
 	cancel()
 	outcome := waitDaemonRun(t, runDone)
-	if outcome.err != nil || outcome.result.RestartRequested {
+	if outcome.err != nil || outcome.result.RestartRequested || !outcome.result.Quiescent {
 		t.Fatalf("Run() = %#v, %v", outcome.result, outcome.err)
 	}
 	if handler.statusCalls.Load() != 0 {
@@ -80,7 +191,7 @@ func TestDaemonUnexpectedAcceptFailureTerminalizesAndStopsRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, runErr := daemon.Run(context.Background())
-	if !errors.Is(runErr, acceptFailure) || result.RestartRequested {
+	if !errors.Is(runErr, acceptFailure) || result.RestartRequested || !result.Quiescent {
 		t.Fatalf("Run() = %#v, %v, want accept failure", result, runErr)
 	}
 	if !supervisor.isTerminal() || supervisor.Snapshot().RelayRunning {
@@ -131,7 +242,7 @@ func TestDaemonEnforcesWorkerCapBeforePeerExtraction(t *testing.T) {
 	waitClosedAdminConn(t, first)
 	cancel()
 	outcome := waitDaemonRun(t, runDone)
-	if outcome.err != nil || outcome.result.RestartRequested {
+	if outcome.err != nil || outcome.result.RestartRequested || !outcome.result.Quiescent {
 		t.Fatalf("Run() = %#v, %v", outcome.result, outcome.err)
 	}
 }
@@ -201,7 +312,7 @@ func TestDaemonCancellationTerminalizesThenDrainsLateDispatchBeforeStoppingRelay
 		t.Fatalf("late Reconcile error = %v, want terminal", err)
 	}
 	outcome := waitDaemonRun(t, runDone)
-	if outcome.err != nil || outcome.result.RestartRequested {
+	if outcome.err != nil || outcome.result.RestartRequested || !outcome.result.Quiescent {
 		t.Fatalf("Run() = %#v, %v", outcome.result, outcome.err)
 	}
 	if dataInstance.closeCount() != 1 || listenCalls.Load() != 1 {
@@ -288,7 +399,7 @@ func TestDaemonTerminalizationSealsRelayAdmissionBeforeAdminDrain(t *testing.T) 
 
 	close(adminHandler.release)
 	outcome := waitDaemonRun(t, runDone)
-	if outcome.err != nil || outcome.result.RestartRequested {
+	if outcome.err != nil || outcome.result.RestartRequested || !outcome.result.Quiescent {
 		t.Fatalf("Run() = %#v, %v", outcome.result, outcome.err)
 	}
 	if dataInstance.closeCount() != 1 {
@@ -322,7 +433,7 @@ func TestDaemonReportsDrainTimeoutWithoutClaimingQuiescence(t *testing.T) {
 	cancel()
 	<-handler.canceled
 	outcome := waitDaemonRun(t, runDone)
-	if outcome.err == nil || outcome.result.RestartRequested {
+	if outcome.err == nil || outcome.result.RestartRequested || outcome.result.Quiescent {
 		t.Fatalf("Run() = %#v, %v, want explicit drain error", outcome.result, outcome.err)
 	}
 	close(handler.release)
@@ -344,7 +455,7 @@ func TestDaemonRepairRestartRequiresFullyFlushedNewOrCachedSuccess(t *testing.T)
 		listener.push(connection)
 		daemon := mustNewDaemonForTest(t, listener, server, newDaemonTestSupervisor(t), 2)
 		outcome := waitDaemonRun(t, startDaemonForTest(context.Background(), daemon))
-		if outcome.err != nil || !outcome.result.RestartRequested || handler.repairCalls.Load() != 1 || !connection.isClosed() {
+		if outcome.err != nil || !outcome.result.RestartRequested || !outcome.result.Quiescent || handler.repairCalls.Load() != 1 || !connection.isClosed() {
 			t.Fatalf("Run/result/calls/closed = %#v/%v/%d/%t", outcome.result, outcome.err, handler.repairCalls.Load(), connection.isClosed())
 		}
 	})
@@ -365,7 +476,7 @@ func TestDaemonRepairRestartRequiresFullyFlushedNewOrCachedSuccess(t *testing.T)
 		}
 		listener.push(full)
 		outcome := waitDaemonRun(t, runDone)
-		if outcome.err != nil || !outcome.result.RestartRequested || handler.repairCalls.Load() != 1 || !full.isClosed() {
+		if outcome.err != nil || !outcome.result.RestartRequested || !outcome.result.Quiescent || handler.repairCalls.Load() != 1 || !full.isClosed() {
 			t.Fatalf("Run/result/calls/closed = %#v/%v/%d/%t", outcome.result, outcome.err, handler.repairCalls.Load(), full.isClosed())
 		}
 		responseRaw, err := relayadmin.ReadFrameExact(bytes.NewReader(full.outputBytes()))
@@ -391,7 +502,7 @@ func TestDaemonRepairRestartRequiresFullyFlushedNewOrCachedSuccess(t *testing.T)
 		waitClosedAdminConn(t, connection)
 		cancel()
 		outcome := waitDaemonRun(t, runDone)
-		if outcome.err != nil || outcome.result.RestartRequested {
+		if outcome.err != nil || outcome.result.RestartRequested || !outcome.result.Quiescent {
 			t.Fatalf("Run() = %#v, %v", outcome.result, outcome.err)
 		}
 	})
