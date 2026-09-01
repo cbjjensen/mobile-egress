@@ -4,7 +4,6 @@ package desktop
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
@@ -34,15 +33,13 @@ func newDarwinDesktopApp() (*DesktopApp, error) {
 	if err != nil {
 		return nil, err
 	}
-	tailscaleController := tailscale.NewController(
-		"/Applications/Tailscale.app/Contents/MacOS/Tailscale", tailscale.ExecRunner{},
-	)
+	tailscaleController := tailscale.NewDarwinController(tailscale.ExecRunner{})
 	return newDesktopApp(context.Background(), desktopControllerConfig{
 		Platform:         platformMacOS,
 		Store:            store,
 		Gateway:          client.DefaultGateway{},
 		Tailscale:        tailscaleController,
-		TailscaleInstall: unsupportedDarwinTailscaleInstaller{},
+		TailscaleInstall: tailscale.NewDarwinInstaller(),
 		BrowserOpenURL:   runtime.BrowserOpenURL,
 		RelayServiceState: func() relayServiceState {
 			return relayServiceNotRegistered
@@ -53,12 +50,6 @@ func newDarwinDesktopApp() (*DesktopApp, error) {
 
 func newDarwinSecureStore() (securestore.Store, error) {
 	return securestore.NewKeychainStore()
-}
-
-type unsupportedDarwinTailscaleInstaller struct{}
-
-func (unsupportedDarwinTailscaleInstaller) Install(context.Context) (tailscale.Release, error) {
-	return tailscale.Release{}, errors.New("macOS Tailscale PKG installation is not yet supported")
 }
 
 func showFatal(err error) {
