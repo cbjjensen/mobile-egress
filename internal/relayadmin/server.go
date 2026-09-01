@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -50,6 +51,10 @@ type Server struct {
 	Replay         ReplayStore
 	OperationLimit time.Duration
 	IOLimit        time.Duration
+
+	dispatchMu     sync.Mutex
+	dispatchActive int
+	dispatchIdle   chan struct{}
 }
 
 // ServeOutcome exposes only the post-flush process action needed by the relay
@@ -160,7 +165,9 @@ func (server *Server) executeStatus(ctx context.Context, connection net.Conn, pe
 		err    error
 	}
 	resultChannel := make(chan handlerResult, 1)
+	finishDispatch := server.beginDispatch()
 	go func() {
+		defer finishDispatch()
 		result, err := server.Handler.Status(ctx, peer.clone())
 		resultChannel <- handlerResult{result: result, err: err}
 	}()
@@ -210,7 +217,9 @@ func (server *Server) executeMutation(ctx context.Context, connection net.Conn, 
 		err      error
 	}
 	resultChannel := make(chan executionResult, 1)
+	finishDispatch := server.beginDispatch()
 	go func() {
+		defer finishDispatch()
 		response, err := reservation.Execute(ctx, func(executionContext context.Context, transaction MutationTransaction) ([]byte, error) {
 			if transaction == nil || transaction.ReplayKey() != key || executionContext.Err() != nil {
 				return nil, ErrReplayState
@@ -270,6 +279,49 @@ func (server *Server) executeMutation(ctx context.Context, connection net.Conn, 
 		return
 	}
 	return
+}
+
+// Drain waits for handler and mutation-reservation goroutines already spawned
+// by ServeConn to exit. Callers that require a stable quiescent result must
+// first stop accepting connections and wait for all ServeConn calls to return.
+func (server *Server) Drain(ctx context.Context) error {
+	if server == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		server.dispatchMu.Lock()
+		if server.dispatchActive == 0 {
+			server.dispatchMu.Unlock()
+			return nil
+		}
+		idle := server.dispatchIdle
+		server.dispatchMu.Unlock()
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (server *Server) beginDispatch() func() {
+	server.dispatchMu.Lock()
+	if server.dispatchActive == 0 {
+		server.dispatchIdle = make(chan struct{})
+	}
+	server.dispatchActive++
+	server.dispatchMu.Unlock()
+	return func() {
+		server.dispatchMu.Lock()
+		server.dispatchActive--
+		if server.dispatchActive == 0 {
+			close(server.dispatchIdle)
+		}
+		server.dispatchMu.Unlock()
+	}
 }
 
 func flushedResponseOutcome(response Response) ServeOutcome {
