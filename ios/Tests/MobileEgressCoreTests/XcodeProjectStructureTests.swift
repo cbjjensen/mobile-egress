@@ -51,8 +51,31 @@ final class XcodeProjectStructureTests: XCTestCase {
         let extensionEntitlements = try plist(at: "MobileEgressTunnelExtension/MobileEgressTunnelExtension.entitlements")
 
         XCTAssertEqual(appInfo["CFBundlePackageType"] as? String, "APPL")
+        XCTAssertEqual(appInfo["CFBundleDisplayName"] as? String, "ZFNF Mobile Egress")
         XCTAssertFalse((appInfo["NSCameraUsageDescription"] as? String ?? "").isEmpty)
         XCTAssertEqual(extensionInfo["CFBundlePackageType"] as? String, "XPC!")
+        XCTAssertEqual(
+            extensionInfo["CFBundleDisplayName"] as? String,
+            "ZFNF Mobile Egress Agent"
+        )
+
+        XCTAssertEqual(
+            appInfo["UISupportedInterfaceOrientations"] as? [String],
+            [
+                "UIInterfaceOrientationPortrait",
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+            ]
+        )
+        XCTAssertEqual(
+            Set(appInfo["UISupportedInterfaceOrientations~ipad"] as? [String] ?? []),
+            Set([
+                "UIInterfaceOrientationPortrait",
+                "UIInterfaceOrientationPortraitUpsideDown",
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+            ])
+        )
 
         let expectedProvider = "$(MOBILE_EGRESS_PROVIDER_BUNDLE_IDENTIFIER)"
         let expectedAppGroup = "$(MOBILE_EGRESS_APP_GROUP_IDENTIFIER)"
@@ -111,6 +134,12 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(manager.contains("disconnectOnSleep = false"))
         XCTAssertTrue(manager.contains("NEOnDemandRuleConnect()"))
         XCTAssertTrue(manager.contains("manager.isOnDemandEnabled = onDemandEnabled"))
+        XCTAssertTrue(manager.contains(
+            "tunnelProtocol.serverAddress = MobileEgressBranding.displayName"
+        ))
+        XCTAssertTrue(manager.contains(
+            "manager.localizedDescription = MobileEgressBranding.displayName"
+        ))
 
         let catalog = try json(at: "Assets/AppAssets.xcassets/Contents.json")
         let accent = try json(at: "Assets/AppAssets.xcassets/AccentColor.colorset/Contents.json")
@@ -229,6 +258,7 @@ final class XcodeProjectStructureTests: XCTestCase {
 
         XCTAssertTrue(viewModel.contains("var dashboardPresentation: AgentDashboardPresentation"))
         XCTAssertTrue(viewModel.contains("AgentDashboardPresentation.present("))
+        XCTAssertTrue(viewModel.contains("tunnelConnectionPhase: vpnStatus.connectionPhase"))
         XCTAssertTrue(viewModel.contains("func dismissUserError()"))
 
         XCTAssertTrue(dashboard.contains("let presentation = model.dashboardPresentation"))

@@ -128,6 +128,27 @@ final class CellularIPRotationCheckpointStoreTests: XCTestCase {
         }
     }
 
+    func testReceiptBearingRestorationCheckpointDoesNotExpireBeforeRestorationSettles() throws {
+        let receipt = TunnelRotationReceipt(wasRunning: true, wasOnDemandEnabled: true)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .restoring(
+                attemptID: 41,
+                outcome: .failed(.cellularDidNotReturn)
+            ),
+            savedAt: now,
+            pauseDisposition: .paused(receipt)
+        )
+        let store = AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL)
+
+        try store.save(checkpoint)
+
+        XCTAssertFalse(checkpoint.isExpired(at: now.addingTimeInterval(24 * 60 * 60)))
+        XCTAssertEqual(
+            try store.load(expectedAttemptID: 41, at: now.addingTimeInterval(24 * 60 * 60)),
+            checkpoint
+        )
+    }
+
     func testRetirementPreventsReplayWhenPhysicalDeletionFailsWithoutLeakingCheckpointData() throws {
         let store = AppGroupCellularIPRotationCheckpointStore(
             containerURL: containerURL,

@@ -31,6 +31,7 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(
             copied,
             """
+            ZFNF Mobile Egress status
             ZFNF Mobile Egress Agent
             Enrolled: yes
             Agent: running
@@ -215,10 +216,11 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.rotationAction, .none)
     }
 
-    func testFailedAgentUsesFiniteErrorPresentationAndDisablesConflictingActions() {
+    func testFailedDisconnectedAgentOffersStartWithMatchingRecoveryCopy() {
         let presentation = AgentDashboardPresentation.present(
             AgentDashboardState(
                 isEnrolled: true,
+                tunnelConnectionPhase: .disconnected,
                 status: status(agentState: .failed, errorClass: .internalFailure)
             )
         )
@@ -227,9 +229,48 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.badge, "Agent error")
         XCTAssertEqual(presentation.tone, .error)
         XCTAssertEqual(presentation.finiteErrorCopy, "The Agent stopped because of an internal error.")
-        XCTAssertEqual(presentation.primaryAgentAction, .none)
+        XCTAssertEqual(presentation.primaryAgentAction, .start)
+        XCTAssertTrue(presentation.summary.contains("start"))
+        XCTAssertFalse(presentation.summary.lowercased().contains("pair"))
         XCTAssertFalse(presentation.isScanEnabled)
         XCTAssertEqual(presentation.rotationAction, .none)
+    }
+
+    func testFailedConnectedAgentOffersStopWithMatchingRecoveryCopy() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                tunnelConnectionPhase: .connected,
+                status: status(agentState: .failed, errorClass: .internalFailure)
+            )
+        )
+
+        XCTAssertEqual(presentation.primaryAgentAction, .stop)
+        XCTAssertTrue(presentation.summary.contains("Stop"))
+        XCTAssertFalse(presentation.summary.lowercased().contains("pair"))
+    }
+
+    func testFailedAgentDisablesActionsDuringEveryTunnelTransitionWithoutPairingCopy() {
+        for phase in [
+            TunnelConnectionPhase.connecting,
+            .reasserting,
+            .disconnecting,
+        ] {
+            let presentation = AgentDashboardPresentation.present(
+                AgentDashboardState(
+                    isEnrolled: true,
+                    tunnelConnectionPhase: phase,
+                    status: status(agentState: .failed, errorClass: .internalFailure)
+                )
+            )
+
+            XCTAssertEqual(presentation.primaryAgentAction, .none, "phase=\(phase)")
+            XCTAssertTrue(presentation.inactiveAgentMessage.contains("transition"), "phase=\(phase)")
+            XCTAssertFalse(
+                presentation.inactiveAgentMessage.lowercased().contains("pair"),
+                "phase=\(phase)"
+            )
+        }
     }
 
     func testCellularLossTakesPrecedenceOverAnUnrelatedStreamError() {
@@ -393,7 +434,38 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.headline, "Rotation storage needs attention")
         XCTAssertEqual(presentation.badge, "Storage failed")
         XCTAssertTrue(presentation.summary.contains("Agent restoration was attempted"))
+        XCTAssertEqual(presentation.rotationAction, .none)
+        XCTAssertEqual(presentation.rotationLabel, "Restart Agent before rotating")
+        XCTAssertFalse(presentation.isRotationEnabled)
         XCTAssertTrue(copied.contains("IP rotation: checkpoint retirement failed"))
+    }
+
+    func testPendingRestorationHasFiniteCopyAndNoCancellationOrRotationAction() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                status: AgentStatusSnapshot(
+                    agentState: .running,
+                    cellular: .available,
+                    relay: .disconnected,
+                    activeStreamCount: 0,
+                    bytesUploaded: 0,
+                    bytesDownloaded: 0,
+                    errorClass: .none,
+                    rotation: .restoring(
+                        attemptID: 41,
+                        outcome: .failed(.cancelled)
+                    )
+                )
+            )
+        )
+
+        XCTAssertEqual(presentation.headline, "Restoring Agent")
+        XCTAssertEqual(presentation.rotationAction, .none)
+        XCTAssertEqual(presentation.rotationLabel, "Restoring Agent…")
+        XCTAssertFalse(presentation.isRotationEnabled)
+        XCTAssertFalse(presentation.showsRotationCancellation)
+        XCTAssertTrue(presentation.safeStatusText.contains("IP rotation: restoring agent"))
     }
 
     func testByteMetricsUseStableHumanReadableUnits() {
