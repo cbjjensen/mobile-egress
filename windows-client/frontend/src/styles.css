@@ -84,6 +84,19 @@ header, .row {
   gap: 24px;
 }
 
+.brand-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 56px;
+  height: 56px;
+  flex: none;
+}
+
 h1 { margin: 3px 0 0; font-size: 30px; letter-spacing: -0.04em; }
 h2 { margin: 0 0 6px; font-size: 18px; }
 p { margin: 0 0 18px; color: var(--ip-muted); line-height: 1.5; }

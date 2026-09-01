@@ -504,7 +504,7 @@ class AgentForegroundService : LifecycleService() {
         )
         val summary = agentNotificationSummary(status)
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
-            .setSmallIcon(R.drawable.ic_mobile_egress)
+            .setSmallIcon(R.drawable.ic_mobile_egress_notification)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(summary)
             .setContentIntent(contentIntent)

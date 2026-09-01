@@ -190,6 +190,8 @@ try {
     $manifestJSON = New-NodeReleaseManifestJson -ReleaseVersion $ReleaseVersion -ClientSHA256 $clientDigest -Identity $identity
     $manifestBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($manifestJSON))
 
+    & (Join-Path $windowsRoot 'scripts\stage-branding.ps1')
+
     Push-Location $windowsRoot
     try {
         $controllerLdflags = "-X mobile-egress/windows-client/internal/desktop.embeddedReleaseManifestBase64=$manifestBase64"

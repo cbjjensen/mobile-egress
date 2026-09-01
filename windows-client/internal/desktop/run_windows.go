@@ -6,8 +6,8 @@ package desktop
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +76,9 @@ const awsIAMUserCreateURL = "https://console.aws.amazon.com/iam/home?region=us-e
 // Authenticode-signed. Node release trust is therefore rooted in the signed
 // controller instead of mutable files beside it.
 var embeddedReleaseManifestBase64 string
+
+//go:embed zfnf-logo.ico
+var zfnfTrayIcon []byte
 
 type AgentQrView struct {
 	ImageDataURL string `json:"imageDataUrl"`
@@ -935,33 +938,7 @@ func (app *DesktopApp) shutdownApp() {
 }
 
 func trayIcon() []byte {
-	const (
-		width      = 16
-		height     = 16
-		pixelBytes = width * height * 4
-		maskBytes  = height * 4
-		imageBytes = 40 + pixelBytes + maskBytes
-	)
-	icon := make([]byte, 6+16+imageBytes)
-	binary.LittleEndian.PutUint16(icon[2:4], 1)
-	binary.LittleEndian.PutUint16(icon[4:6], 1)
-	icon[6], icon[7] = width, height
-	binary.LittleEndian.PutUint16(icon[10:12], 1)
-	binary.LittleEndian.PutUint16(icon[12:14], 32)
-	binary.LittleEndian.PutUint32(icon[14:18], imageBytes)
-	binary.LittleEndian.PutUint32(icon[18:22], 22)
-	dib := icon[22:]
-	binary.LittleEndian.PutUint32(dib[0:4], 40)
-	binary.LittleEndian.PutUint32(dib[4:8], width)
-	binary.LittleEndian.PutUint32(dib[8:12], height*2)
-	binary.LittleEndian.PutUint16(dib[12:14], 1)
-	binary.LittleEndian.PutUint16(dib[14:16], 32)
-	binary.LittleEndian.PutUint32(dib[20:24], pixelBytes)
-	for index := 0; index < width*height; index++ {
-		offset := 40 + index*4
-		dib[offset], dib[offset+1], dib[offset+2], dib[offset+3] = 215, 139, 61, 255
-	}
-	return icon
+	return append([]byte(nil), zfnfTrayIcon...)
 }
 
 func showFatal(err error) {

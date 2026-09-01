@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -70,6 +71,21 @@ func TestDesktopDisplayNameUsesZFNFBranding(t *testing.T) {
 	}
 	if desktopBackgroundRed != 0 || desktopBackgroundGreen != 0 || desktopBackgroundBlue != 0 {
 		t.Fatalf("desktop background RGB = (%d, %d, %d), want true black", desktopBackgroundRed, desktopBackgroundGreen, desktopBackgroundBlue)
+	}
+}
+
+func TestTrayIconIncludesBrandedWindowsSizes(t *testing.T) {
+	t.Parallel()
+
+	icon := trayIcon()
+	if len(icon) < 6 {
+		t.Fatalf("tray icon length = %d, want an ICO header", len(icon))
+	}
+	if reserved, iconType := binary.LittleEndian.Uint16(icon[0:2]), binary.LittleEndian.Uint16(icon[2:4]); reserved != 0 || iconType != 1 {
+		t.Fatalf("tray icon header = reserved %d/type %d, want Windows ICO", reserved, iconType)
+	}
+	if count := binary.LittleEndian.Uint16(icon[4:6]); count < 5 {
+		t.Fatalf("tray icon image count = %d, want at least five sizes", count)
 	}
 }
 

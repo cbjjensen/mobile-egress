@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1040" viewBox="0 0 1440 1040" role="img" aria-labelledby="title desc">
+  <title id="title">ZFNF Mobile Egress Logo Concepts</title>
+  <desc id="desc">A concept sheet with six simple ZFNF monogram logo directions for Mobile Egress.</desc>
+  <defs>
+    <style>
+      .bg { fill: #000; }
+      .panel { fill: #080a0f; stroke: rgba(232, 240, 255, 0.14); stroke-width: 1; }
+      .label { fill: #aeb7c6; font: 500 18px "Segoe UI", Arial, sans-serif; }
+      .caption { fill: #747d8c; font: 400 13px "Segoe UI", Arial, sans-serif; }
+      .word { fill: #f2f5fb; font: 800 46px "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mini { fill: #03060c; font: 900 34px "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mono { fill: #f8faff; font: 900 74px "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mono-small { fill: #f8faff; font: 900 58px "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mini-tiny { fill: #03060c; font: 900 20px "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mint { fill: #7ef2c5; }
+      .blue { fill: #7db7ff; }
+      .violet { fill: #d6b3ff; }
+      .white { fill: #f8faff; }
+      .muted-stroke { stroke: rgba(248, 250, 255, 0.34); stroke-width: 8; stroke-linecap: square; stroke-linejoin: miter; fill: none; }
+      .mint-stroke { stroke: #7ef2c5; stroke-width: 12; stroke-linecap: square; stroke-linejoin: miter; fill: none; }
+      .blue-stroke { stroke: #7db7ff; stroke-width: 10; stroke-linecap: square; stroke-linejoin: miter; fill: none; }
+      .thin-stroke { stroke: #f8faff; stroke-width: 7; stroke-linecap: square; stroke-linejoin: miter; fill: none; }
+      .hairline { stroke: rgba(126, 242, 197, 0.5); stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1440" height="1040"/>
+  <text x="72" y="78" fill="#f2f5fb" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="800">ZFNF logo exploration</text>
+  <text x="72" y="108" class="caption">Simple monogram directions for ZFNF Mobile Egress. Built as editable SVG, using the app's OLED palette.</text>
+
+  <g transform="translate(72 150)">
+    <rect class="panel" width="392" height="250" rx="18"/>
+    <text x="28" y="40" class="label">01 / connected wordmark</text>
+    <g transform="translate(48 88) scale(0.72)">
+      <path class="mint-stroke" d="M0 0 H84 L0 96 H92"/>
+      <path class="thin-stroke" d="M118 0 H202 M118 0 V96 M118 46 H190"/>
+      <path class="blue-stroke" d="M226 96 V0 L318 96 V0"/>
+      <path class="thin-stroke" d="M344 0 H392 M344 0 V96 M344 46 H386"/>
+    </g>
+    <text x="28" y="220" class="caption">Fast diagonal Z, hard F stems, N as the route.</text>
+  </g>
+
+  <g transform="translate(524 150)">
+    <rect class="panel" width="392" height="250" rx="18"/>
+    <text x="28" y="40" class="label">02 / square app block</text>
+    <g transform="translate(121 62)">
+      <rect width="150" height="150" rx="30" fill="#7ef2c5"/>
+      <text x="75" y="68" text-anchor="middle" class="mini">ZF</text>
+      <text x="75" y="116" text-anchor="middle" class="mini">NF</text>
+      <path d="M38 80 H112" stroke="#03060c" stroke-width="5" stroke-linecap="square" opacity="0.35"/>
+    </g>
+    <text x="28" y="220" class="caption">Most launcher-friendly. Reads at tiny sizes.</text>
+  </g>
+
+  <g transform="translate(976 150)">
+    <rect class="panel" width="392" height="250" rx="18"/>
+    <text x="28" y="40" class="label">03 / split signal</text>
+    <g transform="translate(42 78)">
+      <text x="0" y="82" class="mono">ZF</text>
+      <path class="hairline" d="M128 20 C168 20 172 84 214 84 S266 20 306 20"/>
+      <text x="222" y="82" class="mono">NF</text>
+      <circle cx="128" cy="20" r="6" class="mint"/>
+      <circle cx="306" cy="20" r="6" class="blue"/>
+    </g>
+    <text x="28" y="220" class="caption">Keeps the letters primary, adds cellular flow.</text>
+  </g>
+
+  <g transform="translate(72 460)">
+    <rect class="panel" width="392" height="250" rx="18"/>
+    <text x="28" y="40" class="label">04 / bracket route</text>
+    <g transform="translate(54 86) scale(0.56)">
+      <path d="M0 0 H128 L0 116 H132" class="thin-stroke"/>
+      <path d="M170 0 V116 M170 0 H262 M170 56 H246" class="thin-stroke"/>
+      <path d="M294 0 V116" class="mint-stroke"/>
+      <path d="M310 0 L382 116 M382 0 V116" class="mint-stroke"/>
+      <path d="M408 0 V116 M408 0 H492 M408 56 H478" class="thin-stroke"/>
+    </g>
+    <text x="28" y="220" class="caption">Sharp, infrastructural, better as a wordmark.</text>
+  </g>
+
+  <g transform="translate(524 460)">
+    <rect class="panel" width="392" height="250" rx="18"/>
+    <text x="28" y="40" class="label">05 / ZF glyph + name</text>
+    <g transform="translate(42 74)">
+      <rect width="104" height="104" rx="22" fill="#05070b" stroke="rgba(126, 242, 197, 0.72)" stroke-width="3"/>
+      <path d="M24 27 H76 L27 77 H80" class="mint-stroke" stroke-width="9"/>
+      <path d="M58 27 H87 M58 27 V78 M58 52 H82" class="thin-stroke" stroke-width="6"/>
+      <text x="132" y="46" class="word">ZFNF</text>
+      <text x="134" y="78" class="caption">Mobile Egress</text>
+    </g>
+    <text x="28" y="220" class="caption">Practical lockup for Windows header and docs.</text>
+  </g>
+
+  <g transform="translate(976 460)">
+    <rect class="panel" width="392" height="250" rx="18"/>
+    <text x="28" y="40" class="label">06 / cellular bars monogram</text>
+    <g transform="translate(54 78)">
+      <rect x="0" y="68" width="22" height="48" rx="3" class="mint"/>
+      <rect x="34" y="48" width="22" height="68" rx="3" class="mint"/>
+      <rect x="68" y="24" width="22" height="92" rx="3" class="blue"/>
+      <rect x="102" y="0" width="22" height="116" rx="3" class="violet"/>
+      <text x="146" y="88" class="mono-small" font-size="52">ZFNF</text>
+    </g>
+    <text x="28" y="220" class="caption">Closest to the old egress/signal idea.</text>
+  </g>
+
+  <g transform="translate(72 790)">
+    <text x="0" y="0" class="label">Quick read</text>
+    <text x="0" y="34" class="caption">Best icon: 02. Best full product lockup: 05. Most distinctive monogram: 01. Safest bridge from current icon: 06.</text>
+    <g transform="translate(0 70)">
+      <rect x="0" y="0" width="80" height="80" rx="18" fill="#7ef2c5"/>
+      <text x="40" y="36" text-anchor="middle" class="mini-tiny">ZF</text>
+      <text x="40" y="60" text-anchor="middle" class="mini-tiny">NF</text>
+      <rect x="118" y="0" width="80" height="80" rx="18" fill="#05070b" stroke="rgba(126, 242, 197, 0.72)" stroke-width="2"/>
+      <path d="M136 21 H174 L138 58 H176" stroke="#7ef2c5" stroke-width="6" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+      <path d="M160 21 H184 M160 21 V59 M160 40 H181" stroke="#f8faff" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+      <text x="236" y="50" class="word">ZFNF</text>
+      <text x="520" y="50" fill="#aeb7c6" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="500">Mobile Egress</text>
+    </g>
+  </g>
+</svg>
