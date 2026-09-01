@@ -189,6 +189,20 @@ Assert-Condition ($unexpectedProperties.Output -match 'agent\.enrollment has une
 Assert-Condition ($unexpectedProperties.Output -match 'agent\.enrollment platforms has unexpected property: windows') 'Unexpected platforms property diagnostics must name the property.'
 Assert-Condition ($unexpectedProperties.Output -match 'agent\.enrollment/android has unexpected property: unexpectedEntry') 'Unexpected platform-entry property diagnostics must name the property.'
 
+$nullSchema = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    $Manifest.Add('$schema', $null)
+}
+Assert-Condition ($nullSchema.ExitCode -eq 1) 'An explicit null root $schema property must fail validation.'
+Assert-Condition ($nullSchema.Output -match '\$schema must be a non-empty string') 'Null $schema diagnostics must reject present null as a string value.'
+
+$nullNativeEquivalenceNotes = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    $Manifest.features[0].platforms.android.Add('nativeEquivalenceNotes', $null)
+}
+Assert-Condition ($nullNativeEquivalenceNotes.ExitCode -eq 1) 'An explicit null nativeEquivalenceNotes property must fail validation even when optional.'
+Assert-Condition ($nullNativeEquivalenceNotes.Output -match 'agent\.enrollment/android nativeEquivalenceNotes must be a string') 'Null native-equivalence diagnostics must reject present null as a string value.'
+
 $actualManifestOutput = & $validator -RepositoryRoot $repositoryRoot *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 0) 'The checked-in mobile feature manifest must pass validation.'
 Assert-Condition ($actualManifestOutput -match 'Mobile feature manifest validation passed') 'The checked-in manifest must report validation success.'

@@ -159,9 +159,11 @@ if (-not (Test-JsonObject -Value $manifest)) {
     Test-UnexpectedProperties -Object $manifest -Context 'root' -AllowedProperties @('$schema', 'schemaVersion', 'features')
 }
 
-$schemaReference = Get-JsonProperty -Object $manifest -Name '$schema'
-if ($null -ne $schemaReference -and -not (Test-StringValue -Value $schemaReference)) {
-    Add-ManifestError '$schema must be a non-empty string'
+if (Test-JsonProperty -Object $manifest -Name '$schema') {
+    $schemaReference = Get-JsonProperty -Object $manifest -Name '$schema'
+    if (-not (Test-StringValue -Value $schemaReference)) {
+        Add-ManifestError '$schema must be a non-empty string'
+    }
 }
 
 $schemaVersion = Get-JsonProperty -Object $manifest -Name 'schemaVersion'
@@ -239,8 +241,9 @@ foreach ($feature in $features) {
             Add-ManifestError "$featureId/$platform has unsupported status: $status"
         }
 
+        $hasNativeEquivalenceNotes = Test-JsonProperty -Object $entry -Name 'nativeEquivalenceNotes'
         $nativeEquivalenceNotes = Get-JsonProperty -Object $entry -Name 'nativeEquivalenceNotes'
-        if ($null -ne $nativeEquivalenceNotes -and $nativeEquivalenceNotes -isnot [string]) {
+        if ($hasNativeEquivalenceNotes -and $nativeEquivalenceNotes -isnot [string]) {
             Add-ManifestError "$featureId/$platform nativeEquivalenceNotes must be a string"
         }
         if ($status -eq 'native-equivalent' -and ($nativeEquivalenceNotes -isnot [string] -or [string]::IsNullOrWhiteSpace($nativeEquivalenceNotes))) {
