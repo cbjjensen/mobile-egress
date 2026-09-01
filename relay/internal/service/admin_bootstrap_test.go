@@ -106,6 +106,211 @@ func TestAdminBootstrapCommitsOwnerURLUIDAndReplayAtomically(t *testing.T) {
 	}
 }
 
+func TestAdminBootstrapPathGuardRevalidatesAndSkipsLegacyMkdirAll(t *testing.T) {
+	productDir := filepath.Join(t.TempDir(), "Product")
+	if err := os.Mkdir(productDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(productDir, "Relay")
+	guard := &recordingAdminPathGuard{}
+	state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir, PathGuard: guard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	if guard.validateCalls != 1 {
+		t.Fatalf("startup PathGuard.Validate calls = %d, want 1", guard.validateCalls)
+	}
+	legacyParentCalls := 0
+	state.makeSetupParent = func(string, os.FileMode) error {
+		legacyParentCalls++
+		return errors.New("legacy recursive parent creation must not run")
+	}
+	_, csr := newDeviceCSR(t)
+	executeAdminBootstrap(t, state, adminReplayKey(
+		"81818181818181818181818181818181", relayadmin.OperationSetup, "guarded-bootstrap",
+	), AdminBootstrapOwnerOptions{
+		PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+		CSRPEM: csr, AdministrativeOwnerUID: 501,
+	})
+	if guard.validateCalls != 2 {
+		t.Fatalf("PathGuard.Validate calls after setup = %d, want startup plus in-mutation revalidation", guard.validateCalls)
+	}
+	if legacyParentCalls != 0 {
+		t.Fatalf("guarded setup called legacy recursive parent creation %d times", legacyParentCalls)
+	}
+}
+
+func TestAdminBootstrapPathGuardFailureStopsBeforeParentOrStageMutation(t *testing.T) {
+	productDir := filepath.Join(t.TempDir(), "Product")
+	if err := os.Mkdir(productDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(productDir, "Relay")
+	guard := &recordingAdminPathGuard{}
+	state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir, PathGuard: guard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	guard.validateErr = errors.New("injected unsafe replacement")
+	legacyParentCalls := 0
+	state.makeSetupParent = func(string, os.FileMode) error {
+		legacyParentCalls++
+		return nil
+	}
+	_, csr := newDeviceCSR(t)
+	key := adminReplayKey("82828282828282828282828282828282", relayadmin.OperationSetup, "guarded-failure")
+	reservation, err := state.ReplayStore().Reserve(context.Background(), key)
+	if err != nil || reservation.Mutation == nil {
+		t.Fatalf("Reserve() = (%#v, %v), want mutation reservation", reservation, err)
+	}
+	_, err = reservation.Mutation.Execute(context.Background(), func(ctx context.Context, transaction relayadmin.MutationTransaction) ([]byte, error) {
+		_, err := state.BootstrapOwner(ctx, transaction, AdminBootstrapOwnerOptions{
+			PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+			CSRPEM: csr, AdministrativeOwnerUID: 501,
+		})
+		return nil, err
+	})
+	if !errors.Is(err, ErrAdminStateIncompatible) {
+		t.Fatalf("BootstrapOwner() error = %v, want ErrAdminStateIncompatible", err)
+	}
+	if guard.validateCalls != 2 {
+		t.Fatalf("PathGuard.Validate calls = %d, want startup plus in-mutation revalidation", guard.validateCalls)
+	}
+	if legacyParentCalls != 0 {
+		t.Fatalf("unsafe guarded setup called legacy parent creation %d times", legacyParentCalls)
+	}
+	if _, err := os.Lstat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("guard rejection left final state: %v", err)
+	}
+	stageDir := filepath.Join(productDir, ".relay-setup-"+key.RequestID)
+	if _, err := os.Lstat(stageDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("guard rejection left setup stage: %v", err)
+	}
+}
+
+func TestAdminBootstrapPathGuardCancellationPreservesAbsentStateForSameProcessRetry(t *testing.T) {
+	for index, guardErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(guardErr.Error(), func(t *testing.T) {
+			productDir := filepath.Join(t.TempDir(), "Product")
+			if err := os.Mkdir(productDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			stateDir := filepath.Join(productDir, "Relay")
+			guard := &recordingAdminPathGuard{}
+			state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir, PathGuard: guard})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer state.Close()
+
+			legacyParentCalls := 0
+			state.makeSetupParent = func(string, os.FileMode) error {
+				legacyParentCalls++
+				return nil
+			}
+			guard.validateErr = guardErr
+			_, csr := newDeviceCSR(t)
+			failedKey := adminReplayKey(
+				[]string{"83838383838383838383838383838383", "84848484848484848484848484848484"}[index],
+				relayadmin.OperationSetup,
+				"guard-cancellation",
+			)
+			reservation, err := state.ReplayStore().Reserve(context.Background(), failedKey)
+			if err != nil || reservation.Mutation == nil {
+				t.Fatalf("Reserve() = (%#v, %v), want mutation reservation", reservation, err)
+			}
+			_, err = reservation.Mutation.Execute(context.Background(), func(ctx context.Context, transaction relayadmin.MutationTransaction) ([]byte, error) {
+				_, err := state.BootstrapOwner(ctx, transaction, AdminBootstrapOwnerOptions{
+					PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+					CSRPEM: csr, AdministrativeOwnerUID: 501,
+				})
+				return nil, err
+			})
+			if !errors.Is(err, guardErr) {
+				t.Fatalf("BootstrapOwner() error = %v, want %v", err, guardErr)
+			}
+			if snapshot, snapshotErr := state.Snapshot(context.Background()); snapshotErr != nil || snapshot.Class != AdminStateAbsent {
+				t.Fatalf("Snapshot() after guard cancellation = (%#v, %v), want absent", snapshot, snapshotErr)
+			}
+			if legacyParentCalls != 0 {
+				t.Fatalf("canceled guarded setup called legacy parent creation %d times", legacyParentCalls)
+			}
+			if _, err := os.Lstat(stateDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("guard cancellation left final state: %v", err)
+			}
+			stageDir := filepath.Join(productDir, ".relay-setup-"+failedKey.RequestID)
+			if _, err := os.Lstat(stageDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("guard cancellation left setup stage: %v", err)
+			}
+
+			guard.validateErr = nil
+			retryKey := adminReplayKey(
+				[]string{"85858585858585858585858585858585", "86868686868686868686868686868686"}[index],
+				relayadmin.OperationSetup,
+				"guard-retry",
+			)
+			executeAdminBootstrap(t, state, retryKey, AdminBootstrapOwnerOptions{
+				PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+				CSRPEM: csr, AdministrativeOwnerUID: 501,
+			})
+			if snapshot, snapshotErr := state.Snapshot(context.Background()); snapshotErr != nil || snapshot.Class != AdminStateReady {
+				t.Fatalf("Snapshot() after same-process retry = (%#v, %v), want ready", snapshot, snapshotErr)
+			}
+			if legacyParentCalls != 0 {
+				t.Fatalf("successful guarded retry called legacy parent creation %d times", legacyParentCalls)
+			}
+		})
+	}
+}
+
+func TestAdminBootstrapWritesSetupStageCertificatesWithPrivateMode(t *testing.T) {
+	productDir := filepath.Join(t.TempDir(), "Product")
+	if err := os.Mkdir(productDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(productDir, "Relay")
+	guard := &recordingAdminPathGuard{}
+	state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir, PathGuard: guard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+
+	key := adminReplayKey("87878787878787878787878787878787", relayadmin.OperationSetup, "private-stage-certificates")
+	writtenModes := make(map[string]os.FileMode)
+	writeSetupFile := state.writeSetupFile
+	state.writeSetupFile = func(path string, data []byte, mode os.FileMode) error {
+		writtenModes[filepath.Base(path)] = mode
+		return writeSetupFile(path, data, mode)
+	}
+	injected := errors.New("inspect setup-stage certificate modes")
+	state.beforeSetupDatabase = func() error {
+		for _, name := range []string{caCertFilename, relayCertFilename} {
+			if got := writtenModes[name].Perm(); got != 0o600 {
+				t.Fatalf("setup-stage %s mode = %#o, want 0600", name, got)
+			}
+		}
+		return injected
+	}
+	_, csr := newDeviceCSR(t)
+	reservation, err := state.ReplayStore().Reserve(context.Background(), key)
+	if err != nil || reservation.Mutation == nil {
+		t.Fatalf("Reserve() = (%#v, %v), want mutation reservation", reservation, err)
+	}
+	_, err = reservation.Mutation.Execute(context.Background(), func(ctx context.Context, transaction relayadmin.MutationTransaction) ([]byte, error) {
+		_, err := state.BootstrapOwner(ctx, transaction, AdminBootstrapOwnerOptions{
+			PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+			CSRPEM: csr, AdministrativeOwnerUID: 501,
+		})
+		return nil, err
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("BootstrapOwner() error = %v, want injected mode-inspection stop", err)
+	}
+}
+
 func TestAdminBootstrapRejectsRootAndDifferentRequestAfterInitialization(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "Relay")
 	state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir})

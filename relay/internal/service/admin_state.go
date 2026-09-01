@@ -109,6 +109,8 @@ type AdminState struct {
 	endpointFault            func(adminEndpointFaultPoint) error
 	syncEndpointDirectory    func(string) error
 	commitAdminMutation      func(*sql.Tx) error
+	makeSetupParent          func(string, os.FileMode) error
+	writeSetupFile           func(string, []byte, os.FileMode) error
 }
 
 func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
@@ -143,6 +145,8 @@ func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
 		commitAdminMutation: func(transaction *sql.Tx) error {
 			return transaction.Commit()
 		},
+		makeSetupParent: os.MkdirAll,
+		writeSetupFile:  writeDurableFile,
 	}
 	state.mutationGate <- struct{}{}
 	state.replay = &adminReplayStore{state: state}
