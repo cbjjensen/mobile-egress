@@ -1,3 +1,4 @@
+import MobileEgressCore
 import SwiftUI
 import Vision
 import VisionKit
@@ -7,9 +8,13 @@ struct QRScannerView: View {
     let onUnavailable: @MainActor () -> Void
 
     var body: some View {
-        if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+        switch QRScannerSession.availabilityDecision(
+            isSupported: DataScannerViewController.isSupported,
+            isAvailable: DataScannerViewController.isAvailable
+        ) {
+        case .startScanning:
             DataScannerController(onCode: onCode, onUnavailable: onUnavailable)
-        } else {
+        case .reportUnavailable:
             Color.clear.onAppear(perform: onUnavailable)
         }
     }
@@ -52,7 +57,7 @@ private struct DataScannerController: UIViewControllerRepresentable {
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         private let onCode: @MainActor (String) -> Void
         private let onUnavailable: @MainActor () -> Void
-        private var finished = false
+        private var session = QRScannerSession()
 
         init(
             onCode: @escaping @MainActor (String) -> Void,
@@ -67,19 +72,11 @@ private struct DataScannerController: UIViewControllerRepresentable {
             didAdd addedItems: [RecognizedItem],
             allItems: [RecognizedItem]
         ) {
-            guard !finished else { return }
-            for item in addedItems {
-                guard case let .barcode(barcode) = item,
-                      let payload = barcode.payloadStringValue,
-                      !payload.isEmpty
-                else {
-                    continue
-                }
-                finished = true
-                dataScanner.stopScanning()
-                onCode(payload)
-                return
+            let payloads = addedItems.compactMap { item -> String? in
+                guard case let .barcode(barcode) = item else { return nil }
+                return barcode.payloadStringValue
             }
+            apply(session.reduce(.recognizedPayloads(payloads)), scanner: dataScanner)
         }
 
         func dataScanner(
@@ -90,9 +87,22 @@ private struct DataScannerController: UIViewControllerRepresentable {
         }
 
         func reportUnavailable() {
-            guard !finished else { return }
-            finished = true
-            onUnavailable()
+            apply(session.reduce(.scannerUnavailable), scanner: nil)
+        }
+
+        private func apply(
+            _ effect: QRScannerSessionEffect,
+            scanner: DataScannerViewController?
+        ) {
+            switch effect {
+            case .none:
+                break
+            case let .deliverCode(payload):
+                scanner?.stopScanning()
+                onCode(payload)
+            case .reportUnavailable:
+                onUnavailable()
+            }
         }
     }
 }
