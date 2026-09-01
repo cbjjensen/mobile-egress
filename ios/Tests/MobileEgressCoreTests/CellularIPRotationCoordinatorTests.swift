@@ -92,6 +92,40 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         XCTAssertEqual(resumeCount, 1)
     }
 
+    func testDuplicateStartDuringActiveAttemptDoesNotCancelOwnedLossTimeout() async {
+        let sleeper = RotationSleeperStub()
+        let path = RotationPathObserverStub()
+        let tunnel = await RotationTunnelStub()
+        let coordinator = await makeCoordinator(
+            sleeper: sleeper,
+            path: path,
+            tunnel: tunnel,
+            probe: RotationProbeStub(snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10")])
+        )
+
+        await coordinator.resumeAfterActivation()
+        path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.updateAgentAvailability(
+            isEnrolled: true,
+            isAgentRunning: true,
+            activeStreamCount: 0
+        )
+        await coordinator.start(holdSeconds: 10)
+        await waitUntil { await sleeper.pendingSeconds.contains(120) }
+
+        await coordinator.start(holdSeconds: 10)
+        await sleeper.fire(seconds: 120)
+        await waitUntil {
+            if case .failed(_, .cellularDidNotDisconnect) = await coordinator.state { return true }
+            return false
+        }
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
+
+        let pauseCount = await tunnel.pauseCount
+        XCTAssertEqual(pauseCount, 1)
+    }
+
     func testCancellationRejectsLateProbeCallbackAndClearsCheckpointAndCue() async {
         let gate = RotationProbeGate()
         let path = RotationPathObserverStub()
