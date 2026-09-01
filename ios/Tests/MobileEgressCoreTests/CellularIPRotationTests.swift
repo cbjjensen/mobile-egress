@@ -609,11 +609,11 @@ final class CellularIPRotationTests: XCTestCase {
         XCTAssertEqual(
             reducer.reduce(
                 .recover(checkpoint: legacyCheckpoint, at: savedAt.addingTimeInterval(65))
-            ).effects,
-            [
-                .pauseAgentAndStreams(attemptID: 41),
-                .scheduleCellularReturnTimeout(attemptID: 41, seconds: 115),
-            ]
+            ),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .cellularDidNotReturn),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
         )
     }
 
