@@ -8,6 +8,17 @@ public protocol TunnelPreferenceSession: AnyObject {
 }
 
 @MainActor
+public protocol TunnelRotationPreferenceSession: TunnelPreferenceSession {
+    var isRotationTunnelRunning: Bool { get }
+    var isOnDemandEnabled: Bool { get }
+}
+
+public struct TunnelRotationReceipt: Sendable {
+    fileprivate let wasRunning: Bool
+    fileprivate let wasOnDemandEnabled: Bool
+}
+
+@MainActor
 public enum TunnelPreferenceTransaction {
     public static func start(using session: any TunnelPreferenceSession) async throws {
         try await session.loadPreferences()
@@ -30,5 +41,40 @@ public enum TunnelPreferenceTransaction {
         session.applyConfiguration(onDemandEnabled: false)
         try await session.savePreferences()
         try await session.loadPreferences()
+    }
+}
+
+@MainActor
+public enum TunnelRotationPreferenceTransaction {
+    public static func pause(
+        using session: any TunnelRotationPreferenceSession
+    ) async throws -> TunnelRotationReceipt {
+        try await session.loadPreferences()
+        let receipt = TunnelRotationReceipt(
+            wasRunning: session.isRotationTunnelRunning,
+            wasOnDemandEnabled: session.isOnDemandEnabled
+        )
+        session.applyConfiguration(onDemandEnabled: false)
+        try await session.savePreferences()
+        try await session.loadPreferences()
+        session.stopTunnelSession()
+        return receipt
+    }
+
+    public static func resume(
+        using session: any TunnelRotationPreferenceSession,
+        receipt: TunnelRotationReceipt?
+    ) async throws {
+        guard let receipt else {
+            try await TunnelPreferenceTransaction.start(using: session)
+            return
+        }
+        try await session.loadPreferences()
+        session.applyConfiguration(onDemandEnabled: receipt.wasOnDemandEnabled)
+        try await session.savePreferences()
+        try await session.loadPreferences()
+        if receipt.wasRunning {
+            try session.startTunnelSession()
+        }
     }
 }

@@ -155,6 +155,7 @@ public enum CellularIPRotationEvent: Codable, Equatable, Sendable {
     case returnTimedOut(attemptID: UInt64)
     case cancelled(attemptID: UInt64)
     case recover(checkpoint: CellularIPRotationCheckpoint, at: Date)
+    case recoveryFailed(attemptID: UInt64)
     case resumeFailed(attemptID: UInt64)
     case reset
 }
@@ -260,6 +261,8 @@ public struct CellularIPRotationReducer: Sendable {
             transition = cancel(attemptID: attemptID)
         case let .recover(checkpoint, date):
             transition = recover(checkpoint: checkpoint, at: date)
+        case let .recoveryFailed(attemptID):
+            transition = recoveryFailed(attemptID: attemptID)
         case let .resumeFailed(attemptID):
             transition = resumeFailed(attemptID: attemptID)
         case .reset:
@@ -759,6 +762,11 @@ public struct CellularIPRotationReducer: Sendable {
              .awaitingCellularReturn, .verifying, .failed:
             return unchanged()
         }
+    }
+
+    private func recoveryFailed(attemptID: UInt64) -> CellularIPRotationTransition {
+        guard state == .idle, isNewAttemptID(attemptID) else { return unchanged() }
+        return terminalFailure(.recoveryExpired, attemptID: attemptID)
     }
 
     private func reset() -> CellularIPRotationTransition {

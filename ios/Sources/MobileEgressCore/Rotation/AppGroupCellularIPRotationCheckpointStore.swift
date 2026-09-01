@@ -13,8 +13,21 @@ public enum CellularIPRotationCheckpointStoreError: String, Error, Codable, Equa
 
 public protocol CellularIPRotationCheckpointStoring: Sendable {
     func save(_ checkpoint: CellularIPRotationCheckpoint) throws
-    func load(expectedAttemptID: UInt64, at date: Date) throws -> CellularIPRotationCheckpoint?
+    func load(at date: Date) throws -> CellularIPRotationCheckpoint?
     func clear() throws
+}
+
+public extension CellularIPRotationCheckpointStoring {
+    func load(
+        expectedAttemptID: UInt64,
+        at date: Date
+    ) throws -> CellularIPRotationCheckpoint? {
+        guard let checkpoint = try load(at: date) else { return nil }
+        guard checkpoint.state.attemptID == expectedAttemptID else {
+            throw CellularIPRotationCheckpointStoreError.attemptMismatch
+        }
+        return checkpoint
+    }
 }
 
 public final class AppGroupCellularIPRotationCheckpointStore:
@@ -73,10 +86,7 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         }
     }
 
-    public func load(
-        expectedAttemptID: UInt64,
-        at date: Date
-    ) throws -> CellularIPRotationCheckpoint? {
+    public func load(at date: Date) throws -> CellularIPRotationCheckpoint? {
         lock.lock()
         defer { lock.unlock() }
         guard FileManager.default.fileExists(atPath: checkpointURL.path) else { return nil }
@@ -93,9 +103,6 @@ public final class AppGroupCellularIPRotationCheckpointStore:
             throw CellularIPRotationCheckpointStoreError.malformed
         }
         try Self.validate(checkpoint)
-        guard checkpoint.state.attemptID == expectedAttemptID else {
-            throw CellularIPRotationCheckpointStoreError.attemptMismatch
-        }
         guard date >= checkpoint.savedAt else {
             throw CellularIPRotationCheckpointStoreError.malformed
         }
