@@ -454,7 +454,8 @@ final class CellularIPRotationTests: XCTestCase {
                 holdSeconds: 10,
                 before: beforeSnapshot
             ),
-            savedAt: savedAt
+            savedAt: savedAt,
+            timeoutDeadline: savedAt.addingTimeInterval(120)
         )
         var recovering = CellularIPRotationReducer()
 
@@ -521,7 +522,8 @@ final class CellularIPRotationTests: XCTestCase {
         let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
         let checkpoint = CellularIPRotationCheckpoint(
             state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
-            savedAt: savedAt
+            savedAt: savedAt,
+            timeoutDeadline: savedAt.addingTimeInterval(180)
         )
         var recovering = CellularIPRotationReducer()
 
@@ -609,6 +611,26 @@ final class CellularIPRotationTests: XCTestCase {
         XCTAssertEqual(
             reducer.reduce(
                 .recover(checkpoint: legacyCheckpoint, at: savedAt.addingTimeInterval(65))
+            ),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .cellularDidNotReturn),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
+    func testUntimedAwaitingCheckpointFailsSafeInsteadOfResettingPhaseWindow() {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
+            savedAt: savedAt
+        )
+
+        XCTAssertNil(checkpoint.timeoutDeadline)
+        var reducer = CellularIPRotationReducer()
+        XCTAssertEqual(
+            reducer.reduce(
+                .recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(1))
             ),
             CellularIPRotationTransition(
                 state: .failed(attemptID: 41, failure: .cellularDidNotReturn),
