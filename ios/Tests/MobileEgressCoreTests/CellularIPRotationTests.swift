@@ -310,6 +310,38 @@ final class CellularIPRotationTests: XCTestCase {
         )
     }
 
+    func testRequestObservedDuringActiveAttemptCannotReplayAfterReset() {
+        var reducer = awaitingAirplaneModeReducer()
+
+        XCTAssertEqual(
+            reducer.reduce(
+                .requested(attemptID: 42, networkToken: "cell-2", availability: availability())
+            ),
+            CellularIPRotationTransition(state: reducer.state)
+        )
+        _ = reducer.reduce(.lossTimedOut(attemptID: 41))
+        _ = reducer.reduce(.reset)
+
+        XCTAssertEqual(
+            reducer.reduce(
+                .requested(attemptID: 42, networkToken: "cell-2", availability: availability())
+            ),
+            CellularIPRotationTransition(state: .idle)
+        )
+        XCTAssertEqual(
+            reducer.reduce(
+                .requested(attemptID: 43, networkToken: "cell-3", availability: availability())
+            ).state,
+            .preparing(
+                attemptID: 43,
+                originalNetworkToken: "cell-3",
+                holdSeconds: 10,
+                cellularLost: false,
+                returnedNetworkToken: nil
+            )
+        )
+    }
+
     func testCancellationAndTimeoutsAttemptBestEffortAgentResume() {
         var lossTimeout = awaitingAirplaneModeReducer()
         XCTAssertEqual(
