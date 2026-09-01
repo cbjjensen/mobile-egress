@@ -211,7 +211,10 @@ final class XcodeProjectStructureTests: XCTestCase {
     func testAppleManagerConsumesPortablePreferenceTransaction() throws {
         let manager = try text(at: "MobileEgressAgent/TunnelManager.swift")
 
-        XCTAssertTrue(manager.contains("TunnelManager: TunnelPreferenceSession"))
+        XCTAssertTrue(
+            manager.contains("TunnelManager: TunnelPreferenceSession") ||
+                manager.contains("TunnelRotationPreferenceSession")
+        )
         XCTAssertTrue(manager.contains("TunnelPreferenceTransaction.start(using: self)"))
         XCTAssertTrue(manager.contains("TunnelPreferenceTransaction.stop(using: self)"))
         XCTAssertTrue(manager.contains("func loadPreferences() async throws"))
