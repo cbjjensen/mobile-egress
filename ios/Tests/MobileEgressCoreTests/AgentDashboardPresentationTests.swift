@@ -147,7 +147,7 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.requiresActiveStreamConfirmation)
     }
 
-    func testAwaitingConfirmationExposesConsistentConfirmAndDeclineActions() {
+    func testAwaitingConfirmationRequiresDecisionInsteadOfGenericRotationAction() {
         let status = AgentStatusSnapshot(
             agentState: .running,
             cellular: .available,
@@ -171,15 +171,7 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.requiresActiveStreamConfirmation)
         XCTAssertEqual(presentation.rotationAction, .none)
         XCTAssertFalse(presentation.isRotationEnabled)
-        XCTAssertEqual(
-            presentation.rotationConfirmation,
-            CellularIPRotationConfirmationPresentation(
-                title: "Disconnect 4 active streams?",
-                message: "Rotating the cellular IP will close every active proxy stream.",
-                confirmLabel: "Disconnect and rotate",
-                declineLabel: "Keep current connection"
-            )
-        )
+        XCTAssertEqual(presentation.headline, "Confirm IP rotation")
     }
 
     func testStartingAgentUsesFinitePendingPresentationAndDisablesConflictingActions() {
