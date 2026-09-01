@@ -111,9 +111,10 @@ final class CellularPublicIPProbeAdapterTests: XCTestCase {
         let probe = CellularPublicIPProbe(requester: requester, logger: logger)
 
         let snapshot = await probe.probe()
+        let requestedFamilies = await requester.requestedFamilies()
 
         XCTAssertEqual(snapshot, PublicIPSnapshot(ipv4: "198.51.100.8", ipv6: nil))
-        XCTAssertEqual(await requester.requestedFamilies(), Set([.ipv4, .ipv6]))
+        XCTAssertEqual(requestedFamilies, Set([.ipv4, .ipv6]))
         XCTAssertEqual(
             logger.events,
             [
@@ -137,9 +138,10 @@ final class CellularPublicIPProbeAdapterTests: XCTestCase {
         }
         task.cancel()
         let snapshot = await task.value
+        let cancelledFamilies = await requester.cancelledFamilies()
 
         XCTAssertEqual(snapshot, PublicIPSnapshot())
-        XCTAssertEqual(await requester.cancelledFamilies(), Set([.ipv4, .ipv6]))
+        XCTAssertEqual(cancelledFamilies, Set([.ipv4, .ipv6]))
         XCTAssertEqual(
             Set(logger.events),
             Set([

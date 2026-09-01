@@ -27,7 +27,7 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
         )
 
         let result = await cue.schedule(attemptID: 41, holdDeadline: deadline)
-        let scheduled = await center.snapshot().scheduled
+        let scheduled = (await center.snapshot()).scheduled
 
         XCTAssertEqual(result, .scheduled)
         XCTAssertEqual(
@@ -62,16 +62,19 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
             center: schedulingErrorCenter,
             firstUseStore: previouslyUsed
         )
+        let authorizationResult = await authorizationCue.schedule(
+            attemptID: 41,
+            holdDeadline: deadline
+        )
+        let schedulingResult = await schedulingCue.schedule(
+            attemptID: 42,
+            holdDeadline: deadline
+        )
+        let requestCount = (await authorizationErrorCenter.snapshot()).authorizationRequestCount
 
-        XCTAssertEqual(
-            await authorizationCue.schedule(attemptID: 41, holdDeadline: deadline),
-            .authorizationFailed
-        )
-        XCTAssertEqual(
-            await schedulingCue.schedule(attemptID: 42, holdDeadline: deadline),
-            .schedulingFailed
-        )
-        XCTAssertEqual(await authorizationErrorCenter.snapshot().authorizationRequestCount, 1)
+        XCTAssertEqual(authorizationResult, .authorizationFailed)
+        XCTAssertEqual(schedulingResult, .schedulingFailed)
+        XCTAssertEqual(requestCount, 1)
     }
 
     func testCancellationRemovesOnlyThisAttemptsPendingCue() async {
@@ -84,11 +87,9 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
         _ = await cue.schedule(attemptID: 42, holdDeadline: deadline)
 
         await cue.cancel(attemptID: 41)
+        let removedIdentifiers = (await center.snapshot()).removedIdentifiers
 
-        XCTAssertEqual(
-            await center.snapshot().removedIdentifiers,
-            [["com.mobileegress.agent.rotation.41"]]
-        )
+        XCTAssertEqual(removedIdentifiers, [["com.mobileegress.agent.rotation.41"]])
     }
 
     #if canImport(UserNotifications)
