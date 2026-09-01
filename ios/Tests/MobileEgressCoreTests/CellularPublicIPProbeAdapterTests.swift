@@ -66,6 +66,42 @@ final class CellularPublicIPProbeAdapterTests: XCTestCase {
         )
     }
 
+    func testBoundedHTTPParserRejectsMalformedStatusLineGrammar() {
+        let malformedResponses = [
+            "HTTP/1.1  200 OK\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1 200\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1 200  OK\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1\t200 OK\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1 200 O\u{0000}K\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1 200 O\u{0009}K\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+        ]
+
+        for response in malformedResponses {
+            assertProbeFailure(
+                Data(response.utf8),
+                family: .ipv4,
+                classification: .malformedResponse
+            )
+        }
+    }
+
+    func testBoundedHTTPParserRejectsControlBytesInEveryHeaderValue() {
+        let malformedResponses = [
+            "HTTP/1.1 200 OK\r\nX-Probe: safe\u{0000}unsafe\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1 200 OK\r\nX-Probe: safe\u{0001}unsafe\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+            "HTTP/1.1 200 OK\r\nX-Probe:\u{0009}unsafe\r\nContent-Length: 7\r\n\r\n1.1.1.1",
+        ]
+
+        for response in malformedResponses {
+            assertProbeFailure(
+                Data(response.utf8),
+                family: .ipv4,
+                classification: .malformedResponse,
+                httpStatus: 200
+            )
+        }
+    }
+
     func testSafeDiagnosticMapsRelayFailuresWithoutAcceptingRawDetails() {
         XCTAssertEqual(
             SafeNetworkDiagnostic(relayFailure: .authentication, httpStatus: 401),
