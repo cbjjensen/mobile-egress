@@ -47,12 +47,10 @@ final class CellularPathObserverTests: XCTestCase {
     }
 
     func testPublicAvailabilityHandlerIsSendable() {
-        let handler: CellularPathAvailabilityHandler = { _ in }
-
-        requireSendable(handler)
+        XCTAssertTrue(
+            String(reflecting: CellularPathAvailabilityHandler.self).contains("@Sendable")
+        )
     }
-
-    private func requireSendable<T: Sendable>(_: T) {}
 }
 
 private final class CellularPathMonitorStub: CellularPathMonitoring, @unchecked Sendable {

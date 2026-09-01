@@ -103,6 +103,7 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
             center: center,
             firstUseStore: NotificationFirstUseStoreStub(hasRequestedAuthorization: true)
         )
+        let deadline = deadline
         let schedulingTask = Task {
             await cue.schedule(attemptID: 41, holdDeadline: deadline)
         }
@@ -132,6 +133,7 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
             center: center,
             firstUseStore: NotificationFirstUseStoreStub(hasRequestedAuthorization: true)
         )
+        let deadline = deadline
         let schedulingTask = Task {
             await cue.schedule(attemptID: 41, holdDeadline: deadline)
         }
@@ -164,6 +166,7 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
             center: center,
             firstUseStore: NotificationFirstUseStoreStub()
         )
+        let deadline = deadline
         let schedulingTask = Task {
             await cue.schedule(attemptID: 41, holdDeadline: deadline)
         }
@@ -239,7 +242,7 @@ private actor NotificationCenterStub: CellularIPRotationNotificationCenter {
         if let authorizationStatusSuspension {
             await authorizationStatusSuspension.suspend()
         }
-        status
+        return status
     }
 
     func requestAuthorization() async throws -> Bool {
