@@ -1087,7 +1087,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         XCTAssertEqual(resumeReceipts, [nil])
     }
 
-    func testResumeFailureBecomesFiniteTerminalWithoutReplay() async {
+    func testResumeFailureBecomesFiniteTerminalAndRejectsRotationUntilReconstruction() async {
         let path = RotationPathObserverStub()
         let tunnel = await RotationTunnelStub(failResume: true)
         let coordinator = await makeCoordinator(
@@ -1122,6 +1122,20 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         }
         let firstResumeCount = await tunnel.resumeReceipts.count
         XCTAssertEqual(firstResumeCount, 1)
+
+        let failedState = await coordinator.state
+        let captureCountBeforeSecondStart = await tunnel.captureCount
+        let pauseCountBeforeSecondStart = await tunnel.pauseCount
+        await coordinator.start(holdSeconds: 10)
+        let stateAfterSecondStart = await coordinator.state
+        let captureCountAfterSecondStart = await tunnel.captureCount
+        let pauseCountAfterSecondStart = await tunnel.pauseCount
+        let resumeCountAfterSecondStart = await tunnel.resumeReceipts.count
+        XCTAssertEqual(stateAfterSecondStart, failedState)
+        XCTAssertEqual(captureCountAfterSecondStart, captureCountBeforeSecondStart)
+        XCTAssertEqual(pauseCountAfterSecondStart, pauseCountBeforeSecondStart)
+        XCTAssertEqual(resumeCountAfterSecondStart, firstResumeCount)
+
         await coordinator.resumeAfterActivation()
         let finalResumeCount = await tunnel.resumeReceipts.count
         XCTAssertEqual(finalResumeCount, 1)

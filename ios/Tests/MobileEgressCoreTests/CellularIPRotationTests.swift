@@ -23,10 +23,14 @@ final class CellularIPRotationTests: XCTestCase {
         )
     }
 
-    func testRestorationAndRetirementFailureBothLockOutAnotherRotation() {
+    func testRetainedRecoveryStatesLockOutAnotherRotationUntilProcessReconstruction() {
         let restoring = CellularIPRotationState.restoring(
             attemptID: 41,
             outcome: .failed(.cancelled)
+        )
+        let resumeFailure = CellularIPRotationState.failed(
+            attemptID: 41,
+            failure: .tunnelResumeFailed
         )
         let retirementFailure = CellularIPRotationState.failed(
             attemptID: 41,
@@ -35,13 +39,16 @@ final class CellularIPRotationTests: XCTestCase {
 
         XCTAssertFalse(availability().isEligible(for: restoring))
         XCTAssertFalse(restoring.isCancellable)
+        XCTAssertFalse(availability().isEligible(for: resumeFailure))
         XCTAssertFalse(availability().isEligible(for: retirementFailure))
 
-        var reducer = CellularIPRotationReducer(initialState: retirementFailure)
-        XCTAssertEqual(
-            reducer.reduce(.reset),
-            CellularIPRotationTransition(state: retirementFailure)
-        )
+        for retainedFailure in [resumeFailure, retirementFailure] {
+            var reducer = CellularIPRotationReducer(initialState: retainedFailure)
+            XCTAssertEqual(
+                reducer.reduce(.reset),
+                CellularIPRotationTransition(state: retainedFailure)
+            )
+        }
     }
 
     func testActiveStreamsRequireAnAffirmativeDecisionBeforeRotationStarts() {

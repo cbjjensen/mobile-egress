@@ -440,6 +440,39 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertTrue(copied.contains("IP rotation: checkpoint retirement failed"))
     }
 
+    func testTunnelResumeFailureRequiresAppReopenWithoutDisablingAgentRecoveryControls() {
+        let rotation = CellularIPRotationState.failed(
+            attemptID: 41,
+            failure: .tunnelResumeFailed
+        )
+        let runningPresentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                tunnelConnectionPhase: .connected,
+                status: status(agentState: .running, rotation: rotation)
+            )
+        )
+
+        XCTAssertEqual(runningPresentation.primaryAgentAction, .stop)
+        XCTAssertEqual(runningPresentation.rotationAction, .none)
+        XCTAssertEqual(runningPresentation.rotationLabel, "Reopen app before rotating")
+        XCTAssertFalse(runningPresentation.isRotationEnabled)
+        XCTAssertTrue(runningPresentation.summary.contains("close and reopen"))
+        XCTAssertFalse(runningPresentation.summary.contains("Start the Agent again"))
+
+        let stoppedPresentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                tunnelConnectionPhase: .disconnected,
+                status: status(agentState: .failed, rotation: rotation)
+            )
+        )
+
+        XCTAssertEqual(stoppedPresentation.primaryAgentAction, .start)
+        XCTAssertEqual(stoppedPresentation.rotationAction, .none)
+        XCTAssertFalse(stoppedPresentation.isRotationEnabled)
+    }
+
     func testPendingRestorationHasFiniteCopyAndNoCancellationOrRotationAction() {
         let presentation = AgentDashboardPresentation.present(
             AgentDashboardState(
@@ -479,7 +512,8 @@ final class AgentDashboardPresentationTests: XCTestCase {
 
     private func status(
         agentState: AgentOperationalState,
-        errorClass: AgentStatusErrorClass
+        errorClass: AgentStatusErrorClass = .none,
+        rotation: CellularIPRotationState = .idle
     ) -> AgentStatusSnapshot {
         AgentStatusSnapshot(
             agentState: agentState,
@@ -489,7 +523,7 @@ final class AgentDashboardPresentationTests: XCTestCase {
             bytesUploaded: 0,
             bytesDownloaded: 0,
             errorClass: errorClass,
-            rotation: .idle
+            rotation: rotation
         )
     }
 }
