@@ -576,26 +576,61 @@ func validSchemaFromQuery(ctx context.Context, queryer schemaQueryer) error {
 		"identities": false, "pairing_capabilities": false, "metrics": false, "error_metrics": false,
 		"settings": false, "endpoint_migrations": false, "admin_mutation_replay": false,
 	}
-	rows, err := queryer.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
+	requiredAutoindexes := map[string]string{
+		"sqlite_autoindex_identities_1":            "identities",
+		"sqlite_autoindex_pairing_capabilities_1":  "pairing_capabilities",
+		"sqlite_autoindex_error_metrics_1":         "error_metrics",
+		"sqlite_autoindex_settings_1":              "settings",
+		"sqlite_autoindex_endpoint_migrations_1":   "endpoint_migrations",
+		"sqlite_autoindex_admin_mutation_replay_1": "admin_mutation_replay",
+	}
+	seenAutoindexes := make(map[string]bool, len(requiredAutoindexes))
+	rows, err := queryer.QueryContext(ctx, `SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var objectType, name, tableName string
+		var createSQL sql.NullString
+		if err := rows.Scan(&objectType, &name, &tableName, &createSQL); err != nil {
+			rows.Close()
 			return err
 		}
-		if _, ok := required[name]; ok {
+		switch objectType {
+		case "table":
+			present, expected := required[name]
+			if !expected || present || tableName != name || !createSQL.Valid {
+				rows.Close()
+				return errors.New("SQLite state has unexpected schema object " + name)
+			}
 			required[name] = true
+		case "index":
+			expectedTable, expected := requiredAutoindexes[name]
+			if createSQL.Valid || !expected || seenAutoindexes[name] || tableName != expectedTable {
+				rows.Close()
+				return errors.New("SQLite state has unexpected schema object " + name)
+			}
+			seenAutoindexes[name] = true
+		default:
+			rows.Close()
+			return errors.New("SQLite state has unexpected schema object " + name)
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
 		return err
 	}
 	for name, present := range required {
 		if !present {
 			return errors.New("SQLite state is missing required table " + name)
+		}
+	}
+	for name := range requiredAutoindexes {
+		if !seenAutoindexes[name] {
+			return errors.New("SQLite state is missing required schema object " + name)
 		}
 	}
 	rows, err = queryer.QueryContext(ctx, `PRAGMA table_info(admin_mutation_replay)`)

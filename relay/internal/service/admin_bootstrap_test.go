@@ -468,6 +468,86 @@ func TestAdminBootstrapFaultAfterRenameKeepsCachedAuthority(t *testing.T) {
 	}
 }
 
+func TestAdminBootstrapParentSyncFailureStaysBoundDegradedWithFallback(t *testing.T) {
+	parent := t.TempDir()
+	stateDir := filepath.Join(parent, "Relay")
+	injected := errors.New("injected parent sync failure")
+	var state *AdminState
+	var finishedSnapshot AdminSnapshot
+	var finishedSnapshotErr error
+	syncCalls := 0
+	opened, err := OpenAdminState(AdminStateOptions{
+		StateDir: stateDir,
+		syncSetupParent: func(path string) error {
+			syncCalls++
+			if path != parent {
+				t.Fatalf("sync parent = %q, want %q", path, parent)
+			}
+			return injected
+		},
+		MutationFinished: func(relayadmin.ReplayKey) {
+			finishedSnapshot, finishedSnapshotErr = state.Snapshot(context.Background())
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = opened
+	defer state.Close()
+
+	key := adminReplayKey("4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a", relayadmin.OperationSetup, "parent-sync")
+	_, csr := newDeviceCSR(t)
+	reservation, err := state.ReplayStore().Reserve(context.Background(), key)
+	if err != nil || reservation.Decision != relayadmin.ReplayExecute {
+		t.Fatalf("Reserve() = (%#v, %v), want execute", reservation, err)
+	}
+	var durableResponse []byte
+	_, err = reservation.Mutation.Execute(context.Background(), func(ctx context.Context, transaction relayadmin.MutationTransaction) ([]byte, error) {
+		result, setupErr := state.BootstrapOwner(ctx, transaction, AdminBootstrapOwnerOptions{
+			PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+			CSRPEM: csr, AdministrativeOwnerUID: 501,
+		})
+		if setupErr != nil {
+			return nil, setupErr
+		}
+		durableResponse, setupErr = marshalAdminBootstrapResponse(key, result)
+		return durableResponse, setupErr
+	})
+	if !errors.Is(err, relayadmin.ErrMutationIndeterminate) {
+		t.Fatalf("Execute() error = %v, want ErrMutationIndeterminate", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("normal setup parent sync calls = %d, want 1", syncCalls)
+	}
+	if finishedSnapshotErr != nil || finishedSnapshot.Class != AdminStateIncompatible ||
+		!finishedSnapshot.OwnerUIDBound || finishedSnapshot.AdministrativeOwnerUID != 501 {
+		t.Fatalf("MutationFinished Snapshot() = (%#v, %v), want bound degraded UID 501", finishedSnapshot, finishedSnapshotErr)
+	}
+	snapshot, err := state.Snapshot(context.Background())
+	if err != nil || snapshot.Class != AdminStateIncompatible || !snapshot.OwnerUIDBound || snapshot.AdministrativeOwnerUID != 501 {
+		t.Fatalf("Snapshot() = (%#v, %v), want bound degraded UID 501", snapshot, err)
+	}
+	cached, err := state.ReplayStore().Reserve(context.Background(), key)
+	if err != nil || cached.Decision != relayadmin.ReplayCached || !bytes.Equal(cached.Response, durableResponse) {
+		t.Fatalf("same-process retry = (%#v, %v), want exact cached fallback", cached, err)
+	}
+	state.mu.Lock()
+	fallbackCount := len(state.fallback)
+	replayReady := state.replayReady
+	state.mu.Unlock()
+	if fallbackCount != 1 || replayReady {
+		t.Fatalf("authoritative fallback state = (fallback=%d, replayReady=%t), want (1, false)", fallbackCount, replayReady)
+	}
+	repairKey := adminReplayKey("4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b", relayadmin.OperationRepair, "parent-sync-repair")
+	repair, err := state.ReplayStore().Reserve(context.Background(), repairKey)
+	if err != nil || repair.Decision != relayadmin.ReplayExecute || repair.Mutation == nil {
+		t.Fatalf("repair Reserve() = (%#v, %v), want executable recovery", repair, err)
+	}
+	if err := repair.Mutation.Abandon(context.Background()); err != nil {
+		t.Fatalf("repair Abandon() error = %v", err)
+	}
+}
+
 func TestAdminBootstrapReopenFailureAfterRenameNeverReexecutes(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "Relay")
 	state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir, MutationCapacity: 2})
@@ -828,6 +908,83 @@ func TestAdminSnapshotNeverTrustsMalformedUIDInDegradedState(t *testing.T) {
 	}
 }
 
+func TestAdminStateOpenRejectsUnexpectedSQLiteObjectsWithoutDeletingThem(t *testing.T) {
+	for _, object := range unexpectedAdminSQLiteObjects() {
+		t.Run(object.name, func(t *testing.T) {
+			stateDir := filepath.Join(t.TempDir(), "Relay")
+			state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := adminReplayKey("60606060606060606060606060606060", relayadmin.OperationSetup, object.name+"-normal")
+			_, csr := newDeviceCSR(t)
+			executeAdminBootstrap(t, state, key, AdminBootstrapOwnerOptions{
+				PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+				CSRPEM: csr, AdministrativeOwnerUID: 501,
+			})
+			if err := state.Close(); err != nil {
+				t.Fatal(err)
+			}
+			execAdminStateSQL(t, stateDir, object.createSQL)
+
+			reopened, err := OpenAdminState(AdminStateOptions{StateDir: stateDir})
+			if err != nil {
+				t.Fatalf("OpenAdminState() error = %v, want degraded state", err)
+			}
+			defer reopened.Close()
+			snapshot, err := reopened.Snapshot(context.Background())
+			if err != nil || snapshot.Class != AdminStateIncompatible || !snapshot.OwnerUIDBound || snapshot.AdministrativeOwnerUID != 501 {
+				t.Fatalf("Snapshot() = (%#v, %v), want incompatible with bound UID 501", snapshot, err)
+			}
+			requireAdminSQLiteObject(t, filepath.Join(stateDir, databaseFilename), object.objectType, object.objectName)
+		})
+	}
+}
+
+func TestAdminSetupStagePromotionRejectsUnexpectedSQLiteObjectsWithoutDeletingThem(t *testing.T) {
+	for _, object := range unexpectedAdminSQLiteObjects() {
+		t.Run(object.name, func(t *testing.T) {
+			parent := t.TempDir()
+			stateDir := filepath.Join(parent, "Relay")
+			state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := adminReplayKey("61616161616161616161616161616161", relayadmin.OperationSetup, object.name+"-stage")
+			_, csr := newDeviceCSR(t)
+			executeAdminBootstrap(t, state, key, AdminBootstrapOwnerOptions{
+				PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443",
+				CSRPEM: csr, AdministrativeOwnerUID: 501,
+			})
+			if err := state.Close(); err != nil {
+				t.Fatal(err)
+			}
+			execAdminStateSQL(t, stateDir, object.createSQL)
+			stageDir := filepath.Join(parent, ".relay-setup-"+key.RequestID)
+			if err := os.Rename(stateDir, stageDir); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := OpenAdminState(AdminStateOptions{StateDir: stateDir})
+			if err != nil {
+				t.Fatalf("OpenAdminState(completed stage) error = %v, want degraded state", err)
+			}
+			defer reopened.Close()
+			snapshot, err := reopened.Snapshot(context.Background())
+			if err != nil || snapshot.Class != AdminStateIncompatible {
+				t.Fatalf("Snapshot() = (%#v, %v), want incompatible", snapshot, err)
+			}
+			if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected SQLite %s stage was promoted: %v", object.objectType, err)
+			}
+			if _, err := os.Stat(stageDir); err != nil {
+				t.Fatalf("unexpected SQLite %s evidence was removed: %v", object.objectType, err)
+			}
+			requireAdminSQLiteObject(t, filepath.Join(stageDir, databaseFilename), object.objectType, object.objectName)
+		})
+	}
+}
+
 func TestAdminBootstrapReopenCleansOnlyExactPreAuthorityStage(t *testing.T) {
 	parent := t.TempDir()
 	stateDir := filepath.Join(parent, "Relay")
@@ -1108,4 +1265,36 @@ func requireDegradedAdminState(t *testing.T, stateDir string) *AdminState {
 		t.Fatalf("degraded Snapshot() = (%#v, %v), want incompatible", snapshot, err)
 	}
 	return state
+}
+
+type unexpectedAdminSQLiteObject struct {
+	name       string
+	objectType string
+	objectName string
+	createSQL  string
+}
+
+func unexpectedAdminSQLiteObjects() []unexpectedAdminSQLiteObject {
+	return []unexpectedAdminSQLiteObject{
+		{name: "table", objectType: "table", objectName: "unexpected_table", createSQL: `CREATE TABLE unexpected_table(value TEXT) STRICT`},
+		{name: "view", objectType: "view", objectName: "unexpected_view", createSQL: `CREATE VIEW unexpected_view AS SELECT key, value FROM settings`},
+		{name: "trigger", objectType: "trigger", objectName: "unexpected_trigger", createSQL: `CREATE TRIGGER unexpected_trigger AFTER UPDATE ON settings BEGIN UPDATE metrics SET byte_count = byte_count WHERE singleton_id = 1; END`},
+		{name: "user index", objectType: "index", objectName: "unexpected_index", createSQL: `CREATE INDEX unexpected_index ON settings(value)`},
+	}
+}
+
+func requireAdminSQLiteObject(t *testing.T, databasePath, objectType, objectName string) {
+	t.Helper()
+	database, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, objectType, objectName).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("sqlite_master %s %q count = %d, want preserved object", objectType, objectName, count)
+	}
 }

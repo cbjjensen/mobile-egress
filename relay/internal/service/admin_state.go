@@ -77,6 +77,7 @@ type AdminState struct {
 	pathGuard        AdminPathGuard
 	mutationFinished func(relayadmin.ReplayKey)
 	mutationCapacity int
+	syncSetupParent  func(string) error
 	statusReplay     *relayadmin.MemoryReplayStore
 	replay           *adminReplayStore
 
@@ -116,11 +117,16 @@ func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
 	if capacity <= 0 || capacity > relayadmin.MutationReplayCapacity {
 		capacity = relayadmin.MutationReplayCapacity
 	}
+	syncSetupParent := options.syncSetupParent
+	if syncSetupParent == nil {
+		syncSetupParent = syncDirectory
+	}
 	state := &AdminState{
 		stateDir:         stateDir,
 		pathGuard:        options.PathGuard,
 		mutationFinished: options.MutationFinished,
 		mutationCapacity: capacity,
+		syncSetupParent:  syncSetupParent,
 		statusReplay:     relayadmin.NewMemoryReplayStore(relayadmin.MemoryReplayConfig{}),
 		mutationGate:     make(chan struct{}, 1),
 		active:           make(map[string]*adminMutationReservation),
@@ -142,11 +148,7 @@ func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
 	info, err := os.Stat(stateDir)
 	recoveryUncertain := false
 	if errors.Is(err, os.ErrNotExist) {
-		syncParent := options.syncSetupParent
-		if syncParent == nil {
-			syncParent = syncDirectory
-		}
-		promoted, recoveryErr := recoverAdminSetupStage(stateDir, syncParent)
+		promoted, recoveryErr := recoverAdminSetupStage(stateDir, state.syncSetupParent)
 		if recoveryErr != nil {
 			if !promoted {
 				state.presence = adminStatePresenceDegraded

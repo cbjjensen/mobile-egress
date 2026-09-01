@@ -688,7 +688,7 @@ func (reservation *adminMutationReservation) completeFreshSetup(
 		key: reservation.key, response: append([]byte(nil), response...),
 	}
 	reservation.state.mu.Unlock()
-	authorityErr := syncDirectory(filepath.Dir(reservation.state.stateDir))
+	authorityErr := reservation.state.syncSetupParent(filepath.Dir(reservation.state.stateDir))
 	var database *store
 	var openErr error
 	if hook := reservation.state.beforeSetupReopen; hook != nil {
@@ -706,6 +706,8 @@ func (reservation *adminMutationReservation) completeFreshSetup(
 			if keysErr != nil || snapshotErr != nil || snapshot.Class != AdminStateReady {
 				database.Close()
 				openErr = ErrAdminStateIncompatible
+			} else if authorityErr != nil {
+				_ = database.Close()
 			} else {
 				reservation.state.mu.Lock()
 				if !reservation.state.closed {

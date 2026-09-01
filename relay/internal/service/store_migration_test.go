@@ -274,6 +274,96 @@ func TestStoreSchemaV3RejectsReplayTableWithoutPrimaryKey(t *testing.T) {
 	}
 }
 
+func TestStoreSchemaV3RejectsUnexpectedSQLiteAutoindex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), databaseFilename)
+	state, err := createStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.db.Exec(`ALTER TABLE settings RENAME TO settings_original`); err != nil {
+		state.Close()
+		t.Fatal(err)
+	}
+	if _, err := state.db.Exec(`CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        UNIQUE(value)
+    ) STRICT`); err != nil {
+		state.Close()
+		t.Fatal(err)
+	}
+	if _, err := state.db.Exec(`DROP TABLE settings_original`); err != nil {
+		state.Close()
+		t.Fatal(err)
+	}
+	if err := state.validSchema(context.Background()); err == nil {
+		state.Close()
+		t.Fatal("validSchema() accepted an extra SQLite-generated autoindex")
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'sqlite_autoindex_settings_2' AND sql IS NULL`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("unexpected SQLite autoindex count = %d, want preserved evidence", count)
+	}
+}
+
+func TestStoreSchemaV3RejectsDuplicateExpectedSQLiteObjects(t *testing.T) {
+	for _, object := range []struct {
+		name       string
+		insertSQL  string
+		objectType string
+		objectName string
+	}{
+		{
+			name:       "autoindex",
+			insertSQL:  `INSERT INTO sqlite_master(type, name, tbl_name, rootpage, sql) VALUES ('index', 'sqlite_autoindex_settings_1', 'settings', 0, NULL)`,
+			objectType: "index",
+			objectName: "sqlite_autoindex_settings_1",
+		},
+		{
+			name:       "table",
+			insertSQL:  `INSERT INTO sqlite_master(type, name, tbl_name, rootpage, sql) VALUES ('table', 'settings', 'settings', 0, 'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT')`,
+			objectType: "table",
+			objectName: "settings",
+		},
+	} {
+		t.Run(object.name, func(t *testing.T) {
+			state, err := createStore(filepath.Join(t.TempDir(), databaseFilename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer state.Close()
+			if _, err := state.db.Exec(`PRAGMA writable_schema = ON`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := state.db.Exec(object.insertSQL); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.validSchema(context.Background()); err == nil {
+				t.Fatalf("validSchema() accepted duplicate expected SQLite %s", object.objectType)
+			}
+			var count int
+			if err := state.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, object.objectType, object.objectName).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 2 {
+				t.Fatalf("duplicate SQLite %s evidence count = %d, want 2", object.objectType, count)
+			}
+		})
+	}
+}
+
 func TestStoreConfiguresEverySQLiteConnection(t *testing.T) {
 	state, err := createStore(filepath.Join(t.TempDir(), databaseFilename))
 	if err != nil {
