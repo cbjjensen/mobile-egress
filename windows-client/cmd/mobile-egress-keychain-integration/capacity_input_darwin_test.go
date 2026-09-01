@@ -16,12 +16,15 @@ func TestCapacityInputAllowsNonTerminalAndRejectsOtherQueryErrors(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	restore, err := protectCapacityInput(nonTerminal)
+	protection, err := protectCapacityInput(nonTerminal)
 	if err != nil {
 		nonTerminal.Close()
 		t.Fatal(err)
 	}
-	restore()
+	if err := protection.Restore(); err != nil {
+		nonTerminal.Close()
+		t.Fatal(err)
+	}
 	if err := nonTerminal.Close(); err != nil {
 		t.Fatal(err)
 	}
