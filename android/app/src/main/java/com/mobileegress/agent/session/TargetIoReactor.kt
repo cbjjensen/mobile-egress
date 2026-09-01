@@ -78,6 +78,7 @@ internal class TargetIoReactor(
     private val active = HashMap<String, ReactorStream>()
     private val started = AtomicBoolean(false)
     private val shutdownRequested = AtomicBoolean(false)
+    private val fatalFailureRequested = AtomicBoolean(false)
     private val stopped = CountDownLatch(1)
     private val connectTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(connectTimeoutMillis)
     private val idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(idleTimeoutMillis)
@@ -297,8 +298,9 @@ internal class TargetIoReactor(
                 ready.forEach(::handleReady)
             }
         } catch (_: Exception) {
-            fatalFailure = !shutdownRequested.get()
+            fatalFailure = !shutdownRequested.get() || fatalFailureRequested.get()
         } finally {
+            fatalFailure = fatalFailure || fatalFailureRequested.get()
             shutdownRequested.set(true)
             closeEverything(TargetTerminalReason.Shutdown)
             try {
@@ -332,6 +334,7 @@ internal class TargetIoReactor(
         try {
             activeBackend?.wakeup()
         } catch (_: Exception) {
+            if (!shutdownRequested.get()) fatalFailureRequested.set(true)
             shutdownRequested.set(true)
         }
     }

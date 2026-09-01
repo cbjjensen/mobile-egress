@@ -1,6 +1,9 @@
 package com.mobileegress.agent.session
 
+import com.mobileegress.agent.network.DestinationRejected
+import com.mobileegress.agent.network.PublicAddressPolicy
 import com.mobileegress.agent.protocol.ProtocolException
+import com.mobileegress.agent.protocol.WireEnvelope
 import com.mobileegress.agent.protocol.WireProtocol
 import com.mobileegress.agent.status.ErrorClass
 import java.net.InetSocketAddress
@@ -64,6 +67,34 @@ internal class AgentTargetBridge(
             reject(streamId, "agent_stream_limit")
             return
         }
+        openReserved(streamId, address)
+    }
+
+    fun open(envelope: WireEnvelope) {
+        val streamId = envelope.streamId
+        if (closed.get()) return
+        if (!admission.tryReserve(streamId)) {
+            reject(streamId, "agent_stream_limit")
+            return
+        }
+        val target = try {
+            WireProtocol.parseOpen(envelope)
+        } catch (_: ProtocolException) {
+            admission.release(streamId)
+            reject(streamId, "invalid_target")
+            return
+        }
+        val address = try {
+            InetSocketAddress(PublicAddressPolicy.validate(target.ip, target.port), target.port)
+        } catch (_: DestinationRejected) {
+            admission.release(streamId)
+            reject(streamId, "policy_denied", ErrorClass.TargetPolicy)
+            return
+        }
+        openReserved(streamId, address)
+    }
+
+    private fun openReserved(streamId: String, address: InetSocketAddress) {
         val targetReactor = reactor
         if (targetReactor == null) {
             admission.release(streamId)
@@ -96,31 +127,43 @@ internal class AgentTargetBridge(
     }
 
     fun routeData(streamId: String, payload: ByteArray) {
-        val stream = streams[streamId] ?: throw ProtocolException("Data for an unknown stream")
+        val stream = streams[streamId]
+        if (stream == null) {
+            if (tombstones.contains(streamId)) return
+            throw ProtocolException("Data for an unknown stream")
+        }
         val targetReactor = reactor ?: throw ProtocolException("Data for a closed stream")
-        val state = synchronized(stream.lock) {
+        var backpressureQueued: Boolean? = null
+        val result = synchronized(stream.lock) {
             when (stream.state) {
                 StreamState.Open,
-                StreamState.GracefulPending -> stream.state
-                StreamState.ReleasePending -> return
+                StreamState.GracefulPending -> Unit
+                StreamState.ReleasePending,
                 StreamState.ForcedPending,
-                StreamState.CancelPending,
-                StreamState.Released -> throw ProtocolException("Data for a closed stream")
+                StreamState.Released -> return
+                StreamState.CancelPending -> throw ProtocolException("Data for a closed stream")
+            }
+            // Reactor submission only mutates its bounded command queue and wakes the selector. Holding
+            // the stream lock makes submission precede graceful release and saturation finalization.
+            targetReactor.write(stream.id, stream.correlationToken, payload).also { submitted ->
+                if (submitted == ReactorSubmitResult.StreamSaturated) {
+                    backpressureQueued = forceBackpressureLocked(stream)
+                }
             }
         }
-        when (targetReactor.write(stream.id, stream.correlationToken, payload)) {
+        backpressureQueued?.let { queued ->
+            status.onError(ErrorClass.Backpressure)
+            if (!queued) onSessionFailure(ErrorClass.Backpressure)
+        }
+        when (result) {
             ReactorSubmitResult.Accepted -> Unit
-            ReactorSubmitResult.StreamSaturated -> failForBackpressure(stream)
+            ReactorSubmitResult.StreamSaturated -> Unit
             ReactorSubmitResult.SessionSaturated -> onSessionFailure(ErrorClass.Backpressure)
             ReactorSubmitResult.StreamLimit -> throw ProtocolException("Data for a closed stream")
-            ReactorSubmitResult.MissingOrClosed -> {
-                val gracefulRace = synchronized(stream.lock) {
-                    state == StreamState.GracefulPending ||
-                        stream.state == StreamState.GracefulPending ||
-                        stream.state == StreamState.ReleasePending
-                }
-                if (!gracefulRace) throw ProtocolException("Data for a closed stream")
-            }
+            // The reactor drops its reservation before delivering the correlated terminal callback.
+            // A stream found above is therefore valid even when that callback has not acquired its
+            // bridge lock yet. Truly unknown IDs were rejected before reactor submission.
+            ReactorSubmitResult.MissingOrClosed -> Unit
         }
     }
 
@@ -260,16 +303,14 @@ internal class AgentTargetBridge(
         }
     }
 
-    private fun failForBackpressure(stream: TargetStream) {
-        val shouldFail = synchronized(stream.lock) {
-            if (stream.finalized || stream.state == StreamState.ForcedPending) return
-            stream.state = StreamState.ForcedPending
-            true
-        }
-        if (!shouldFail) return
+    /** Called with [TargetStream.lock] held so reactor release cannot finalize ahead of the close. */
+    private fun forceBackpressureLocked(stream: TargetStream): Boolean {
+        if (stream.finalized || stream.state == StreamState.ForcedPending) return true
+        stream.state = StreamState.ForcedPending
         outbound.cancelStream(stream.id)
+        outbound.allowData(stream.id)
         outbound.blockAndDiscardData(stream.id)
-        val queued = outbound.offerRequiredControl(
+        return outbound.offerRequiredControl(
             WireProtocol.encode(
                 "close",
                 stream.id,
@@ -277,8 +318,6 @@ internal class AgentTargetBridge(
             ),
             streamId = stream.id,
         ) {}
-        if (!queued) onSessionFailure(ErrorClass.Backpressure)
-        status.onError(ErrorClass.Backpressure)
     }
 
     private fun failStream(stream: TargetStream, code: String, errorClass: ErrorClass) {
@@ -311,9 +350,9 @@ internal class AgentTargetBridge(
             true
         }
         if (!shouldFinalize) return
+        tombstones.remember(stream.id)
         streams.remove(stream.id, stream)
         admission.release(stream.id)
-        tombstones.remember(stream.id)
         status.onActiveStreams(admission.size)
         if (errorClass != ErrorClass.None) status.onError(errorClass)
     }

@@ -2,8 +2,6 @@ package com.mobileegress.agent.session
 
 import android.net.Network
 import android.util.Log
-import com.mobileegress.agent.network.DestinationRejected
-import com.mobileegress.agent.network.PublicAddressPolicy
 import com.mobileegress.agent.pairing.PairingBundleParser
 import com.mobileegress.agent.protocol.ProtocolException
 import com.mobileegress.agent.protocol.WireEnvelope
@@ -14,7 +12,6 @@ import com.mobileegress.agent.security.PinnedTls
 import com.mobileegress.agent.status.AgentStatusBus
 import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
-import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -196,19 +193,7 @@ class AgentSession(
     }
 
     private fun openStream(envelope: WireEnvelope) {
-        val target = try {
-            WireProtocol.parseOpen(envelope)
-        } catch (error: ProtocolException) {
-            targetBridge.reject(envelope.streamId, "invalid_target")
-            return
-        }
-        val address = try {
-            PublicAddressPolicy.validate(target.ip, target.port)
-        } catch (_: DestinationRejected) {
-            targetBridge.reject(envelope.streamId, "policy_denied", ErrorClass.TargetPolicy)
-            return
-        }
-        targetBridge.open(envelope.streamId, InetSocketAddress(address, target.port))
+        targetBridge.open(envelope)
     }
 
     private fun routeData(envelope: WireEnvelope) {

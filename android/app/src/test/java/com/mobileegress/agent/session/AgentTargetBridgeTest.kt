@@ -56,6 +56,272 @@ class AgentTargetBridgeTest {
     }
 
     @Test
+    fun `target write saturation emits exactly one required agent unavailable close`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("saturated", targetAddress())
+        fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
+
+        fixture.bridge.routeData("saturated", byteArrayOf(1))
+
+        assertEquals(
+            listOf(
+                "{\"version\":1,\"type\":\"close\",\"streamId\":\"saturated\"," +
+                    "\"payload\":\"YWdlbnRfdW5hdmFpbGFibGU\"}",
+            ),
+            fixture.emittedFrames().map(ByteArray::decodeToString),
+        )
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `saturated stream release is exact once and its slot is reusable`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("saturated", targetAddress())
+        val firstToken = fixture.reactor.opened.getValue("saturated")
+        fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
+        fixture.bridge.routeData("saturated", byteArrayOf(1))
+
+        fixture.listener.onTerminal("saturated", firstToken, TargetTerminalReason.Backpressure)
+        fixture.listener.onReleased("saturated", firstToken)
+        fixture.listener.onReleased("saturated", firstToken)
+
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertEquals(listOf(1, 0), fixture.status.activeCounts)
+        fixture.bridge.open("replacement", targetAddress())
+        val replacementToken = fixture.reactor.opened.getValue("replacement")
+        assertNotEquals(firstToken, replacementToken)
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertEquals(listOf(1, 0, 1), fixture.status.activeCounts)
+        assertEquals(
+            1,
+            fixture.emittedFrames().count {
+                it.decodeToString().contains("YWdlbnRfdW5hdmFpbGFibGU")
+            },
+        )
+    }
+
+    @Test
+    fun `late saturated stream data is absorbed while an unrelated stream continues`() {
+        val fixture = Fixture(maxStreams = 2)
+        fixture.bridge.open("saturated", targetAddress())
+        fixture.bridge.open("peer", targetAddress())
+        val saturatedToken = fixture.reactor.opened.getValue("saturated")
+        fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
+        fixture.bridge.routeData("saturated", byteArrayOf(1))
+
+        fixture.bridge.routeData("saturated", byteArrayOf(2))
+        fixture.bridge.routeData("saturated", byteArrayOf(3))
+        fixture.bridge.routeData("peer", "first".encodeToByteArray())
+        fixture.listener.onReleased("saturated", saturatedToken)
+        fixture.bridge.routeData("saturated", "after-release".encodeToByteArray())
+        fixture.bridge.routeData("peer", "second".encodeToByteArray())
+
+        assertEquals(1, fixture.reactor.writes.count { it.streamId == "saturated" })
+        assertEquals(
+            listOf("first", "second"),
+            fixture.reactor.writes
+                .filter { it.streamId == "peer" }
+                .map { it.payload.decodeToString() },
+        )
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+        assertEquals(
+            1,
+            fixture.emittedFrames().count {
+                it.decodeToString().contains("YWdlbnRfdW5hdmFpbGFibGU")
+            },
+        )
+    }
+
+    @Test
+    fun `late data after relay bound saturation release is absorbed before close emission`() {
+        val fixture = Fixture(
+            outbound = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1),
+            maxStreams = 2,
+        )
+        fixture.bridge.open("saturated", targetAddress())
+        fixture.bridge.open("peer", targetAddress())
+        val token = fixture.reactor.opened.getValue("saturated")
+        assertTrue(fixture.listener.onData("saturated", token, byteArrayOf(1)))
+        assertFalse(fixture.listener.onData("saturated", token, byteArrayOf(2)))
+
+        fixture.listener.onTerminal("saturated", token, TargetTerminalReason.Backpressure)
+        fixture.listener.onReleased("saturated", token)
+        fixture.bridge.routeData("saturated", "after-release".encodeToByteArray())
+        fixture.bridge.routeData("peer", "continues".encodeToByteArray())
+
+        assertEquals(
+            listOf("continues"),
+            fixture.reactor.writes.map { it.payload.decodeToString() },
+        )
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+        assertEquals(
+            listOf(
+                "{\"version\":1,\"type\":\"close\",\"streamId\":\"saturated\"," +
+                    "\"payload\":\"YWdlbnRfdW5hdmFpbGFibGU\"}",
+            ),
+            fixture.emittedFrames().map(ByteArray::decodeToString),
+        )
+    }
+
+    @Test
+    fun `eof saturation atomically replaces target closed before release finalizes`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val releaseDone = CountDownLatch(1)
+        fixture.reactor.writeAction = { call ->
+            Thread {
+                fixture.listener.onReleased(call.streamId, call.correlationToken)
+                releaseDone.countDown()
+            }.start()
+            releaseDone.await(100, TimeUnit.MILLISECONDS)
+            ReactorSubmitResult.StreamSaturated
+        }
+
+        fixture.bridge.routeData("stream", byteArrayOf(1))
+
+        assertTrue(releaseDone.await(2, TimeUnit.SECONDS))
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+        assertEquals(
+            listOf(
+                "{\"version\":1,\"type\":\"close\",\"streamId\":\"stream\"," +
+                    "\"payload\":\"YWdlbnRfdW5hdmFpbGFibGU\"}",
+            ),
+            fixture.emittedFrames().map(ByteArray::decodeToString),
+        )
+    }
+
+    @Test
+    fun `graceful close emission cannot overtake a crossing target write submission`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val targetClosed = requireNotNull(fixture.mailbox.poll())
+        val writeEntered = CountDownLatch(1)
+        val allowWrite = CountDownLatch(1)
+        fixture.reactor.writeAction = {
+            writeEntered.countDown()
+            allowWrite.await(2, TimeUnit.SECONDS)
+            ReactorSubmitResult.Accepted
+        }
+        val routeFailure = arrayOfNulls<Throwable>(1)
+        val router = thread(name = "graceful-crossing-write") {
+            try {
+                fixture.bridge.routeData("stream", "crossing".encodeToByteArray())
+            } catch (error: Throwable) {
+                routeFailure[0] = error
+            }
+        }
+        assertTrue(writeEntered.await(2, TimeUnit.SECONDS))
+        val emitter = thread(name = "graceful-close-emitter") {
+            fixture.mailbox.emit(targetClosed) { true }
+        }
+
+        try {
+            assertFalse(fixture.reactor.releaseCalled.await(100, TimeUnit.MILLISECONDS))
+        } finally {
+            allowWrite.countDown()
+            router.join(2_000)
+            emitter.join(2_000)
+        }
+
+        assertEquals(null, routeFailure[0])
+        assertTrue(fixture.reactor.releaseCalled.await(2, TimeUnit.SECONDS))
+        assertEquals(
+            listOf("crossing"),
+            fixture.reactor.writes.map { it.payload.decodeToString() },
+        )
+    }
+
+    @Test
+    fun `reactor terminal reservation removal cannot make correlated data session fatal`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        val callbackStarted = CountDownLatch(1)
+        val allowTerminal = CountDownLatch(1)
+        val terminalDone = CountDownLatch(1)
+        fixture.reactor.writeAction = {
+            Thread {
+                callbackStarted.countDown()
+                allowTerminal.await(2, TimeUnit.SECONDS)
+                fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetFailure)
+                fixture.listener.onReleased("stream", token)
+                terminalDone.countDown()
+            }.start()
+            assertTrue(callbackStarted.await(2, TimeUnit.SECONDS))
+            ReactorSubmitResult.MissingOrClosed
+        }
+        var routeFailure: Throwable? = null
+
+        try {
+            fixture.bridge.routeData("stream", byteArrayOf(1))
+        } catch (error: Throwable) {
+            routeFailure = error
+        } finally {
+            allowTerminal.countDown()
+        }
+
+        assertEquals(null, routeFailure)
+        assertTrue(terminalDone.await(2, TimeUnit.SECONDS))
+        var unknownFailure: Throwable? = null
+        try {
+            fixture.bridge.routeData("never-opened", byteArrayOf(2))
+        } catch (error: Throwable) {
+            unknownFailure = error
+        }
+        assertTrue(unknownFailure is com.mobileegress.agent.protocol.ProtocolException)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `full admission rejects malformed and policy denied opens as stream limit`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("active", targetAddress())
+
+        fixture.bridge.open(malformedOpen("malformed"))
+        fixture.bridge.open(policyDeniedOpen("policy"))
+
+        assertEquals(
+            listOf("YWdlbnRfc3RyZWFtX2xpbWl0", "YWdlbnRfc3RyZWFtX2xpbWl0"),
+            fixture.emittedFrames().map { frame ->
+                Regex("\\\"payload\\\":\\\"([^\\\"]+)\\\"")
+                    .find(frame.decodeToString())
+                    ?.groupValues
+                    ?.get(1)
+            },
+        )
+        assertEquals(emptyList<ErrorClass>(), fixture.status.errors)
+        assertEquals(setOf("active"), fixture.reactor.opened.keys)
+    }
+
+    @Test
+    fun `duplicate admission rejects malformed and policy denied opens as stream limit`() {
+        val fixture = Fixture(maxStreams = 2)
+        fixture.bridge.open("same", targetAddress())
+
+        fixture.bridge.open(malformedOpen("same"))
+        fixture.bridge.open(policyDeniedOpen("same"))
+
+        assertEquals(
+            listOf("YWdlbnRfc3RyZWFtX2xpbWl0", "YWdlbnRfc3RyZWFtX2xpbWl0"),
+            fixture.emittedFrames().map { frame ->
+                Regex("\\\"payload\\\":\\\"([^\\\"]+)\\\"")
+                    .find(frame.decodeToString())
+                    ?.groupValues
+                    ?.get(1)
+            },
+        )
+        assertEquals(emptyList<ErrorClass>(), fixture.status.errors)
+        assertEquals(1, fixture.reactor.opened.size)
+    }
+
+    @Test
     fun `any matching terminal crossing cancel releases admission exactly once`() {
         val fixture = Fixture(maxStreams = 1)
         fixture.bridge.open("same", targetAddress())
@@ -305,7 +571,7 @@ class AgentTargetBridgeTest {
             status = status,
             maxStreams = maxStreams,
         )
-        private val mailbox = outbound
+        val mailbox = outbound
 
         init {
             assertTrue(bridge.start())
@@ -332,6 +598,9 @@ class AgentTargetBridgeTest {
         val writes = Collections.synchronizedList(mutableListOf<Write>())
         val cancels = Collections.synchronizedList(mutableListOf<Call>())
         val releases = Collections.synchronizedList(mutableListOf<Call>())
+        val writeResults = HashMap<String, ReactorSubmitResult>()
+        val releaseCalled = CountDownLatch(1)
+        @Volatile var writeAction: ((Write) -> ReactorSubmitResult)? = null
         val shutdown = AtomicBoolean(false)
         val shutdownCalled = CountDownLatch(1)
         val allowStopped = CountDownLatch(1)
@@ -355,8 +624,11 @@ class AgentTargetBridgeTest {
             correlationToken: Long,
             payload: ByteArray,
         ): ReactorSubmitResult {
-            writes += Write(streamId, correlationToken, payload.copyOf())
-            return ReactorSubmitResult.Accepted
+            val call = Write(streamId, correlationToken, payload.copyOf())
+            writes += call
+            return writeAction?.invoke(call)
+                ?: writeResults.remove(streamId)
+                ?: ReactorSubmitResult.Accepted
         }
 
         override fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult {
@@ -366,6 +638,7 @@ class AgentTargetBridgeTest {
 
         override fun release(streamId: String, correlationToken: Long): ReactorSubmitResult {
             releases += Call(streamId, correlationToken)
+            releaseCalled.countDown()
             return ReactorSubmitResult.Accepted
         }
 
@@ -406,6 +679,18 @@ class AgentTargetBridgeTest {
     }
 
     private fun targetAddress() = InetSocketAddress(InetAddress.getLoopbackAddress(), 9)
+
+    private fun malformedOpen(streamId: String) = WireProtocol.parseAgentInbound(
+        WireProtocol.encode("open", streamId, "not-json".encodeToByteArray()),
+    )
+
+    private fun policyDeniedOpen(streamId: String) = WireProtocol.parseAgentInbound(
+        WireProtocol.encode(
+            "open",
+            streamId,
+            "{\"ip\":\"127.0.0.1\",\"port\":80}".encodeToByteArray(),
+        ),
+    )
 
     private fun pollEventually(mailbox: OutboundMailbox): OutboundFrame {
         var frame: OutboundFrame? = null

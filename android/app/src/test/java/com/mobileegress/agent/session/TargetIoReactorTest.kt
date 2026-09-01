@@ -1,5 +1,6 @@
 package com.mobileegress.agent.session
 
+import com.mobileegress.agent.status.ErrorClass
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -531,6 +532,61 @@ class TargetIoReactorTest {
     }
 
     @Test
+    fun `selector wakeup failure is fatal exactly once and teardown stays bounded`() {
+        val backend = FakeSelectorBackend(FakeConnection("stream", connectedImmediately = true))
+        val listener = RecordingListener(openCount = 1, terminalCount = 1)
+        val reactor = reactor(backend, listener)
+        assertTrue(reactor.start())
+        assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream", targetAddress()))
+        assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+        backend.failWakeup.set(true)
+
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", byteArrayOf(1)))
+
+        assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        assertTrue(backend.closed.get())
+        assertEquals(1, listener.fatalCalls.get())
+        assertEquals(listOf(TargetTerminalReason.Shutdown), listener.terminalReasons["stream"])
+    }
+
+    @Test
+    fun `production bridge turns selector wakeup failure into session termination`() {
+        val backend = FakeSelectorBackend(FakeConnection("stream", connectedImmediately = true))
+        val mailbox = OutboundMailbox()
+        val failures = Collections.synchronizedList(mutableListOf<ErrorClass>())
+        lateinit var bridge: AgentTargetBridge
+        bridge = AgentTargetBridge(
+            outbound = mailbox,
+            reactorFactory = { listener ->
+                TargetIoReactor(
+                    binder = TargetSocketBinder {},
+                    listener = listener,
+                    backend = backend,
+                )
+            },
+            onSessionFailure = { failure ->
+                failures += failure
+                bridge.shutdownAndAwait(2, TimeUnit.SECONDS)
+            },
+            maxStreams = 1,
+        )
+        assertTrue(bridge.start())
+        bridge.open("stream", targetAddress())
+        var opened: OutboundFrame? = null
+        waitUntil { mailbox.poll()?.also { opened = it } != null }
+        assertEquals(OutboundEmission.Emitted, mailbox.emit(requireNotNull(opened)) { true })
+        backend.failWakeup.set(true)
+
+        bridge.routeData("stream", byteArrayOf(1))
+
+        waitUntil { failures.isNotEmpty() }
+        assertEquals(listOf(ErrorClass.Internal), failures)
+        assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+        assertTrue(backend.closed.get())
+        assertEquals(0, bridge.activeStreamCount)
+    }
+
+    @Test
     fun `selector backend ownership begins at start and factory failure leaks nothing`() {
         val created = AtomicInteger()
         val backend = FakeSelectorBackend()
@@ -776,6 +832,7 @@ class TargetIoReactorTest {
         private var wakeup = false
         val closed = AtomicBoolean(false)
         val failSelect = AtomicBoolean(false)
+        val failWakeup = AtomicBoolean(false)
         val openCalls = AtomicInteger()
         val blockClose = AtomicBoolean(false)
         val closeEntered = CountDownLatch(1)
@@ -845,6 +902,7 @@ class TargetIoReactorTest {
             synchronized(lock) {
                 wakeup = true
                 lock.notifyAll()
+                if (failWakeup.get()) throw IllegalStateException("selector wakeup failed")
             }
         }
 
