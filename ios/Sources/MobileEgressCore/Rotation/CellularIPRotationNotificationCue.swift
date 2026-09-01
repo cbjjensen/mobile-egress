@@ -145,14 +145,14 @@ public struct AppleCellularIPRotationNotificationCenter:
     CellularIPRotationNotificationCenter,
     @unchecked Sendable
 {
-    private let center: UNUserNotificationCenter
+    private let centerProvider: @Sendable () -> UNUserNotificationCenter
 
-    public init(center: UNUserNotificationCenter = .current()) {
-        self.center = center
+    public init() {
+        centerProvider = { UNUserNotificationCenter.current() }
     }
 
     public func authorizationStatus() async -> CellularIPRotationNotificationAuthorization {
-        let settings = await center.notificationSettings()
+        let settings = await centerProvider().notificationSettings()
         switch settings.authorizationStatus {
         case .notDetermined:
             return .notDetermined
@@ -166,7 +166,7 @@ public struct AppleCellularIPRotationNotificationCenter:
     }
 
     public func requestAuthorization() async throws -> Bool {
-        try await center.requestAuthorization(options: [.alert, .sound])
+        try await centerProvider().requestAuthorization(options: [.alert, .sound])
     }
 
     public func schedule(_ request: CellularIPRotationNotificationRequest) async throws {
@@ -183,11 +183,11 @@ public struct AppleCellularIPRotationNotificationCenter:
             content: content,
             trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         )
-        try await center.add(notification)
+        try await centerProvider().add(notification)
     }
 
     public func removePendingRequests(withIdentifiers identifiers: [String]) async {
-        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+        centerProvider().removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 }
 #endif
