@@ -156,3 +156,85 @@ Tests:
 
 - Real cellular routing, DNS family resolution, system-TLS exchange behavior, App Group entitlement access, notification delivery, and physical-device cancellation remain device acceptance items; this task intentionally proves their configuration and injected boundaries without causing those side effects.
 - Task 3B still owns coordinator/lifecycle integration, tunnel pause/resume, foreground recovery, and app publication. These adapters do not alter those behaviors preemptively.
+
+## Round 1/5 review remediation — 2026-09-01
+
+### Status and commits
+
+All three round-one findings are fixed and verified on the exact committed Mac checkout.
+
+- `31a01b0` — initial test-only race/grammar regression fixtures.
+- `91f19c333c2f38050ff35dc132e8e79098545f47` — test-only Swift 6 harness correction and authoritative expected RED commit.
+- `303499818cf5490de913a7471f38e6f26ddcd0cc` — production fix for notification generations, byte-level HTTP parsing, and synchronized path callbacks.
+
+The first test-only commit deliberately demonstrated that the public path callback did not conform to `Sendable`, but also exposed two fixture-only Swift 6 errors: an implicit actor return and test tasks capturing `XCTestCase.self`. The second test-only commit corrected only those fixtures and was transferred as a fresh bundle. The detached Mac checkout printed and verified exact HEAD `91f19c333c2f38050ff35dc132e8e79098545f47` before the authoritative behavioral RED.
+
+### Exact-commit RED
+
+Focused commands:
+
+```text
+swift test --filter CellularIPRotationNotificationCueTests
+swift test --filter CellularPublicIPProbeAdapterTests
+swift test --filter CellularPathObserverTests
+```
+
+Expected failures at `91f19c3`:
+
+- Notification: 8 executed, 3 failing tests / 7 assertions. Cancellation during authorization-status lookup, permission request, and notification add all returned `scheduled`; the first two left stale requests and the add race lacked the second removal needed to undo its late commit.
+- Parser/probe: 8 executed, 2 failing table tests / 8 assertions. Repeated or missing status separators, absent reason phrase, tab/NUL controls in the reason phrase, and controls in ignored header values were accepted.
+- Path: 4 executed, 1 failure. Runtime reflection of the public callback type did not contain `@Sendable`.
+
+These failures matched the review findings; existing cases in the same focused suites remained green.
+
+### GREEN implementation
+
+Notification scheduling now assigns an actor-isolated generation to each active attempt. Cancellation marks only that attempt's active generation before removing its identifier. Scheduling rechecks the generation after authorization-status lookup, permission request (including its error path), and notification add. A cancellation observed after a late successful add performs a second attempt-specific removal before returning the new finite `cancelled` result. Finished generations are removed without disturbing a newer generation.
+
+The HTTP parser no longer converts headers to `String`. It scans only the bounded header window, splits literal CRLF at the byte level, and requires the exact `HTTP/1.1 SP 3DIGIT SP reason-phrase` shape with a 100–599 code, one separator at each boundary, a non-empty visible reason phrase, and no control/NUL/DEL bytes. Every header name is checked as an ASCII token and every header value is control-checked before recognized fields are interpreted. The prior single-`Content-Length`, no-transfer-encoding, exact-body, 128-byte, 2xx, and strict-address checks remain intact.
+
+The public cellular availability handler is now `@Sendable`. The live `NWCellularPathMonitor` stores and loads its callback behind an `NSLock`; the existing outer observer lock continues to serialize delivery with cancellation, so an update copied immediately before cancellation is suppressed after cancellation returns. Repeated concurrent cancellation remains idempotent.
+
+### Exact-commit GREEN and full verification
+
+The Mac detached checkout printed and verified exact HEAD `303499818cf5490de913a7471f38e6f26ddcd0cc`.
+
+Focused results:
+
+```text
+CellularIPRotationNotificationCueTests: 8 tests, 0 failures
+CellularPublicIPProbeAdapterTests: 8 tests, 0 failures
+CellularPathObserverTests: 4 tests, 0 failures
+```
+
+Full commands:
+
+```text
+swift test
+swift test -Xswiftc -warnings-as-errors
+```
+
+Both commands exited zero and reported 208 tests executed, 2 existing device/entitlement tests skipped, and 0 failures. No compiler warnings were accepted by the warnings-as-errors run.
+
+### Round-one files
+
+Production:
+
+- `ios/Sources/MobileEgressCore/Rotation/CellularIPRotationNotificationCue.swift`
+- `ios/Sources/MobileEgressCore/Network/CellularPublicIPHTTPResponseParser.swift`
+- `ios/Sources/MobileEgressCore/Network/CellularPathObserver.swift`
+
+Tests:
+
+- `ios/Tests/MobileEgressCoreTests/CellularIPRotationNotificationCueTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularPublicIPProbeAdapterTests.swift`
+- `ios/Tests/MobileEgressCoreTests/CellularPathObserverTests.swift`
+
+### Round-one self-review
+
+- `git diff --check 7e9adc4..3034998` reported no whitespace errors.
+- The round-one changed-file list is exactly the three permitted `MobileEgressCore` sources and their three focused test files. No app target, SwiftUI, Xcode project, `TunnelManager`, `AgentViewModel`, relay, wire, security, signing, account, or Mac configuration file changed.
+- The notification state is keyed by `attemptID` and generation; every removal still derives only `com.mobileegress.agent.rotation.<attemptID>`. The added `cancelled` value is a local finite adapter result and is not part of relay or wire encoding.
+- The parser allocates only the at-most-8-KiB header slice and the already-bounded body string. It does not log or expose status text, header values, response bodies, addresses, endpoints, or raw errors.
+- The live path wrapper never reads or writes its callback without its private lock. The outer recursive lock still permits callback-initiated cancellation while ensuring cancellation cannot return before an already-delivering user callback completes.
+- Focused mutation review: removing any post-await generation check, either late-add removal, status separator/control check, header-value control check, `@Sendable`, callback lock, or idempotent cancellation guard breaks a new regression test or Swift 6 compilation contract.
