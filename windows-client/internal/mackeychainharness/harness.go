@@ -68,95 +68,24 @@ type Runner interface {
 }
 
 func Run(ctx context.Context, runner Runner, config Config) error {
-	if runner == nil {
-		return errors.New("macOS Keychain harness command runner is required")
-	}
-	if !strings.HasPrefix(config.Identity, "Developer ID Application: ") {
-		return errors.New("operator-supplied signing identity must be a Developer ID Application identity")
-	}
-	repositoryRoot, err := requireAbsoluteDirectory(config.RepositoryRoot, "repository root")
+	signing, cleanup, err := prepareSigningContext(ctx, runner, config)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(repositoryRoot, "go.mod")); err != nil {
-		return fmt.Errorf("repository root does not contain go.mod: %w", err)
-	}
-	profilePath, err := requireAbsoluteFile(config.ProfilePath, "Developer ID distribution provisioning profile")
-	if err != nil {
-		return err
-	}
-
-	workspace, removeWorkspace, err := prepareWorkspace(config.Workspace)
-	if err != nil {
-		return err
-	}
-	if removeWorkspace {
-		defer os.RemoveAll(workspace)
-	}
-
-	profilePlist := filepath.Join(workspace, "decoded-profile.plist")
-	if _, err := runCommand(ctx, runner, Command{
-		Name: "security",
-		Args: []string{"cms", "-D", "-i", profilePath, "-o", profilePlist},
-	}); err != nil {
-		return fmt.Errorf("decode provisioning profile: %w", err)
-	}
-	applicationIdentifier, err := plistValue(ctx, runner, profilePlist, "Print :Entitlements:com.apple.application-identifier")
-	if err != nil {
-		return fmt.Errorf("read provisioned application identifier: %w", err)
-	}
-	teamIdentifier, err := plistValue(ctx, runner, profilePlist, "Print :Entitlements:com.apple.developer.team-identifier")
-	if err != nil {
-		return fmt.Errorf("read provisioned team identifier: %w", err)
-	}
-	profileAccessGroup, err := plistValue(ctx, runner, profilePlist, "Print :Entitlements:keychain-access-groups:0")
-	if err != nil {
-		return fmt.Errorf("read provisioned Keychain access group: %w", err)
-	}
-	getTaskAllow, err := plistValue(ctx, runner, profilePlist, "Print :Entitlements:com.apple.security.get-task-allow")
-	if err != nil {
-		return fmt.Errorf("read provisioning distribution entitlement: %w", err)
-	}
-	provisionsAllDevices, err := plistValue(ctx, runner, profilePlist, "Print :ProvisionsAllDevices")
-	if err != nil {
-		return fmt.Errorf("read provisioning distribution scope: %w", err)
-	}
-	if err := validateProvisionedIdentity(
-		applicationIdentifier,
-		teamIdentifier,
-		profileAccessGroup,
-		getTaskAllow,
-		provisionsAllDevices,
-		config.Identity,
-	); err != nil {
-		return err
-	}
-	profileCertificates, err := loadProfileCertificates(ctx, runner, profilePlist)
-	if err != nil {
-		return fmt.Errorf("read provisioned developer certificates: %w", err)
-	}
-	identity, err := resolveSigningIdentity(ctx, runner, config.Identity, teamIdentifier, profileCertificates, time.Now())
-	if err != nil {
-		return err
-	}
-
-	entitlementsPath := filepath.Join(workspace, "controller.entitlements.plist")
-	if err := os.WriteFile(entitlementsPath, []byte(entitlementsPlist(applicationIdentifier, teamIdentifier)), 0o600); err != nil {
-		return fmt.Errorf("write exact test entitlements: %w", err)
-	}
+	defer cleanup()
 
 	applications := make(map[string]string, 2)
 	for _, version := range []string{"A", "B"} {
 		applicationPath, err := buildAndSignApplication(
 			ctx,
 			runner,
-			repositoryRoot,
-			workspace,
-			profilePath,
-			entitlementsPath,
-			applicationIdentifier,
-			teamIdentifier,
-			identity,
+			signing.repositoryRoot,
+			signing.workspace,
+			signing.profilePath,
+			signing.entitlementsPath,
+			signing.applicationIdentifier,
+			signing.teamIdentifier,
+			signing.identity,
 			version,
 		)
 		if err != nil {
@@ -165,7 +94,7 @@ func Run(ctx context.Context, runner Runner, config Config) error {
 		applications[version] = applicationPath
 	}
 
-	statePath := filepath.Join(workspace, "keychain-upgrade-state.json")
+	statePath := filepath.Join(signing.workspace, "keychain-upgrade-state.json")
 	versionAExecutable := applicationExecutable(applications["A"])
 	versionBExecutable := applicationExecutable(applications["B"])
 	versionAComplete := false
@@ -176,13 +105,13 @@ func Run(ctx context.Context, runner Runner, config Config) error {
 		if _, statErr := os.Stat(statePath); statErr != nil {
 			return
 		}
-		_, _ = runSignedPhase(context.Background(), runner, versionBExecutable, repositoryRoot, statePath, "cleanup")
+		_, _ = runSignedPhase(context.Background(), runner, versionBExecutable, signing.repositoryRoot, statePath, "cleanup")
 	}()
-	if _, err := runSignedPhase(ctx, runner, versionAExecutable, repositoryRoot, statePath, "A"); err != nil {
+	if _, err := runSignedPhase(ctx, runner, versionAExecutable, signing.repositoryRoot, statePath, "A"); err != nil {
 		return fmt.Errorf("run signed version A Keychain phase: %w", err)
 	}
 	versionAComplete = true
-	if _, err := runSignedPhase(ctx, runner, versionBExecutable, repositoryRoot, statePath, "B"); err != nil {
+	if _, err := runSignedPhase(ctx, runner, versionBExecutable, signing.repositoryRoot, statePath, "B"); err != nil {
 		return fmt.Errorf("run signed version B Keychain phase: %w", err)
 	}
 	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {

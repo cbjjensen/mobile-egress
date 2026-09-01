@@ -24,4 +24,28 @@ The harness builds and signs version A and version B app-like bundles with the s
 
 The operator's private key remains in the macOS Keychain and is never read or copied by the harness. The profile and identity label are not credentials. Temporary state contains only a random logical test key and an opaque persistent reference, is written with owner-only permissions, and is removed with the temporary bundles after the run.
 
+## Signed capacity acceptance host
+
+The developer-only capacity runner can use the production controller Owner on macOS only while the complete `run` path is executing inside a temporary app signed for that same private Keychain group. Build the ignored non-release launcher before handling the one-time token, then invoke it directly with capacity mode:
+
+```bash
+mkdir -p .local/capacity-harness
+if go build -tags capacityharness -trimpath -o .local/capacity-harness/mobile-egress-keychain-integration ./windows-client/cmd/mobile-egress-keychain-integration; then
+  ./.local/capacity-harness/mobile-egress-keychain-integration \
+    -profile "/absolute/path/MobileEgressController.provisionprofile" \
+    -identity "Developer ID Application: Operator Name (TEAMID1234)" \
+    -capacity-run
+else
+  printf '%s\n' 'Signed capacity launcher build failed before secret entry.' >&2
+fi
+```
+
+The build must finish before secret entry. After launch, wait until the signed child emits exactly `{"phase":"input","attempted":0,"open":0,"verified":0,"closed":0,"failure":"none"}`; only then enter the strict run-secret JSON document on stdin and send EOF. If profile validation, signing, or child startup fails first, enter nothing. Do not put the token or target in an argument, environment variable, shell history, temporary file, or log. The launcher disables terminal echo before profile validation or signing and fails closed if a detected terminal cannot be protected. It never parses the document: after starting the signed child behind a private readiness gate, it flushes input queued before the handoff, transfers terminal ownership, and launches the child's fixed capacity `run` mode. A pre-handoff failure flushes unread terminal input before echo is restored. The signed child loads the Owner through the production `KeychainStore` and repository; it never returns Owner certificate or private-key material to the launcher.
+
+The host accepts only the capacity runner's bounded JSON event schema on stdout and stderr. Unknown fields, invalid values, partial lines, lines over 512 bytes, or more than 1,024 lines per stream fail closed without forwarding the rejected content. On interruption it signals the child first, allows the runner's bounded cleanup and identity revocation to finish, and force-terminates only after the cleanup grace expires. The temporary bundle is removed after the run.
+
+Both the signed-host code and capacity command remain behind the `capacityharness` build tag and are absent from normal controller and release dependency graphs. This command is acceptance tooling, not macOS package/version metadata and not a release artifact. Delete `.local/capacity-harness/mobile-egress-keychain-integration` after the run; never distribute or attach it to a release.
+
+Follow the complete [authenticated 256-stream acceptance runbook](capacity-acceptance.md) for the one-time target, strict stdin fields, dedicated-relay preconditions, required result, and cleanup policy.
+
 The access-group and app-like-bundle requirements follow Apple's [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) and [`kSecAttrAccessGroup` documentation](https://developer.apple.com/documentation/security/ksecattraccessgroup).

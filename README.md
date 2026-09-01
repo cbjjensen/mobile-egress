@@ -43,6 +43,7 @@ Friends do not clone the repository, run Docker, execute setup scripts, open inb
 
 - [Architecture](docs/architecture.md)
 - [Release, deployment, and step-by-step physical acceptance](docs/deployment.md)
+- [Authenticated 256-stream acceptance](docs/capacity-acceptance.md)
 - [Physical acceptance record template](docs/templates/physical-acceptance-record.md)
 - [Operations](docs/operations.md)
 - [iOS build server over SSH](docs/ios-build-server.md)

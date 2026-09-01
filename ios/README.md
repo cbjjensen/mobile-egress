@@ -6,6 +6,10 @@ The Agent reuses the Android Agent's enrollment and endpoint-migration QRs, `POS
 
 The host app presents the approved ZFNF branding in an accessible true-black OLED dashboard. Cellular path health and relay health are separate signals, alongside bounded stream/byte metrics, finite error copy, guided rotation state, and **Copy diagnostic status**. Copied status never includes public addresses, relay origins, certificates, capabilities, opaque network tokens, or raw errors. The tracked [mobile feature manifest](../docs/mobile-feature-manifest.json) is the cross-platform parity ledger for this behavior.
 
+## Capacity and queueing
+
+The asynchronous `NWConnection` runtime admits at most 256 active streams first-come across all Client identities, while the relay separately enforces 32 per Client. It uses bounded O(1) ring/deque mailboxes: 512 outbound controls, 256 aggregate outbound data frames, two outbound data frames and two target-bound data frames per stream, and 1,024 closed-stream tombstones. Data is scheduled round-robin across ready streams. Senders prefer 16 KiB chunks and accept valid inbound data frames through 32 KiB. Data saturation closes only the affected stream with the existing finite failure behavior; required-control saturation or writer failure closes the affected session.
+
 ## Guided cellular-IP rotation
 
 Rotation is available only while the Agent is enrolled and running, cellular is available, and no other attempt is active. If streams are active, the app requires native confirmation before it pauses the packet tunnel and on-demand reconnect intent. The normal attempt uses a 10-second cellular reset; an unchanged result offers a 30-second retry. Outcomes are **changed**, **unchanged**, or **unverified**, and copied/logged evidence must never contain the compared addresses.

@@ -6,7 +6,7 @@ The Android app is the one cellular egress Agent for an operator's local relay. 
 
 In the Windows controller, choose **Phone → Generate Android QR**. In Android choose **Scan QR**. The strict version-1 payload pins the relay CA and carries a short-lived one-use Agent capability. The app creates a non-exportable P-256 key in Android Keystore, enrolls over a cellular-bound pinned TLS connection, and stores only the resulting identity in encrypted app storage.
 
-Tap **Start** to request a cellular network and connect. Every relay and target socket is created through that cellular `Network`. If cellular disappears while Wi-Fi remains available, streams close and reconnection waits for cellular; there is no Wi-Fi fallback.
+Tap **Start** to request a cellular network and connect. The relay uses that cellular `Network`, and every still-unconnected target channel is bound to it before connect. If cellular disappears while Wi-Fi remains available, streams close and reconnection waits for cellular; there is no Wi-Fi fallback.
 
 ## Rotate the cellular IP
 
@@ -29,7 +29,7 @@ Enrollment and migration payloads are distinct and strict. Unknown fields, insec
 
 ## Capacity and queueing
 
-The Agent admits at most 256 active streams across all Client identities; each Client identity can hold at most 32. Admission is first-come within both limits. Each stream has a bounded inbound queue; outbound control, aggregate data, and per-stream data queues are bounded. Data frames are scheduled round-robin across ready streams. Senders prefer 16 KiB data frames and accept valid frames up to 32 KiB. Data saturation closes only the affected stream; required-control saturation or writer failure closes the affected session instead of allocating without bound.
+The Agent admits at most 256 active streams across all Client identities; each Client identity can hold at most 32. Admission is first-come within both limits. One nonblocking selector reactor binds every still-unconnected target channel to the selected cellular `Network` before connect and handles all partial target I/O, deadlines, cancellation, and closure without per-stream I/O threads. The reactor command queue and outbound control queue each hold at most 512 entries; aggregate outbound data holds 256 frames, each stream holds at most two outbound and two target-bound frames, and closed-stream tombstones are capped at 1,024. Data frames are scheduled round-robin across ready streams. Senders prefer 16 KiB data frames and accept valid frames up to 32 KiB. Data saturation closes only the affected stream; required-control saturation or writer failure closes the affected session instead of allocating without bound.
 
 Public-destination policy is applied before opening a cellular target socket. Private, loopback, link-local, multicast, reserved, and otherwise disallowed addresses fail closed.
 

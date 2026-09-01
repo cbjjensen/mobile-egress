@@ -66,12 +66,33 @@ Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Andr
 
 ## Android 256-stream physical acceptance
 
-Keep these as two separate evidence rows. For each desktop host, all 256 streams must verify an exact 16 KiB echo and then remain live for 15 minutes; the ninth legitimate Client identity's aggregate stream 257 must reject with `agent_stream_limit`; closing one held stream must permit one verified replacement. This is not a throughput benchmark and has no throughput floor.
+Keep these as two separate evidence rows and follow the [authenticated capacity runbook](../capacity-acceptance.md). For each desktop host, all 256 streams must verify an exact 16 KiB echo and then remain live for 15 minutes; the ninth legitimate Client identity's aggregate stream 257 must reject with `agent_stream_limit`; closing one held stream must permit one verified replacement. A passing row also requires no corruption, process or Agent restart, queue overflow, continuously growing memory, or leaked socket. This is not a throughput benchmark and has no throughput floor.
 
 | Desktop bridge host | Result | Sanitized evidence |
 |---|---|---|
 | Windows-hosted bridge | PENDING | |
 | macOS-hosted bridge | PENDING | |
+
+For each bridge row, attach the following sanitized numeric evidence. Use one ordered comma-separated series for the baseline, 15 once-per-minute hold samples, and up-to-seven post-cleanup samples (immediate plus every 10 seconds for up to 60 seconds). The runner series ends when its required bounded exit is observed. Record aggregate counts only; do not attach raw process/socket-tool output or any endpoint, address, port, hostname, identity, destination, token, certificate path, command line, or payload.
+
+| Resource-stability field | Windows-hosted bridge | macOS-hosted bridge |
+|---|---|---|
+| Harness final aggregate JSON | | |
+| Relay/Agent/target/runner process start markers unchanged (`YES`/`NO`) | | |
+| Relay memory: baseline / 15 hold samples / post-cleanup samples | | |
+| Agent memory: baseline / 15 hold samples / post-cleanup samples | | |
+| Target memory: baseline / 15 hold samples / post-cleanup samples | | |
+| Runner memory: protected-input baseline / 15 hold samples | | |
+| Relay established sockets: baseline / 15 hold samples / post-cleanup samples | | |
+| Agent established sockets: baseline / 15 hold samples / post-cleanup samples | | |
+| Target established sockets: baseline / 15 hold samples / post-cleanup samples | | |
+| Runner established sockets: protected-input baseline / 15 hold samples | | |
+| Runner exited with no attributable socket within cleanup budget (`YES` required) | | |
+| Saturation-related closure or queue overflow observed (`NONE` required) | | |
+| Post-cleanup relay health `connectedClients` / `activeStreams` (`0 / 0` required) | | |
+| No component rose in every final five hold samples (`YES` required) | | |
+| No surviving component rose in every post-cleanup sample (`YES` required) | | |
+| Acceptance sockets returned to pre-run counts within 60 seconds (`YES` required) | | |
 
 ## iOS physical acceptance
 
