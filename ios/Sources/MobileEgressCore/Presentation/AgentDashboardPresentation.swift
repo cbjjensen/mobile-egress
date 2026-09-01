@@ -189,6 +189,20 @@ public enum CellularIPRotationAction: String, Codable, Equatable, Sendable {
     case retry
 }
 
+public struct CellularIPRotationConfirmationPresentation: Codable, Equatable, Sendable {
+    public let title: String
+    public let message: String
+    public let confirmLabel: String
+    public let declineLabel: String
+
+    public init(title: String, message: String, confirmLabel: String, declineLabel: String) {
+        self.title = title
+        self.message = message
+        self.confirmLabel = confirmLabel
+        self.declineLabel = declineLabel
+    }
+}
+
 public struct AgentHealthPresentation: Codable, Equatable, Sendable {
     public let label: String
     public let value: String
@@ -226,6 +240,7 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
     public let rotationLabel: String
     public let isRotationEnabled: Bool
     public let requiresActiveStreamConfirmation: Bool
+    public let rotationConfirmation: CellularIPRotationConfirmationPresentation?
     public let cellularHealth: AgentHealthPresentation
     public let relayHealth: AgentHealthPresentation
     public let metrics: [AgentMetricPresentation]
@@ -258,6 +273,7 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
                 availability: availability,
                 rotation: state.status.rotation
             ),
+            rotationConfirmation: rotationConfirmation(for: state.status.rotation),
             cellularHealth: cellularPresentation(state.status.cellular),
             relayHealth: relayPresentation(state.status.relay),
             metrics: [
@@ -573,6 +589,20 @@ private func requiresRotationConfirmation(
 ) -> Bool {
     if case .awaitingConfirmation = rotation { return true }
     return availability.requiresConfirmation(for: rotation)
+}
+
+private func rotationConfirmation(
+    for rotation: CellularIPRotationState
+) -> CellularIPRotationConfirmationPresentation? {
+    guard case let .awaitingConfirmation(_, _, _, activeStreamCount) = rotation else {
+        return nil
+    }
+    return CellularIPRotationConfirmationPresentation(
+        title: "Disconnect \(activeStreamCount) active streams?",
+        message: "Rotating the cellular IP will close every active proxy stream.",
+        confirmLabel: "Disconnect and rotate",
+        declineLabel: "Keep current connection"
+    )
 }
 
 private func resolveRotationLabel(for rotation: CellularIPRotationState) -> String {
