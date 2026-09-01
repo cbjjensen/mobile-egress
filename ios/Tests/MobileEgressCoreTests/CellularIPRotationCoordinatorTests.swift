@@ -91,7 +91,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
     }
 
     func testCancellationRejectsLateProbeCallbackAndClearsCheckpointAndCue() async {
-        let gate = AsyncTestGate()
+        let gate = RotationProbeGate()
         let path = RotationPathObserverStub()
         let store = RotationCheckpointStoreStub()
         let cue = RotationNotificationCueStub()
@@ -327,9 +327,9 @@ private actor RotationSleeperStub: CellularIPRotationSleeping {
 
 private actor RotationProbeStub: CellularPublicIPProbing {
     private var snapshots: [PublicIPSnapshot]
-    private let gate: AsyncTestGate?
+    private let gate: RotationProbeGate?
 
-    init(snapshots: [PublicIPSnapshot] = [], gate: AsyncTestGate? = nil) {
+    init(snapshots: [PublicIPSnapshot] = [], gate: RotationProbeGate? = nil) {
         self.snapshots = snapshots
         self.gate = gate
     }
@@ -337,6 +337,34 @@ private actor RotationProbeStub: CellularPublicIPProbing {
     func probe() async -> PublicIPSnapshot {
         if let gate { await gate.wait() }
         return snapshots.isEmpty ? PublicIPSnapshot() : snapshots.removeFirst()
+    }
+}
+
+private actor RotationProbeGate {
+    private var isOpen = false
+    private var isEntered = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        isEntered = true
+        let entered = entryWaiters
+        entryWaiters.removeAll()
+        entered.forEach { $0.resume() }
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !isEntered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }
 
