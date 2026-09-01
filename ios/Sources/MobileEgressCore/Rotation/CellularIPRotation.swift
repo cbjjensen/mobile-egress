@@ -625,13 +625,12 @@ public struct CellularIPRotationReducer: Sendable {
         recoveredAt: Date,
         elapsedSeconds: Int
     ) -> CellularIPRotationTransition {
-        let checkpointState = checkpoint.state
-        switch checkpointState {
+        switch checkpoint.state {
         case .awaitingConfirmation:
-            CellularIPRotationTransition(state: checkpointState)
+            CellularIPRotationTransition(state: checkpoint.state)
         case let .preparing(_, networkToken, _, _, _):
             CellularIPRotationTransition(
-                state: checkpointState,
+                state: checkpoint.state,
                 effects: [
                     .pauseAgentAndStreams(attemptID: attemptID),
                     .probeBefore(attemptID: attemptID, networkToken: networkToken),
@@ -639,7 +638,7 @@ public struct CellularIPRotationReducer: Sendable {
             )
         case .awaitingAirplaneMode:
             recoverAwaitingAirplaneMode(
-                checkpointState,
+                checkpoint.state,
                 attemptID: attemptID,
                 remainingSeconds: checkpoint.remainingTimeoutSeconds(at: recoveredAt)
             )
@@ -653,13 +652,13 @@ public struct CellularIPRotationReducer: Sendable {
             )
         case .awaitingCellularReturn:
             recoverAwaitingCellularReturn(
-                checkpointState,
+                checkpoint.state,
                 attemptID: attemptID,
                 remainingSeconds: checkpoint.remainingTimeoutSeconds(at: recoveredAt)
             )
         case let .verifying(_, _, networkToken):
             CellularIPRotationTransition(
-                state: checkpointState,
+                state: checkpoint.state,
                 effects: [
                     .pauseAgentAndStreams(attemptID: attemptID),
                     .probeAfter(attemptID: attemptID, networkToken: networkToken),
