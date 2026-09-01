@@ -1,0 +1,229 @@
+{
+  "$schema": "./mobile-feature-manifest.schema.v1.json",
+  "schemaVersion": 1,
+  "features": [
+    {
+      "id": "agent.enrollment",
+      "title": "Strict QR enrollment and retained Agent identity",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/pairing/PairingController.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/DeviceKeyStore.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/pairing/PairingControllerTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/security/DeviceKeyStorePolicyTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses Secure Enclave keys and a shared Keychain group instead of Android Keystore while preserving strict QR enrollment and non-exportable P-256 identity semantics.",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Pairing/PairingBundleParser.swift",
+            "ios/Sources/MobileEgressCore/Identity/SecureEnclaveIdentityKeyManager.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/PairingValidationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AppleSecurityPrimitiveTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.endpoint-migration",
+      "title": "One-use relay endpoint migration",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/migration/EndpointMigration.kt",
+            "android/app/src/main/java/com/mobileegress/agent/migration/EndpointMigrationClient.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/migration/EndpointMigrationTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Pairing/EndpointMigrationParser.swift",
+            "ios/Sources/MobileEgressCore/Migration/EndpointMigrationExecution.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/EndpointMigrationExecutionTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.cellular-required-transport",
+      "title": "Cellular-only relay and target transport",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/network/CellularNetworkAcquirer.kt",
+            "android/app/src/main/java/com/mobileegress/agent/network/CellularRequiredController.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/network/CellularRequiredControllerTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses Network.framework path and connection configuration to require cellular on Apple platforms rather than Android's Network binding API.",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Network/CellularPinnedHTTPTransport.swift",
+            "ios/Sources/MobileEgressCore/Network/PinnedCellularTransportConfiguration.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/PinnedCellularTransportTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.relay-session",
+      "title": "Startable relay session over pinned mTLS",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
+            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionUrlTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/service/ForegroundControllerTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Runs the Agent workload inside Apple's packet-tunnel extension lifecycle while retaining the same relay protocol, mTLS role, and user start/stop semantics.",
+          "sourceEvidence": [
+            "ios/MobileEgressTunnelExtension/PacketTunnelProvider.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionRuntime.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift",
+            "ios/Tests/MobileEgressCoreTests/TunnelRuntimeControllerTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.stream-capacity",
+      "title": "Bounded stream admission and queueing",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/session/StreamAdmission.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/session/StreamAdmissionTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
+            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.public-target-policy",
+      "title": "Public-destination target policy",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/network/PublicAddressPolicy.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/network/PublicAddressPolicyTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Policy/PublicAddressPolicy.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/PublicAddressPolicyTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.qr-scanning",
+      "title": "Native QR scanning entry point",
+      "platforms": {
+        "android": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses Android camera scanning UI to acquire the shared enrollment and migration QR payloads.",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/ui/QrCodeScanner.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/ScanPairingCoordinator.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/ui/ScanPairingCoordinatorTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/PairingScanSessionTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses VisionKit scanning in the SwiftUI host app to acquire the shared enrollment and migration QR payloads.",
+          "sourceEvidence": [
+            "ios/MobileEgressAgent/QRScannerView.swift",
+            "ios/MobileEgressAgent/AgentViewModel.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/PairingValidationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.status-surface",
+      "title": "Agent status and action surface",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt",
+            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses a SwiftUI host surface backed by tunnel state rather than Android foreground-service presentation while preserving visible enrollment, relay, and runtime status.",
+          "sourceEvidence": [
+            "ios/MobileEgressAgent/AgentDashboardView.swift",
+            "ios/Sources/MobileEgressCore/Runtime/TunnelConnectionState.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/TunnelConnectionStateTests.swift",
+            "ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift"
+          ]
+        }
+      }
+    }
+  ]
+}

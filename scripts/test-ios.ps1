@@ -29,6 +29,8 @@ function Invoke-RequiredCommand {
     }
 }
 
+Invoke-RequiredCommand -Name 'Mobile feature manifest parity' -Command { & (Join-Path $PSScriptRoot 'validate-mobile-feature-manifest.ps1') }
+
 function Invoke-PortableSwiftTests {
     $dockerVersion = & docker version --format '{{.Server.Version}}' 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($dockerVersion)) {

@@ -16,6 +16,7 @@ Assert-Condition (Test-Path -LiteralPath $iosTestScript -PathType Leaf) 'The iOS
 
 $scriptContent = (Get-Content -Raw $iosTestScript).Replace("`r`n", "`n")
 $scriptCommand = Get-Command $iosTestScript
+Assert-Condition ($scriptContent -match 'validate-mobile-feature-manifest\.ps1') 'The iOS component gate must validate the mobile feature parity manifest.'
 Assert-Condition (-not $scriptCommand.Parameters.ContainsKey('SkipPortableTests')) 'The verifier must reject portable-test continuation controls.'
 Assert-Condition (-not $scriptCommand.Parameters.ContainsKey('MacBuildServerStartAt')) 'The verifier must reject remote-phase continuation controls.'
 Assert-Condition ($scriptContent -match 'IOS_XCODE_STATUS=UNSUPPORTED_HOST') 'Unsupported hosts must emit the explicit Xcode status marker.'

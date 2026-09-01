@@ -106,6 +106,7 @@ function Invoke-RequiredCommand {
 Push-Location $repositoryRoot
 try {
     Initialize-MobileEgressTestAllToolchain -Components $Components
+    Invoke-RequiredCommand -Name 'Mobile feature manifest parity' -Command { & (Join-Path $PSScriptRoot 'validate-mobile-feature-manifest.ps1') }
     Invoke-RequiredCommand -Name 'Release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-all.ps1') }
 
     if ($Components -contains 'Windows') {
