@@ -437,21 +437,35 @@ function Resolve-MobileEgressReleaseComponents {
     param([AllowEmptyCollection()][string[]]$Components = @())
 
     if ($null -eq $Components -or $Components.Count -eq 0) {
-        return @('Windows', 'Android')
+        return @('Desktop', 'Android')
     }
 
-    $unsupported = @($Components | Where-Object { $_ -notin @('Windows', 'Android') } | Select-Object -Unique)
+    $platformOnly = @($Components | Where-Object { $_ -in @('Windows', 'macOS') } | Select-Object -Unique)
+    if ($platformOnly.Count -ne 0) {
+        throw 'Windows and macOS desktop releases cannot be selected separately. Select Desktop to release both platforms together.'
+    }
+    $unsupported = @($Components | Where-Object { $_ -notin @('Desktop', 'Android') } | Select-Object -Unique)
     if ($unsupported.Count -ne 0) {
-        throw "Unsupported release component: $($unsupported -join ', '). Supported components are Windows and Android."
+        throw "Unsupported release component: $($unsupported -join ', '). Supported components are Desktop and Android."
     }
 
     $resolved = [System.Collections.Generic.List[string]]::new()
-    foreach ($component in @('Windows', 'Android')) {
+    foreach ($component in @('Desktop', 'Android')) {
         if ($Components -contains $component) {
             $resolved.Add($component)
         }
     }
     return @($resolved)
+}
+
+function Get-MobileEgressReleaseGateComponents {
+    param([Parameter(Mandatory)][string[]]$Components)
+
+    $resolved = @(Resolve-MobileEgressReleaseComponents -Components $Components)
+    $gateComponents = [System.Collections.Generic.List[string]]::new()
+    if ($resolved -contains 'Desktop') { $gateComponents.Add('Windows') }
+    if ($resolved -contains 'Android') { $gateComponents.Add('Android') }
+    return @($gateComponents)
 }
 
 function Get-MobileEgressAndroidApkName {
@@ -474,7 +488,7 @@ function Get-MobileEgressReleaseArtifactDefinitions {
     )
 
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
-    if ($resolvedComponents -contains 'Windows') {
+    if ($resolvedComponents -contains 'Desktop') {
         [pscustomobject]@{
             Name = "mobile-egress-windows-$Version.zip"
             Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip"
@@ -482,6 +496,10 @@ function Get-MobileEgressReleaseArtifactDefinitions {
         [pscustomobject]@{
             Name = 'mobile-egress-client.exe'
             Path = Join-Path $RepositoryRoot 'windows-client\build\bin\mobile-egress-client.exe'
+        }
+        [pscustomobject]@{
+            Name = "mobile-egress-macos-$Version-arm64.pkg"
+            Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-macos-$Version-arm64.pkg"
         }
     }
     if ($resolvedComponents -contains 'Android') {
@@ -511,6 +529,11 @@ function Get-MobileEgressReleaseDownloadItemDefinitions {
             CurrentName = 'mobile-egress-client.exe'
         },
         [pscustomobject]@{
+            Key = 'macos'
+            Label = 'macOS controller PKG (Apple Silicon)'
+            CurrentName = "mobile-egress-macos-$Version-arm64.pkg"
+        },
+        [pscustomobject]@{
             Key = 'android'
             Label = 'Android agent APK'
             CurrentName = Get-MobileEgressAndroidApkName -Version $Version
@@ -529,6 +552,7 @@ function Test-MobileEgressReleaseDownloadAssetName {
     switch ($Key) {
         'windows' { return $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
         'client' { return $Name -ceq 'mobile-egress-client.exe' }
+        'macos' { return $Name -match '^mobile-egress-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
         'android' { return $Name -match '^zfnf-mobile-egress-android-[0-9]+\.[0-9]+\.[0-9]+\.apk$' -or $Name -ceq 'app-release.apk' }
         default { throw "Unsupported download item: $Key" }
     }
@@ -696,11 +720,15 @@ function Assert-MobileEgressReleaseArtifacts {
         [Parameter(Mandatory)]
         [string]$Version,
         [Parameter(Mandatory)]
-        [string[]]$Components
+        [string[]]$Components,
+        [string]$SourceCommit = ''
     )
 
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
-    if ($resolvedComponents -contains 'Windows') {
+    if ($resolvedComponents -contains 'Desktop') {
+        if ($SourceCommit -notmatch '^[0-9a-f]{40}$') {
+            throw 'SourceCommit is required to validate Desktop release artifacts.'
+        }
         $record = Get-Content -Raw -LiteralPath (Join-Path $RepositoryRoot 'windows-signing\release-signing-certificate.txt')
         $thumbprintMatch = [regex]::Match($record, '(?im)^SHA-1 thumbprint:\s*([0-9A-F]{40})\s*$')
         if (-not $thumbprintMatch.Success) {
@@ -744,6 +772,11 @@ function Assert-MobileEgressReleaseArtifacts {
         Assert-MobileEgressReleaseZipMatchesSources `
             -ZipPath (Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip") `
             -ExpectedSources $zipSources
+
+        Invoke-MobileEgressRequiredPowerShellScript `
+            -Path (Join-Path $PSScriptRoot 'release-desktop.ps1') `
+            -Arguments @('-ReleaseVersion', $Version, '-SourceCommit', $SourceCommit, '-ValidateArtifacts') `
+            -Description 'macOS Desktop release verification'
     }
 
     if ($resolvedComponents -contains 'Android') {
@@ -790,7 +823,7 @@ function Invoke-MobileEgressRelease {
     Import-MobileEgressReleaseEnvironment
     $tag = "v$Version"
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
-    $includesWindows = $resolvedComponents -contains 'Windows'
+    $includesDesktop = $resolvedComponents -contains 'Desktop'
     $includesAndroid = $resolvedComponents -contains 'Android'
 
     $status = Invoke-MobileEgressNativeCommand -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'status', '--porcelain') -Description 'Git worktree check'
@@ -858,24 +891,29 @@ function Invoke-MobileEgressRelease {
 
     $windowsSigningScript = Join-Path $PSScriptRoot 'setup-windows-signing.ps1'
     $androidReleaseScript = Join-Path $PSScriptRoot 'release-android.ps1'
-    if ($includesWindows) {
+    $desktopReleaseScript = Join-Path $PSScriptRoot 'release-desktop.ps1'
+    if ($includesDesktop) {
         Invoke-MobileEgressRequiredPowerShellScript -Path $windowsSigningScript -Arguments @('-ValidateOnly') -Description 'Windows publisher validation'
     }
     if ($includesAndroid) {
         Invoke-MobileEgressRequiredPowerShellScript -Path $androidReleaseScript -Arguments @('-ValidateOnly') -Description 'Android signing validation'
     }
-    Invoke-MobileEgressComponentGate -Path (Join-Path $PSScriptRoot 'test-all.ps1') -Components $resolvedComponents
+    $gateComponents = @(Get-MobileEgressReleaseGateComponents -Components $resolvedComponents)
+    Invoke-MobileEgressComponentGate -Path (Join-Path $PSScriptRoot 'test-all.ps1') -Components $gateComponents
 
     if (-not $resumeArtifacts) {
-        if ($includesWindows) {
+        if ($includesDesktop) {
             $windowsZip = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip"
-            if (Test-Path -LiteralPath $windowsZip) {
-                throw "Unsigned release state is ambiguous because $windowsZip already exists. Do not overwrite it automatically."
+            $macPkg = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-macos-$Version-arm64.pkg"
+            $macRecord = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-macos-$Version-arm64.verification.json"
+            $existingDesktopOutput = @(@($windowsZip, $macPkg, $macRecord) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
+            if ($existingDesktopOutput.Count -ne 0) {
+                throw "Unsigned release state is ambiguous because $($existingDesktopOutput[0]) already exists. Do not overwrite it automatically."
             }
             Invoke-MobileEgressRequiredPowerShellScript `
-                -Path (Join-Path $PSScriptRoot 'build-windows.ps1') `
-                -Arguments @('-ReleaseVersion', $Version) `
-                -Description 'Signed Windows release'
+                -Path $desktopReleaseScript `
+                -Arguments @('-ReleaseVersion', $Version, '-SourceCommit', $head, '-BuildArtifacts') `
+                -Description 'Coupled Windows and macOS Desktop release'
         }
 
         if ($includesAndroid) {
@@ -900,7 +938,7 @@ function Invoke-MobileEgressRelease {
         }
     }
 
-    Assert-MobileEgressReleaseArtifacts -RepositoryRoot $RepositoryRoot -Version $Version -Components $resolvedComponents
+    Assert-MobileEgressReleaseArtifacts -RepositoryRoot $RepositoryRoot -Version $Version -Components $resolvedComponents -SourceCommit $head
     $artifacts = Get-MobileEgressReleaseArtifacts -RepositoryRoot $RepositoryRoot -Version $Version -Components $resolvedComponents
     foreach ($artifact in $artifacts) {
         Write-Host "$($artifact.Digest)  $($artifact.Name)"

@@ -16,9 +16,23 @@ Assert-Condition (Test-Path -LiteralPath $releaseScript -PathType Leaf) 'The det
 . $releaseScript
 
 $allComponents = @(Resolve-MobileEgressReleaseComponents -Components @())
-Assert-Condition (($allComponents -join ',') -eq 'Windows,Android') 'An unspecified component set must preserve the full release workflow.'
-$canonicalComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Windows', 'Android'))
-Assert-Condition (($canonicalComponents -join ',') -eq 'Windows,Android') 'Release components must be deduplicated into deterministic order.'
+Assert-Condition (($allComponents -join ',') -eq 'Desktop,Android') 'An unspecified component set must release both desktop platforms plus Android.'
+$canonicalComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Desktop', 'Android'))
+Assert-Condition (($canonicalComponents -join ',') -eq 'Desktop,Android') 'Release components must be deduplicated into deterministic order.'
+$windowsOnlyRejected = $false
+try {
+    $null = Resolve-MobileEgressReleaseComponents -Components @('Windows')
+} catch {
+    $windowsOnlyRejected = $_.Exception.Message -match 'Desktop'
+}
+Assert-Condition $windowsOnlyRejected 'A Windows-only desktop release must be rejected.'
+$macosOnlyRejected = $false
+try {
+    $null = Resolve-MobileEgressReleaseComponents -Components @('macOS')
+} catch {
+    $macosOnlyRejected = $_.Exception.Message -match 'Desktop'
+}
+Assert-Condition $macosOnlyRejected 'A macOS-only desktop release must be rejected.'
 $invalidComponentRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('Relay')
@@ -26,29 +40,35 @@ try {
     $invalidComponentRejected = $_.Exception.Message -match 'Unsupported release component'
 }
 Assert-Condition $invalidComponentRejected 'Unknown release components must stop before build or publication.'
+$fullGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Desktop', 'Android'))
+Assert-Condition (($fullGateComponents -join ',') -eq 'Windows,Android') 'The coupled Desktop scope must map to the existing Windows gate while Android retains its independent gate.'
+$androidGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Android'))
+Assert-Condition (($androidGateComponents -join ',') -eq 'Android') 'An Android-only release must not resolve Windows or macOS build prerequisites.'
 
-$windowsDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows'))
-Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe') 'A Windows release must publish the controller bundle and its coupled EC2 Client, but not Android.'
+$desktopDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop'))
+Assert-Condition (($desktopDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg') 'A Desktop release must publish the Windows bundle, EC2 Client, and macOS PKG together.'
 $androidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Android'))
 Assert-Condition (($androidDefinitions.Name -join ',') -eq 'zfnf-mobile-egress-android-1.2.3.apk') 'An Android release must publish only the versioned ZFNF APK.'
-$allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
-Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,zfnf-mobile-egress-android-1.2.3.apk') 'The full release must retain the established three-artifact set with the renamed Android APK.'
+$allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop', 'Android'))
+Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg,zfnf-mobile-egress-android-1.2.3.apk') 'The full release must contain the coupled Desktop assets followed by Android.'
 
-$windowsDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.3' -Version '1.2.3' -ReleasedArtifacts $windowsDefinitions -PublishedReleases @(
+$desktopDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.3' -Version '1.2.3' -ReleasedArtifacts $desktopDefinitions -PublishedReleases @(
     [pscustomobject]@{
         tagName = 'v1.2.2'
         isDraft = $false
         assets = @(
             [pscustomobject]@{ name = 'mobile-egress-windows-1.2.2.zip' },
             [pscustomobject]@{ name = 'mobile-egress-client.exe' },
+            [pscustomobject]@{ name = 'mobile-egress-macos-1.2.2-arm64.pkg' },
             [pscustomobject]@{ name = 'zfnf-mobile-egress-android-1.2.2.apk' }
         )
     }
 ))
-Assert-Condition ($windowsDownloadLinks.Count -eq 3) 'Release notes must cover Windows, Client, and Android downloads even for scoped releases.'
-Assert-Condition (($windowsDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Tag -eq 'v1.2.3') 'A scoped Windows release must link its new Windows bundle from the current tag.'
-Assert-Condition (($windowsDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.2.3') 'A scoped Windows release must link its new EC2 Client from the current tag.'
-Assert-Condition (($windowsDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.2.2') 'A scoped Windows release must link the latest published Android APK when Android was not rebuilt.'
+Assert-Condition ($desktopDownloadLinks.Count -eq 4) 'Release notes must cover Windows, macOS, Client, and Android downloads even for scoped releases.'
+Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Tag -eq 'v1.2.3') 'A scoped Desktop release must link its new Windows bundle from the current tag.'
+Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.2.3') 'A scoped Desktop release must link its new EC2 Client from the current tag.'
+Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Name -eq 'mobile-egress-macos-1.2.3-arm64.pkg') 'A scoped Desktop release must link its same-version macOS PKG.'
+Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.2.2') 'A scoped Desktop release must link the latest published Android APK when Android was not rebuilt.'
 
 $androidDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.4' -Version '1.2.4' -ReleasedArtifacts $androidDefinitions -PublishedReleases @(
     [pscustomobject]@{
@@ -56,15 +76,17 @@ $androidDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag '
         isDraft = $false
         assets = @(
             [pscustomobject]@{ name = 'mobile-egress-windows-1.2.3.zip' },
-            [pscustomobject]@{ name = 'mobile-egress-client.exe' }
+            [pscustomobject]@{ name = 'mobile-egress-client.exe' },
+            [pscustomobject]@{ name = 'mobile-egress-macos-1.2.3-arm64.pkg' }
         )
     }
 ))
 Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Name -eq 'mobile-egress-windows-1.2.3.zip') 'A scoped Android release must link the latest versioned Windows bundle when Windows was not rebuilt.'
 Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.2.3') 'A scoped Android release must link the latest EC2 Client when Windows was not rebuilt.'
+Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Tag -eq 'v1.2.3') 'A scoped Android release must link the same published Desktop release for macOS.'
 Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.2.4') 'A scoped Android release must link its new APK from the current tag.'
 
-$downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $windowsDownloadLinks
+$downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $desktopDownloadLinks
 Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'
 Assert-Condition ($downloadSection -match '\[zfnf-mobile-egress-android-1\.2\.2\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.2/zfnf-mobile-egress-android-1\.2\.2\.apk\)') 'The download section must render fallback assets as direct GitHub download links.'
 
@@ -98,7 +120,8 @@ Sync-MobileEgressReleaseDownloadNotes -CurrentTag 'v1.2.4' -Version '1.2.4' -Rel
         isDraft = $false
         assets = @(
             [pscustomobject]@{ name = 'mobile-egress-windows-1.2.3.zip' },
-            [pscustomobject]@{ name = 'mobile-egress-client.exe' }
+            [pscustomobject]@{ name = 'mobile-egress-client.exe' },
+            [pscustomobject]@{ name = 'mobile-egress-macos-1.2.3-arm64.pkg' }
         )
     }
 ) -UpdateReleaseBody {
@@ -109,10 +132,8 @@ Assert-Condition ($noteUpdates.Count -eq 1) 'Release publication must write the 
 Assert-Condition ($noteUpdates[0] -match 'Generated release notes') 'Release download note updates must preserve GitHub-generated notes.'
 Assert-Condition ($noteUpdates[0] -match '\[mobile-egress-windows-1\.2\.3\.zip\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.3/mobile-egress-windows-1\.2\.3\.zip\)') 'Release download note updates must include fallback links before publication.'
 
-$windowsEntryPoint = Join-Path $PSScriptRoot 'release-windows.ps1'
-Assert-Condition (Test-Path -LiteralPath $windowsEntryPoint -PathType Leaf) 'The fast Windows release entry point must exist.'
-$windowsEntryPointContent = Get-Content -Raw -LiteralPath $windowsEntryPoint
-Assert-Condition ($windowsEntryPointContent -match "release-all\.ps1.*-Components\s+'Windows'") 'The Windows entry point must route through the deterministic orchestrator with Windows scope.'
+$desktopEntryPoint = Join-Path $PSScriptRoot 'release-desktop.ps1'
+Assert-Condition (Test-Path -LiteralPath $desktopEntryPoint -PathType Leaf) 'The coupled Desktop release entry point must exist.'
 $androidEntryPointContent = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'release-android.ps1')
 Assert-Condition ($androidEntryPointContent -match "release-all\.ps1.*-Components\s+'Android'") 'The public Android release entry point must route versioned publication through the deterministic orchestrator with Android scope.'
 
