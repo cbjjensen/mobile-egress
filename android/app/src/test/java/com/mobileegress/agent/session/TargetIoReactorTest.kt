@@ -900,9 +900,9 @@ class TargetIoReactorTest {
 
         override fun wakeup() {
             synchronized(lock) {
+                if (failWakeup.get()) throw IllegalStateException("selector wakeup failed")
                 wakeup = true
                 lock.notifyAll()
-                if (failWakeup.get()) throw IllegalStateException("selector wakeup failed")
             }
         }
 

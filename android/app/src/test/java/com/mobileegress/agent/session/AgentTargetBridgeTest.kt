@@ -210,6 +210,8 @@ class AgentTargetBridgeTest {
             ReactorSubmitResult.Accepted
         }
         val routeFailure = arrayOfNulls<Throwable>(1)
+        val emissionResult = arrayOfNulls<OutboundEmission>(1)
+        val senderCalled = CountDownLatch(1)
         val router = thread(name = "graceful-crossing-write") {
             try {
                 fixture.bridge.routeData("stream", "crossing".encodeToByteArray())
@@ -219,11 +221,16 @@ class AgentTargetBridgeTest {
         }
         assertTrue(writeEntered.await(2, TimeUnit.SECONDS))
         val emitter = thread(name = "graceful-close-emitter") {
-            fixture.mailbox.emit(targetClosed) { true }
+            emissionResult[0] = fixture.mailbox.emit(targetClosed) {
+                senderCalled.countDown()
+                true
+            }
         }
 
         try {
-            assertFalse(fixture.reactor.releaseCalled.await(100, TimeUnit.MILLISECONDS))
+            waitUntil { senderCalled.count == 0L || emitter.state == Thread.State.BLOCKED }
+            assertEquals(1L, senderCalled.count)
+            assertEquals(1L, fixture.reactor.releaseCalled.count)
         } finally {
             allowWrite.countDown()
             router.join(2_000)
@@ -231,11 +238,117 @@ class AgentTargetBridgeTest {
         }
 
         assertEquals(null, routeFailure[0])
+        assertEquals(OutboundEmission.Emitted, emissionResult[0])
+        assertTrue(senderCalled.await(2, TimeUnit.SECONDS))
         assertTrue(fixture.reactor.releaseCalled.await(2, TimeUnit.SECONDS))
         assertEquals(
             listOf("crossing"),
             fixture.reactor.writes.map { it.payload.decodeToString() },
         )
+    }
+
+    @Test
+    fun `crossing saturation wins before target closed sender and emits one terminal`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val targetClosed = requireNotNull(fixture.mailbox.poll())
+        val writeEntered = CountDownLatch(1)
+        val allowWrite = CountDownLatch(1)
+        fixture.reactor.writeAction = {
+            writeEntered.countDown()
+            allowWrite.await(2, TimeUnit.SECONDS)
+            ReactorSubmitResult.StreamSaturated
+        }
+        val sent = Collections.synchronizedList(mutableListOf<String>())
+        val senderCalled = CountDownLatch(1)
+        val routeFailure = arrayOfNulls<Throwable>(1)
+        val emissionResult = arrayOfNulls<OutboundEmission>(1)
+        val router = thread(name = "saturation-before-close-sender") {
+            try {
+                fixture.bridge.routeData("stream", byteArrayOf(1))
+            } catch (error: Throwable) {
+                routeFailure[0] = error
+            }
+        }
+        assertTrue(writeEntered.await(2, TimeUnit.SECONDS))
+        val emitter = thread(name = "target-closed-sender") {
+            emissionResult[0] = fixture.mailbox.emit(targetClosed) { bytes ->
+                senderCalled.countDown()
+                sent += bytes.decodeToString()
+                true
+            }
+        }
+
+        try {
+            waitUntil { senderCalled.count == 0L || emitter.state == Thread.State.BLOCKED }
+            assertEquals(1L, senderCalled.count)
+        } finally {
+            allowWrite.countDown()
+            router.join(2_000)
+            emitter.join(2_000)
+        }
+        while (true) {
+            val frame = fixture.mailbox.poll() ?: break
+            fixture.mailbox.emit(frame) { bytes ->
+                sent += bytes.decodeToString()
+                true
+            }
+        }
+
+        assertEquals(null, routeFailure[0])
+        assertEquals(OutboundEmission.Canceled, emissionResult[0])
+        assertEquals(
+            listOf(
+                "{\"version\":1,\"type\":\"close\",\"streamId\":\"stream\"," +
+                    "\"payload\":\"YWdlbnRfdW5hdmFpbGFibGU\"}",
+            ),
+            sent,
+        )
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `target closed emission advances state before sender can route data`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val targetClosed = requireNotNull(fixture.mailbox.poll())
+        fixture.reactor.writeResults["stream"] = ReactorSubmitResult.StreamSaturated
+        val sent = mutableListOf<String>()
+        var routeFailure: Throwable? = null
+
+        val result = fixture.mailbox.emit(targetClosed) { bytes ->
+            sent += bytes.decodeToString()
+            try {
+                fixture.bridge.routeData("stream", byteArrayOf(1))
+            } catch (error: Throwable) {
+                routeFailure = error
+            }
+            true
+        }
+        while (true) {
+            val frame = fixture.mailbox.poll() ?: break
+            fixture.mailbox.emit(frame) { bytes ->
+                sent += bytes.decodeToString()
+                true
+            }
+        }
+
+        assertEquals(OutboundEmission.Emitted, result)
+        assertEquals(null, routeFailure)
+        assertEquals(
+            listOf(
+                "{\"version\":1,\"type\":\"close\",\"streamId\":\"stream\"," +
+                    "\"payload\":\"dGFyZ2V0X2Nsb3NlZA\"}",
+            ),
+            sent,
+        )
+        assertEquals(emptyList<FakeReactor.Write>(), fixture.reactor.writes)
+        assertTrue(fixture.reactor.releaseCalled.await(2, TimeUnit.SECONDS))
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
     }
 
     @Test
@@ -276,6 +389,249 @@ class AgentTargetBridgeTest {
             unknownFailure = error
         }
         assertTrue(unknownFailure is com.mobileegress.agent.protocol.ProtocolException)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `captured unopened terminal cannot reject a replacement generation`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("same", targetAddress())
+        val oldToken = fixture.reactor.opened.getValue("same")
+        fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
+        val oldLockHeld = CountDownLatch(1)
+        val performCancelAndReuse = CountDownLatch(1)
+        val replacementOpened = CountDownLatch(1)
+        fixture.reactor.writeAction = {
+            oldLockHeld.countDown()
+            performCancelAndReuse.await(2, TimeUnit.SECONDS)
+            fixture.bridge.closeFromRelay("same")
+            fixture.bridge.open("same", targetAddress())
+            replacementOpened.countDown()
+            ReactorSubmitResult.Accepted
+        }
+        val router = thread(name = "old-generation-lock-owner") {
+            fixture.bridge.routeData("same", byteArrayOf(1))
+        }
+        assertTrue(oldLockHeld.await(2, TimeUnit.SECONDS))
+        val terminal = thread(name = "captured-old-open-terminal") {
+            fixture.listener.onTerminal("same", oldToken, TargetTerminalReason.OpenSetupFailure)
+        }
+        waitUntil { terminal.state == Thread.State.BLOCKED }
+
+        performCancelAndReuse.countDown()
+        assertTrue(replacementOpened.await(2, TimeUnit.SECONDS))
+        router.join(2_000)
+        terminal.join(2_000)
+        fixture.reactor.writeAction = null
+        val replacementToken = fixture.reactor.opened.getValue("same")
+
+        assertNotEquals(oldToken, replacementToken)
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertTrue(fixture.listener.onData("same", replacementToken, byteArrayOf(2)))
+        fixture.bridge.routeData("same", byteArrayOf(3))
+        assertEquals(
+            listOf(WireProtocol.encode("data", "same", byteArrayOf(2)).toList()),
+            fixture.emittedFrames().map(ByteArray::toList),
+        )
+        assertEquals(
+            listOf(1, 3),
+            fixture.reactor.writes.map { it.payload.single().toInt() },
+        )
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `checked target failure cannot mutate a replacement generation`() {
+        val callbackChecked = CountDownLatch(1)
+        val allowMailboxCommit = CountDownLatch(1)
+        val pauseOnce = AtomicBoolean(true)
+        val fixture = Fixture(
+            maxStreams = 1,
+            beforeMailboxCommit = {
+                if (pauseOnce.compareAndSet(true, false)) {
+                    callbackChecked.countDown()
+                    allowMailboxCommit.await(2, TimeUnit.SECONDS)
+                }
+            },
+        )
+        fixture.bridge.open("same", targetAddress())
+        val oldToken = fixture.reactor.opened.getValue("same")
+        fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
+        val terminal = thread(name = "checked-old-target-failure") {
+            fixture.listener.onTerminal("same", oldToken, TargetTerminalReason.TargetFailure)
+        }
+        assertTrue(callbackChecked.await(2, TimeUnit.SECONDS))
+        val replacementOpened = CountDownLatch(1)
+        val closeStarted = CountDownLatch(1)
+        val raceTrace = Collections.synchronizedList(mutableListOf<String>())
+        val closer = thread(name = "target-failure-close-and-reuse") {
+            closeStarted.countDown()
+            fixture.bridge.closeFromRelay("same")
+            raceTrace += "after-close active=${fixture.bridge.activeStreamCount}"
+            fixture.bridge.open("same", targetAddress())
+            raceTrace += "after-open active=${fixture.bridge.activeStreamCount} token=${fixture.reactor.opened["same"]}"
+            replacementOpened.countDown()
+        }
+        assertTrue(closeStarted.await(2, TimeUnit.SECONDS))
+        waitUntil { replacementOpened.count == 0L || closer.state == Thread.State.BLOCKED }
+        val replacementEscapedOldLock = replacementOpened.count == 0L
+
+        allowMailboxCommit.countDown()
+        terminal.join(2_000)
+        closer.join(2_000)
+        val replacementToken = fixture.reactor.opened.getValue("same")
+
+        assertFalse(replacementEscapedOldLock)
+        assertNotEquals("race=$raceTrace status=${fixture.status.activeCounts}", oldToken, replacementToken)
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertTrue(fixture.listener.onData("same", replacementToken, byteArrayOf(2)))
+        assertEquals(
+            listOf(WireProtocol.encode("data", "same", byteArrayOf(2)).toList()),
+            fixture.emittedFrames().map(ByteArray::toList),
+        )
+        assertEquals(listOf(ErrorClass.TargetConnect), fixture.status.errors)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `checked opened callback cannot enqueue control for a replacement generation`() {
+        val callbackChecked = CountDownLatch(1)
+        val allowMailboxCommit = CountDownLatch(1)
+        val pauseOnce = AtomicBoolean(true)
+        val fixture = Fixture(
+            maxStreams = 1,
+            beforeMailboxCommit = {
+                if (pauseOnce.compareAndSet(true, false)) {
+                    callbackChecked.countDown()
+                    allowMailboxCommit.await(2, TimeUnit.SECONDS)
+                }
+            },
+        )
+        fixture.bridge.open("same", targetAddress())
+        val oldToken = fixture.reactor.opened.getValue("same")
+        fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
+        val opened = thread(name = "checked-old-opened") {
+            fixture.listener.onOpened("same", oldToken)
+        }
+        assertTrue(callbackChecked.await(2, TimeUnit.SECONDS))
+        val replacementOpened = CountDownLatch(1)
+        val closeStarted = CountDownLatch(1)
+        val closer = thread(name = "opened-close-and-reuse") {
+            closeStarted.countDown()
+            fixture.bridge.closeFromRelay("same")
+            fixture.bridge.open("same", targetAddress())
+            replacementOpened.countDown()
+        }
+        assertTrue(closeStarted.await(2, TimeUnit.SECONDS))
+        waitUntil { replacementOpened.count == 0L || closer.state == Thread.State.BLOCKED }
+        val replacementEscapedOldLock = replacementOpened.count == 0L
+
+        allowMailboxCommit.countDown()
+        opened.join(2_000)
+        closer.join(2_000)
+
+        assertFalse(replacementEscapedOldLock)
+        assertNotEquals(oldToken, fixture.reactor.opened.getValue("same"))
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertEquals(emptyList<ByteArray>(), fixture.emittedFrames())
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `checked data callback cannot enqueue payload for a replacement generation`() {
+        val callbackChecked = CountDownLatch(1)
+        val allowMailboxCommit = CountDownLatch(1)
+        val pauseOnce = AtomicBoolean(true)
+        val fixture = Fixture(
+            maxStreams = 1,
+            beforeMailboxCommit = {
+                if (pauseOnce.compareAndSet(true, false)) {
+                    callbackChecked.countDown()
+                    allowMailboxCommit.await(2, TimeUnit.SECONDS)
+                }
+            },
+        )
+        fixture.bridge.open("same", targetAddress())
+        val oldToken = fixture.reactor.opened.getValue("same")
+        fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
+        val oldAccepted = AtomicBoolean(false)
+        val data = thread(name = "checked-old-data") {
+            oldAccepted.set(fixture.listener.onData("same", oldToken, byteArrayOf(1)))
+        }
+        assertTrue(callbackChecked.await(2, TimeUnit.SECONDS))
+        val replacementOpened = CountDownLatch(1)
+        val closeStarted = CountDownLatch(1)
+        val closer = thread(name = "data-close-and-reuse") {
+            closeStarted.countDown()
+            fixture.bridge.closeFromRelay("same")
+            fixture.bridge.open("same", targetAddress())
+            replacementOpened.countDown()
+        }
+        assertTrue(closeStarted.await(2, TimeUnit.SECONDS))
+        waitUntil { replacementOpened.count == 0L || closer.state == Thread.State.BLOCKED }
+        val replacementEscapedOldLock = replacementOpened.count == 0L
+
+        allowMailboxCommit.countDown()
+        data.join(2_000)
+        closer.join(2_000)
+        val replacementToken = fixture.reactor.opened.getValue("same")
+        assertTrue(fixture.listener.onData("same", replacementToken, byteArrayOf(2)))
+
+        assertFalse(replacementEscapedOldLock)
+        assertTrue(oldAccepted.get())
+        assertNotEquals(oldToken, replacementToken)
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertEquals(
+            listOf(WireProtocol.encode("data", "same", byteArrayOf(2)).toList()),
+            fixture.emittedFrames().map(ByteArray::toList),
+        )
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `tombstoned close cannot cancel a replacement generation`() {
+        val pauseClose = AtomicBoolean(false)
+        val closeChecked = CountDownLatch(1)
+        val allowCloseCommit = CountDownLatch(1)
+        val fixture = Fixture(
+            maxStreams = 1,
+            beforeMailboxCommit = {
+                if (pauseClose.get()) {
+                    closeChecked.countDown()
+                    allowCloseCommit.await(2, TimeUnit.SECONDS)
+                }
+            },
+        )
+        fixture.bridge.open("same", targetAddress())
+        val oldToken = fixture.reactor.opened.getValue("same")
+        fixture.listener.onTerminal("same", oldToken, TargetTerminalReason.TargetFailure)
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        pauseClose.set(true)
+        val oldClose = thread(name = "tombstoned-old-close") {
+            fixture.bridge.closeFromRelay("same")
+        }
+        assertTrue(closeChecked.await(2, TimeUnit.SECONDS))
+        val replacementOpened = CountDownLatch(1)
+        val opener = thread(name = "replacement-open") {
+            fixture.bridge.open("same", targetAddress())
+            replacementOpened.countDown()
+        }
+        waitUntil { replacementOpened.count == 0L || opener.state == Thread.State.BLOCKED }
+        val replacementEscapedClose = replacementOpened.count == 0L
+
+        allowCloseCommit.countDown()
+        oldClose.join(2_000)
+        opener.join(2_000)
+        val replacementToken = fixture.reactor.opened.getValue("same")
+
+        assertFalse(replacementEscapedClose)
+        assertNotEquals(oldToken, replacementToken)
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertTrue(fixture.listener.onData("same", replacementToken, byteArrayOf(2)))
+        assertEquals(
+            listOf(WireProtocol.encode("data", "same", byteArrayOf(2)).toList()),
+            fixture.emittedFrames().map(ByteArray::toList),
+        )
         assertEquals(emptyList<ErrorClass>(), fixture.failures)
     }
 
@@ -552,10 +908,48 @@ class AgentTargetBridgeTest {
         assertTrue(reactor.shutdown.get())
     }
 
+    @Test
+    fun `shutdown cannot linearize through an in flight open submission`() {
+        val fixture = Fixture(maxStreams = 1)
+        val openEntered = CountDownLatch(1)
+        val allowOpen = CountDownLatch(1)
+        fixture.reactor.openAction = {
+            openEntered.countDown()
+            allowOpen.await(2, TimeUnit.SECONDS)
+            ReactorSubmitResult.Accepted
+        }
+        val opener = thread(name = "bridge-open-race") {
+            fixture.bridge.open("racing", targetAddress())
+        }
+        assertTrue(openEntered.await(2, TimeUnit.SECONDS))
+        val shutdownReturned = CountDownLatch(1)
+        val shutdownStarted = CountDownLatch(1)
+        val closer = thread(name = "bridge-shutdown-race") {
+            shutdownStarted.countDown()
+            fixture.bridge.shutdownAndAwait(2, TimeUnit.SECONDS)
+            shutdownReturned.countDown()
+        }
+
+        try {
+            assertTrue(shutdownStarted.await(2, TimeUnit.SECONDS))
+            waitUntil { shutdownReturned.count == 0L || closer.state == Thread.State.BLOCKED }
+            assertEquals(1L, shutdownReturned.count)
+        } finally {
+            allowOpen.countDown()
+            opener.join(2_000)
+            closer.join(2_000)
+        }
+
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertEquals(listOf(1, 0, 0), fixture.status.activeCounts)
+        assertTrue(fixture.reactor.shutdown.get())
+    }
+
     private class Fixture(
         outbound: OutboundMailbox = OutboundMailbox(),
         openResult: ReactorSubmitResult = ReactorSubmitResult.Accepted,
         maxStreams: Int = 256,
+        beforeMailboxCommit: () -> Unit = {},
     ) {
         lateinit var listener: TargetReactorListener
         val reactor = FakeReactor(openResult)
@@ -570,6 +964,7 @@ class AgentTargetBridgeTest {
             onSessionFailure = failures::add,
             status = status,
             maxStreams = maxStreams,
+            beforeMailboxCommit = beforeMailboxCommit,
         )
         val mailbox = outbound
 
@@ -595,12 +990,14 @@ class AgentTargetBridgeTest {
         data class Write(val streamId: String, val correlationToken: Long, val payload: ByteArray)
 
         val opened = HashMap<String, Long>()
+        @Volatile var openAction: (() -> ReactorSubmitResult)? = null
         val writes = Collections.synchronizedList(mutableListOf<Write>())
         val cancels = Collections.synchronizedList(mutableListOf<Call>())
         val releases = Collections.synchronizedList(mutableListOf<Call>())
         val writeResults = HashMap<String, ReactorSubmitResult>()
         val releaseCalled = CountDownLatch(1)
         @Volatile var writeAction: ((Write) -> ReactorSubmitResult)? = null
+        @Volatile var cancelResult = ReactorSubmitResult.Accepted
         val shutdown = AtomicBoolean(false)
         val shutdownCalled = CountDownLatch(1)
         val allowStopped = CountDownLatch(1)
@@ -616,7 +1013,7 @@ class AgentTargetBridgeTest {
             address: InetSocketAddress,
         ): ReactorSubmitResult {
             opened[streamId] = correlationToken
-            return openResult
+            return openAction?.invoke() ?: openResult
         }
 
         override fun write(
@@ -633,7 +1030,7 @@ class AgentTargetBridgeTest {
 
         override fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult {
             cancels += Call(streamId, correlationToken)
-            return ReactorSubmitResult.Accepted
+            return cancelResult
         }
 
         override fun release(streamId: String, correlationToken: Long): ReactorSubmitResult {

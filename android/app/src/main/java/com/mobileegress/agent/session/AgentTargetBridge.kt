@@ -37,6 +37,7 @@ internal class AgentTargetBridge(
     private val status: AgentTargetStatusSink = NoOpAgentTargetStatusSink,
     maxStreams: Int = AgentCapacity.MAX_STREAMS,
     retainedStreamCapacity: Int = AgentCapacity.RETAINED_STREAM_CAPACITY,
+    private val beforeMailboxCommit: () -> Unit = {},
 ) : TargetReactorListener {
     private val lifecycleLock = Any()
     private val admission = StreamAdmission(maxStreams)
@@ -95,35 +96,68 @@ internal class AgentTargetBridge(
     }
 
     private fun openReserved(streamId: String, address: InetSocketAddress) {
-        val targetReactor = reactor
-        if (targetReactor == null) {
-            admission.release(streamId)
-            onSessionFailure(ErrorClass.Internal)
-            return
-        }
-        val stream = TargetStream(streamId, nextCorrelation.getAndIncrement())
-        outbound.allowData(streamId)
-        streams[streamId] = stream
-        status.onActiveStreams(admission.size)
-        when (targetReactor.open(streamId, stream.correlationToken, address)) {
-            ReactorSubmitResult.Accepted -> Unit
-            ReactorSubmitResult.StreamLimit -> {
-                finalizeStream(stream, ErrorClass.None)
-                reject(streamId, "agent_stream_limit")
+        var sessionFailure: ErrorClass? = null
+        synchronized(lifecycleLock) {
+            if (closed.get()) {
+                admission.release(streamId)
+                return
             }
-            ReactorSubmitResult.SessionSaturated -> onSessionFailure(ErrorClass.Backpressure)
-            ReactorSubmitResult.StreamSaturated,
-            ReactorSubmitResult.MissingOrClosed -> {
-                finalizeStream(stream, ErrorClass.TargetConnect)
-                reject(streamId, "target_failure")
+            val targetReactor = reactor
+            if (targetReactor == null) {
+                admission.release(streamId)
+                sessionFailure = ErrorClass.Internal
+            } else {
+                val stream = TargetStream(streamId, nextCorrelation.getAndIncrement())
+                outbound.allowData(streamId)
+                streams[streamId] = stream
+                status.onActiveStreams(admission.size)
+                // Submission only updates the bounded reactor queue and wakes its selector.
+                // Keeping result handling in the same lifecycle critical section prevents any
+                // insertion, release, control, or status mutation after shutdown linearizes.
+                when (targetReactor.open(streamId, stream.correlationToken, address)) {
+                    ReactorSubmitResult.Accepted -> Unit
+                    ReactorSubmitResult.StreamLimit -> {
+                        finalizeStream(stream, ErrorClass.None)
+                        if (!queueRejected(streamId, "agent_stream_limit")) {
+                            sessionFailure = ErrorClass.Backpressure
+                        }
+                    }
+                    ReactorSubmitResult.SessionSaturated -> {
+                        sessionFailure = ErrorClass.Backpressure
+                    }
+                    ReactorSubmitResult.StreamSaturated,
+                    ReactorSubmitResult.MissingOrClosed -> {
+                        finalizeStream(stream, ErrorClass.TargetConnect)
+                        if (!queueRejected(streamId, "target_failure")) {
+                            sessionFailure = ErrorClass.Backpressure
+                        }
+                    }
+                }
             }
         }
+        sessionFailure?.let(onSessionFailure)
     }
 
     fun reject(streamId: String, code: String, errorClass: ErrorClass = ErrorClass.None) {
+        val queued = synchronized(lifecycleLock) {
+            if (closed.get()) return
+            queueRejected(streamId, code, errorClass)
+        }
+        if (!queued) onSessionFailure(ErrorClass.Backpressure)
+    }
+
+    private fun queueRejected(
+        streamId: String,
+        code: String,
+        errorClass: ErrorClass = ErrorClass.None,
+    ): Boolean {
         tombstones.remember(streamId)
         if (errorClass != ErrorClass.None) status.onError(errorClass)
-        enqueueRequiredControl("rejected", streamId, WireProtocol.finiteErrorCode(code))
+        if (closed.get()) return false
+        return outbound.offerRequiredControl(
+            WireProtocol.encode("rejected", streamId, WireProtocol.finiteErrorCode(code)),
+            streamId = streamId,
+        ) {}
     }
 
     fun routeData(streamId: String, payload: ByteArray) {
@@ -168,11 +202,13 @@ internal class AgentTargetBridge(
     }
 
     fun closeFromRelay(streamId: String) {
-        val stream = streams[streamId]
-        if (stream == null) {
-            val canceledPendingFrame = outbound.cancelStream(streamId)
-            if (canceledPendingFrame || tombstones.contains(streamId)) return
-            throw ProtocolException("Close for an unknown stream")
+        val stream = synchronized(lifecycleLock) {
+            streams[streamId] ?: run {
+                beforeMailboxCommit()
+                val canceledPendingFrame = outbound.cancelStream(streamId)
+                if (canceledPendingFrame || tombstones.contains(streamId)) return
+                throw ProtocolException("Close for an unknown stream")
+            }
         }
         val shouldCancel = synchronized(stream.lock) {
             if (stream.finalized || stream.state == StreamState.Released) return
@@ -213,19 +249,38 @@ internal class AgentTargetBridge(
 
     override fun onOpened(streamId: String, correlationToken: Long) {
         val stream = current(streamId, correlationToken) ?: return
-        val eligible = synchronized(stream.lock) {
-            !stream.finalized && stream.state == StreamState.Open
+        val queued = synchronized(stream.lock) {
+            if (
+                stream.finalized ||
+                stream.state != StreamState.Open ||
+                streams[stream.id] !== stream ||
+                closed.get()
+            ) {
+                return
+            }
+            beforeMailboxCommit()
+            outbound.offerRequiredControl(
+                WireProtocol.encode("opened", streamId),
+                streamId = streamId,
+            ) {}
         }
-        if (eligible) enqueueRequiredControl("opened", streamId)
+        if (!queued) onSessionFailure(ErrorClass.Backpressure)
     }
 
     override fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean {
         val stream = current(streamId, correlationToken) ?: return false
-        val eligible = synchronized(stream.lock) {
-            !stream.finalized && stream.state == StreamState.Open
+        val accepted = synchronized(stream.lock) {
+            if (
+                stream.finalized ||
+                stream.state != StreamState.Open ||
+                streams[stream.id] !== stream ||
+                closed.get()
+            ) {
+                return false
+            }
+            beforeMailboxCommit()
+            outbound.offerData(streamId, WireProtocol.encode("data", streamId, payload))
         }
-        if (!eligible || closed.get()) return false
-        val accepted = outbound.offerData(streamId, WireProtocol.encode("data", streamId, payload))
         if (accepted) status.onBytesDown(payload.size)
         return accepted
     }
@@ -274,10 +329,18 @@ internal class AgentTargetBridge(
     private fun closeAfterRelayData(stream: TargetStream, code: String) {
         val terminalFrame = WireProtocol.encode("close", stream.id, WireProtocol.finiteErrorCode(code))
         val reserved = synchronized(stream.lock) {
-            if (stream.finalized || stream.state != StreamState.Open || closed.get()) return
+            if (
+                stream.finalized ||
+                stream.state != StreamState.Open ||
+                streams[stream.id] !== stream ||
+                closed.get()
+            ) {
+                return
+            }
             outbound.offerRequiredControlAfterData(
                 stream.id,
                 terminalFrame,
+                beforeEmission = { beginGracefulCloseEmission(stream) },
                 onEmitted = { onGracefulCloseEmitted(stream) },
             ) {}.also { accepted ->
                 if (accepted) stream.state = StreamState.GracefulPending
@@ -286,11 +349,18 @@ internal class AgentTargetBridge(
         if (!reserved) onSessionFailure(ErrorClass.Backpressure)
     }
 
-    private fun onGracefulCloseEmitted(stream: TargetStream) {
-        val shouldRelease = synchronized(stream.lock) {
-            if (stream.finalized || stream.state != StreamState.GracefulPending) return
+    private fun beginGracefulCloseEmission(stream: TargetStream): Boolean =
+        synchronized(stream.lock) {
+            if (stream.finalized || stream.state != StreamState.GracefulPending) {
+                return@synchronized false
+            }
             stream.state = StreamState.ReleasePending
             true
+        }
+
+    private fun onGracefulCloseEmitted(stream: TargetStream) {
+        val shouldRelease = synchronized(stream.lock) {
+            !stream.finalized && stream.state == StreamState.ReleasePending
         }
         if (!shouldRelease) return
         when (reactor?.release(stream.id, stream.correlationToken)) {
@@ -321,52 +391,59 @@ internal class AgentTargetBridge(
     }
 
     private fun failStream(stream: TargetStream, code: String, errorClass: ErrorClass) {
-        val shouldFail = synchronized(stream.lock) {
-            if (stream.finalized || stream.state != StreamState.Open || closed.get()) return
+        val queued = synchronized(stream.lock) {
+            if (
+                stream.finalized ||
+                stream.state != StreamState.Open ||
+                streams[stream.id] !== stream ||
+                closed.get()
+            ) {
+                return
+            }
             stream.state = StreamState.ForcedPending
-            true
+            beforeMailboxCommit()
+            outbound.blockAndDiscardData(stream.id)
+            outbound.offerRequiredControl(
+                WireProtocol.encode("close", stream.id, WireProtocol.finiteErrorCode(code)),
+                streamId = stream.id,
+            ) {}
         }
-        if (!shouldFail) return
-        outbound.blockAndDiscardData(stream.id)
-        val queued = outbound.offerRequiredControl(
-            WireProtocol.encode("close", stream.id, WireProtocol.finiteErrorCode(code)),
-            streamId = stream.id,
-        ) {}
         if (!queued) onSessionFailure(ErrorClass.Backpressure)
         finalizeStream(stream, errorClass)
     }
 
     private fun rejectUnopenedStream(stream: TargetStream, code: String, errorClass: ErrorClass) {
-        outbound.blockAndDiscardData(stream.id)
+        val queued = synchronized(stream.lock) {
+            if (
+                stream.finalized ||
+                stream.state != StreamState.Open ||
+                streams[stream.id] !== stream ||
+                closed.get()
+            ) {
+                return
+            }
+            stream.state = StreamState.ForcedPending
+            outbound.blockAndDiscardData(stream.id)
+            outbound.offerRequiredControl(
+                WireProtocol.encode("rejected", stream.id, WireProtocol.finiteErrorCode(code)),
+                streamId = stream.id,
+            ) {}
+        }
+        if (!queued) onSessionFailure(ErrorClass.Backpressure)
         finalizeStream(stream, errorClass)
-        reject(stream.id, code)
     }
 
     private fun finalizeStream(stream: TargetStream, errorClass: ErrorClass) {
-        val shouldFinalize = synchronized(stream.lock) {
+        synchronized(stream.lock) {
             if (stream.finalized) return
             stream.finalized = true
             stream.state = StreamState.Released
-            true
+            tombstones.remember(stream.id)
+            streams.remove(stream.id, stream)
+            admission.release(stream.id)
+            status.onActiveStreams(admission.size)
+            if (errorClass != ErrorClass.None) status.onError(errorClass)
         }
-        if (!shouldFinalize) return
-        tombstones.remember(stream.id)
-        streams.remove(stream.id, stream)
-        admission.release(stream.id)
-        status.onActiveStreams(admission.size)
-        if (errorClass != ErrorClass.None) status.onError(errorClass)
-    }
-
-    private fun enqueueRequiredControl(
-        type: String,
-        streamId: String = "",
-        payload: ByteArray = byteArrayOf(),
-    ): Boolean {
-        if (closed.get()) return false
-        return outbound.offerRequiredControl(
-            WireProtocol.encode(type, streamId, payload),
-            streamId = streamId.takeIf(String::isNotEmpty),
-        ) { onSessionFailure(ErrorClass.Backpressure) }
     }
 
     private fun current(streamId: String, correlationToken: Long): TargetStream? =

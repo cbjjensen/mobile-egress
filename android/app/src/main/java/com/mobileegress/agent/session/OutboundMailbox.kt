@@ -13,6 +13,7 @@ class OutboundFrame internal constructor(
     internal val streamId: String? = null,
     internal val streamCancellation: OutboundCancellation? = null,
     internal val dataCancellation: OutboundCancellation? = null,
+    internal val beforeEmission: (() -> Boolean)? = null,
     internal val onEmitted: (() -> Unit)? = null,
 )
 
@@ -106,6 +107,7 @@ class OutboundMailbox(
     fun offerRequiredControlAfterData(
         streamId: String,
         frame: ByteArray,
+        beforeEmission: () -> Boolean = { true },
         onEmitted: () -> Unit = {},
         onSaturated: () -> Unit,
     ): Boolean {
@@ -115,6 +117,7 @@ class OutboundMailbox(
             val outboundFrame = createFrame(
                 bytes = frame,
                 streamId = streamId,
+                beforeEmission = beforeEmission,
                 onEmitted = onEmitted,
             )
             controls.addLast(ControlFrame(frame = outboundFrame, afterDataStreamId = streamId))
@@ -141,6 +144,10 @@ class OutboundMailbox(
     }
 
     fun emit(frame: OutboundFrame, sender: (ByteArray) -> Boolean): OutboundEmission {
+        if (frame.beforeEmission?.invoke() == false) {
+            synchronized(lock) { release(frame) }
+            return OutboundEmission.Canceled
+        }
         var emittedCallback: (() -> Unit)? = null
         val result = synchronized(lock) {
             val canceledStream = frame.streamCancellation?.canceled == true
@@ -224,6 +231,7 @@ class OutboundMailbox(
         bytes: ByteArray,
         streamId: String?,
         isData: Boolean = false,
+        beforeEmission: (() -> Boolean)? = null,
         onEmitted: (() -> Unit)? = null,
     ): OutboundFrame {
         val streamCancellation = streamId?.let {
@@ -237,6 +245,7 @@ class OutboundMailbox(
             streamId = streamId,
             streamCancellation = streamCancellation,
             dataCancellation = dataCancellation,
+            beforeEmission = beforeEmission,
             onEmitted = onEmitted,
         )
     }
