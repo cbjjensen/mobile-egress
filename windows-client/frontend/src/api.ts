@@ -17,7 +17,12 @@ export type Status = {
 export type AgentQr = { imageDataUrl: string; expiresAt: string }
 export type EndpointMigration = AgentQr & { updatedNodes: string[]; failedNodes: string[] }
 
+export type DesktopPlatform = 'windows' | 'macos'
+export type RelayServiceState = 'not-required' | 'not-registered' | 'approval-required' | 'enabled' | 'version-mismatch' | 'unavailable'
+
 export type BridgeStatus = {
+  platform: DesktopPlatform
+  relayServiceState: RelayServiceState
   tailscaleInstalled: boolean
   tailscaleOnline: boolean
   funnelReady: boolean
@@ -106,6 +111,6 @@ declare global {
 
 export function api(): DesktopAPI {
   const backend = window.go?.desktop?.DesktopApp
-  if (!backend) throw new Error('Wails backend unavailable. Start this UI with the Windows client.')
+  if (!backend) throw new Error('Wails backend unavailable. Start this UI with the desktop controller.')
   return backend
 }
