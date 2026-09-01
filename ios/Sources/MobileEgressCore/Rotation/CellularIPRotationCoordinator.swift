@@ -33,7 +33,7 @@ public protocol CellularIPRotationTunnelControlling: AnyObject, Sendable {
 @MainActor
 public final class CellularIPRotationCoordinator<
     Tunnel: CellularIPRotationTunnelControlling
-> {
+> where Tunnel.RotationReceipt == TunnelRotationReceipt {
     public typealias StateChangeHandler = @MainActor @Sendable (CellularIPRotationState) -> Void
     public typealias CellularChangeHandler = @MainActor @Sendable (Bool) -> Void
 
@@ -61,9 +61,12 @@ public final class CellularIPRotationCoordinator<
     private var attemptGeneration: UInt64 = 0
     private var recoveringAttemptID: UInt64?
     private var preserveFreshRecoveryPauseReceipt = false
+    private var recoveredPauseAlreadyCompleted = false
     private var requiresTerminalTunnelResume = false
+    private var checkpointPauseDisposition: CellularIPRotationPauseDisposition = .legacyUnknown
+    private var pendingRetirementFailureAttemptID: UInt64?
     private var timeoutDeadline: Date?
-    private var pauseReceipt: Tunnel.RotationReceipt?
+    private var pauseReceipt: TunnelRotationReceipt?
     private var stateChangeHandler: StateChangeHandler?
     private var cellularChangeHandler: CellularChangeHandler?
 
@@ -136,7 +139,10 @@ public final class CellularIPRotationCoordinator<
         pauseReceipt = nil
         recoveringAttemptID = nil
         preserveFreshRecoveryPauseReceipt = false
+        recoveredPauseAlreadyCompleted = false
         requiresTerminalTunnelResume = false
+        checkpointPauseDisposition = .pending
+        pendingRetirementFailureAttemptID = nil
         timeoutDeadline = nil
         await apply(
             .requested(
@@ -189,8 +195,9 @@ public final class CellularIPRotationCoordinator<
             cancelOwnedTasks()
             pauseReceipt = nil
             recoveringAttemptID = attemptID
-            preserveFreshRecoveryPauseReceipt = checkpoint.state.isPrePauseRecoveryState
-            requiresTerminalTunnelResume = !preserveFreshRecoveryPauseReceipt
+            checkpointPauseDisposition = checkpoint.pauseDisposition
+            pendingRetirementFailureAttemptID = nil
+            configureRecoveredPauseOwnership(from: checkpoint)
             timeoutDeadline = checkpoint.timeoutDeadline
             await apply(
                 .recover(checkpoint: checkpoint, at: clock.currentDate()),
@@ -210,12 +217,36 @@ public final class CellularIPRotationCoordinator<
         pauseReceipt = nil
         recoveringAttemptID = nextAttemptID
         preserveFreshRecoveryPauseReceipt = false
+        recoveredPauseAlreadyCompleted = false
         requiresTerminalTunnelResume = true
+        checkpointPauseDisposition = .legacyUnknown
+        pendingRetirementFailureAttemptID = nil
         timeoutDeadline = nil
         await apply(
             .recoveryFailed(attemptID: nextAttemptID),
             expectedGeneration: attemptGeneration
         )
+    }
+
+    private func configureRecoveredPauseOwnership(
+        from checkpoint: CellularIPRotationCheckpoint
+    ) {
+        switch checkpoint.pauseDisposition {
+        case let .paused(receipt):
+            pauseReceipt = receipt
+            preserveFreshRecoveryPauseReceipt = false
+            recoveredPauseAlreadyCompleted = true
+            requiresTerminalTunnelResume = true
+        case .pending:
+            let isPrePause = checkpoint.state.isPrePauseRecoveryState
+            preserveFreshRecoveryPauseReceipt = isPrePause
+            recoveredPauseAlreadyCompleted = false
+            requiresTerminalTunnelResume = !isPrePause
+        case .legacyUnknown:
+            preserveFreshRecoveryPauseReceipt = checkpoint.state.isAwaitingConfirmation
+            recoveredPauseAlreadyCompleted = false
+            requiresTerminalTunnelResume = !checkpoint.state.isAwaitingConfirmation
+        }
     }
 
     private func startPathObservationIfNeeded() {
@@ -272,13 +303,7 @@ public final class CellularIPRotationCoordinator<
 
         if state.isActive, !skipCheckpointSave {
             do {
-                try checkpointStore.save(
-                    CellularIPRotationCheckpoint(
-                        state: state,
-                        savedAt: clock.currentDate(),
-                        timeoutDeadline: timeoutDeadline
-                    )
-                )
+                try saveActiveCheckpoint()
             } catch {
                 try? checkpointStore.clear()
                 if let attemptID = state.attemptID {
@@ -297,14 +322,37 @@ public final class CellularIPRotationCoordinator<
             cancelOwnedTasks()
             attemptGeneration &+= 1
             timeoutDeadline = nil
-            try? checkpointStore.retire(attemptID: terminalAttemptID)
+            pendingRetirementFailureAttemptID = nil
+            do {
+                try checkpointStore.retire(attemptID: terminalAttemptID)
+            } catch {
+                pendingRetirementFailureAttemptID = terminalAttemptID
+            }
             await notificationCue.cancel(attemptID: terminalAttemptID)
         }
 
         let effectGeneration = attemptGeneration
+        var schedulesResume = false
         for effect in transition.effects {
+            if case .resumeAgent = effect {
+                schedulesResume = true
+            }
             interpret(effect, generation: effectGeneration)
         }
+        if let terminalAttemptID, !schedulesResume {
+            reportRetirementFailureIfNeeded(attemptID: terminalAttemptID)
+        }
+    }
+
+    private func saveActiveCheckpoint() throws {
+        try checkpointStore.save(
+            CellularIPRotationCheckpoint(
+                state: state,
+                savedAt: clock.currentDate(),
+                timeoutDeadline: timeoutDeadline,
+                pauseDisposition: checkpointPauseDisposition
+            )
+        )
     }
 
     private func updateDeadline(
@@ -336,6 +384,9 @@ public final class CellularIPRotationCoordinator<
     private func interpret(_ effect: CellularIPRotationEffect, generation: UInt64) {
         switch effect {
         case let .pauseAgentAndStreams(attemptID):
+            guard recoveringAttemptID != attemptID || !recoveredPauseAlreadyCompleted else {
+                return
+            }
             schedulePause(attemptID: attemptID, generation: generation)
         case let .probeBefore(attemptID, _):
             scheduleProbe(attemptID: attemptID, isBefore: true, generation: generation)
@@ -377,11 +428,27 @@ public final class CellularIPRotationCoordinator<
             do {
                 let receipt = try await self.tunnel.pauseForRotation()
                 guard self.isCurrent(attemptID: attemptID, generation: generation) else { return }
-                if self.recoveringAttemptID != attemptID
-                    || self.preserveFreshRecoveryPauseReceipt {
+                let capturedOriginalIntent = self.recoveringAttemptID != attemptID
+                    || self.preserveFreshRecoveryPauseReceipt
+                if capturedOriginalIntent {
                     self.pauseReceipt = receipt
+                    self.checkpointPauseDisposition = .paused(receipt)
                 }
                 self.requiresTerminalTunnelResume = true
+                guard capturedOriginalIntent else { return }
+                do {
+                    try self.saveActiveCheckpoint()
+                } catch {
+                    guard self.isCurrent(
+                        attemptID: attemptID,
+                        generation: generation
+                    ) else { return }
+                    await self.apply(
+                        .cancelled(attemptID: attemptID),
+                        expectedGeneration: generation,
+                        skipCheckpointSave: true
+                    )
+                }
             } catch {
                 guard self.isCurrent(attemptID: attemptID, generation: generation) else { return }
                 if self.recoveringAttemptID != attemptID
@@ -491,30 +558,50 @@ public final class CellularIPRotationCoordinator<
         resumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard self.requiresTerminalTunnelResume else {
-                self.pauseReceipt = nil
-                self.recoveringAttemptID = nil
-                self.preserveFreshRecoveryPauseReceipt = false
+                self.finishTunnelRestoration(attemptID: attemptID)
                 return
             }
             do {
                 try await self.tunnel.resumeAfterRotation(receipt)
                 guard generation == self.attemptGeneration else { return }
-                self.pauseReceipt = nil
-                self.recoveringAttemptID = nil
-                self.preserveFreshRecoveryPauseReceipt = false
-                self.requiresTerminalTunnelResume = false
+                self.finishTunnelRestoration(attemptID: attemptID)
             } catch {
                 guard generation == self.attemptGeneration else { return }
-                self.pauseReceipt = nil
-                self.recoveringAttemptID = nil
-                self.preserveFreshRecoveryPauseReceipt = false
-                self.requiresTerminalTunnelResume = false
+                if self.pendingRetirementFailureAttemptID == attemptID {
+                    self.finishTunnelRestoration(attemptID: attemptID)
+                    return
+                }
+                self.clearTunnelRestorationOwnership()
                 await self.apply(
                     .resumeFailed(attemptID: attemptID),
                     expectedGeneration: generation
                 )
             }
         }
+    }
+
+    private func finishTunnelRestoration(attemptID: UInt64) {
+        clearTunnelRestorationOwnership()
+        reportRetirementFailureIfNeeded(attemptID: attemptID)
+    }
+
+    private func clearTunnelRestorationOwnership() {
+        pauseReceipt = nil
+        recoveringAttemptID = nil
+        preserveFreshRecoveryPauseReceipt = false
+        recoveredPauseAlreadyCompleted = false
+        requiresTerminalTunnelResume = false
+        checkpointPauseDisposition = .legacyUnknown
+    }
+
+    private func reportRetirementFailureIfNeeded(attemptID: UInt64) {
+        guard pendingRetirementFailureAttemptID == attemptID else { return }
+        pendingRetirementFailureAttemptID = nil
+        let transition = reducer.reduce(
+            .checkpointRetirementFailed(attemptID: attemptID)
+        )
+        state = transition.state
+        stateChangeHandler?(state)
     }
 
     private func isCurrent(attemptID: UInt64, generation: UInt64) -> Bool {
@@ -538,6 +625,11 @@ public final class CellularIPRotationCoordinator<
 }
 
 private extension CellularIPRotationState {
+    var isAwaitingConfirmation: Bool {
+        if case .awaitingConfirmation = self { return true }
+        return false
+    }
+
     var isPrePauseRecoveryState: Bool {
         switch self {
         case .awaitingConfirmation, .preparing:

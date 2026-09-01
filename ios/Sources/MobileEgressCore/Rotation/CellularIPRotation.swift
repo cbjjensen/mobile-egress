@@ -34,6 +34,7 @@ public enum CellularIPRotationFailure: String, Codable, Equatable, Sendable {
     case cancelled
     case recoveryExpired
     case tunnelResumeFailed
+    case checkpointRetirementFailed
 }
 
 public enum CellularIPRotationState: Codable, Equatable, Sendable {
@@ -157,6 +158,7 @@ public enum CellularIPRotationEvent: Codable, Equatable, Sendable {
     case recover(checkpoint: CellularIPRotationCheckpoint, at: Date)
     case recoveryFailed(attemptID: UInt64)
     case resumeFailed(attemptID: UInt64)
+    case checkpointRetirementFailed(attemptID: UInt64)
     case reset
 }
 
@@ -186,12 +188,19 @@ public struct CellularIPRotationTransition: Codable, Equatable, Sendable {
     }
 }
 
+public enum CellularIPRotationPauseDisposition: Codable, Equatable, Sendable {
+    case legacyUnknown
+    case pending
+    case paused(TunnelRotationReceipt)
+}
+
 public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
     public static let validityDuration: TimeInterval = 5 * 60
 
     public let state: CellularIPRotationState
     public let savedAt: Date
     public let timeoutDeadline: Date?
+    public let pauseDisposition: CellularIPRotationPauseDisposition
 
     public var expiresAt: Date {
         savedAt.addingTimeInterval(Self.validityDuration)
@@ -200,11 +209,13 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
     public init(
         state: CellularIPRotationState,
         savedAt: Date,
-        timeoutDeadline: Date? = nil
+        timeoutDeadline: Date? = nil,
+        pauseDisposition: CellularIPRotationPauseDisposition = .legacyUnknown
     ) {
         self.state = state
         self.savedAt = savedAt
         self.timeoutDeadline = timeoutDeadline
+        self.pauseDisposition = pauseDisposition
     }
 
     public func isExpired(at date: Date) -> Bool {
@@ -216,6 +227,32 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
         let remaining = timeoutDeadline.timeIntervalSince(date)
         guard remaining > 0 else { return 0 }
         return Int(remaining.rounded(.up))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case savedAt
+        case timeoutDeadline
+        case pauseDisposition
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        state = try container.decode(CellularIPRotationState.self, forKey: .state)
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+        timeoutDeadline = try container.decodeIfPresent(Date.self, forKey: .timeoutDeadline)
+        pauseDisposition = try container.decodeIfPresent(
+            CellularIPRotationPauseDisposition.self,
+            forKey: .pauseDisposition
+        ) ?? .legacyUnknown
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(state, forKey: .state)
+        try container.encode(savedAt, forKey: .savedAt)
+        try container.encodeIfPresent(timeoutDeadline, forKey: .timeoutDeadline)
+        try container.encode(pauseDisposition, forKey: .pauseDisposition)
     }
 }
 
@@ -265,6 +302,8 @@ public struct CellularIPRotationReducer: Sendable {
             transition = recoveryFailed(attemptID: attemptID)
         case let .resumeFailed(attemptID):
             transition = resumeFailed(attemptID: attemptID)
+        case let .checkpointRetirementFailed(attemptID):
+            transition = checkpointRetirementFailed(attemptID: attemptID)
         case .reset:
             transition = reset()
         }
@@ -610,13 +649,18 @@ public struct CellularIPRotationReducer: Sendable {
         case .awaitingConfirmation:
             CellularIPRotationTransition(state: checkpoint.state)
         case let .preparing(_, networkToken, _, _, _):
-            CellularIPRotationTransition(
-                state: checkpoint.state,
-                effects: [
-                    .pauseAgentAndStreams(attemptID: attemptID),
-                    .probeBefore(attemptID: attemptID, networkToken: networkToken),
-                ]
-            )
+            switch checkpoint.pauseDisposition {
+            case .pending, .paused:
+                CellularIPRotationTransition(
+                    state: checkpoint.state,
+                    effects: [
+                        .pauseAgentAndStreams(attemptID: attemptID),
+                        .probeBefore(attemptID: attemptID, networkToken: networkToken),
+                    ]
+                )
+            case .legacyUnknown:
+                terminalFailure(.recoveryExpired, attemptID: attemptID)
+            }
         case .awaitingAirplaneMode:
             recoverAwaitingAirplaneMode(
                 checkpoint.state,
@@ -767,6 +811,18 @@ public struct CellularIPRotationReducer: Sendable {
     private func recoveryFailed(attemptID: UInt64) -> CellularIPRotationTransition {
         guard state == .idle, isNewAttemptID(attemptID) else { return unchanged() }
         return terminalFailure(.recoveryExpired, attemptID: attemptID)
+    }
+
+    private func checkpointRetirementFailed(
+        attemptID: UInt64
+    ) -> CellularIPRotationTransition {
+        guard !state.isActive else { return unchanged() }
+        return CellularIPRotationTransition(
+            state: .failed(
+                attemptID: attemptID,
+                failure: .checkpointRetirementFailed
+            )
+        )
     }
 
     private func reset() -> CellularIPRotationTransition {

@@ -13,9 +13,14 @@ public protocol TunnelRotationPreferenceSession: TunnelPreferenceSession {
     var isOnDemandEnabled: Bool { get }
 }
 
-public struct TunnelRotationReceipt: Sendable {
-    fileprivate let wasRunning: Bool
-    fileprivate let wasOnDemandEnabled: Bool
+public struct TunnelRotationReceipt: Codable, Equatable, Sendable {
+    let wasRunning: Bool
+    let wasOnDemandEnabled: Bool
+
+    init(wasRunning: Bool, wasOnDemandEnabled: Bool) {
+        self.wasRunning = wasRunning
+        self.wasOnDemandEnabled = wasOnDemandEnabled
+    }
 }
 
 @MainActor

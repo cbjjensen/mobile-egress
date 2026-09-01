@@ -43,6 +43,7 @@ public final class AppGroupCellularIPRotationCheckpointStore:
     private let lock = NSLock()
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let atomicWriter: @Sendable (Data, URL) throws -> Void
     private let fileRemover: @Sendable (URL) throws -> Void
     let checkpointURL: URL
     var retirementURL: URL { checkpointURL }
@@ -86,6 +87,9 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         containerURL: URL,
         encoder: JSONEncoder = .init(),
         decoder: JSONDecoder = .init(),
+        atomicWriter: @escaping @Sendable (Data, URL) throws -> Void = {
+            try $0.write(to: $1, options: .atomic)
+        },
         fileRemover: @escaping @Sendable (URL) throws -> Void = {
             try FileManager.default.removeItem(at: $0)
         }
@@ -93,6 +97,7 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         checkpointURL = containerURL.appendingPathComponent(Self.filename, isDirectory: false)
         self.encoder = encoder
         self.decoder = decoder
+        self.atomicWriter = atomicWriter
         self.fileRemover = fileRemover
     }
 
@@ -103,7 +108,7 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         let data: Data
         do {
             data = try encoder.encode(checkpoint)
-            try data.write(to: checkpointURL, options: .atomic)
+            try atomicWriter(data, checkpointURL)
         } catch let error as CellularIPRotationCheckpointStoreError {
             throw error
         } catch {
@@ -156,15 +161,32 @@ public final class AppGroupCellularIPRotationCheckpointStore:
     public func retire(attemptID: UInt64) throws {
         lock.lock()
         defer { lock.unlock() }
+        var wroteTombstone = false
         do {
             let tombstone = try encoder.encode(
                 RetirementTombstone(retiredAttemptID: attemptID)
             )
-            try tombstone.write(to: checkpointURL, options: .atomic)
+            try atomicWriter(tombstone, checkpointURL)
+            wroteTombstone = true
         } catch {
+            wroteTombstone = false
+        }
+
+        var deletedCheckpoint = false
+        if FileManager.default.fileExists(atPath: checkpointURL.path) {
+            do {
+                try fileRemover(checkpointURL)
+                deletedCheckpoint = true
+            } catch {
+                deletedCheckpoint = false
+            }
+        } else {
+            deletedCheckpoint = true
+        }
+
+        guard wroteTombstone || deletedCheckpoint else {
             throw CellularIPRotationCheckpointStoreError.writeFailed
         }
-        try? fileRemover(checkpointURL)
     }
 
     private static func validate(_ checkpoint: CellularIPRotationCheckpoint) throws {

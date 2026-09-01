@@ -534,6 +534,13 @@ private func failedRotationPresentation(
             badge: "Resume failed",
             tone: .error
         )
+    case .checkpointRetirementFailed:
+        DashboardStatusPresentation(
+            headline: "Rotation storage needs attention",
+            summary: "Agent restoration was attempted, but the saved rotation could not be retired. Restart the Agent before another rotation.",
+            badge: "Storage failed",
+            tone: .error
+        )
     }
 }
 
@@ -670,6 +677,7 @@ private extension CellularIPRotationFailure {
         case .cancelled: "cancelled"
         case .recoveryExpired: "recovery expired"
         case .tunnelResumeFailed: "tunnel resume failed"
+        case .checkpointRetirementFailed: "checkpoint retirement failed"
         }
     }
 }
