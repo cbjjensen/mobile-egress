@@ -333,6 +333,32 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.isRotationEnabled)
     }
 
+    func testCheckpointRetirementFailureHasFiniteSafeRecoveryCopy() {
+        let status = AgentStatusSnapshot(
+            agentState: .running,
+            cellular: .available,
+            relay: .connected,
+            activeStreamCount: 0,
+            bytesUploaded: 0,
+            bytesDownloaded: 0,
+            errorClass: .none,
+            rotation: .failed(
+                attemptID: 41,
+                failure: .checkpointRetirementFailed
+            )
+        )
+
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(isEnrolled: true, status: status)
+        )
+        let copied = status.safeCopiedStatus(isEnrolled: true)
+
+        XCTAssertEqual(presentation.headline, "Rotation storage needs attention")
+        XCTAssertEqual(presentation.badge, "Storage failed")
+        XCTAssertTrue(presentation.summary.contains("Agent restoration was attempted"))
+        XCTAssertTrue(copied.contains("IP rotation: checkpoint retirement failed"))
+    }
+
     func testByteMetricsUseStableHumanReadableUnits() {
         XCTAssertEqual(formatMobileEgressByteCount(0), "0 B")
         XCTAssertEqual(formatMobileEgressByteCount(1_023), "1023 B")
