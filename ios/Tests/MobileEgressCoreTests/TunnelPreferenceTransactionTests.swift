@@ -2,13 +2,21 @@ import XCTest
 @testable import MobileEgressCore
 
 final class TunnelPreferenceTransactionTests: XCTestCase {
-    func testRotationPausePersistsDisabledOnDemandBeforeStoppingAndReturnsOpaqueIntent() async throws {
+    func testRotationIntentCaptureIsReadOnlyAndPausePersistsDisabledOnDemandBeforeStopping() async throws {
         let session = await RecordingTunnelPreferenceSession(
             isRotationTunnelRunning: true,
             isOnDemandEnabled: true
         )
 
-        _ = try await TunnelRotationPreferenceTransaction.pause(using: session)
+        let receipt = try await TunnelRotationPreferenceTransaction.captureIntent(using: session)
+
+        let intentAfterCapture = await session.intentSnapshot()
+        let captureOperations = await session.operations
+        XCTAssertEqual(intentAfterCapture.isRunning, true)
+        XCTAssertEqual(intentAfterCapture.isOnDemandEnabled, true)
+        XCTAssertEqual(captureOperations, [.load])
+
+        try await TunnelRotationPreferenceTransaction.pause(using: session, receipt: receipt)
 
         let operations = await session.operations
         XCTAssertEqual(operations, [
@@ -29,8 +37,10 @@ final class TunnelPreferenceTransactionTests: XCTestCase {
             isRotationTunnelRunning: false,
             isOnDemandEnabled: true
         )
-        let runningReceipt = try await TunnelRotationPreferenceTransaction.pause(using: running)
-        let stoppedReceipt = try await TunnelRotationPreferenceTransaction.pause(using: stopped)
+        let runningReceipt = try await TunnelRotationPreferenceTransaction.captureIntent(using: running)
+        let stoppedReceipt = try await TunnelRotationPreferenceTransaction.captureIntent(using: stopped)
+        try await TunnelRotationPreferenceTransaction.pause(using: running, receipt: runningReceipt)
+        try await TunnelRotationPreferenceTransaction.pause(using: stopped, receipt: stoppedReceipt)
         await running.resetOperations()
         await stopped.resetOperations()
 
@@ -62,7 +72,8 @@ final class TunnelPreferenceTransactionTests: XCTestCase {
         )
 
         do {
-            _ = try await TunnelRotationPreferenceTransaction.pause(using: session)
+            let receipt = try await TunnelRotationPreferenceTransaction.captureIntent(using: session)
+            try await TunnelRotationPreferenceTransaction.pause(using: session, receipt: receipt)
             XCTFail("Expected preference save to fail")
         } catch {
             XCTAssertEqual(error as? RecordingPreferenceError, .injected)
@@ -208,6 +219,10 @@ private final class RecordingTunnelPreferenceSession: TunnelRotationPreferenceSe
 
     func resetOperations() {
         operations = []
+    }
+
+    func intentSnapshot() -> (isRunning: Bool, isOnDemandEnabled: Bool) {
+        (isRotationTunnelRunning, isOnDemandEnabled)
     }
 
     func loadPreferences() async throws {

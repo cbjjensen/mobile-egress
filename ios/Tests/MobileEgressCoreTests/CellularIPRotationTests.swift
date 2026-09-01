@@ -406,7 +406,11 @@ final class CellularIPRotationTests: XCTestCase {
             before: beforeSnapshot,
             returnedNetworkToken: nil
         )
-        let checkpoint = CellularIPRotationCheckpoint(state: state, savedAt: savedAt)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: state,
+            savedAt: savedAt,
+            pauseDisposition: pausedRunningIntent
+        )
         let encoded = try JSONEncoder().encode(checkpoint)
         let decoded = try JSONDecoder().decode(CellularIPRotationCheckpoint.self, from: encoded)
 
@@ -503,7 +507,8 @@ final class CellularIPRotationTests: XCTestCase {
                 before: beforeSnapshot
             ),
             savedAt: savedAt,
-            timeoutDeadline: savedAt.addingTimeInterval(120)
+            timeoutDeadline: savedAt.addingTimeInterval(120),
+            pauseDisposition: pausedRunningIntent
         )
         var recovering = CellularIPRotationReducer()
 
@@ -539,7 +544,8 @@ final class CellularIPRotationTests: XCTestCase {
                 before: beforeSnapshot
             ),
             savedAt: phaseStartedAt.addingTimeInterval(90),
-            timeoutDeadline: phaseStartedAt.addingTimeInterval(120)
+            timeoutDeadline: phaseStartedAt.addingTimeInterval(120),
+            pauseDisposition: pausedRunningIntent
         )
         var recovering = CellularIPRotationReducer()
 
@@ -571,7 +577,8 @@ final class CellularIPRotationTests: XCTestCase {
         let checkpoint = CellularIPRotationCheckpoint(
             state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
             savedAt: savedAt,
-            timeoutDeadline: savedAt.addingTimeInterval(180)
+            timeoutDeadline: savedAt.addingTimeInterval(180),
+            pauseDisposition: pausedRunningIntent
         )
         var recovering = CellularIPRotationReducer()
 
@@ -601,7 +608,8 @@ final class CellularIPRotationTests: XCTestCase {
         let checkpoint = CellularIPRotationCheckpoint(
             state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
             savedAt: phaseStartedAt.addingTimeInterval(150),
-            timeoutDeadline: phaseStartedAt.addingTimeInterval(180)
+            timeoutDeadline: phaseStartedAt.addingTimeInterval(180),
+            pauseDisposition: pausedRunningIntent
         )
         var recovering = CellularIPRotationReducer()
 
@@ -632,7 +640,8 @@ final class CellularIPRotationTests: XCTestCase {
         let checkpoint = CellularIPRotationCheckpoint(
             state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
             savedAt: savedAt,
-            timeoutDeadline: savedAt.addingTimeInterval(80)
+            timeoutDeadline: savedAt.addingTimeInterval(80),
+            pauseDisposition: pausedRunningIntent
         )
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
@@ -671,7 +680,8 @@ final class CellularIPRotationTests: XCTestCase {
         let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
         let checkpoint = CellularIPRotationCheckpoint(
             state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
-            savedAt: savedAt
+            savedAt: savedAt,
+            pauseDisposition: pausedRunningIntent
         )
 
         XCTAssertNil(checkpoint.timeoutDeadline)
@@ -696,7 +706,8 @@ final class CellularIPRotationTests: XCTestCase {
                 before: beforeSnapshot,
                 returnedNetworkToken: nil
             ),
-            savedAt: savedAt
+            savedAt: savedAt,
+            pauseDisposition: pausedRunningIntent
         )
         var recoveringHold = CellularIPRotationReducer()
 
@@ -742,7 +753,8 @@ final class CellularIPRotationTests: XCTestCase {
                 before: beforeSnapshot,
                 returnedNetworkToken: "cell-2"
             ),
-            savedAt: savedAt
+            savedAt: savedAt,
+            pauseDisposition: pausedRunningIntent
         )
         var reducer = CellularIPRotationReducer()
 
@@ -783,6 +795,10 @@ final class CellularIPRotationTests: XCTestCase {
 
     private var beforeSnapshot: PublicIPSnapshot {
         PublicIPSnapshot(ipv4: "198.51.100.10", ipv6: nil)
+    }
+
+    private var pausedRunningIntent: CellularIPRotationPauseDisposition {
+        .paused(TunnelRotationReceipt(wasRunning: true, wasOnDemandEnabled: true))
     }
 
     private func availability(

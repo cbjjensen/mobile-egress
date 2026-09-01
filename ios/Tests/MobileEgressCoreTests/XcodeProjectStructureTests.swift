@@ -231,8 +231,11 @@ final class XcodeProjectStructureTests: XCTestCase {
 
         XCTAssertTrue(manager.contains("TunnelRotationPreferenceSession"))
         XCTAssertTrue(manager.contains("CellularIPRotationTunnelControlling"))
-        XCTAssertTrue(manager.contains("func pauseForRotation()"))
-        XCTAssertTrue(manager.contains("TunnelRotationPreferenceTransaction.pause(using: self)"))
+        XCTAssertTrue(manager.contains("func captureRotationIntent()"))
+        XCTAssertTrue(manager.contains("TunnelRotationPreferenceTransaction.captureIntent(using: self)"))
+        XCTAssertTrue(manager.contains("func pauseForRotation(using receipt:"))
+        XCTAssertTrue(manager.contains("TunnelRotationPreferenceTransaction.pause("))
+        XCTAssertTrue(manager.contains("receipt: receipt"))
         XCTAssertTrue(manager.contains("func resumeAfterRotation("))
         XCTAssertTrue(manager.contains("TunnelRotationPreferenceTransaction.resume("))
 
