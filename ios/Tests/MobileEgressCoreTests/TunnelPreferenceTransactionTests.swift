@@ -54,7 +54,7 @@ final class TunnelPreferenceTransactionTests: XCTestCase {
         ])
     }
 
-    func testRotationPauseFailureNeverStopsBeforeOnDemandIsDisabled() async {
+    func testRotationPauseFailureRestoresOnDemandIntentWithoutStopping() async {
         let session = await RecordingTunnelPreferenceSession(
             failure: .save,
             isRotationTunnelRunning: true,
@@ -73,6 +73,9 @@ final class TunnelPreferenceTransactionTests: XCTestCase {
             .load,
             .apply(onDemandEnabled: false),
             .save,
+            .apply(onDemandEnabled: true),
+            .save,
+            .load,
         ])
     }
 
