@@ -2,6 +2,7 @@ package com.mobileegress.agent.ui
 
 import android.content.res.Configuration
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,12 +44,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.mobileegress.agent.R
 import com.mobileegress.agent.status.AgentRuntimeStatus
 import com.mobileegress.agent.status.CellularHealth
 import com.mobileegress.agent.status.ErrorClass
@@ -128,12 +131,13 @@ private fun AppHeader(presentation: AgentScreenPresentation) {
                 Surface(
                     modifier = Modifier.size(42.dp),
                     shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    color = Color.Black,
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(presentation.appMark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
+                    Image(
+                        painter = painterResource(R.drawable.ic_mobile_egress_foreground),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
