@@ -47,7 +47,7 @@ func newDarwinDesktopApp() (*DesktopApp, error) {
 		RelayServiceState: func() relayServiceState {
 			return relayServiceNotRegistered
 		},
-		Native: wailsDesktopNative{},
+		Native: newDarwinDesktopNative(),
 	})
 }
 

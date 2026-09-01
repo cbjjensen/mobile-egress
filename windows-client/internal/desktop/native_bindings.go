@@ -11,6 +11,8 @@ import (
 // Production builds never use this adapter.
 type wailsDesktopNative struct{}
 
+func newDarwinDesktopNative() wailsDesktopNative { return wailsDesktopNative{} }
+
 func (wailsDesktopNative) StartTray(*DesktopApp)      {}
 func (wailsDesktopNative) StopTray()                  {}
 func (wailsDesktopNative) HideWindow(context.Context) {}

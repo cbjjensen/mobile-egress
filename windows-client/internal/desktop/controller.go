@@ -257,9 +257,14 @@ func (app *DesktopApp) GetBridgeStatus() BridgeView {
 			}
 		}
 	}
-	relayServiceReady := relayState == relayServiceNotRequired || relayState == relayServiceEnabled
-	view.Ready = view.TailscaleOnline && view.FunnelReady && view.RelayReady && view.OwnerReady && relayServiceReady && !view.NeedsRotation
+	view.Ready = bridgeReady(platform, relayState, view)
 	return view
+}
+
+func bridgeReady(platform desktopPlatform, relayState relayServiceState, view BridgeView) bool {
+	relayServiceReady := (platform == platformWindows && relayState == relayServiceNotRequired) ||
+		(platform == platformMacOS && relayState == relayServiceEnabled)
+	return view.TailscaleOnline && view.FunnelReady && view.RelayReady && view.OwnerReady && relayServiceReady && !view.NeedsRotation
 }
 
 func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
@@ -858,7 +863,7 @@ func (app *DesktopApp) currentRelayServiceState() relayServiceState {
 	}
 	state := app.relayState()
 	switch state {
-	case relayServiceNotRequired, relayServiceNotRegistered, relayServiceApprovalRequired,
+	case relayServiceNotRegistered, relayServiceApprovalRequired,
 		relayServiceEnabled, relayServiceVersionMismatch, relayServiceUnavailable:
 		return state
 	default:

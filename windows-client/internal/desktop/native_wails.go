@@ -3,34 +3,15 @@
 package desktop
 
 import (
-	"context"
 	_ "embed"
 	goruntime "runtime"
 	"time"
 
 	"github.com/getlantern/systray"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed zfnf-logo.ico
 var zfnfTrayIcon []byte
-
-type wailsDesktopNative struct{}
-
-func (wailsDesktopNative) StartTray(app *DesktopApp) {
-	go systray.Run(func() { app.trayReady() }, func() {})
-}
-
-func (wailsDesktopNative) StopTray() { systray.Quit() }
-
-func (wailsDesktopNative) HideWindow(ctx context.Context) { wailsruntime.WindowHide(ctx) }
-
-func (wailsDesktopNative) ShowWindow(ctx context.Context) {
-	wailsruntime.WindowUnminimise(ctx)
-	wailsruntime.WindowShow(ctx)
-}
-
-func (wailsDesktopNative) Quit(ctx context.Context) { wailsruntime.Quit(ctx) }
 
 func (app *DesktopApp) trayReady() {
 	if goruntime.GOOS == "darwin" {

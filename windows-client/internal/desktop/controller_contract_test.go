@@ -48,27 +48,16 @@ func TestWindowsBridgeStatusIncludesThePlatformContract(t *testing.T) {
 	}
 }
 
-func TestMacOSBridgeStatusExposesEveryRelayServiceStateVerbatim(t *testing.T) {
+func TestBridgeReadinessRequiresThePlatformSpecificRelayState(t *testing.T) {
 	t.Parallel()
 
-	wantStates := []relayServiceState{
-		relayServiceNotRequired,
-		relayServiceNotRegistered,
-		relayServiceApprovalRequired,
-		relayServiceEnabled,
-		relayServiceVersionMismatch,
-		relayServiceUnavailable,
+	complete := BridgeView{
+		TailscaleOnline: true,
+		FunnelReady:     true,
+		RelayReady:      true,
+		OwnerReady:      true,
 	}
-	if got := []string{
-		string(wantStates[0]), string(wantStates[1]), string(wantStates[2]),
-		string(wantStates[3]), string(wantStates[4]), string(wantStates[5]),
-	}; !reflect.DeepEqual(got, []string{
-		"not-required", "not-registered", "approval-required", "enabled", "version-mismatch", "unavailable",
-	}) {
-		t.Fatalf("relay service states = %#v", got)
-	}
-
-	current := relayServiceApprovalRequired
+	current := relayServiceNotRegistered
 	app, err := newDesktopApp(context.Background(), desktopControllerConfig{
 		Platform:          platformMacOS,
 		Store:             securestore.NewMemoryStore(),
@@ -78,12 +67,34 @@ func TestMacOSBridgeStatusExposesEveryRelayServiceStateVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status := app.GetBridgeStatus(); status.Platform != "macos" || status.RelayServiceState != "approval-required" || status.Ready {
-		t.Fatalf("approval-required BridgeStatus = %#v", status)
+
+	tests := []struct {
+		name       string
+		injected   relayServiceState
+		wantStatus string
+		wantReady  bool
+	}{
+		{name: "not required is invalid on macOS", injected: relayServiceNotRequired, wantStatus: "unavailable", wantReady: false},
+		{name: "not registered", injected: relayServiceNotRegistered, wantStatus: "not-registered", wantReady: false},
+		{name: "approval required", injected: relayServiceApprovalRequired, wantStatus: "approval-required", wantReady: false},
+		{name: "enabled", injected: relayServiceEnabled, wantStatus: "enabled", wantReady: true},
+		{name: "version mismatch", injected: relayServiceVersionMismatch, wantStatus: "version-mismatch", wantReady: false},
+		{name: "unavailable", injected: relayServiceUnavailable, wantStatus: "unavailable", wantReady: false},
 	}
-	current = relayServiceEnabled
-	if status := app.GetBridgeStatus(); status.RelayServiceState != "enabled" {
-		t.Fatalf("enabled BridgeStatus = %#v", status)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current = test.injected
+			status := app.GetBridgeStatus()
+			if status.Platform != "macos" || status.RelayServiceState != test.wantStatus {
+				t.Fatalf("GetBridgeStatus() = %#v, want platform macos and relay state %q", status, test.wantStatus)
+			}
+			if got := bridgeReady(platformMacOS, test.injected, complete); got != test.wantReady {
+				t.Fatalf("bridgeReady(macos, %q, complete) = %t, want %t", test.injected, got, test.wantReady)
+			}
+		})
+	}
+	if !bridgeReady(platformWindows, relayServiceNotRequired, complete) {
+		t.Fatal("bridgeReady(windows, not-required, complete) = false, want true")
 	}
 }
 
