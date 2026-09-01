@@ -40,18 +40,21 @@ function New-IosVerificationFixture {
     Set-Content -LiteralPath (Join-Path $shimDirectory 'docker.cmd') -Value @'
 @echo off
 >> "%MOBILE_EGRESS_COMMAND_LOG%" echo docker %*
+if "%1"=="version" if "%MOBILE_EGRESS_DOCKER_EXIT_CODE%"=="0" echo 27.0.0
 exit /b %MOBILE_EGRESS_DOCKER_EXIT_CODE%
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory 'scp.cmd') -Value @'
 @echo off
 >> "%MOBILE_EGRESS_COMMAND_LOG%" echo scp %*
-exit /b 0
+exit /b %MOBILE_EGRESS_SCP_EXIT_CODE%
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory 'ssh.cmd') -Value @'
 @echo off
 >> "%MOBILE_EGRESS_COMMAND_LOG%" echo ssh %*
+echo %* | findstr /C:"rm -f --" > nul
+if not errorlevel 1 exit /b %MOBILE_EGRESS_SSH_CLEANUP_EXIT_CODE%
 more > nul
-exit /b 0
+exit /b %MOBILE_EGRESS_SSH_PRIMARY_EXIT_CODE%
 '@
 
     & git -C $fixtureRoot init -q
@@ -61,12 +64,14 @@ exit /b 0
     & git -C $fixtureRoot add --all
     & git -C $fixtureRoot commit -q -m 'fixture'
     Assert-Condition ($LASTEXITCODE -eq 0) 'The isolated iOS verifier fixture must have a committed tree.'
+    $commit = (& git -C $fixtureRoot rev-parse HEAD).Trim()
 
     return [pscustomobject]@{
         Root      = $fixtureRoot
         Script    = Join-Path $scriptsDirectory 'test-ios.ps1'
         ShimPath  = $shimDirectory
         KeyPath   = Join-Path $keyDirectory 'id_ed25519'
+        Commit    = $commit
     }
 }
 
@@ -74,17 +79,26 @@ function Invoke-IosVerificationFixture {
     param(
         [pscustomobject]$Fixture,
         [string[]]$Arguments,
-        [int]$DockerExitCode
+        [int]$DockerExitCode,
+        [int]$ScpExitCode = 0,
+        [int]$SshPrimaryExitCode = 0,
+        [int]$SshCleanupExitCode = 0
     )
 
     $commandLog = Join-Path ([IO.Path]::GetTempPath()) ("mobile-egress-ios-commands-" + [guid]::NewGuid().ToString('N') + '.log')
     $originalPath = $env:Path
     $originalCommandLog = $env:MOBILE_EGRESS_COMMAND_LOG
     $originalDockerExitCode = $env:MOBILE_EGRESS_DOCKER_EXIT_CODE
+    $originalScpExitCode = $env:MOBILE_EGRESS_SCP_EXIT_CODE
+    $originalSshPrimaryExitCode = $env:MOBILE_EGRESS_SSH_PRIMARY_EXIT_CODE
+    $originalSshCleanupExitCode = $env:MOBILE_EGRESS_SSH_CLEANUP_EXIT_CODE
     try {
         $env:Path = "$($Fixture.ShimPath);$originalPath"
         $env:MOBILE_EGRESS_COMMAND_LOG = $commandLog
         $env:MOBILE_EGRESS_DOCKER_EXIT_CODE = [string]$DockerExitCode
+        $env:MOBILE_EGRESS_SCP_EXIT_CODE = [string]$ScpExitCode
+        $env:MOBILE_EGRESS_SSH_PRIMARY_EXIT_CODE = [string]$SshPrimaryExitCode
+        $env:MOBILE_EGRESS_SSH_CLEANUP_EXIT_CODE = [string]$SshCleanupExitCode
         $result = Invoke-ChildPowerShell -ScriptPath $Fixture.Script -Arguments $Arguments
         $commands = if (Test-Path -LiteralPath $commandLog) {
             Get-Content -LiteralPath $commandLog
@@ -100,6 +114,9 @@ function Invoke-IosVerificationFixture {
         $env:Path = $originalPath
         $env:MOBILE_EGRESS_COMMAND_LOG = $originalCommandLog
         $env:MOBILE_EGRESS_DOCKER_EXIT_CODE = $originalDockerExitCode
+        $env:MOBILE_EGRESS_SCP_EXIT_CODE = $originalScpExitCode
+        $env:MOBILE_EGRESS_SSH_PRIMARY_EXIT_CODE = $originalSshPrimaryExitCode
+        $env:MOBILE_EGRESS_SSH_CLEANUP_EXIT_CODE = $originalSshCleanupExitCode
         if (Test-Path -LiteralPath $commandLog -PathType Leaf) {
             Remove-Item -LiteralPath $commandLog -Force
         }
@@ -117,7 +134,19 @@ function ConvertTo-WslPath {
 function Invoke-RemoteScriptScenario {
     param(
         [string]$RemoteScript,
-        [ValidateSet('success', 'known-retry', 'known-retry-fails', 'signature-no-condition', 'unrelated-failure')]
+        [ValidateSet(
+            'success',
+            'known-retry',
+            'known-retry-fails',
+            'signature-no-condition',
+            'unrelated-failure',
+            'mixed-test-failure',
+            'swift-compile-failure',
+            'swift-warnings-failure',
+            'project-list-failure',
+            'unsigned-build-failure',
+            'workspace-list-failure'
+        )]
         [string]$Scenario
     )
 
@@ -126,13 +155,21 @@ function Invoke-RemoteScriptScenario {
     $iosDirectory = Join-Path $repository 'ios'
     $shimDirectory = Join-Path $fixtureRoot 'shims'
     $bundlePath = Join-Path $fixtureRoot 'source.bundle'
-    $commandLog = Join-Path $fixtureRoot 'xcodebuild.log'
+    $commandLog = Join-Path $fixtureRoot 'remote-commands.log'
     $finalCount = Join-Path $fixtureRoot 'final-count.txt'
     $null = New-Item -ItemType Directory -Path $iosDirectory, $shimDirectory
     Set-Content -LiteralPath (Join-Path $iosDirectory 'README.md') -Value "fixture`n" -NoNewline
     Set-Content -LiteralPath (Join-Path $shimDirectory 'swift') -Value @'
 #!/usr/bin/env bash
-printf 'swift %s\n' "$*"
+printf 'swift %s\n' "$*" >> "$MOBILE_EGRESS_REMOTE_COMMAND_LOG"
+if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'swift-compile-failure' && "$*" == 'test' ]]; then
+    printf 'com.apple.testmanagerd.control connection invalidated during Swift compilation\n' >&2
+    exit 70
+fi
+if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'swift-warnings-failure' && "$*" == 'test -Xswiftc -warnings-as-errors' ]]; then
+    printf 'com.apple.testmanagerd.control connection unavailable during warning-strict compilation\n' >&2
+    exit 71
+fi
 exit 0
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory 'git') -Value @'
@@ -154,7 +191,19 @@ exit 90
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory 'xcodebuild') -Value @'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$MOBILE_EGRESS_XCODE_LOG"
+printf 'xcodebuild %s\n' "$*" >> "$MOBILE_EGRESS_REMOTE_COMMAND_LOG"
+if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'project-list-failure' && "$*" == '-list -project MobileEgressAgent.xcodeproj' ]]; then
+    printf 'com.apple.testmanagerd.control connection invalidated during project listing\n' >&2
+    exit 72
+fi
+if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'unsigned-build-failure' && "$*" == '-project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build' ]]; then
+    printf 'com.apple.testmanagerd.control connection unavailable during unsigned build\n' >&2
+    exit 73
+fi
+if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'workspace-list-failure' && "$*" == '-list -workspace .' ]]; then
+    printf 'com.apple.testmanagerd.control connection invalidated during workspace listing\n' >&2
+    exit 74
+fi
 if [[ "$*" != 'test -workspace . -scheme MobileEgressCore -destination platform=macOS' ]]; then
     printf 'xcodebuild fixture success: %s\n' "$*"
     exit 0
@@ -193,7 +242,13 @@ case "$MOBILE_EGRESS_XCODE_SCENARIO" in
         exit 65
         ;;
     unrelated-failure)
-        printf 'Testing failed: assertion failure\n' >&2
+        printf 'XCTAssertEqual failed: expected values to match\n' >&2
+        exit 65
+        ;;
+    mixed-test-failure)
+        printf 'com.apple.testmanagerd.control connection invalidated\n' >&2
+        printf "Test Case '-[MobileEgressCoreTests.ExampleTests testExample]' failed (0.001 seconds).\n" >&2
+        printf 'Executed 1 test, with 1 failure (0 unexpected)\n' >&2
         exit 65
         ;;
 esac
@@ -221,7 +276,7 @@ esac
         $finalCountWslPath = ConvertTo-WslPath -WindowsPath $finalCount
         $output = $RemoteScript | & wsl.exe --exec bash -c @'
 chmod +x "$1/git" "$1/swift" "$1/xcodebuild"
-PATH="$1:$PATH" MOBILE_EGRESS_XCODE_LOG="$2" MOBILE_EGRESS_FINAL_COUNT="$3" MOBILE_EGRESS_XCODE_SCENARIO="$4" bash -s -- "$5" "$6"
+PATH="$1:$PATH" MOBILE_EGRESS_REMOTE_COMMAND_LOG="$2" MOBILE_EGRESS_FINAL_COUNT="$3" MOBILE_EGRESS_XCODE_SCENARIO="$4" MOBILE_EGRESS_REMOTE_SCENARIO="$4" bash -s -- "$5" "$6"
 '@ fixture $shimWslPath $commandLogWslPath $finalCountWslPath $Scenario $bundleWslPath $commit *>&1 | Out-String
         $exitCode = $LASTEXITCODE
         $attempts = if (Test-Path -LiteralPath $finalCount -PathType Leaf) {
@@ -229,10 +284,16 @@ PATH="$1:$PATH" MOBILE_EGRESS_XCODE_LOG="$2" MOBILE_EGRESS_FINAL_COUNT="$3" MOBI
         } else {
             0
         }
+        $commands = if (Test-Path -LiteralPath $commandLog -PathType Leaf) {
+            @(Get-Content -LiteralPath $commandLog)
+        } else {
+            @()
+        }
         return [pscustomobject]@{
             ExitCode = $exitCode
             Output   = $output
             Attempts = $attempts
+            Commands = @($commands)
         }
     } finally {
         $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
@@ -309,6 +370,11 @@ Assert-Condition ($scriptContent -match '(?m)^\s*\$remoteScript \| & ssh (?=.*-o
 
 Assert-Condition ($scriptContent -match 'Assert-ExactCommittedTree') 'Build-server verification must bind portable and remote phases to one committed HEAD.'
 
+$mixedTestFailure = Invoke-RemoteScriptScenario -RemoteScript $remoteScript -Scenario 'mixed-test-failure'
+Assert-Condition ($mixedTestFailure.ExitCode -ne 0) 'A mixed XCTest assertion and testmanagerd invalidation must fail.'
+Assert-Condition ($mixedTestFailure.Attempts -eq 1) 'A recognizable XCTest assertion/failure summary must prevent a testmanagerd retry.'
+Assert-Condition ($mixedTestFailure.Output -notmatch 'retrying final Xcode package tests') 'Mixed assertion output must not emit a retry marker.'
+
 $verificationFixture = New-IosVerificationFixture -SourceScript $iosTestScript
 try {
     $macResult = Invoke-IosVerificationFixture -Fixture $verificationFixture -Arguments @(
@@ -319,13 +385,40 @@ try {
     Assert-Condition ($macResult.ExitCode -eq 0) "Mac build-server mode must succeed without Docker. Output: $($macResult.Output)"
     Assert-Condition (-not ($macResult.Commands -match '^docker ')) 'Mac build-server mode must not invoke Docker.'
     Assert-Condition (($macResult.Commands -match '^scp ').Count -eq 1) 'Mac build-server mode must transfer one exact Git bundle.'
-    Assert-Condition (($macResult.Commands -match '^ssh ').Count -eq 1) 'Mac build-server mode must launch one disposable remote verification.'
+    $macSshCommands = @($macResult.Commands -match '^ssh ')
+    Assert-Condition ($macSshCommands.Count -eq 2) 'Mac build-server mode must launch verification and then best-effort remote bundle cleanup.'
+    Assert-Condition ($macSshCommands[1] -match ([regex]::Escape("rm -f -- '/tmp/mobile-egress-ios-$($verificationFixture.Commit).bundle'"))) 'Mac build-server cleanup must target only the exact transferred remote bundle.'
 
     $defaultWindowsResult = Invoke-IosVerificationFixture -Fixture $verificationFixture -Arguments @() -DockerExitCode 1
     Assert-Condition ($defaultWindowsResult.ExitCode -ne 0) 'Default Windows mode must fail when Docker Engine is unavailable.'
     Assert-Condition (($defaultWindowsResult.Commands -match '^docker ').Count -eq 1) 'Default Windows mode must validate Docker Engine availability.'
     Assert-Condition ($defaultWindowsResult.Output -match 'Docker Engine is required on Windows') 'Default Windows Docker failure must explain the prerequisite.'
     Assert-Condition (-not ($defaultWindowsResult.Commands -match '^(ssh|scp) ')) 'Default Windows mode must not contact the Mac build server.'
+
+    $defaultWindowsSuccess = Invoke-IosVerificationFixture -Fixture $verificationFixture -Arguments @() -DockerExitCode 0
+    $successfulDockerCommands = @($defaultWindowsSuccess.Commands -match '^docker ')
+    Assert-Condition ($defaultWindowsSuccess.ExitCode -eq 20) 'Default Windows mode must return unsupported-Xcode exit 20 after portable suites pass.'
+    Assert-Condition ($successfulDockerCommands.Count -eq 3) 'Default Windows mode must check Docker and run both portable Swift suites.'
+    Assert-Condition ($successfulDockerCommands[0] -match '^docker version ') 'Default Windows mode must validate Docker before portable suites.'
+    Assert-Condition ($successfulDockerCommands[1] -match 'swift test --scratch-path /tmp/mobile-egress-swift-build$') 'Default Windows mode must run the portable Swift suite first.'
+    Assert-Condition ($successfulDockerCommands[2] -match 'swift test -Xswiftc -warnings-as-errors --scratch-path /tmp/mobile-egress-swift-build-warnings$') 'Default Windows mode must run warning-strict portable Swift second.'
+    $portablePassedIndex = $defaultWindowsSuccess.Output.IndexOf('IOS_PORTABLE_TEST_STATUS=PASSED', [StringComparison]::Ordinal)
+    $unsupportedIndex = $defaultWindowsSuccess.Output.IndexOf('IOS_XCODE_STATUS=UNSUPPORTED_HOST', [StringComparison]::Ordinal)
+    Assert-Condition ($portablePassedIndex -ge 0 -and $portablePassedIndex -lt $unsupportedIndex) 'Portable success must be reported before unsupported Xcode status.'
+    Assert-Condition (-not ($defaultWindowsSuccess.Commands -match '^(ssh|scp) ')) 'Successful default Windows portable mode must not contact the Mac.'
+
+    $preScriptSshFailure = Invoke-IosVerificationFixture -Fixture $verificationFixture -Arguments @(
+        '-UseMacBuildServer',
+        '-SshKeyPath',
+        $verificationFixture.KeyPath
+    ) -DockerExitCode 99 -SshPrimaryExitCode 73 -SshCleanupExitCode 91
+    $failedSshCommands = @($preScriptSshFailure.Commands -match '^ssh ')
+    Assert-Condition ($preScriptSshFailure.ExitCode -ne 0) 'A pre-script SSH launch failure must fail Mac verification.'
+    Assert-Condition ($preScriptSshFailure.Output -match 'Mac iOS verification failed with exit code 73') 'Best-effort cleanup must preserve the original SSH launch failure.'
+    Assert-Condition ($preScriptSshFailure.Output -notmatch 'exit code 91') 'Best-effort cleanup failure must not replace the original SSH failure.'
+    Assert-Condition ($failedSshCommands.Count -eq 2) 'A successful scp followed by SSH launch failure must attempt exact remote bundle cleanup once.'
+    Assert-Condition ($failedSshCommands[1] -match '-o BatchMode=yes') 'Remote bundle cleanup must remain noninteractive.'
+    Assert-Condition ($failedSshCommands[1] -match ([regex]::Escape("rm -f -- '/tmp/mobile-egress-ios-$($verificationFixture.Commit).bundle'"))) 'Failure cleanup must remove only the exact validated remote bundle path.'
 } finally {
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
     $resolvedFixtureRoot = [IO.Path]::GetFullPath($verificationFixture.Root)
@@ -356,6 +449,33 @@ Assert-Condition ($unrelatedFailure.Attempts -eq 1) 'An unrelated final Xcode pa
 $failedRetry = Invoke-RemoteScriptScenario -RemoteScript $remoteScript -Scenario 'known-retry-fails'
 Assert-Condition ($failedRetry.ExitCode -ne 0) 'A failed retry after known testmanagerd unavailability must fail verification.'
 Assert-Condition ($failedRetry.Attempts -eq 2) 'A known testmanagerd retry must run once only even when the retry fails.'
+
+$allRemoteCommands = @(
+    'swift test',
+    'swift test -Xswiftc -warnings-as-errors',
+    'xcodebuild -list -project MobileEgressAgent.xcodeproj',
+    'xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build',
+    'xcodebuild -list -workspace .',
+    'xcodebuild test -workspace . -scheme MobileEgressCore -destination platform=macOS'
+)
+$earlyFailureCases = @(
+    [pscustomobject]@{ Scenario = 'swift-compile-failure'; ExpectedCount = 1 },
+    [pscustomobject]@{ Scenario = 'swift-warnings-failure'; ExpectedCount = 2 },
+    [pscustomobject]@{ Scenario = 'project-list-failure'; ExpectedCount = 3 },
+    [pscustomobject]@{ Scenario = 'unsigned-build-failure'; ExpectedCount = 4 },
+    [pscustomobject]@{ Scenario = 'workspace-list-failure'; ExpectedCount = 5 }
+)
+foreach ($failureCase in $earlyFailureCases) {
+    $phaseFailure = Invoke-RemoteScriptScenario -RemoteScript $remoteScript -Scenario $failureCase.Scenario
+    $expectedCommands = $allRemoteCommands[0..($failureCase.ExpectedCount - 1)]
+    Assert-Condition ($phaseFailure.ExitCode -ne 0) "$($failureCase.Scenario) must fail remote verification."
+    Assert-Condition ($phaseFailure.Attempts -eq 0) "$($failureCase.Scenario) must stop before final Xcode package tests."
+    Assert-Condition ($phaseFailure.Commands.Count -eq $failureCase.ExpectedCount) "$($failureCase.Scenario) must stop at its exact phase boundary."
+    Assert-Condition (
+        [string]::Join("`n", $phaseFailure.Commands) -eq [string]::Join("`n", $expectedCommands)
+    ) "$($failureCase.Scenario) must preserve remote command order and stop immediately."
+    Assert-Condition ($phaseFailure.Output -notmatch 'retrying final Xcode package tests') "$($failureCase.Scenario) must never retry."
+}
 
 Write-Host 'iOS verification script checks passed.'
 exit 0

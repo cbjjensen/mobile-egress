@@ -147,6 +147,10 @@ run_xcode_package_tests() {
         return 0
     fi
 
+    if grep -Eiq 'Test (Case|Suite) .* failed|Executed [0-9]+ tests?, with [1-9][0-9]* failures?|XCTAssert[A-Za-z0-9_]* failed|Assertion failed' "$output_path"; then
+        return "$test_status"
+    fi
+
     if grep -Fq 'com.apple.testmanagerd.control' "$output_path" && grep -Eiq 'invalidat(e|ed|ing|ion)|unavailable' "$output_path"; then
         printf '%s\n' 'Known testmanagerd control invalidation detected; retrying final Xcode package tests once.'
         set +e
@@ -162,6 +166,7 @@ run_xcode_package_tests
 '@
     $remoteScript = $remoteScript.Replace("`r`n", "`n")
 
+    $bundleTransferred = $false
     try {
         & git -C $repositoryRoot bundle create $bundlePath --all
         if ($LASTEXITCODE -ne 0) {
@@ -171,11 +176,19 @@ run_xcode_package_tests
         if ($LASTEXITCODE -ne 0) {
             throw "Mac bundle transfer failed with exit code $LASTEXITCODE."
         }
+        $bundleTransferred = $true
         $remoteScript | & ssh -i $resolvedKey -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $macTarget "bash -s -- '$remoteBundlePath' '$verifiedCommit'"
         if ($LASTEXITCODE -ne 0) {
             throw "Mac iOS verification failed with exit code $LASTEXITCODE."
         }
     } finally {
+        if ($bundleTransferred) {
+            try {
+                & ssh -i $resolvedKey -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $macTarget "rm -f -- '$remoteBundlePath'" 2>$null | Out-Null
+            } catch {
+                # Preserve the verification result; this cleanup is best effort.
+            }
+        }
         if (Test-Path -LiteralPath $bundlePath -PathType Leaf) {
             Remove-Item -LiteralPath $bundlePath -Force
         }
