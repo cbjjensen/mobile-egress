@@ -191,6 +191,7 @@ public struct CellularIPRotationTransition: Codable, Equatable, Sendable {
 public enum CellularIPRotationPauseDisposition: Codable, Equatable, Sendable {
     case legacyUnknown
     case pending
+    case pausing(TunnelRotationReceipt)
     case paused(TunnelRotationReceipt)
 }
 
@@ -627,6 +628,9 @@ public struct CellularIPRotationReducer: Sendable {
         guard !checkpoint.isExpired(at: date) else {
             return terminalFailure(.recoveryExpired, attemptID: attemptID)
         }
+        guard checkpoint.pauseDisposition.canRecover(state: checkpoint.state) else {
+            return terminalFailure(.recoveryExpired, attemptID: attemptID)
+        }
         let elapsedSeconds = max(
             0,
             Int(date.timeIntervalSince(checkpoint.savedAt))
@@ -650,7 +654,7 @@ public struct CellularIPRotationReducer: Sendable {
             CellularIPRotationTransition(state: checkpoint.state)
         case let .preparing(_, networkToken, _, _, _):
             switch checkpoint.pauseDisposition {
-            case .pending, .paused:
+            case .pending, .pausing, .paused:
                 CellularIPRotationTransition(
                     state: checkpoint.state,
                     effects: [
@@ -858,6 +862,28 @@ public struct CellularIPRotationReducer: Sendable {
     private mutating func recordAttemptID(_ attemptID: UInt64?) {
         guard let attemptID else { return }
         highestAttemptID = max(highestAttemptID ?? attemptID, attemptID)
+    }
+}
+
+private extension CellularIPRotationPauseDisposition {
+    func canRecover(state: CellularIPRotationState) -> Bool {
+        switch self {
+        case .legacyUnknown:
+            return false
+        case .pending:
+            switch state {
+            case .awaitingConfirmation, .preparing:
+                return true
+            case .idle, .awaitingAirplaneMode, .holding, .awaitingCellularReturn,
+                 .verifying, .completed, .failed:
+                return false
+            }
+        case .pausing:
+            if case .preparing = state { return true }
+            return false
+        case .paused:
+            return true
+        }
     }
 }
 

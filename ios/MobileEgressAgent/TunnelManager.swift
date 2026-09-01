@@ -122,9 +122,17 @@ final class TunnelManager:
         try await TunnelPreferenceTransaction.stop(using: self)
     }
 
-    func pauseForRotation() async throws -> TunnelRotationReceipt {
+    func captureRotationIntent() async throws -> TunnelRotationReceipt {
+        guard manager != nil else { throw TunnelManagerError.configurationUnavailable }
+        return try await TunnelRotationPreferenceTransaction.captureIntent(using: self)
+    }
+
+    func pauseForRotation(using receipt: TunnelRotationReceipt) async throws {
         _ = try await preparedManager()
-        return try await TunnelRotationPreferenceTransaction.pause(using: self)
+        try await TunnelRotationPreferenceTransaction.pause(
+            using: self,
+            receipt: receipt
+        )
     }
 
     func resumeAfterRotation(_ receipt: TunnelRotationReceipt?) async throws {
