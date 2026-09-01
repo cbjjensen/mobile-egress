@@ -23,7 +23,7 @@ public struct ContinuousCellularIPRotationSleeper: CellularIPRotationSleeping {
 }
 
 @MainActor
-public protocol CellularIPRotationTunnelControlling: AnyObject {
+public protocol CellularIPRotationTunnelControlling: AnyObject, Sendable {
     associatedtype RotationReceipt: Sendable
 
     func pauseForRotation() async throws -> RotationReceipt

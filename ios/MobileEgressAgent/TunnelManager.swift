@@ -15,7 +15,10 @@ struct TunnelConnectionRefresh {
 }
 
 @MainActor
-final class TunnelManager: TunnelPreferenceSession {
+final class TunnelManager:
+    TunnelRotationPreferenceSession,
+    CellularIPRotationTunnelControlling
+{
     private let configuration: MobileEgressSystemConfiguration
     private var manager: NETunnelProviderManager?
 
@@ -29,6 +32,17 @@ final class TunnelManager: TunnelPreferenceSession {
 
     var isOnDemandEnabled: Bool {
         manager?.isOnDemandEnabled ?? false
+    }
+
+    var isRotationTunnelRunning: Bool {
+        switch status {
+        case .connecting, .connected, .reasserting:
+            true
+        case .invalid, .disconnected, .disconnecting:
+            false
+        @unknown default:
+            false
+        }
     }
 
     func statusUpdates() -> AsyncStream<TunnelConnectionPhase> {
@@ -106,6 +120,19 @@ final class TunnelManager: TunnelPreferenceSession {
     func stop() async throws {
         guard manager != nil else { return }
         try await TunnelPreferenceTransaction.stop(using: self)
+    }
+
+    func pauseForRotation() async throws -> TunnelRotationReceipt {
+        _ = try await preparedManager()
+        return try await TunnelRotationPreferenceTransaction.pause(using: self)
+    }
+
+    func resumeAfterRotation(_ receipt: TunnelRotationReceipt?) async throws {
+        _ = try await preparedManager()
+        try await TunnelRotationPreferenceTransaction.resume(
+            using: self,
+            receipt: receipt
+        )
     }
 
     func providerStatus() async throws -> TunnelProviderStatus {

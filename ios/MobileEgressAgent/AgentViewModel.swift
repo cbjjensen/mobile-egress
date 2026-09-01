@@ -38,11 +38,14 @@ final class AgentViewModel: ObservableObject {
     @Published private(set) var isChangingTunnel = false
     @Published private(set) var vpnStatus: NEVPNStatus = .invalid
     @Published private(set) var providerStatus = AgentViewModel.stoppedProviderStatus
+    @Published private(set) var cellularHealth: CellularHealth = .unavailable
+    @Published private(set) var rotationState: CellularIPRotationState = .idle
     @Published private(set) var userError: AgentUserError?
     @Published var isScannerPresented = false
 
     private let dependencies: MobileEgressDependencies?
     private let tunnelManager: TunnelManager?
+    private let rotationCoordinator: CellularIPRotationCoordinator<TunnelManager>?
     private var monitorTask: Task<Void, Never>?
     private var connectionStatusTask: Task<Void, Never>?
     private var connectionState = TunnelConnectionStateReducer()
@@ -50,12 +53,26 @@ final class AgentViewModel: ObservableObject {
     init() {
         do {
             let dependencies = try MobileEgressDependencies.live()
+            let tunnelManager = TunnelManager(configuration: dependencies.configuration)
             self.dependencies = dependencies
-            self.tunnelManager = TunnelManager(configuration: dependencies.configuration)
+            self.tunnelManager = tunnelManager
+            self.rotationCoordinator = Self.makeRotationCoordinator(
+                configuration: dependencies.configuration,
+                tunnelManager: tunnelManager
+            )
         } catch {
             self.dependencies = nil
             self.tunnelManager = nil
+            self.rotationCoordinator = nil
             self.userError = .configurationUnavailable
+        }
+        rotationCoordinator?.setStateChangeHandler { [weak self] state in
+            self?.rotationState = state
+        }
+        rotationCoordinator?.setCellularChangeHandler { [weak self] available in
+            guard let self else { return }
+            self.cellularHealth = available ? .available : .unavailable
+            self.syncRotationAvailability()
         }
     }
 
@@ -112,10 +129,28 @@ final class AgentViewModel: ObservableObject {
     var bytesUploaded: UInt64 { providerStatus.runtimeSnapshot.bytesUploaded }
     var bytesDownloaded: UInt64 { providerStatus.runtimeSnapshot.bytesDownloaded }
 
+    var rotationAvailability: CellularIPRotationAvailability {
+        CellularIPRotationAvailability(
+            isEnrolled: isEnrolled,
+            isAgentRunning: providerStatus.providerState == .running,
+            isCellularAvailable: cellularHealth == .available,
+            activeStreamCount: activeStreamCount
+        )
+    }
+
+    var canRotateCellularIP: Bool {
+        rotationAvailability.isEligible(for: rotationState)
+    }
+
+    var rotationRequiresConfirmation: Bool {
+        rotationAvailability.requiresConfirmation(for: rotationState)
+    }
+
     func startMonitoring() {
         guard monitorTask == nil else { return }
         monitorTask = Task { [weak self] in
             guard let self else { return }
+            await self.rotationCoordinator?.resumeAfterActivation()
             await prepare()
             while !Task.isCancelled {
                 await refresh()
@@ -170,6 +205,54 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    func requestRotation() {
+        guard canRotateCellularIP else { return }
+        syncRotationAvailability()
+        Task { [weak self] in
+            await self?.rotationCoordinator?.start(holdSeconds: 10)
+        }
+    }
+
+    func confirmRotationStart() {
+        guard case .awaitingConfirmation = rotationState else { return }
+        Task { [weak self] in
+            await self?.rotationCoordinator?.confirm(proceed: true)
+        }
+    }
+
+    func declineRotation() {
+        guard case .awaitingConfirmation = rotationState else { return }
+        Task { [weak self] in
+            await self?.rotationCoordinator?.confirm(proceed: false)
+        }
+    }
+
+    func cancelRotation() {
+        guard rotationState.isActive else { return }
+        Task { [weak self] in
+            await self?.rotationCoordinator?.cancel()
+        }
+    }
+
+    func retryRotation() {
+        guard case .completed(_, _, _, .unchanged) = rotationState,
+              canRotateCellularIP else { return }
+        syncRotationAvailability()
+        Task { [weak self] in
+            await self?.rotationCoordinator?.start(holdSeconds: 30)
+        }
+    }
+
+    func resumeAfterActivation() {
+        Task { [weak self] in
+            await self?.rotationCoordinator?.resumeAfterActivation()
+        }
+    }
+
+    func safeStatusForCopy() -> String {
+        statusSnapshot.safeCopiedStatus(isEnrolled: isEnrolled)
+    }
+
     private func prepare() async {
         guard let dependencies, let tunnelManager else { return }
         do {
@@ -178,6 +261,7 @@ final class AgentViewModel: ObservableObject {
                 vpnStatus = .invalid
                 connectionState = TunnelConnectionStateReducer()
                 providerStatus = Self.stoppedProviderStatus
+                syncRotationAvailability()
                 return
             }
             try await tunnelManager.prepare()
@@ -189,6 +273,7 @@ final class AgentViewModel: ObservableObject {
         } catch {
             userError = .vpnConfiguration
         }
+        syncRotationAvailability()
     }
 
     private func completeScan(_ payload: String) async {
@@ -229,6 +314,7 @@ final class AgentViewModel: ObservableObject {
 
     private func startTunnel(using tunnelManager: TunnelManager) async {
         providerStatus = Self.providerStatus(for: connectionState.startRequested())
+        syncRotationAvailability()
         do {
             try await tunnelManager.start()
             await refresh()
@@ -238,10 +324,12 @@ final class AgentViewModel: ObservableObject {
             ))
             userError = .vpnStart
         }
+        syncRotationAvailability()
     }
 
     private func stopTunnel(using tunnelManager: TunnelManager) async {
         providerStatus = Self.providerStatus(for: connectionState.stopRequested())
+        syncRotationAvailability()
         do {
             try await tunnelManager.stop()
             providerStatus = Self.providerStatus(for:
@@ -254,6 +342,7 @@ final class AgentViewModel: ObservableObject {
             userError = .vpnConfiguration
         }
         await refresh()
+        syncRotationAvailability()
     }
 
     private func startConnectionStatusMonitoring(using tunnelManager: TunnelManager) {
@@ -268,6 +357,7 @@ final class AgentViewModel: ObservableObject {
     }
 
     private func refresh(observedPhase: TunnelConnectionPhase? = nil) async {
+        defer { syncRotationAvailability() }
         guard let tunnelManager else { return }
         let observationToken = connectionState.observationToken
         let refresh = await tunnelManager.connectionRefresh(observedPhase: observedPhase)
@@ -307,6 +397,106 @@ final class AgentViewModel: ObservableObject {
         case .targetConnect: "A target connection failed."
         case .backpressure: "Agent capacity was exceeded."
         case .internal: "Agent runtime failed."
+        }
+    }
+
+    private func syncRotationAvailability() {
+        rotationCoordinator?.updateAgentAvailability(
+            isEnrolled: isEnrolled,
+            isAgentRunning: providerStatus.providerState == .running,
+            activeStreamCount: activeStreamCount
+        )
+    }
+
+    private var statusSnapshot: AgentStatusSnapshot {
+        AgentStatusSnapshot(
+            agentState: Self.agentOperationalState(providerStatus.providerState),
+            cellular: cellularHealth,
+            relay: Self.relayHealth(providerStatus.runtimeSnapshot.connectionState),
+            activeStreamCount: activeStreamCount,
+            bytesUploaded: bytesUploaded,
+            bytesDownloaded: bytesDownloaded,
+            errorClass: Self.statusErrorClass(
+                provider: providerStatus.providerError,
+                runtime: providerStatus.runtimeSnapshot.errorClass,
+                cellular: cellularHealth
+            ),
+            rotation: rotationState
+        )
+    }
+
+    private static func makeRotationCoordinator(
+        configuration: MobileEgressSystemConfiguration,
+        tunnelManager: TunnelManager
+    ) -> CellularIPRotationCoordinator<TunnelManager>? {
+        guard let checkpointStore = try? AppGroupCellularIPRotationCheckpointStore(
+            appGroupIdentifier: configuration.appGroupIdentifier
+        ) else { return nil }
+        let defaults = UserDefaults(suiteName: configuration.appGroupIdentifier) ?? .standard
+        let notificationCue = CellularIPRotationNotificationCue(
+            center: AppleCellularIPRotationNotificationCenter(),
+            firstUseStore: UserDefaultsNotificationFirstUseStore(defaults: defaults)
+        )
+        return CellularIPRotationCoordinator(
+            probe: CellularPublicIPProbe(),
+            pathObserver: CellularPathObserver(),
+            checkpointStore: checkpointStore,
+            notificationCue: notificationCue,
+            tunnel: tunnelManager
+        )
+    }
+
+    private static func agentOperationalState(
+        _ state: TunnelProviderLifecycleState
+    ) -> AgentOperationalState {
+        switch state {
+        case .stopped: .stopped
+        case .starting: .starting
+        case .running: .running
+        case .stopping: .stopping
+        case .failed: .failed
+        }
+    }
+
+    private static func relayHealth(_ state: AgentRuntimeConnectionState) -> RelayHealth {
+        switch state {
+        case .stopped, .stopping: .disconnected
+        case .connecting: .connecting
+        case .connected: .connected
+        }
+    }
+
+    private static func statusErrorClass(
+        provider: TunnelProviderErrorClass,
+        runtime: AgentRuntimeErrorClass,
+        cellular: CellularHealth
+    ) -> AgentStatusErrorClass {
+        if provider != .none {
+            switch provider {
+            case .none: break
+            case .identityUnavailable: return .credential
+            case .relayUnavailable: return .relayUnavailable
+            case .relayAuth: return .relayAuthentication
+            case .relayTLS: return .relayTLS
+            case .protocol, .invalidMessage: return .protocolViolation
+            case .targetPolicy: return .targetPolicy
+            case .targetConnect: return .targetConnect
+            case .backpressure: return .backpressure
+            case .invalidConfiguration, .tunnelSettings, .runtimeUnavailable, .internal:
+                return .internalFailure
+            }
+        }
+        switch runtime {
+        case .none:
+            return cellular == .available ? .none : .cellularUnavailable
+        case .relayUnavailable: return .relayUnavailable
+        case .relayAuth: return .relayAuthentication
+        case .relayTLS: return .relayTLS
+        case .protocol: return .protocolViolation
+        case .targetPolicy: return .targetPolicy
+        case .targetConnect: return .targetConnect
+        case .backpressure: return .backpressure
+        case .internal: return .internalFailure
         }
     }
 
