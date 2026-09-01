@@ -1,4 +1,4 @@
-//go:build darwin && cgo && macintegration
+//go:build darwin && cgo && macintegration && !bindings
 
 #import <Cocoa/Cocoa.h>
 #import <dispatch/dispatch.h>

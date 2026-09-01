@@ -1,3 +1,5 @@
+//go:build darwin && cgo && !bindings
+
 #import <Cocoa/Cocoa.h>
 #import <dispatch/dispatch.h>
 
