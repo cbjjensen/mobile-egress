@@ -172,6 +172,15 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.rotationAction, .none)
         XCTAssertFalse(presentation.isRotationEnabled)
         XCTAssertEqual(presentation.headline, "Confirm IP rotation")
+        XCTAssertEqual(
+            presentation.rotationConfirmation,
+            CellularIPRotationConfirmationPresentation(
+                title: "Disconnect 4 active streams?",
+                message: "Rotating the cellular IP will close every active proxy stream.",
+                confirmLabel: "Disconnect and rotate",
+                declineLabel: "Keep current connection"
+            )
+        )
     }
 
     func testStartingAgentUsesFinitePendingPresentationAndDisablesConflictingActions() {
