@@ -224,6 +224,7 @@ public struct CellularIPRotationReducer: Sendable {
                 networkToken: networkToken,
                 availability: availability
             )
+            recordAttemptID(attemptID)
         case let .confirmationDecided(attemptID, proceed):
             transition = confirm(attemptID: attemptID, proceed: proceed)
         case let .beforeProbeCompleted(attemptID, snapshot):
