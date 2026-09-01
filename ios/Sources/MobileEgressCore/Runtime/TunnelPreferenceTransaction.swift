@@ -49,14 +49,24 @@ public enum TunnelRotationPreferenceTransaction {
     public static func pause(
         using session: any TunnelRotationPreferenceSession
     ) async throws -> TunnelRotationReceipt {
+        try Task.checkCancellation()
         try await session.loadPreferences()
+        try Task.checkCancellation()
         let receipt = TunnelRotationReceipt(
             wasRunning: session.isRotationTunnelRunning,
             wasOnDemandEnabled: session.isOnDemandEnabled
         )
-        session.applyConfiguration(onDemandEnabled: false)
-        try await session.savePreferences()
-        try await session.loadPreferences()
+        do {
+            session.applyConfiguration(onDemandEnabled: false)
+            try Task.checkCancellation()
+            try await session.savePreferences()
+            try Task.checkCancellation()
+            try await session.loadPreferences()
+            try Task.checkCancellation()
+        } catch {
+            await restorePreparedIntent(using: session, receipt: receipt)
+            throw error
+        }
         session.stopTunnelSession()
         return receipt
     }
@@ -76,5 +86,14 @@ public enum TunnelRotationPreferenceTransaction {
         if receipt.wasRunning {
             try session.startTunnelSession()
         }
+    }
+
+    private static func restorePreparedIntent(
+        using session: any TunnelRotationPreferenceSession,
+        receipt: TunnelRotationReceipt
+    ) async {
+        session.applyConfiguration(onDemandEnabled: receipt.wasOnDemandEnabled)
+        try? await session.savePreferences()
+        try? await session.loadPreferences()
     }
 }

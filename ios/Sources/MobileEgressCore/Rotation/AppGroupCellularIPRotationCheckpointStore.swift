@@ -15,9 +15,14 @@ public protocol CellularIPRotationCheckpointStoring: Sendable {
     func save(_ checkpoint: CellularIPRotationCheckpoint) throws
     func load(at date: Date) throws -> CellularIPRotationCheckpoint?
     func clear() throws
+    func retire(attemptID: UInt64) throws
 }
 
 public extension CellularIPRotationCheckpointStoring {
+    func retire(attemptID: UInt64) throws {
+        try clear()
+    }
+
     func load(
         expectedAttemptID: UInt64,
         at date: Date
@@ -38,7 +43,19 @@ public final class AppGroupCellularIPRotationCheckpointStore:
     private let lock = NSLock()
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let fileRemover: @Sendable (URL) throws -> Void
     let checkpointURL: URL
+    var retirementURL: URL { checkpointURL }
+
+    private struct RetirementTombstone: Codable {
+        let formatVersion: Int
+        let retiredAttemptID: UInt64
+
+        init(retiredAttemptID: UInt64) {
+            formatVersion = 1
+            self.retiredAttemptID = retiredAttemptID
+        }
+    }
 
     #if canImport(Darwin)
     public convenience init(appGroupIdentifier: String) throws {
@@ -65,10 +82,18 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         self.init(containerURL: containerURL)
     }
 
-    init(containerURL: URL, encoder: JSONEncoder = .init(), decoder: JSONDecoder = .init()) {
+    init(
+        containerURL: URL,
+        encoder: JSONEncoder = .init(),
+        decoder: JSONDecoder = .init(),
+        fileRemover: @escaping @Sendable (URL) throws -> Void = {
+            try FileManager.default.removeItem(at: $0)
+        }
+    ) {
         checkpointURL = containerURL.appendingPathComponent(Self.filename, isDirectory: false)
         self.encoder = encoder
         self.decoder = decoder
+        self.fileRemover = fileRemover
     }
 
     public func save(_ checkpoint: CellularIPRotationCheckpoint) throws {
@@ -96,6 +121,10 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         } catch {
             throw CellularIPRotationCheckpointStoreError.readFailed
         }
+        if let tombstone = try? decoder.decode(RetirementTombstone.self, from: data),
+           tombstone.formatVersion == 1 {
+            return nil
+        }
         let checkpoint: CellularIPRotationCheckpoint
         do {
             checkpoint = try decoder.decode(CellularIPRotationCheckpoint.self, from: data)
@@ -118,10 +147,24 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         defer { lock.unlock() }
         guard FileManager.default.fileExists(atPath: checkpointURL.path) else { return }
         do {
-            try FileManager.default.removeItem(at: checkpointURL)
+            try fileRemover(checkpointURL)
         } catch {
             throw CellularIPRotationCheckpointStoreError.writeFailed
         }
+    }
+
+    public func retire(attemptID: UInt64) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            let tombstone = try encoder.encode(
+                RetirementTombstone(retiredAttemptID: attemptID)
+            )
+            try tombstone.write(to: checkpointURL, options: .atomic)
+        } catch {
+            throw CellularIPRotationCheckpointStoreError.writeFailed
+        }
+        try? fileRemover(checkpointURL)
     }
 
     private static func validate(_ checkpoint: CellularIPRotationCheckpoint) throws {

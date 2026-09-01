@@ -55,7 +55,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         let resumeReceipts = await tunnel.resumeReceipts
         XCTAssertEqual(resumeReceipts.count, 1)
         XCTAssertNotNil(resumeReceipts.first ?? nil)
-        XCTAssertGreaterThanOrEqual(store.clearCount, 1)
+        XCTAssertEqual(store.retireCount, 1)
         XCTAssertEqual(cueSnapshot.cancelledAttemptIDs, [1])
     }
 
@@ -416,7 +416,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         } else {
             XCTFail("Late probe callback changed a cancelled attempt")
         }
-        XCTAssertGreaterThanOrEqual(store.clearCount, 1)
+        XCTAssertEqual(store.retireCount, 1)
         let cancelledAttemptIDs = await cue.snapshot().cancelledAttemptIDs
         let resumeCount = await tunnel.resumeReceipts.count
         XCTAssertEqual(cancelledAttemptIDs, [1])

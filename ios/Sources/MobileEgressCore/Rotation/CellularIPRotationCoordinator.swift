@@ -53,12 +53,15 @@ public final class CellularIPRotationCoordinator<
     private var isAgentRunning = false
     private var activeStreamCount = 0
     private var pathObservationStarted = false
+    private var lastCellularAvailability: Bool?
     private var recoveryAttempted = false
     private var nextAttemptID: UInt64 = 0
     private var cellularGeneration: UInt64 = 0
     private var currentNetworkToken: String?
     private var attemptGeneration: UInt64 = 0
     private var recoveringAttemptID: UInt64?
+    private var preserveFreshRecoveryPauseReceipt = false
+    private var requiresTerminalTunnelResume = false
     private var timeoutDeadline: Date?
     private var pauseReceipt: Tunnel.RotationReceipt?
     private var stateChangeHandler: StateChangeHandler?
@@ -132,6 +135,8 @@ public final class CellularIPRotationCoordinator<
         cancelOwnedTasks()
         pauseReceipt = nil
         recoveringAttemptID = nil
+        preserveFreshRecoveryPauseReceipt = false
+        requiresTerminalTunnelResume = false
         timeoutDeadline = nil
         await apply(
             .requested(
@@ -153,9 +158,15 @@ public final class CellularIPRotationCoordinator<
 
     public func cancel() async {
         guard state.isActive, let attemptID = state.attemptID else { return }
+        let generation = attemptGeneration
+        let pendingPause = pauseTask
+        pendingPause?.cancel()
+        await pendingPause?.value
+        guard isCurrent(attemptID: attemptID, generation: generation) else { return }
+        pauseTask = nil
         await apply(
             .cancelled(attemptID: attemptID),
-            expectedGeneration: attemptGeneration
+            expectedGeneration: generation
         )
     }
 
@@ -178,6 +189,8 @@ public final class CellularIPRotationCoordinator<
             cancelOwnedTasks()
             pauseReceipt = nil
             recoveringAttemptID = attemptID
+            preserveFreshRecoveryPauseReceipt = checkpoint.state.isPrePauseRecoveryState
+            requiresTerminalTunnelResume = !preserveFreshRecoveryPauseReceipt
             timeoutDeadline = checkpoint.timeoutDeadline
             await apply(
                 .recover(checkpoint: checkpoint, at: clock.currentDate()),
@@ -196,6 +209,8 @@ public final class CellularIPRotationCoordinator<
         cancelOwnedTasks()
         pauseReceipt = nil
         recoveringAttemptID = nextAttemptID
+        preserveFreshRecoveryPauseReceipt = false
+        requiresTerminalTunnelResume = true
         timeoutDeadline = nil
         await apply(
             .recoveryFailed(attemptID: nextAttemptID),
@@ -214,10 +229,11 @@ public final class CellularIPRotationCoordinator<
     }
 
     private func cellularPathChanged(_ available: Bool) async {
-        guard available != isCellularAvailable else {
+        guard lastCellularAvailability != available else {
             cellularChangeHandler?(available)
             return
         }
+        lastCellularAvailability = available
         isCellularAvailable = available
         if available {
             cellularGeneration &+= 1
@@ -281,7 +297,7 @@ public final class CellularIPRotationCoordinator<
             cancelOwnedTasks()
             attemptGeneration &+= 1
             timeoutDeadline = nil
-            try? checkpointStore.clear()
+            try? checkpointStore.retire(attemptID: terminalAttemptID)
             await notificationCue.cancel(attemptID: terminalAttemptID)
         }
 
@@ -361,11 +377,18 @@ public final class CellularIPRotationCoordinator<
             do {
                 let receipt = try await self.tunnel.pauseForRotation()
                 guard self.isCurrent(attemptID: attemptID, generation: generation) else { return }
-                if self.recoveringAttemptID != attemptID {
+                if self.recoveringAttemptID != attemptID
+                    || self.preserveFreshRecoveryPauseReceipt {
                     self.pauseReceipt = receipt
                 }
+                self.requiresTerminalTunnelResume = true
             } catch {
                 guard self.isCurrent(attemptID: attemptID, generation: generation) else { return }
+                if self.recoveringAttemptID != attemptID
+                    || self.preserveFreshRecoveryPauseReceipt {
+                    self.requiresTerminalTunnelResume = false
+                }
+                if Task.isCancelled { return }
                 await self.apply(
                     .cancelled(attemptID: attemptID),
                     expectedGeneration: generation
@@ -467,13 +490,25 @@ public final class CellularIPRotationCoordinator<
         let receipt = pauseReceipt
         resumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            guard self.requiresTerminalTunnelResume else {
+                self.pauseReceipt = nil
+                self.recoveringAttemptID = nil
+                self.preserveFreshRecoveryPauseReceipt = false
+                return
+            }
             do {
                 try await self.tunnel.resumeAfterRotation(receipt)
                 guard generation == self.attemptGeneration else { return }
                 self.pauseReceipt = nil
                 self.recoveringAttemptID = nil
+                self.preserveFreshRecoveryPauseReceipt = false
+                self.requiresTerminalTunnelResume = false
             } catch {
                 guard generation == self.attemptGeneration else { return }
+                self.pauseReceipt = nil
+                self.recoveringAttemptID = nil
+                self.preserveFreshRecoveryPauseReceipt = false
+                self.requiresTerminalTunnelResume = false
                 await self.apply(
                     .resumeFailed(attemptID: attemptID),
                     expectedGeneration: generation
@@ -499,5 +534,17 @@ public final class CellularIPRotationCoordinator<
         returnTimeoutTask = nil
         holdTask = nil
         resumeTask = nil
+    }
+}
+
+private extension CellularIPRotationState {
+    var isPrePauseRecoveryState: Bool {
+        switch self {
+        case .awaitingConfirmation, .preparing:
+            true
+        case .idle, .awaitingAirplaneMode, .holding, .awaitingCellularReturn,
+             .verifying, .completed, .failed:
+            false
+        }
     }
 }
