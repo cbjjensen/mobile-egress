@@ -145,6 +145,7 @@ function Invoke-RemoteScriptScenario {
             'swift-warnings-failure',
             'project-list-failure',
             'unsigned-build-failure',
+            'simulator-build-failure',
             'workspace-list-failure'
         )]
         [string]$Scenario
@@ -199,6 +200,10 @@ fi
 if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'unsigned-build-failure' && "$*" == '-project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build' ]]; then
     printf 'com.apple.testmanagerd.control connection unavailable during unsigned build\n' >&2
     exit 73
+fi
+if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'simulator-build-failure' && "$*" == '-project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphonesimulator -destination generic/platform=iOS Simulator CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build' ]]; then
+    printf 'com.apple.testmanagerd.control connection unavailable during simulator build\n' >&2
+    exit 75
 fi
 if [[ "$MOBILE_EGRESS_REMOTE_SCENARIO" == 'workspace-list-failure' && "$*" == '-list -workspace .' ]]; then
     printf 'com.apple.testmanagerd.control connection invalidated during workspace listing\n' >&2
@@ -321,6 +326,8 @@ Assert-Condition ($scriptContent -match '(?m)^\$isWindowsHost = \$env:OS -eq ''W
 Assert-Condition ($scriptContent -match 'swift test -Xswiftc -warnings-as-errors') 'The verifier must run warning-as-errors Swift tests through the Swift compiler.'
 Assert-Condition ($scriptContent -match 'xcodebuild -list') 'The macOS branch must enumerate Xcode targets and schemes.'
 Assert-Condition ($scriptContent -match 'CODE_SIGNING_ALLOWED=NO') 'The macOS build must be unsigned.'
+Assert-Condition ($scriptContent -match 'Unsigned iOS Simulator app and extension build') 'The macOS branch must run the unsigned generic iOS Simulator build.'
+Assert-Condition ($scriptContent -match '-sdk iphonesimulator') 'The verifier must select the iOS Simulator SDK explicitly.'
 Assert-Condition ($scriptContent -match '\[switch\]\$UseMacBuildServer') 'The Windows entry point must expose an explicit Mac build-server path.'
 Assert-Condition ($scriptContent -notmatch 'SkipPortableTests|MacBuildServerStartAt') 'Retired continuation controls must not remain in the verifier implementation.'
 
@@ -349,6 +356,7 @@ $requiredRemoteCommands = @(
     'swift test -Xswiftc -warnings-as-errors',
     'xcodebuild -list -project MobileEgressAgent.xcodeproj',
     'xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build',
+    'xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build',
     'xcodebuild -list -workspace .',
     'xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS"'
 )
@@ -455,6 +463,7 @@ $allRemoteCommands = @(
     'swift test -Xswiftc -warnings-as-errors',
     'xcodebuild -list -project MobileEgressAgent.xcodeproj',
     'xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build',
+    'xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphonesimulator -destination generic/platform=iOS Simulator CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build',
     'xcodebuild -list -workspace .',
     'xcodebuild test -workspace . -scheme MobileEgressCore -destination platform=macOS'
 )
@@ -463,7 +472,8 @@ $earlyFailureCases = @(
     [pscustomobject]@{ Scenario = 'swift-warnings-failure'; ExpectedCount = 2 },
     [pscustomobject]@{ Scenario = 'project-list-failure'; ExpectedCount = 3 },
     [pscustomobject]@{ Scenario = 'unsigned-build-failure'; ExpectedCount = 4 },
-    [pscustomobject]@{ Scenario = 'workspace-list-failure'; ExpectedCount = 5 }
+    [pscustomobject]@{ Scenario = 'simulator-build-failure'; ExpectedCount = 5 },
+    [pscustomobject]@{ Scenario = 'workspace-list-failure'; ExpectedCount = 6 }
 )
 foreach ($failureCase in $earlyFailureCases) {
     $phaseFailure = Invoke-RemoteScriptScenario -RemoteScript $remoteScript -Scenario $failureCase.Scenario

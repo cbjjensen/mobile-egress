@@ -134,6 +134,7 @@ swift test
 swift test -Xswiftc -warnings-as-errors
 xcodebuild -list -project MobileEgressAgent.xcodeproj
 xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
+xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
 xcodebuild -list -workspace .
 run_xcode_package_tests() {
     local output_path="$checkout/.mobile-egress-xcode-test-output"
@@ -203,6 +204,9 @@ if ($isMacHost) {
         Invoke-RequiredCommand -Name 'Xcode project targets and schemes' -Command { xcodebuild -list -project $projectPath }
         Invoke-RequiredCommand -Name 'Unsigned iPhoneOS app and extension build' -Command {
             xcodebuild -project $projectPath -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
+        }
+        Invoke-RequiredCommand -Name 'Unsigned iOS Simulator app and extension build' -Command {
+            xcodebuild -project $projectPath -scheme MobileEgressAgent -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
         }
 
         Invoke-RequiredCommand -Name 'Standalone MobileEgressCore Xcode package schemes' -Command {
