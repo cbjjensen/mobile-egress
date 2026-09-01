@@ -48,6 +48,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
             if case .completed(_, _, _, .changed) = await coordinator.state { return true }
             return false
         }
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
 
         let cueSnapshot = await cue.snapshot()
         XCTAssertEqual(cueSnapshot.scheduledDeadlines, [clock.now.addingTimeInterval(10)])
@@ -85,6 +86,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
             if case .failed(_, .cellularDidNotDisconnect) = await coordinator.state { return true }
             return false
         }
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
 
         let resumeCount = await tunnel.resumeReceipts.count
         XCTAssertEqual(resumeCount, 1)
@@ -126,7 +128,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
             return false
         }
         await gate.open()
-        await Task.yield()
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
 
         if case .failed(_, .cancelled) = await coordinator.state {
             // Expected: the late probe cannot advance the terminal attempt.
@@ -177,6 +179,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
             if case .failed(41, .cellularDidNotDisconnect) = await coordinator.state { return true }
             return false
         }
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
         let resumeReceipts = await tunnel.resumeReceipts
         XCTAssertEqual(resumeReceipts, [nil])
     }
@@ -200,6 +203,7 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
             return false
         }
         await coordinator.resumeAfterActivation()
+        await waitUntil { await tunnel.resumeReceipts.count == 1 }
 
         XCTAssertEqual(store.loadCount, 1)
         XCTAssertGreaterThanOrEqual(store.clearCount, 1)
