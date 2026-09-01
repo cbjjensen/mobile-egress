@@ -184,12 +184,14 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses VisionKit scanning in the SwiftUI host app to acquire the shared enrollment and migration QR payloads.",
+          "nativeEquivalenceNotes": "Uses VisionKit through a one-shot portable scanner session to acquire the shared enrollment and migration QR payloads, report scanner unavailability, and suppress duplicate or late callbacks.",
           "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Pairing/QRScannerSession.swift",
             "ios/MobileEgressAgent/QRScannerView.swift",
             "ios/MobileEgressAgent/AgentViewModel.swift"
           ],
           "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/QRScannerSessionTests.swift",
             "ios/Tests/MobileEgressCoreTests/PairingValidationTests.swift",
             "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift"
           ]

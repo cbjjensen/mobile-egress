@@ -8,7 +8,7 @@ EC2 Refract -> authenticated HTTP/CONNECT 127.0.0.1:1081 -> MobileEgressClient -
 EC2 application -> authenticated SOCKS5 127.0.0.1:1080 -> MobileEgressClient -----+
 ```
 
-There is no relay EC2 instance, inbound EC2 security-group rule, Elastic IP, router change, local port-forward, or public proxy listener. The local PC and phone must remain powered on and connected.
+There is no relay EC2 instance, inbound EC2 security-group rule, Elastic IP, router change, local port-forward, or public proxy listener. The local PC and Agent device must remain powered on and connected.
 
 ## Friend quick start
 
@@ -18,7 +18,7 @@ Each friend self-hosts a separate bridge:
 2. You may independently compare the signer certificate Windows shows for the exact `MobileEgressSetup.exe` with the SHA-256 fingerprint received through the separate channel. **Properties → Digital Signatures** and trusted system Windows PowerShell are optional checks described in the [Windows friend quick start](windows-client/README.md#friend-quick-start), not required launchers. Directly double-clicking setup remains supported; confirm its displayed fingerprint reminder with **Yes**, approve one UAC prompt, and let it transactionally install and launch the controller.
 3. In **Bridge**, choose **Install Tailscale** only when the status says **Not installed** and approve UAC. When it says **Installed · not connected**, choose **Connect Tailscale** and finish browser login; this never reruns the MSI. Once it says **Online**, choose **Set up local bridge**. On first use the controller opens Tailscale's official Funnel approval page automatically; approve it, then approve relay UAC when prompted. The app installs `MobileEgressRelay` as LocalSystem and enables raw TCP Funnel on port 8443.
 4. In **Agent**, generate the short-lived Agent QR. Install/open the Android or iOS app, scan it, and start the Agent. Both implementations require cellular and do not fall back to Wi-Fi.
-5. When you want a best-effort new carrier address, tap **Rotate cellular IP** in Android, manually turn Airplane Mode on, wait for the notification countdown, and turn it off. The Agent compares the cellular public address and reconnects automatically.
+5. When you want a best-effort new carrier address, choose **Rotate cellular IP** in the Android or iOS/iPadOS Agent and confirm before any active streams are disconnected. Follow the platform guidance to turn Airplane Mode on, wait for the displayed hold interval, and turn it off. Android can guide you through its system Internet controls; on iOS/iPadOS, open Control Center manually. A local notification can cue the end of the hold interval when permission is granted, but notification permission is optional. Both Agents compare the available cellular public address families, reconnect automatically, and report **Changed**, **Unchanged**, or **Unverified** without copying the addresses. An unchanged normal attempt offers a longer retry.
 6. In **AWS Login**, use the default **IAM user access key** path. The controller is fixed to `us-east-1`.
    - If the friend only has the AWS root login, they may use root in the browser to create an IAM user named `mobile-egress`. Root is for console setup only; never create or paste root access keys.
    - Create an access key for the `mobile-egress` IAM user and paste that access key into Mobile Egress.
