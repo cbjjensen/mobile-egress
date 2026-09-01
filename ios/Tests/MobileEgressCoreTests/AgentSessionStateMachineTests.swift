@@ -90,6 +90,7 @@ final class AgentSessionStateMachineTests: XCTestCase {
             payload: Data([0x42])
         )).isEmpty)
         XCTAssertTrue(machine.targetEnded(streamID: "stream", token: opened.token).isEmpty)
+        XCTAssertNil(machine.nextOutbound())
 
         let next = try XCTUnwrap(machine.targetWriteCompleted(
             streamID: "stream",
@@ -99,6 +100,7 @@ final class AgentSessionStateMachineTests: XCTestCase {
         ).singleTargetWrite)
 
         XCTAssertEqual(next.data, Data([0x42]))
+        XCTAssertNil(machine.nextOutbound())
         XCTAssertTrue(machine.targetWriteCompleted(
             streamID: "stream",
             token: opened.token,

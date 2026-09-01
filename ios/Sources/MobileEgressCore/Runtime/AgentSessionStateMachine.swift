@@ -25,6 +25,7 @@ struct AgentSessionStateMachine {
         let inboundQueue: BoundedDeque<Data>
         var writeInFlight: TargetWrite?
         var writeFailed = false
+        var gracefulCloseQueued = false
 
         init(token: UInt64, phase: StreamPhase, hasTarget: Bool, inboundCapacity: Int) {
             self.token = token
@@ -34,7 +35,7 @@ struct AgentSessionStateMachine {
         }
 
         var canWrite: Bool {
-            !writeFailed && (phase == .open || phase == .gracefulPending)
+            !writeFailed && (phase == .open || (phase == .gracefulPending && !gracefulCloseQueued))
         }
 
         var targetOutstandingFrameCount: Int {
@@ -167,17 +168,9 @@ struct AgentSessionStateMachine {
 
     mutating func targetEnded(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
         guard var stream = streams[streamID], stream.token == token, stream.phase == .open else { return [] }
-        guard let payload = try? WireProtocol.finiteErrorCode("target_closed"),
-              let frame = try? WireProtocol.encode(type: .close, streamID: streamID, payload: payload)
-        else {
-            return terminate(error: .internal, relay: .cancel)
-        }
-        guard outbound.offerRequiredControlAfterData(frame, streamID: streamID, onSaturated: {}) else {
-            return terminate(error: .backpressure, relay: .cancel)
-        }
         stream.phase = .gracefulPending
         streams[streamID] = stream
-        return []
+        return enqueueGracefulCloseIfDrained(streamID: streamID, token: token)
     }
 
     mutating func targetFailed(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
@@ -204,7 +197,10 @@ struct AgentSessionStateMachine {
                 let shouldCancelTarget = stream.hasTarget
                 stream.hasTarget = false
                 streams[streamID] = stream
-                return shouldCancelTarget ? [.cancelTarget(streamID: streamID, token: token)] : []
+                let cancelEffects: [AgentRuntimeEffect] = shouldCancelTarget
+                    ? [.cancelTarget(streamID: streamID, token: token)]
+                    : []
+                return cancelEffects + enqueueGracefulCloseIfDrained(streamID: streamID, token: token)
             }
             streams[streamID] = stream
             return failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect)
@@ -212,7 +208,9 @@ struct AgentSessionStateMachine {
         bytesUploaded = adding(bytesUploaded, write.data.count)
         stream.writeInFlight = nil
         streams[streamID] = stream
-        return startNextTargetWrite(streamID: streamID, token: token)
+        let nextWrite = startNextTargetWrite(streamID: streamID, token: token)
+        if !nextWrite.isEmpty { return nextWrite }
+        return enqueueGracefulCloseIfDrained(streamID: streamID, token: token)
     }
 
     mutating func relayClosed() -> [AgentRuntimeEffect] {
@@ -325,7 +323,7 @@ struct AgentSessionStateMachine {
         guard let stream = streams[envelope.streamID] else { return protocolFailure() }
         guard let payload = try? envelope.decodedPayload() else { return protocolFailure() }
         guard payload.count <= limits.maximumInboundDataBytes else { return protocolFailure() }
-        if stream.phase == .gracefulPending, stream.writeFailed {
+        if stream.phase == .gracefulPending, stream.writeFailed || stream.gracefulCloseQueued {
             return []
         }
         if stream.canWrite, stream.writeInFlight == nil {
@@ -380,6 +378,27 @@ struct AgentSessionStateMachine {
               let data = stream.inboundQueue.popFirst()
         else { return [] }
         return beginTargetWrite(streamID: streamID, token: token, data: data)
+    }
+
+    private mutating func enqueueGracefulCloseIfDrained(
+        streamID: String,
+        token: UInt64
+    ) -> [AgentRuntimeEffect] {
+        guard var stream = streams[streamID], stream.token == token,
+              stream.phase == .gracefulPending, !stream.gracefulCloseQueued,
+              stream.targetOutstandingFrameCount == 0
+        else { return [] }
+        guard let payload = try? WireProtocol.finiteErrorCode("target_closed"),
+              let frame = try? WireProtocol.encode(type: .close, streamID: streamID, payload: payload)
+        else {
+            return terminate(error: .internal, relay: .cancel)
+        }
+        guard outbound.offerRequiredControlAfterData(frame, streamID: streamID, onSaturated: {}) else {
+            return terminate(error: .backpressure, relay: .cancel)
+        }
+        stream.gracefulCloseQueued = true
+        streams[streamID] = stream
+        return []
     }
 
     private mutating func failStream(
