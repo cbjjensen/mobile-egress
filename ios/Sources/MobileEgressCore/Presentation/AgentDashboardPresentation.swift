@@ -248,14 +248,15 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
             tone: statusPresentation.tone,
             pairingTone: resolvePairingTone(for: state),
             scanLabel: state.pairingInProgress ? "Pairing…" : "Scan QR",
-            isScanEnabled: !state.pairingInProgress && state.status.agentState != .running,
+            isScanEnabled: !state.pairingInProgress && state.status.agentState == .stopped,
             primaryAgentAction: primaryAction(for: state),
             inactiveAgentMessage: resolveInactiveAgentMessage(for: state),
             rotationAction: resolveRotationAction(for: state),
             rotationLabel: resolveRotationLabel(for: state.status.rotation),
             isRotationEnabled: availability.isEligible(for: state.status.rotation),
-            requiresActiveStreamConfirmation: availability.requiresConfirmation(
-                for: state.status.rotation
+            requiresActiveStreamConfirmation: requiresRotationConfirmation(
+                availability: availability,
+                rotation: state.status.rotation
             ),
             cellularHealth: cellularPresentation(state.status.cellular),
             relayHealth: relayPresentation(state.status.relay),
@@ -328,13 +329,37 @@ private func statusPresentation(for state: AgentDashboardState) -> DashboardStat
             tone: .accent
         )
     }
-    if state.status.agentState != .running {
+    switch state.status.agentState {
+    case .stopped:
         return DashboardStatusPresentation(
             headline: "Ready to connect",
             summary: "Your phone is paired. Start the Agent when cellular data is available.",
             badge: "Paired",
             tone: .success
         )
+    case .starting:
+        return DashboardStatusPresentation(
+            headline: "Starting Agent",
+            summary: "Preparing the cellular relay and secure connection.",
+            badge: "Starting",
+            tone: .info
+        )
+    case .stopping:
+        return DashboardStatusPresentation(
+            headline: "Stopping Agent",
+            summary: "Closing proxy streams and the secure relay connection.",
+            badge: "Stopping",
+            tone: .info
+        )
+    case .failed:
+        return DashboardStatusPresentation(
+            headline: "Agent needs attention",
+            summary: "The Agent stopped after an error. Review the details below.",
+            badge: "Agent error",
+            tone: .error
+        )
+    case .running:
+        break
     }
     if let rotation = rotationPresentation(state.status.rotation) {
         return rotation
@@ -510,7 +535,14 @@ private func resolvePairingTone(for state: AgentDashboardState) -> AgentDashboar
 
 private func primaryAction(for state: AgentDashboardState) -> AgentPrimaryAction {
     guard state.isEnrolled, !state.pairingInProgress else { return .none }
-    return state.status.agentState == .running ? .stop : .start
+    switch state.status.agentState {
+    case .stopped:
+        return .start
+    case .running:
+        return .stop
+    case .starting, .stopping, .failed:
+        return .none
+    }
 }
 
 private func resolveInactiveAgentMessage(for state: AgentDashboardState) -> String {
@@ -524,11 +556,23 @@ private func resolveInactiveAgentMessage(for state: AgentDashboardState) -> Stri
 }
 
 private func resolveRotationAction(for state: AgentDashboardState) -> CellularIPRotationAction {
-    guard state.isEnrolled, state.status.agentState == .running else { return .none }
+    guard state.isEnrolled,
+          state.status.agentState == .running,
+          !state.status.rotation.isActive else {
+        return .none
+    }
     if case .completed(_, _, _, .unchanged) = state.status.rotation {
         return .retry
     }
     return .rotate
+}
+
+private func requiresRotationConfirmation(
+    availability: CellularIPRotationAvailability,
+    rotation: CellularIPRotationState
+) -> Bool {
+    if case .awaitingConfirmation = rotation { return true }
+    return availability.requiresConfirmation(for: rotation)
 }
 
 private func resolveRotationLabel(for rotation: CellularIPRotationState) -> String {

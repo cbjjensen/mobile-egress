@@ -387,10 +387,10 @@ final class CellularIPRotationTests: XCTestCase {
         XCTAssertEqual(
             reducer.reduce(.recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(30))),
             CellularIPRotationTransition(
-                state: state,
+                state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
                 effects: [
                     .pauseAgentAndStreams(attemptID: 41),
-                    .startHoldCountdown(attemptID: 41, seconds: 7),
+                    .scheduleCellularReturnTimeout(attemptID: 41, seconds: 157),
                 ]
             )
         )

@@ -207,9 +207,11 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
 
 public struct CellularIPRotationReducer: Sendable {
     public private(set) var state: CellularIPRotationState
+    private var highestAttemptID: UInt64?
 
     public init(initialState: CellularIPRotationState = .idle) {
         state = initialState
+        highestAttemptID = initialState.attemptID
     }
 
     @discardableResult
@@ -250,6 +252,7 @@ public struct CellularIPRotationReducer: Sendable {
             transition = reset()
         }
         state = transition.state
+        recordAttemptID(transition.state.attemptID)
         return transition
     }
 
@@ -258,7 +261,7 @@ public struct CellularIPRotationReducer: Sendable {
         networkToken: String,
         availability: CellularIPRotationAvailability
     ) -> CellularIPRotationTransition {
-        guard availability.isEligible(for: state), state.attemptID != attemptID else {
+        guard availability.isEligible(for: state), isNewAttemptID(attemptID) else {
             return unchanged()
         }
         let holdSeconds = state.nextHoldSeconds
@@ -561,60 +564,172 @@ public struct CellularIPRotationReducer: Sendable {
     ) -> CellularIPRotationTransition {
         guard state == .idle,
               checkpoint.state.isActive,
-              let attemptID = checkpoint.state.attemptID else {
+              let attemptID = checkpoint.state.attemptID,
+              isNewAttemptID(attemptID) else {
             return unchanged()
         }
         guard !checkpoint.isExpired(at: date) else {
             return terminalFailure(.recoveryExpired, attemptID: attemptID)
         }
-        return CellularIPRotationTransition(
-            state: checkpoint.state,
-            effects: recoveryEffects(for: checkpoint.state, attemptID: attemptID)
+        let elapsedSeconds = max(
+            0,
+            Int(date.timeIntervalSince(checkpoint.savedAt))
+        )
+        return recoveryTransition(
+            for: checkpoint.state,
+            attemptID: attemptID,
+            elapsedSeconds: elapsedSeconds
         )
     }
 
-    private func recoveryEffects(
+    private func recoveryTransition(
         for checkpointState: CellularIPRotationState,
-        attemptID: UInt64
-    ) -> [CellularIPRotationEffect] {
+        attemptID: UInt64,
+        elapsedSeconds: Int
+    ) -> CellularIPRotationTransition {
         switch checkpointState {
         case .awaitingConfirmation:
-            []
+            CellularIPRotationTransition(state: checkpointState)
         case let .preparing(_, networkToken, _, _, _):
-            [
-                .pauseAgentAndStreams(attemptID: attemptID),
-                .probeBefore(attemptID: attemptID, networkToken: networkToken),
-            ]
+            CellularIPRotationTransition(
+                state: checkpointState,
+                effects: [
+                    .pauseAgentAndStreams(attemptID: attemptID),
+                    .probeBefore(attemptID: attemptID, networkToken: networkToken),
+                ]
+            )
         case .awaitingAirplaneMode:
-            [
+            recoverAwaitingAirplaneMode(
+                checkpointState,
+                attemptID: attemptID,
+                elapsedSeconds: elapsedSeconds
+            )
+        case let .holding(_, remainingSeconds, before, returnedNetworkToken):
+            recoverHolding(
+                attemptID: attemptID,
+                remainingSeconds: remainingSeconds,
+                before: before,
+                returnedNetworkToken: returnedNetworkToken,
+                elapsedSeconds: elapsedSeconds
+            )
+        case .awaitingCellularReturn:
+            recoverAwaitingCellularReturn(
+                checkpointState,
+                attemptID: attemptID,
+                elapsedSeconds: elapsedSeconds
+            )
+        case let .verifying(_, _, networkToken):
+            CellularIPRotationTransition(
+                state: checkpointState,
+                effects: [
+                    .pauseAgentAndStreams(attemptID: attemptID),
+                    .probeAfter(attemptID: attemptID, networkToken: networkToken),
+                ]
+            )
+        case .idle, .completed, .failed:
+            unchanged()
+        }
+    }
+
+    private func recoverAwaitingAirplaneMode(
+        _ checkpointState: CellularIPRotationState,
+        attemptID: UInt64,
+        elapsedSeconds: Int
+    ) -> CellularIPRotationTransition {
+        let remainingSeconds = CellularIPRotationPolicy.cellularLossTimeoutSeconds
+            - elapsedSeconds
+        guard remainingSeconds > 0 else {
+            return terminalFailure(.cellularDidNotDisconnect, attemptID: attemptID)
+        }
+        return CellularIPRotationTransition(
+            state: checkpointState,
+            effects: [
                 .pauseAgentAndStreams(attemptID: attemptID),
                 .presentAirplaneModeGuidance(attemptID: attemptID),
                 .scheduleCellularLossTimeout(
                     attemptID: attemptID,
-                    seconds: CellularIPRotationPolicy.cellularLossTimeoutSeconds
+                    seconds: remainingSeconds
                 ),
             ]
-        case let .holding(_, remainingSeconds, _, _):
-            [
-                .pauseAgentAndStreams(attemptID: attemptID),
-                .startHoldCountdown(attemptID: attemptID, seconds: remainingSeconds),
-            ]
-        case .awaitingCellularReturn:
-            [
+        )
+    }
+
+    private func recoverHolding(
+        attemptID: UInt64,
+        remainingSeconds: Int,
+        before: PublicIPSnapshot,
+        returnedNetworkToken: String?,
+        elapsedSeconds: Int
+    ) -> CellularIPRotationTransition {
+        let remainingHoldSeconds = remainingSeconds - elapsedSeconds
+        if remainingHoldSeconds > 0 {
+            return CellularIPRotationTransition(
+                state: .holding(
+                    attemptID: attemptID,
+                    remainingSeconds: remainingHoldSeconds,
+                    before: before,
+                    returnedNetworkToken: returnedNetworkToken
+                ),
+                effects: [
+                    .pauseAgentAndStreams(attemptID: attemptID),
+                    .startHoldCountdown(
+                        attemptID: attemptID,
+                        seconds: remainingHoldSeconds
+                    ),
+                ]
+            )
+        }
+        if let returnedNetworkToken {
+            return CellularIPRotationTransition(
+                state: .verifying(
+                    attemptID: attemptID,
+                    before: before,
+                    returnedNetworkToken: returnedNetworkToken
+                ),
+                effects: [
+                    .pauseAgentAndStreams(attemptID: attemptID),
+                    .probeAfter(attemptID: attemptID, networkToken: returnedNetworkToken),
+                ]
+            )
+        }
+        let returnElapsedSeconds = -remainingHoldSeconds
+        let remainingReturnSeconds = CellularIPRotationPolicy.cellularReturnTimeoutSeconds
+            - returnElapsedSeconds
+        guard remainingReturnSeconds > 0 else {
+            return terminalFailure(.cellularDidNotReturn, attemptID: attemptID)
+        }
+        return CellularIPRotationTransition(
+            state: .awaitingCellularReturn(attemptID: attemptID, before: before),
+            effects: [
                 .pauseAgentAndStreams(attemptID: attemptID),
                 .scheduleCellularReturnTimeout(
                     attemptID: attemptID,
-                    seconds: CellularIPRotationPolicy.cellularReturnTimeoutSeconds
+                    seconds: remainingReturnSeconds
                 ),
             ]
-        case let .verifying(_, _, networkToken):
-            [
-                .pauseAgentAndStreams(attemptID: attemptID),
-                .probeAfter(attemptID: attemptID, networkToken: networkToken),
-            ]
-        case .idle, .completed, .failed:
-            []
+        )
+    }
+
+    private func recoverAwaitingCellularReturn(
+        _ checkpointState: CellularIPRotationState,
+        attemptID: UInt64,
+        elapsedSeconds: Int
+    ) -> CellularIPRotationTransition {
+        let remainingSeconds = CellularIPRotationPolicy.cellularReturnTimeoutSeconds
+            - elapsedSeconds
+        guard remainingSeconds > 0 else {
+            return terminalFailure(.cellularDidNotReturn, attemptID: attemptID)
         }
+        return CellularIPRotationTransition(
+            state: checkpointState,
+            effects: [
+                .pauseAgentAndStreams(attemptID: attemptID),
+                .scheduleCellularReturnTimeout(
+                    attemptID: attemptID,
+                    seconds: remainingSeconds
+                ),
+            ]
+        )
     }
 
     private func resumeFailed(attemptID: UInt64) -> CellularIPRotationTransition {
@@ -657,6 +772,16 @@ public struct CellularIPRotationReducer: Sendable {
 
     private func unchanged() -> CellularIPRotationTransition {
         CellularIPRotationTransition(state: state)
+    }
+
+    private func isNewAttemptID(_ attemptID: UInt64) -> Bool {
+        guard let highestAttemptID else { return true }
+        return attemptID > highestAttemptID
+    }
+
+    private mutating func recordAttemptID(_ attemptID: UInt64?) {
+        guard let attemptID else { return }
+        highestAttemptID = max(highestAttemptID ?? attemptID, attemptID)
     }
 }
 
