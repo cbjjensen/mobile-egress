@@ -31,32 +31,38 @@ final class CellularPublicIPProbeAdapterTests: XCTestCase {
         assertProbeFailure(
             Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n0\r\n\r\n".utf8),
             family: .ipv4,
-            classification: .unsupportedTransferEncoding
+            classification: .unsupportedTransferEncoding,
+            httpStatus: 200
         )
         assertProbeFailure(
             Data("HTTP/1.1 200 OK\r\nContent-Length: 7\r\nContent-Length: 7\r\n\r\n1.1.1.1".utf8),
             family: .ipv4,
-            classification: .malformedResponse
+            classification: .malformedResponse,
+            httpStatus: 200
         )
         assertProbeFailure(
             Data("HTTP/1.1 200 OK\r\nContent-Length: 129\r\n\r\n".utf8),
             family: .ipv4,
-            classification: .responseTooLarge
+            classification: .responseTooLarge,
+            httpStatus: 200
         )
         assertProbeFailure(
             Data("HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n1.1.1.1".utf8),
             family: .ipv4,
-            classification: .malformedResponse
+            classification: .malformedResponse,
+            httpStatus: 200
         )
         assertProbeFailure(
             Data("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n2001:db8::7".utf8),
             family: .ipv4,
-            classification: .wrongAddressFamily
+            classification: .wrongAddressFamily,
+            httpStatus: 200
         )
         assertProbeFailure(
             Data("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n999.1.1.01".utf8),
             family: .ipv4,
-            classification: .invalidAddress
+            classification: .invalidAddress,
+            httpStatus: 200
         )
     }
 
