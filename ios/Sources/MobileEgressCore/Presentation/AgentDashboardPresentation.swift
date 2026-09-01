@@ -486,7 +486,7 @@ private func failedRotationPresentation(
             badge: "Expired",
             tone: .warning
         )
-    case .agentResumeFailed:
+    case .tunnelResumeFailed:
         DashboardStatusPresentation(
             headline: "Agent needs attention",
             summary: "IP rotation ended, but the Agent could not resume. Start the Agent again.",
@@ -595,7 +595,7 @@ private extension CellularIPRotationFailure {
         case .cellularDidNotReturn: "cellular did not return"
         case .cancelled: "cancelled"
         case .recoveryExpired: "recovery expired"
-        case .agentResumeFailed: "agent resume failed"
+        case .tunnelResumeFailed: "tunnel resume failed"
         }
     }
 }

@@ -33,7 +33,7 @@ public enum CellularIPRotationFailure: String, Codable, Equatable, Sendable {
     case cellularDidNotReturn
     case cancelled
     case recoveryExpired
-    case agentResumeFailed
+    case tunnelResumeFailed
 }
 
 public enum CellularIPRotationState: Codable, Equatable, Sendable {
@@ -620,11 +620,11 @@ public struct CellularIPRotationReducer: Sendable {
         switch state {
         case .completed:
             return CellularIPRotationTransition(
-                state: .failed(attemptID: attemptID, failure: .agentResumeFailed)
+                state: .failed(attemptID: attemptID, failure: .tunnelResumeFailed)
             )
-        case let .failed(_, failure) where failure != .agentResumeFailed:
+        case let .failed(_, failure) where failure != .tunnelResumeFailed:
             return CellularIPRotationTransition(
-                state: .failed(attemptID: attemptID, failure: .agentResumeFailed)
+                state: .failed(attemptID: attemptID, failure: .tunnelResumeFailed)
             )
         case .idle, .awaitingConfirmation, .preparing, .awaitingAirplaneMode, .holding,
              .awaitingCellularReturn, .verifying, .failed:
