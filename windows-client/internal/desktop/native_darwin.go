@@ -11,7 +11,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-//go:embed zfnf-logo.ico
+//go:embed zfnf-menu-bar.png
 var darwinMenuBarIcon []byte
 
 type wailsDesktopNative struct {

@@ -159,6 +159,7 @@ void mobile_egress_menu_bar_start(
                 [button setToolTip:tooltipValue];
                 if (iconData != nil) {
                     NSImage *image = [[NSImage alloc] initWithData:iconData];
+                    [image setSize:NSMakeSize(18.0, 18.0)];
                     [image setTemplate:YES];
                     [button setImage:image];
                     [image release];
