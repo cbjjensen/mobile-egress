@@ -190,18 +190,53 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
 
     public let state: CellularIPRotationState
     public let savedAt: Date
+    public let timeoutDeadline: Date?
 
     public var expiresAt: Date {
         savedAt.addingTimeInterval(Self.validityDuration)
     }
 
-    public init(state: CellularIPRotationState, savedAt: Date) {
+    public init(
+        state: CellularIPRotationState,
+        savedAt: Date,
+        timeoutDeadline: Date? = nil
+    ) {
         self.state = state
         self.savedAt = savedAt
+        self.timeoutDeadline = timeoutDeadline ?? Self.defaultTimeoutDeadline(
+            for: state,
+            savedAt: savedAt
+        )
     }
 
     public func isExpired(at date: Date) -> Bool {
         date >= expiresAt
+    }
+
+    fileprivate func remainingTimeoutSeconds(at date: Date) -> Int? {
+        guard let timeoutDeadline else { return nil }
+        let remaining = timeoutDeadline.timeIntervalSince(date)
+        guard remaining > 0 else { return 0 }
+        return Int(remaining.rounded(.up))
+    }
+
+    private static func defaultTimeoutDeadline(
+        for state: CellularIPRotationState,
+        savedAt: Date
+    ) -> Date? {
+        switch state {
+        case .awaitingAirplaneMode:
+            savedAt.addingTimeInterval(
+                TimeInterval(CellularIPRotationPolicy.cellularLossTimeoutSeconds)
+            )
+        case .awaitingCellularReturn:
+            savedAt.addingTimeInterval(
+                TimeInterval(CellularIPRotationPolicy.cellularReturnTimeoutSeconds)
+            )
+        case .idle, .awaitingConfirmation, .preparing, .holding, .verifying,
+             .completed, .failed:
+            nil
+        }
     }
 }
 
@@ -577,17 +612,20 @@ public struct CellularIPRotationReducer: Sendable {
             Int(date.timeIntervalSince(checkpoint.savedAt))
         )
         return recoveryTransition(
-            for: checkpoint.state,
+            for: checkpoint,
             attemptID: attemptID,
+            recoveredAt: date,
             elapsedSeconds: elapsedSeconds
         )
     }
 
     private func recoveryTransition(
-        for checkpointState: CellularIPRotationState,
+        for checkpoint: CellularIPRotationCheckpoint,
         attemptID: UInt64,
+        recoveredAt: Date,
         elapsedSeconds: Int
     ) -> CellularIPRotationTransition {
+        let checkpointState = checkpoint.state
         switch checkpointState {
         case .awaitingConfirmation:
             CellularIPRotationTransition(state: checkpointState)
@@ -603,7 +641,7 @@ public struct CellularIPRotationReducer: Sendable {
             recoverAwaitingAirplaneMode(
                 checkpointState,
                 attemptID: attemptID,
-                elapsedSeconds: elapsedSeconds
+                remainingSeconds: checkpoint.remainingTimeoutSeconds(at: recoveredAt)
             )
         case let .holding(_, remainingSeconds, before, returnedNetworkToken):
             recoverHolding(
@@ -617,7 +655,7 @@ public struct CellularIPRotationReducer: Sendable {
             recoverAwaitingCellularReturn(
                 checkpointState,
                 attemptID: attemptID,
-                elapsedSeconds: elapsedSeconds
+                remainingSeconds: checkpoint.remainingTimeoutSeconds(at: recoveredAt)
             )
         case let .verifying(_, _, networkToken):
             CellularIPRotationTransition(
@@ -635,11 +673,9 @@ public struct CellularIPRotationReducer: Sendable {
     private func recoverAwaitingAirplaneMode(
         _ checkpointState: CellularIPRotationState,
         attemptID: UInt64,
-        elapsedSeconds: Int
+        remainingSeconds: Int?
     ) -> CellularIPRotationTransition {
-        let remainingSeconds = CellularIPRotationPolicy.cellularLossTimeoutSeconds
-            - elapsedSeconds
-        guard remainingSeconds > 0 else {
+        guard let remainingSeconds, remainingSeconds > 0 else {
             return terminalFailure(.cellularDidNotDisconnect, attemptID: attemptID)
         }
         return CellularIPRotationTransition(
@@ -714,11 +750,9 @@ public struct CellularIPRotationReducer: Sendable {
     private func recoverAwaitingCellularReturn(
         _ checkpointState: CellularIPRotationState,
         attemptID: UInt64,
-        elapsedSeconds: Int
+        remainingSeconds: Int?
     ) -> CellularIPRotationTransition {
-        let remainingSeconds = CellularIPRotationPolicy.cellularReturnTimeoutSeconds
-            - elapsedSeconds
-        guard remainingSeconds > 0 else {
+        guard let remainingSeconds, remainingSeconds > 0 else {
             return terminalFailure(.cellularDidNotReturn, attemptID: attemptID)
         }
         return CellularIPRotationTransition(
