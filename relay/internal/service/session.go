@@ -24,7 +24,7 @@ import (
 const (
 	maxWebSocketMessageBytes      = 2 << 20
 	webSocketWriteTimeout         = time.Second
-	maxClosedStreamTombstones     = 128
+	maxClosedStreamTombstones     = 1024
 	closedStreamTombstoneLifetime = 30 * time.Second
 )
 
@@ -57,12 +57,27 @@ type session struct {
 	service *Service
 	serial  string
 	role    enrollment.Role
-	conn    *websocket.Conn
+	conn    sessionConnection
 
+	outbound   *outboundMailbox
 	writeMu    sync.Mutex
 	closeOnce  sync.Once
 	registered bool
 }
+
+type sessionConnection interface {
+	SetReadLimit(int64)
+	ReadMessage() (int, []byte, error)
+	SetWriteDeadline(time.Time) error
+	WriteMessage(int, []byte) error
+	WriteControl(int, []byte, time.Time) error
+	Close() error
+}
+
+var (
+	errOutboundDataSaturated = errors.New("session data lane saturated")
+	errSessionUnavailable    = errors.New("session unavailable")
+)
 
 type streamState uint8
 
@@ -142,7 +157,8 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 		service.mu.Unlock()
 		return
 	}
-	activeSession := &session{service: service, serial: serial, role: role, conn: connection, registered: true}
+	activeSession := newSession(service, serial, role, connection)
+	activeSession.registered = true
 	service.sessions[serial] = activeSession
 	if role == enrollment.RoleAgent {
 		service.agent = activeSession
@@ -154,7 +170,16 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 
 	service.janitorOnce.Do(func() { go service.runStreamJanitor() })
 	activeSession.readLoop()
-	service.detachSession(activeSession, "session_closed")
+	activeSession.close("session_closed")
+}
+
+func newSession(service *Service, serial string, role enrollment.Role, connection sessionConnection) *session {
+	activeSession := &session{
+		service: service, serial: serial, role: role, conn: connection,
+		outbound: newSessionOutboundMailbox(role),
+	}
+	go activeSession.writeLoop()
+	return activeSession
 }
 
 func (activeSession *session) readLoop() {
@@ -286,11 +311,19 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 	if err := service.store.incrementTotalStreams(context.Background()); err != nil {
 		service.removeStreamLocked(tracked)
 		errorCode = "agent_unavailable"
-	} else if err := agent.send(forward); err != nil {
-		service.removeStreamLocked(tracked)
-		errorCode = "agent_unavailable"
+	}
+	admission := outboundClosed
+	if errorCode == "" {
+		admission = agent.outbound.enqueue(forward)
+		if admission != outboundAdmitted {
+			service.removeStreamLocked(tracked)
+			errorCode = "agent_unavailable"
+		}
 	}
 	service.mu.Unlock()
+	if admission == outboundControlSaturated {
+		agent.close("session_closed")
+	}
 	if errorCode != "" {
 		service.rejectOpen(client, envelope.StreamID, errorCode)
 	}
@@ -331,7 +364,10 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 	if agent == nil {
 		return nil
 	}
-	if err := agent.send(envelope); err != nil {
+	if err := agent.send(envelope); errors.Is(err, errOutboundDataSaturated) {
+		service.failStreamUnavailable(tracked)
+		return nil
+	} else if err != nil {
 		return nil
 	}
 	if envelope.Type == protocol.TypeData {
@@ -388,7 +424,10 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 		service.removeStreamLocked(tracked)
 	}
 	service.mu.Unlock()
-	if err := client.send(envelope); err != nil {
+	if err := client.send(envelope); errors.Is(err, errOutboundDataSaturated) {
+		service.failStreamUnavailable(tracked)
+		return nil
+	} else if err != nil {
 		return nil
 	}
 	if envelope.Type == protocol.TypeData {
@@ -427,9 +466,21 @@ func (service *Service) rejectOpen(client *session, streamID, code string) {
 	})
 }
 
+func (service *Service) failStreamUnavailable(tracked *stream) {
+	service.mu.Lock()
+	if current := service.streams[tracked.id]; current != tracked {
+		service.mu.Unlock()
+		return
+	}
+	service.removeStreamLocked(tracked)
+	notifications := service.streamCloseNotificationsLocked(tracked, "agent_unavailable", tracked.agent)
+	service.mu.Unlock()
+	_ = service.store.incrementError(context.Background(), "agent_unavailable")
+	service.dispatchNotifications(notifications)
+}
+
 func (service *Service) protocolViolation(activeSession *session) {
 	_ = service.store.incrementError(context.Background(), "protocol_error")
-	service.detachSession(activeSession, "protocol_error")
 	activeSession.close("protocol_error")
 }
 
@@ -441,17 +492,12 @@ func (service *Service) detachSession(activeSession *session, code string) {
 }
 
 func (service *Service) closeIdentitySession(serial, code string) {
-	service.mu.Lock()
+	service.mu.RLock()
 	activeSession := service.sessions[serial]
-	var notifications []streamNotification
-	if activeSession != nil {
-		notifications = service.detachSessionLocked(activeSession, code)
-	}
-	service.mu.Unlock()
+	service.mu.RUnlock()
 	if activeSession == nil {
 		return
 	}
-	service.dispatchNotifications(notifications)
 	activeSession.close(code)
 }
 
@@ -462,12 +508,7 @@ func (service *Service) revokeIdentity(ctx context.Context, serial string, now t
 		return err
 	}
 	activeSession := service.sessions[serial]
-	var notifications []streamNotification
-	if activeSession != nil {
-		notifications = service.detachSessionLocked(activeSession, "revoked")
-	}
 	service.mu.Unlock()
-	service.dispatchNotifications(notifications)
 	if activeSession != nil {
 		activeSession.close("revoked")
 	}
@@ -509,6 +550,12 @@ func (service *Service) removeStreamLocked(tracked *stream) {
 		return
 	}
 	delete(service.streams, tracked.id)
+	if tracked.client != nil && tracked.client.outbound != nil {
+		tracked.client.outbound.discardStreamData(tracked.id)
+	}
+	if tracked.agent != nil && tracked.agent.outbound != nil {
+		tracked.agent.outbound.discardStreamData(tracked.id)
+	}
 	service.rememberClosedStreamLocked(tracked, time.Now())
 	if service.activeStreams > 0 {
 		service.activeStreams--
@@ -606,26 +653,53 @@ func (service *Service) expireStreams(now time.Time) {
 }
 
 func (activeSession *session) send(envelope protocol.Envelope) error {
-	message, err := json.Marshal(envelope)
-	if err != nil {
-		return err
+	if activeSession.outbound == nil {
+		return errSessionUnavailable
 	}
-	deadline := time.Now().Add(webSocketWriteTimeout)
-	for !activeSession.writeMu.TryLock() {
-		if !time.Now().Before(deadline) {
-			return errors.New("WebSocket writer unavailable")
+	switch activeSession.outbound.enqueue(envelope) {
+	case outboundAdmitted:
+		return nil
+	case outboundDataSaturated:
+		return errOutboundDataSaturated
+	case outboundControlSaturated:
+		activeSession.close("session_closed")
+		return errSessionUnavailable
+	default:
+		return errSessionUnavailable
+	}
+}
+
+func (activeSession *session) writeLoop() {
+	for {
+		envelope, ok := activeSession.outbound.wait()
+		if !ok {
+			return
 		}
-		time.Sleep(time.Millisecond)
+		message, err := json.Marshal(envelope)
+		if err == nil {
+			activeSession.writeMu.Lock()
+			deadline := time.Now().Add(webSocketWriteTimeout)
+			err = activeSession.conn.SetWriteDeadline(deadline)
+			if err == nil {
+				err = activeSession.conn.WriteMessage(websocket.BinaryMessage, message)
+			}
+			activeSession.writeMu.Unlock()
+		}
+		if err != nil {
+			activeSession.close("session_closed")
+			return
+		}
 	}
-	defer activeSession.writeMu.Unlock()
-	if err := activeSession.conn.SetWriteDeadline(deadline); err != nil {
-		return err
-	}
-	return activeSession.conn.WriteMessage(websocket.BinaryMessage, message)
 }
 
 func (activeSession *session) close(code string) {
 	activeSession.closeOnce.Do(func() {
+		if activeSession.outbound != nil {
+			activeSession.outbound.close()
+		}
+		if activeSession.service != nil {
+			activeSession.service.detachSession(activeSession, code)
+		}
 		_ = activeSession.conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, code), time.Now().Add(time.Second))
 		_ = activeSession.conn.Close()
@@ -643,10 +717,7 @@ func (service *Service) streamCloseNotificationsLocked(tracked *stream, code str
 
 func (service *Service) dispatchNotifications(notifications []streamNotification) {
 	for _, notification := range notifications {
-		notification := notification
-		go func() {
-			_ = notification.target.send(notification.envelope)
-		}()
+		_ = notification.target.send(notification.envelope)
 	}
 }
 

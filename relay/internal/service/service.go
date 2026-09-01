@@ -134,7 +134,7 @@ func Open(stateDir string) (*Service, error) {
 		serverCert: serverCert, clientRoots: roots,
 		sessions: make(map[string]*session), streams: make(map[string]*stream),
 		closedStreams:    make(map[string]closedStreamTombstone),
-		maxClientStreams: 4, maxAgentStreams: 32,
+		maxClientStreams: 32, maxAgentStreams: 256,
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
 		lookupNetIP: defaultLookupNetIP,

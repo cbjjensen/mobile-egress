@@ -233,15 +233,35 @@ func TestClosedStreamTombstonesAreBoundedAndPurgedBySweep(t *testing.T) {
 	}
 	client := &session{role: enrollment.RoleClient}
 	agent := &session{role: enrollment.RoleAgent}
-	for index := 0; index < 512; index++ {
+	for index := 0; index < 2048; index++ {
 		id := "closed-" + strconv.Itoa(index)
 		tracked := &stream{id: id, client: client, agent: agent}
 		service.streams[id] = tracked
 		service.activeStreams++
 		service.removeStreamLocked(tracked)
 	}
-	if got := len(service.closedStreams); got > 128 {
-		t.Fatalf("closed stream tombstones = %d, want at most 128", got)
+	if got := len(service.closedStreams); got != 1024 {
+		t.Fatalf("closed stream tombstones = %d, want 1024", got)
+	}
+	now := time.Now()
+	for streamID := range service.closedStreams {
+		closeEnvelope := protocol.Envelope{Version: 1, Type: protocol.TypeClose, StreamID: streamID, Payload: encodeRelayError("client_closed")}
+		if !service.absorbLateCloseLocked(client, enrollment.RoleClient, closeEnvelope, now) {
+			t.Fatalf("first late Client close for %q was not absorbed", streamID)
+		}
+		if !service.absorbLateCloseLocked(client, enrollment.RoleClient, closeEnvelope, now) {
+			t.Fatalf("duplicate late Client close for %q was not absorbed", streamID)
+		}
+		if !service.absorbLateCloseLocked(agent, enrollment.RoleAgent, closeEnvelope, now) {
+			t.Fatalf("late Agent close for %q was not absorbed", streamID)
+		}
+		rejected := protocol.Envelope{Version: 1, Type: protocol.TypeRejected, StreamID: streamID, Payload: encodeRelayError("target_failure")}
+		if service.absorbLateCloseLocked(agent, enrollment.RoleAgent, rejected, now) {
+			t.Fatalf("late rejection for %q was incorrectly absorbed as a close", streamID)
+		}
+	}
+	if got := len(service.closedStreams); got != 1024 {
+		t.Fatalf("closed stream tombstones after late-frame churn = %d, want 1024", got)
 	}
 
 	service.expireStreams(time.Now().Add(time.Minute))

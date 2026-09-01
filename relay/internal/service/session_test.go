@@ -216,7 +216,7 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 	agent := mustDialSession(t, fixture, devices[9].client)
 	defer agent.Close()
 
-	for index := 0; index < 4; index++ {
+	for index := 0; index < 32; index++ {
 		streamID := "client-one-" + string(rune('a'+index))
 		writeEnvelope(t, clientOne, openEnvelope(streamID, "1.1.1.1", 443))
 		if forwarded := readEnvelope(t, agent); forwarded.StreamID != streamID || forwarded.Type != protocol.TypeOpen {
@@ -228,8 +228,19 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 		t.Fatalf("per-client limit response = %#v", rejected)
 	}
 
+	writeEnvelope(t, clientOne, protocol.Envelope{
+		Version: 1, Type: protocol.TypeClose, StreamID: "client-one-a", Payload: encodeErrorCode("client_closed"),
+	})
+	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "client-one-a" || forwarded.Type != protocol.TypeClose {
+		t.Fatalf("agent received wrong close: %#v", forwarded)
+	}
+	writeEnvelope(t, clientOne, openEnvelope("client-one-reused-slot", "1.1.1.1", 443))
+	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "client-one-reused-slot" || forwarded.Type != protocol.TypeOpen {
+		t.Fatalf("agent received wrong replacement open: %#v", forwarded)
+	}
+
 	for clientIndex := 1; clientIndex < 8; clientIndex++ {
-		for streamIndex := 0; streamIndex < 4; streamIndex++ {
+		for streamIndex := 0; streamIndex < 32; streamIndex++ {
 			streamID := fmt.Sprintf("client-%d-%d", clientIndex+1, streamIndex+1)
 			writeEnvelope(t, clients[clientIndex], openEnvelope(streamID, "1.1.1.1", 443))
 			if forwarded := readEnvelope(t, agent); forwarded.StreamID != streamID || forwarded.Type != protocol.TypeOpen {
@@ -240,6 +251,55 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 	writeEnvelope(t, clients[8], openEnvelope("agent-over-limit", "1.1.1.1", 443))
 	if rejected := readEnvelope(t, clients[8]); rejected.Type != protocol.TypeRejected || decodedErrorCode(t, rejected) != "agent_stream_limit" {
 		t.Fatalf("agent-wide limit response = %#v", rejected)
+	}
+}
+
+func TestSessionRoutesThirtyTwoKiBDataAndRetainsOversizeProtocolRejection(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client", "agent")
+	client := mustDialSession(t, fixture, devices[0].client)
+	defer client.Close()
+	agent := mustDialSession(t, fixture, devices[1].client)
+	defer agent.Close()
+
+	writeEnvelope(t, client, openEnvelope("frame-boundary", "1.1.1.1", 443))
+	if opened := readEnvelope(t, agent); opened.Type != protocol.TypeOpen || opened.StreamID != "frame-boundary" {
+		t.Fatalf("Agent received %#v, want frame-boundary open", opened)
+	}
+	writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: "frame-boundary"})
+	if opened := readEnvelope(t, client); opened.Type != protocol.TypeOpened || opened.StreamID != "frame-boundary" {
+		t.Fatalf("Client received %#v, want frame-boundary opened", opened)
+	}
+
+	payload := strings.Repeat("x", 32<<10)
+	writeEnvelope(t, client, protocol.Envelope{
+		Version: 1, Type: protocol.TypeData, StreamID: "frame-boundary",
+		Payload: base64.RawURLEncoding.EncodeToString([]byte(payload)),
+	})
+	forwarded := readEnvelope(t, agent)
+	decoded, err := forwarded.DecodePayload()
+	if err != nil {
+		t.Fatalf("decode forwarded 32 KiB frame: %v", err)
+	}
+	if forwarded.Type != protocol.TypeData || forwarded.StreamID != "frame-boundary" || len(decoded) != 32<<10 {
+		t.Fatalf("forwarded 32 KiB frame = %s/%s/%d bytes", forwarded.Type, forwarded.StreamID, len(decoded))
+	}
+
+	writeEnvelope(t, client, protocol.Envelope{
+		Version: 1, Type: protocol.TypeData, StreamID: "frame-boundary",
+		Payload: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("z", (1<<20)+1))),
+	})
+	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := client.ReadMessage(); err == nil {
+		t.Fatal("Client remained connected after sending an over-limit payload")
+	} else {
+		var closeError *websocket.CloseError
+		if !errors.As(err, &closeError) || closeError.Code != websocket.ClosePolicyViolation || closeError.Text != "protocol_error" {
+			t.Fatalf("over-limit payload close = %v, want policy-violation protocol_error", err)
+		}
 	}
 }
 
