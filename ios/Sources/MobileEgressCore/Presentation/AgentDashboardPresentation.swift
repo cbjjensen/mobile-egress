@@ -273,7 +273,7 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
                 availability: availability,
                 rotation: state.status.rotation
             ),
-            rotationConfirmation: rotationConfirmation(for: state.status.rotation),
+            rotationConfirmation: resolveRotationConfirmation(for: state.status.rotation),
             cellularHealth: cellularPresentation(state.status.cellular),
             relayHealth: relayPresentation(state.status.relay),
             metrics: [
@@ -591,7 +591,7 @@ private func requiresRotationConfirmation(
     return availability.requiresConfirmation(for: rotation)
 }
 
-private func rotationConfirmation(
+private func resolveRotationConfirmation(
     for rotation: CellularIPRotationState
 ) -> CellularIPRotationConfirmationPresentation? {
     guard case let .awaitingConfirmation(_, _, _, activeStreamCount) = rotation else {
