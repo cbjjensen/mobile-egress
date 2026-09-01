@@ -23,6 +23,7 @@ type DaemonConfig struct {
 
 type RunResult struct {
 	RestartRequested bool
+	Quiescent        bool
 }
 
 type Daemon struct {
@@ -173,11 +174,11 @@ acceptLoop:
 	if stopErr != nil {
 		stopErr = fmt.Errorf("stop relay supervisor: %w", stopErr)
 	}
-	joined := errors.Join(acceptErr, listenerCloseErr, drainErr, stopErr)
-	if joined != nil {
-		return RunResult{}, joined
+	result := RunResult{
+		RestartRequested: channelClosed(restartRequested),
+		Quiescent:        drainErr == nil && stopErr == nil,
 	}
-	return RunResult{RestartRequested: channelClosed(restartRequested)}, nil
+	return result, errors.Join(acceptErr, listenerCloseErr, drainErr, stopErr)
 }
 
 func channelClosed(channel <-chan struct{}) bool {

@@ -25,6 +25,10 @@ func main() {
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
+	return runWithDaemon(arguments, stdout, stderr, runPlatformDaemon)
+}
+
+func runWithDaemon(arguments []string, stdout, stderr io.Writer, platform daemonPlatform) int {
 	if len(arguments) == 0 {
 		writeUsage(stderr)
 		return 2
@@ -39,6 +43,8 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return runRotateEndpoint(arguments[1:], stdout, stderr)
 	case "serve":
 		return runServe(arguments[1:], stderr)
+	case "daemon":
+		return runDaemon(arguments[1:], stderr, platform)
 	default:
 		writeUsage(stderr)
 		return 2

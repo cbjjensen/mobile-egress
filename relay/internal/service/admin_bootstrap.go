@@ -65,6 +65,18 @@ func (state *AdminState) BootstrapOwner(
 	if presence == adminStatePresenceReady {
 		return EnrollmentResult{}, ErrAdminAlreadyInitialized
 	}
+	if state.pathGuard != nil {
+		if err := state.pathGuard.Validate(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return EnrollmentResult{}, ctxErr
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return EnrollmentResult{}, err
+			}
+			state.markAdminDegraded()
+			return EnrollmentResult{}, ErrAdminStateIncompatible
+		}
+	}
 	if _, err := os.Lstat(stateDir); err == nil {
 		state.markAdminDegraded()
 		return EnrollmentResult{}, ErrAdminStateIncompatible
@@ -73,8 +85,14 @@ func (state *AdminState) BootstrapOwner(
 		return EnrollmentResult{}, ErrAdminStateIncompatible
 	}
 	parent := filepath.Dir(stateDir)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return EnrollmentResult{}, fmt.Errorf("create relay admin state parent: %w", err)
+	if state.pathGuard == nil {
+		makeSetupParent := state.makeSetupParent
+		if makeSetupParent == nil {
+			makeSetupParent = os.MkdirAll
+		}
+		if err := makeSetupParent(parent, 0o700); err != nil {
+			return EnrollmentResult{}, fmt.Errorf("create relay admin state parent: %w", err)
+		}
 	}
 	stageDir := filepath.Join(parent, ".relay-setup-"+transaction.key.RequestID)
 	if _, err := os.Lstat(stageDir); err == nil {
@@ -107,13 +125,17 @@ func (state *AdminState) BootstrapOwner(
 		data []byte
 		mode os.FileMode
 	}{
-		{name: caCertFilename, data: caCertPEM, mode: 0o644},
+		{name: caCertFilename, data: caCertPEM, mode: 0o600},
 		{name: caKeyFilename, data: caKeyPEM, mode: 0o600},
-		{name: relayCertFilename, data: relayCertPEM, mode: 0o644},
+		{name: relayCertFilename, data: relayCertPEM, mode: 0o600},
 		{name: relayKeyFilename, data: relayKeyPEM, mode: 0o600},
 	}
+	writeSetupFile := state.writeSetupFile
+	if writeSetupFile == nil {
+		writeSetupFile = writeDurableFile
+	}
 	for _, file := range files {
-		if err := writeDurableFile(filepath.Join(stageDir, file.name), file.data, file.mode); err != nil {
+		if err := writeSetupFile(filepath.Join(stageDir, file.name), file.data, file.mode); err != nil {
 			return EnrollmentResult{}, fmt.Errorf("write relay admin setup state: %w", err)
 		}
 	}

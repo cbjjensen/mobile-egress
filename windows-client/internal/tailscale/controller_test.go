@@ -64,7 +64,7 @@ func TestFindFunnelApprovalURLAcceptsOnlyTheOfficialFunnelEndpoint(t *testing.T)
 	}
 }
 
-func TestConnectUsesLoginAndUnattendedSetupWithoutConfiguringFunnel(t *testing.T) {
+func TestConnectUsesLoginAndPlatformSetupWithoutConfiguringFunnel(t *testing.T) {
 	t.Parallel()
 
 	executable := filepath.Join(t.TempDir(), "tailscale.exe")
@@ -89,7 +89,7 @@ func TestConnectUsesLoginAndUnattendedSetupWithoutConfiguringFunnel(t *testing.T
 	want := [][]string{
 		{"status", "--json"},
 		{"login"},
-		{"up", "--unattended=true"},
+		append([]string(nil), testPlatformUpArguments...),
 		{"status", "--json"},
 		{"funnel", "status", "--json"},
 	}
@@ -100,6 +100,30 @@ func TestConnectUsesLoginAndUnattendedSetupWithoutConfiguringFunnel(t *testing.T
 		if len(arguments) > 0 && arguments[0] == "funnel" && (len(arguments) < 2 || arguments[1] != "status") {
 			t.Fatalf("Connect() configured Funnel with arguments %#v", arguments)
 		}
+	}
+}
+
+func TestConnectReturnsThePlatformSetupFailure(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(t.TempDir(), "tailscale")
+	if err := os.WriteFile(executable, []byte("test executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{
+		outputs: [][]byte{
+			[]byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`),
+			[]byte(`{}`),
+			nil,
+		},
+		errors: []error{nil, nil, errors.New("private up failure")},
+	}
+	_, err := NewController(executable, runner).Connect(context.Background())
+	if err == nil || err.Error() != testPlatformUpFailure {
+		t.Fatalf("Connect() error = %v, want %q", err, testPlatformUpFailure)
+	}
+	if got := runner.arguments[len(runner.arguments)-1]; !reflect.DeepEqual(got, testPlatformUpArguments) {
+		t.Fatalf("up arguments = %#v, want %#v", got, testPlatformUpArguments)
 	}
 }
 
@@ -130,7 +154,7 @@ func TestControllerStatusAndEnableUseExactCLICommands(t *testing.T) {
 		{"funnel", "status", "--json"},
 		{"status", "--json"},
 		{"funnel", "status", "--json"},
-		{"up", "--unattended=true"},
+		append([]string(nil), testPlatformUpArguments...),
 		{"funnel", "--bg", "--yes", "--tcp=8443", "tcp://127.0.0.1:8443"},
 		{"status", "--json"},
 		{"funnel", "status", "--json"},
@@ -154,7 +178,7 @@ func TestEnableStartsInteractiveBrowserLoginWhenStatusIsOffline(t *testing.T) {
 	want := [][]string{
 		{"status", "--json"},
 		{"login"},
-		{"up", "--unattended=true"},
+		append([]string(nil), testPlatformUpArguments...),
 		{"funnel", "--bg", "--yes", "--tcp=8443", "tcp://127.0.0.1:8443"},
 		{"status", "--json"},
 		{"funnel", "status", "--json"},
@@ -226,7 +250,7 @@ func (runner *approvalStreamingRunner) Run(_ context.Context, _ string, argument
 		}
 		return []byte(`{}`), nil
 	}
-	if reflect.DeepEqual(arguments, []string{"up", "--unattended=true"}) {
+	if reflect.DeepEqual(arguments, testPlatformUpArguments) {
 		return nil, nil
 	}
 	return nil, errors.New("unexpected non-streaming command")
