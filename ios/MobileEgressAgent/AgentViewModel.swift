@@ -220,6 +220,22 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    func confirmStopAgent() {
+        let command = TunnelCommandDecision.confirmedStopCommand(
+            providerState: providerStatus.providerState,
+            connectionPhase: vpnStatus.connectionPhase
+        )
+        guard isEnrolled,
+              !isProcessingScan,
+              !isChangingTunnel,
+              let command else { return }
+        isChangingTunnel = true
+        userError = nil
+        Task { [weak self] in
+            await self?.changeTunnelState(command: command)
+        }
+    }
+
     func requestRotation() {
         guard canRotateCellularIP else { return }
         syncRotationAvailability()

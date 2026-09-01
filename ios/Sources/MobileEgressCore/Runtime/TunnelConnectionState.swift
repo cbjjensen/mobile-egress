@@ -40,6 +40,18 @@ public struct TunnelCommandDecision: Equatable, Sendable {
         }
     }
 
+    public static func confirmedStopCommand(
+        providerState: TunnelProviderLifecycleState,
+        connectionPhase: TunnelConnectionPhase
+    ) -> TunnelCommand? {
+        let current = resolve(
+            providerState: providerState,
+            connectionPhase: connectionPhase
+        )
+        guard current.isEnabled, current.command == .stop else { return nil }
+        return .stop
+    }
+
     private init(command: TunnelCommand, isEnabled: Bool) {
         self.command = command
         self.isEnabled = isEnabled

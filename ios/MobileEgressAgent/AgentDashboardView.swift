@@ -79,7 +79,7 @@ struct AgentDashboardView: View {
             titleVisibility: .visible
         ) {
             Button("Stop Agent", role: .destructive) {
-                model.toggleTunnel()
+                model.confirmStopAgent()
             }
             Button("Keep Running", role: .cancel) {}
         } message: {
