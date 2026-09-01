@@ -290,6 +290,7 @@ final class SessionPrimitivesTests: XCTestCase {
 
         popped = deque.popFirst()
         XCTAssertEqual(deque.occupiedSlotCount, 0)
+        XCTAssertNotNil(popped)
         popped = nil
 
         XCTAssertNil(weakReference)
