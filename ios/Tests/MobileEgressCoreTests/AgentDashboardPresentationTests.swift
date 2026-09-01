@@ -147,6 +147,90 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.requiresActiveStreamConfirmation)
     }
 
+    func testAwaitingConfirmationExposesConsistentConfirmAndDeclineActions() {
+        let status = AgentStatusSnapshot(
+            agentState: .running,
+            cellular: .available,
+            relay: .connected,
+            activeStreamCount: 4,
+            bytesUploaded: 0,
+            bytesDownloaded: 0,
+            errorClass: .none,
+            rotation: .awaitingConfirmation(
+                attemptID: 41,
+                originalNetworkToken: "private-token",
+                holdSeconds: 10,
+                activeStreamCount: 4
+            )
+        )
+
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(isEnrolled: true, status: status)
+        )
+
+        XCTAssertTrue(presentation.requiresActiveStreamConfirmation)
+        XCTAssertEqual(presentation.rotationAction, .none)
+        XCTAssertFalse(presentation.isRotationEnabled)
+        XCTAssertEqual(
+            presentation.rotationConfirmation,
+            CellularIPRotationConfirmationPresentation(
+                title: "Disconnect 4 active streams?",
+                message: "Rotating the cellular IP will close every active proxy stream.",
+                confirmLabel: "Disconnect and rotate",
+                declineLabel: "Keep current connection"
+            )
+        )
+    }
+
+    func testStartingAgentUsesFinitePendingPresentationAndDisablesConflictingActions() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                status: status(agentState: .starting, errorClass: .none)
+            )
+        )
+
+        XCTAssertEqual(presentation.headline, "Starting Agent")
+        XCTAssertEqual(presentation.badge, "Starting")
+        XCTAssertEqual(presentation.tone, .info)
+        XCTAssertEqual(presentation.primaryAgentAction, .none)
+        XCTAssertFalse(presentation.isScanEnabled)
+        XCTAssertEqual(presentation.rotationAction, .none)
+    }
+
+    func testStoppingAgentUsesFinitePendingPresentationAndDisablesConflictingActions() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                status: status(agentState: .stopping, errorClass: .none)
+            )
+        )
+
+        XCTAssertEqual(presentation.headline, "Stopping Agent")
+        XCTAssertEqual(presentation.badge, "Stopping")
+        XCTAssertEqual(presentation.tone, .info)
+        XCTAssertEqual(presentation.primaryAgentAction, .none)
+        XCTAssertFalse(presentation.isScanEnabled)
+        XCTAssertEqual(presentation.rotationAction, .none)
+    }
+
+    func testFailedAgentUsesFiniteErrorPresentationAndDisablesConflictingActions() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                status: status(agentState: .failed, errorClass: .internalFailure)
+            )
+        )
+
+        XCTAssertEqual(presentation.headline, "Agent needs attention")
+        XCTAssertEqual(presentation.badge, "Agent error")
+        XCTAssertEqual(presentation.tone, .error)
+        XCTAssertEqual(presentation.finiteErrorCopy, "The Agent stopped because of an internal error.")
+        XCTAssertEqual(presentation.primaryAgentAction, .none)
+        XCTAssertFalse(presentation.isScanEnabled)
+        XCTAssertEqual(presentation.rotationAction, .none)
+    }
+
     func testCellularLossTakesPrecedenceOverAnUnrelatedStreamError() {
         let status = AgentStatusSnapshot(
             agentState: .running,
@@ -255,5 +339,21 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(formatMobileEgressByteCount(1_536), "1.5 KB")
         XCTAssertEqual(formatMobileEgressByteCount(2 * 1_024 * 1_024), "2.0 MB")
         XCTAssertEqual(formatMobileEgressByteCount(1_024 * 1_024 * 1_024), "1.0 GB")
+    }
+
+    private func status(
+        agentState: AgentOperationalState,
+        errorClass: AgentStatusErrorClass
+    ) -> AgentStatusSnapshot {
+        AgentStatusSnapshot(
+            agentState: agentState,
+            cellular: .available,
+            relay: .disconnected,
+            activeStreamCount: 0,
+            bytesUploaded: 0,
+            bytesDownloaded: 0,
+            errorClass: errorClass,
+            rotation: .idle
+        )
     }
 }

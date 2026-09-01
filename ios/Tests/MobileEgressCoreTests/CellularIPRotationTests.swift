@@ -233,6 +233,83 @@ final class CellularIPRotationTests: XCTestCase {
         XCTAssertEqual(duplicateProbe, CellularIPRotationTransition(state: accepted.state))
     }
 
+    func testAttemptIDsRemainMonotonicAfterTerminalReset() {
+        var reducer = awaitingAirplaneModeReducer()
+        _ = reducer.reduce(.lossTimedOut(attemptID: 41))
+        _ = reducer.reduce(.reset)
+
+        let stale = reducer.reduce(
+            .requested(attemptID: 40, networkToken: "stale-cell", availability: availability())
+        )
+        let duplicate = reducer.reduce(
+            .requested(attemptID: 41, networkToken: "duplicate-cell", availability: availability())
+        )
+        let newer = reducer.reduce(
+            .requested(attemptID: 42, networkToken: "cell-2", availability: availability())
+        )
+
+        XCTAssertEqual(stale, CellularIPRotationTransition(state: .idle))
+        XCTAssertEqual(duplicate, CellularIPRotationTransition(state: .idle))
+        XCTAssertEqual(
+            newer.state,
+            .preparing(
+                attemptID: 42,
+                originalNetworkToken: "cell-2",
+                holdSeconds: 10,
+                cellularLost: false,
+                returnedNetworkToken: nil
+            )
+        )
+    }
+
+    func testDeclinedConfirmationStillRejectsDelayedAndDuplicateRequests() {
+        var reducer = CellularIPRotationReducer()
+        _ = reducer.reduce(
+            .requested(
+                attemptID: 50,
+                networkToken: "cell-1",
+                availability: availability(activeStreamCount: 2)
+            )
+        )
+        _ = reducer.reduce(.confirmationDecided(attemptID: 50, proceed: false))
+
+        XCTAssertEqual(
+            reducer.reduce(
+                .requested(
+                    attemptID: 49,
+                    networkToken: "stale-cell",
+                    availability: availability(activeStreamCount: 2)
+                )
+            ),
+            CellularIPRotationTransition(state: .idle)
+        )
+        XCTAssertEqual(
+            reducer.reduce(
+                .requested(
+                    attemptID: 50,
+                    networkToken: "duplicate-cell",
+                    availability: availability(activeStreamCount: 2)
+                )
+            ),
+            CellularIPRotationTransition(state: .idle)
+        )
+        XCTAssertEqual(
+            reducer.reduce(
+                .requested(
+                    attemptID: 51,
+                    networkToken: "cell-2",
+                    availability: availability(activeStreamCount: 2)
+                )
+            ).state,
+            .awaitingConfirmation(
+                attemptID: 51,
+                originalNetworkToken: "cell-2",
+                holdSeconds: 10,
+                activeStreamCount: 2
+            )
+        )
+    }
+
     func testCancellationAndTimeoutsAttemptBestEffortAgentResume() {
         var lossTimeout = awaitingAirplaneModeReducer()
         XCTAssertEqual(
@@ -332,6 +409,164 @@ final class CellularIPRotationTests: XCTestCase {
             CellularIPRotationTransition(
                 state: .failed(attemptID: 41, failure: .recoveryExpired),
                 effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
+    func testLossTimeoutRecoveryUsesOnlyTheRemainingTwoMinuteWindow() {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingAirplaneMode(
+                attemptID: 41,
+                originalNetworkToken: "cell-1",
+                holdSeconds: 10,
+                before: beforeSnapshot
+            ),
+            savedAt: savedAt
+        )
+        var recovering = CellularIPRotationReducer()
+
+        XCTAssertEqual(
+            recovering.reduce(.recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(45))),
+            CellularIPRotationTransition(
+                state: checkpoint.state,
+                effects: [
+                    .pauseAgentAndStreams(attemptID: 41),
+                    .presentAirplaneModeGuidance(attemptID: 41),
+                    .scheduleCellularLossTimeout(attemptID: 41, seconds: 75),
+                ]
+            )
+        )
+
+        var timedOut = CellularIPRotationReducer()
+        XCTAssertEqual(
+            timedOut.reduce(.recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(120))),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .cellularDidNotDisconnect),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
+    func testReturnTimeoutRecoveryUsesOnlyTheRemainingThreeMinuteWindow() {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
+            savedAt: savedAt
+        )
+        var recovering = CellularIPRotationReducer()
+
+        XCTAssertEqual(
+            recovering.reduce(.recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(65))),
+            CellularIPRotationTransition(
+                state: checkpoint.state,
+                effects: [
+                    .pauseAgentAndStreams(attemptID: 41),
+                    .scheduleCellularReturnTimeout(attemptID: 41, seconds: 115),
+                ]
+            )
+        )
+
+        var timedOut = CellularIPRotationReducer()
+        XCTAssertEqual(
+            timedOut.reduce(.recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(180))),
+            CellularIPRotationTransition(
+                state: .failed(attemptID: 41, failure: .cellularDidNotReturn),
+                effects: [.resumeAgent(attemptID: 41)]
+            )
+        )
+    }
+
+    func testHoldRecoveryPreservesTenSecondWindowAndAppliesReturnOverflow() {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .holding(
+                attemptID: 41,
+                remainingSeconds: 10,
+                before: beforeSnapshot,
+                returnedNetworkToken: nil
+            ),
+            savedAt: savedAt
+        )
+        var recoveringHold = CellularIPRotationReducer()
+
+        XCTAssertEqual(
+            recoveringHold.reduce(
+                .recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(4))
+            ),
+            CellularIPRotationTransition(
+                state: .holding(
+                    attemptID: 41,
+                    remainingSeconds: 6,
+                    before: beforeSnapshot,
+                    returnedNetworkToken: nil
+                ),
+                effects: [
+                    .pauseAgentAndStreams(attemptID: 41),
+                    .startHoldCountdown(attemptID: 41, seconds: 6),
+                ]
+            )
+        )
+
+        var recoveringReturn = CellularIPRotationReducer()
+        XCTAssertEqual(
+            recoveringReturn.reduce(
+                .recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(12))
+            ),
+            CellularIPRotationTransition(
+                state: .awaitingCellularReturn(attemptID: 41, before: beforeSnapshot),
+                effects: [
+                    .pauseAgentAndStreams(attemptID: 41),
+                    .scheduleCellularReturnTimeout(attemptID: 41, seconds: 178),
+                ]
+            )
+        )
+    }
+
+    func testRetryHoldRecoveryPreservesRemainingThirtySecondWindow() {
+        let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .holding(
+                attemptID: 41,
+                remainingSeconds: 30,
+                before: beforeSnapshot,
+                returnedNetworkToken: "cell-2"
+            ),
+            savedAt: savedAt
+        )
+        var reducer = CellularIPRotationReducer()
+
+        XCTAssertEqual(
+            reducer.reduce(.recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(12))),
+            CellularIPRotationTransition(
+                state: .holding(
+                    attemptID: 41,
+                    remainingSeconds: 18,
+                    before: beforeSnapshot,
+                    returnedNetworkToken: "cell-2"
+                ),
+                effects: [
+                    .pauseAgentAndStreams(attemptID: 41),
+                    .startHoldCountdown(attemptID: 41, seconds: 18),
+                ]
+            )
+        )
+
+        var completedHold = CellularIPRotationReducer()
+        XCTAssertEqual(
+            completedHold.reduce(
+                .recover(checkpoint: checkpoint, at: savedAt.addingTimeInterval(30))
+            ),
+            CellularIPRotationTransition(
+                state: .verifying(
+                    attemptID: 41,
+                    before: beforeSnapshot,
+                    returnedNetworkToken: "cell-2"
+                ),
+                effects: [
+                    .pauseAgentAndStreams(attemptID: 41),
+                    .probeAfter(attemptID: 41, networkToken: "cell-2"),
+                ]
             )
         )
     }
