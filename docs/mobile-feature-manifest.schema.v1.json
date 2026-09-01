@@ -6,6 +6,10 @@
   "required": ["schemaVersion", "features"],
   "additionalProperties": false,
   "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
     "schemaVersion": {
       "const": 1
     },

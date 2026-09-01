@@ -155,6 +155,40 @@ $singlePlatform = Invoke-ManifestValidatorFixture -MutateManifest {
 Assert-Condition ($singlePlatform.ExitCode -eq 1) 'Single-platform feature entries must fail validation.'
 Assert-Condition ($singlePlatform.Output -match 'missing platform: ios') 'Single-platform diagnostics must name the missing platform.'
 
+$scalarFeatures = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    $Manifest['features'] = 'agent.enrollment'
+}
+Assert-Condition ($scalarFeatures.ExitCode -eq 1) 'The features collection must fail validation when it is not an array.'
+Assert-Condition ($scalarFeatures.Output -match 'features must be an array') 'Scalar feature diagnostics must reject coercion into a one-item collection.'
+
+$scalarEvidence = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    $Manifest.features[0].platforms.android.sourceEvidence = 'android/app/src/main/java/com/example/Enrollment.kt'
+}
+Assert-Condition ($scalarEvidence.ExitCode -eq 1) 'Evidence fields must fail validation when they are not arrays.'
+Assert-Condition ($scalarEvidence.Output -match 'agent\.enrollment/android sourceEvidence must be an array') 'Scalar evidence diagnostics must name the platform evidence field.'
+
+$invalidIdPattern = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    $Manifest.features[0].id = 'Agent Enrollment'
+}
+Assert-Condition ($invalidIdPattern.ExitCode -eq 1) 'Feature IDs outside the lowercase schema pattern must fail validation.'
+Assert-Condition ($invalidIdPattern.Output -match 'feature id does not match schema pattern: Agent Enrollment') 'Invalid ID diagnostics must include the rejected ID.'
+
+$unexpectedProperties = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    $Manifest.Add('unexpectedRoot', $true)
+    $Manifest.features[0].Add('unexpectedFeature', $true)
+    $Manifest.features[0].platforms.Add('windows', [ordered]@{ status = 'implemented'; sourceEvidence = @('windows.cs'); testEvidence = @('windows.test.cs') })
+    $Manifest.features[0].platforms.android.Add('unexpectedEntry', $true)
+}
+Assert-Condition ($unexpectedProperties.ExitCode -eq 1) 'Unexpected root, feature, platforms, and platform-entry properties must fail validation.'
+Assert-Condition ($unexpectedProperties.Output -match 'root has unexpected property: unexpectedRoot') 'Unexpected root property diagnostics must name the property.'
+Assert-Condition ($unexpectedProperties.Output -match 'agent\.enrollment has unexpected property: unexpectedFeature') 'Unexpected feature property diagnostics must name the property.'
+Assert-Condition ($unexpectedProperties.Output -match 'agent\.enrollment platforms has unexpected property: windows') 'Unexpected platforms property diagnostics must name the property.'
+Assert-Condition ($unexpectedProperties.Output -match 'agent\.enrollment/android has unexpected property: unexpectedEntry') 'Unexpected platform-entry property diagnostics must name the property.'
+
 $actualManifestOutput = & $validator -RepositoryRoot $repositoryRoot *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 0) 'The checked-in mobile feature manifest must pass validation.'
 Assert-Condition ($actualManifestOutput -match 'Mobile feature manifest validation passed') 'The checked-in manifest must report validation success.'
