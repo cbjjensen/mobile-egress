@@ -1,12 +1,14 @@
-# iOS build server over SSH
+# Mac build server over SSH
 
-This runbook preserves the Windows-to-Mac build path for the future Mobile Egress iOS Agent. Windows remains the main editing and orchestration workstation; the Mac performs every iOS compile, simulator, device, signing, archive, TestFlight, and App Store operation.
+This runbook covers the Windows-orchestrated macOS Desktop build/sign/notary path and preserves a separate development path for the future Mobile Egress iOS Agent. Windows remains the main editing/publishing workstation; the Apple Silicon Mac produces the macOS PKG and, in the future, iOS builds.
 
-The current goal is free development builds first. A paid Apple Developer Program membership is not required for simulator builds or early local proof work. It is required for TestFlight, App Store, Ad Hoc distribution, and likely any production-grade entitlement path.
+Production Desktop distribution requires Apple Developer Program membership, approved Developer ID Application/Installer identities, a matching distribution profile, and notary credentials. The future iOS section still begins with free simulator/local proof work; TestFlight, App Store, Ad Hoc distribution, and production entitlements require the applicable paid enrollment.
 
 ## Known hosts
 
-Current local setup:
+Desktop releases use the ignored/untracked PowerShell data file `.local/mac-build-server/release-desktop.psd1`. It has exactly eight keys: `SshTarget`, `SshKeyPath`, `RepositoryPath`, `TeamID`, `ApplicationIdentity`, `InstallerIdentity`, `NotaryKeychainProfile`, and `ProvisioningProfilePath`. `ssh` and `scp` use the configured key and the standard OpenSSH `known_hosts`.
+
+The following values are retained for the separate future iOS development path:
 
 - Windows workstation: `Raidmax-Fix`
 - Windows Wi-Fi address on `Rockchalk`: `10.0.0.55`
@@ -17,18 +19,16 @@ Current local setup:
 - Project-local ignored SSH key: `.local/mac-build-server/id_ed25519`
 - SSH setup skill: `.agents/skills/mobile-egress-mac-build-server`
 
-Local IP addresses can change. Prefer `Y9YD7JN54M.local` when it resolves; otherwise use the current Mac LAN address.
-
 ## Secret boundary
 
-The SSH private key may live in the repository checkout under `.local/`, but `.local/` is ignored and must remain untracked. Do not commit, paste, release, or log the private key. Xcode signing identities, provisioning profiles, Apple credentials, and export options with team-specific values are also local secrets unless explicitly documented as public metadata.
+The Desktop PSD1 and SSH private key live under ignored `.local/` and must remain untracked. Do not commit, paste, release, or log them. Developer ID/iOS signing private keys, provisioning profiles, Apple/notary credentials, and export options with team-specific values are also private.
 
 Before using the project-local key, verify:
 
 ```powershell
-git check-ignore -q -- .local/mac-build-server/id_ed25519
-if ($LASTEXITCODE -ne 0) { throw 'Mac build-server SSH private key is not ignored.' }
-git ls-files -- .local/mac-build-server/id_ed25519
+git check-ignore -q -- .local/mac-build-server/release-desktop.psd1 .local/mac-build-server/id_ed25519
+if ($LASTEXITCODE -ne 0) { throw 'Mac Desktop config or SSH private key is not ignored.' }
+git ls-files -- .local/mac-build-server/release-desktop.psd1 .local/mac-build-server/id_ed25519
 ```
 
 The second command must print nothing.
@@ -65,6 +65,14 @@ Y9YD7JN54M.local
 
 ## Mac prerequisites
 
+### Desktop release
+
+The Mac must be Apple Silicon. The release bootstrap installs the pinned user-local Go 1.26.7, Node 24.20.0, and Wails 2.14.0 toolchain from `windows-client/macos/toolchain.lock` under the dedicated build root without Homebrew.
+
+The Mac Keychain must contain the configured Developer ID Application and Installer identities. The distribution profile must authorize `com.cbjjensen.mobile-egress.controller` and its Keychain access group, and the configured `notarytool` profile must work. These production prerequisites require Apple Developer Program enrollment.
+
+### Future iOS development
+
 Install full Xcode on the Mac, not just Command Line Tools. After installation, open Xcode once and approve any additional component prompts.
 
 The selected developer directory must point at full Xcode:
@@ -91,7 +99,7 @@ A free Apple ID is enough for simulator work and may be enough for local install
 
 ## Readiness check from Windows
 
-Run this from the repository root:
+Desktop readiness is checked by `release-desktop.ps1` from the PSD1. The commands below remain useful for future iOS diagnostics:
 
 ```powershell
 $mac = 'diana@10.0.0.77'
@@ -115,17 +123,23 @@ Device, TestFlight, App Store, or Ad Hoc readiness additionally requires a valid
 
 ## Current verified state
 
-As of the initial setup, Windows can reach the Mac over SSH with the project-local key. Xcode 26.6 is installed and selected, iOS SDK 26.5 is present, and the iOS 26.5 simulator runtime has available iPhone/iPad devices.
+As of the initial iOS setup, Windows reached the Mac with the project-local key, Xcode 26.6 was selected, iOS SDK 26.5 was present, and the iOS 26.5 simulator runtime listed devices. This is not current Desktop release evidence.
 
 The remaining known gaps from the last check were:
 
 - no valid code-signing identities reported by `security find-identity -v -p codesigning`.
 
-That state is enough to continue source work, create the iOS project, and run simulator builds once the future scheme exists. It is not enough to produce signed device builds. Re-run the readiness check after configuring signing.
+That state is enough for future iOS source/simulator work. It does not prove Developer ID identities, the distribution profile, or notarization readiness.
 
 ## Source sync model
 
-Use Git as the source-of-truth transfer mechanism. The Mac should have its own checkout of this repository, on the same branch and commit as the Windows worktree.
+### Desktop release
+
+The Windows build freezes the source commit and raw Windows node manifest first. The Desktop orchestrator transfers one exact-commit Git bundle plus that manifest, builds the detached Mac checkout at the same commit, and invokes `scripts/release-macos.sh`.
+
+### Future iOS development
+
+For non-production iOS development, use Git as the source-of-truth transfer mechanism. The Mac should have its own checkout of this repository, on the same branch and commit as the Windows worktree.
 
 Create the initial Mac checkout:
 
@@ -149,6 +163,25 @@ ssh -i $key $mac "cd ~/workspace/mobile-egress && git fetch origin && git checko
 The printed Mac commit should match `$commit`. If it does not, stop before building.
 
 If the branch is local-only and cannot be pushed yet, create a patch bundle or use `git bundle`; do not copy ad hoc source directories over SSH because that makes builds hard to reproduce.
+
+## Desktop release orchestration
+
+The public entry point is:
+
+```powershell
+& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
+```
+
+Without `-Publish`, this command still builds/signs both platforms and freezes a local annotated tag. Add `-Publish` only to push source/tag state and change GitHub.
+
+The Windows stage passes its exact node manifest and source commit. The Mac returns:
+
+```text
+mobile-egress-macos-<version>-arm64.pkg
+mobile-egress-macos-<version>-arm64.verification.json
+```
+
+Windows validates the returned record and compares the remote/local PKG SHA-256. Only the PKG is a GitHub asset; the verification JSON stays private/local.
 
 ## Future iOS build commands
 

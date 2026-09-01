@@ -1,39 +1,43 @@
 # Release, deployment, and physical acceptance
 
-This is the operator runbook for producing the signed artifacts that friends download and for proving them on a real Windows PC, Android phone, and EC2 nodes. Normal friends do not perform these steps; they follow the root README after you publish an accepted release.
+This is the operator runbook for producing the signed artifacts that friends download and proving them on real Windows and macOS controllers, an Android phone, and Windows Server 2019 EC2 nodes. Normal friends do not perform these steps; they follow the root README after an accepted release is published.
 
-The former EC2-relay Docker Compose deployment is removed. The supported topology is a local Windows relay behind Tailscale Funnel, an Android cellular Agent, and SSM-managed Windows Server 2019 EC2 Clients.
+The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel. The Android cellular Agent and SSM-managed x86-64 Windows Server 2019 EC2 Clients remain unchanged. A public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version; Android remains independently selectable.
 
 ## Routine release commands
 
-Commit the intended code on clean `main`, choose the smallest compatible component path, and first omit `-Publish` to build, sign, and verify locally without changing GitHub.
+Commit the intended code on clean `main` and choose the smallest compatible scope.
 
-For Windows controller, setup, relay, or EC2 Client changes, use the Windows path. The controller embeds the signed Client version/hash/URL, so these Windows artifacts are intentionally released together; Android is not built or uploaded:
+> Running the Desktop command **without** `-Publish` still signs both platforms and freezes a local annotated tag. `-Publish` separately authorizes pushing source/tag state and changing GitHub. Do not run the bare Desktop command as a read-only check.
+
+For a controller, relay, or EC2 Client change, use the coupled Desktop path:
 
 ```powershell
-& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7'
-& .\scripts\release-windows.ps1 -ReleaseVersion '1.0.7' -Publish
+& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0' -Publish
 ```
+
+Legacy `release-windows.ps1` fails closed with migration guidance. Windows-only and macOS-only release selectors are not supported.
 
 For an Android-only change, first set Android `versionName` to the release version and increase `versionCode`, then use the Android path. Go, the Windows frontend, and Authenticode packaging are not run:
 
 ```powershell
-& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8'
-& .\scripts\release-android.ps1 -ReleaseVersion '1.0.8' -Publish
+& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0' -Publish
 ```
 
-Use the full path only when a protocol, shared compatibility boundary, or coordinated Windows/Android change requires all three artifacts:
+Use the full path when a protocol/shared compatibility change requires Desktop plus Android:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9'
-& .\scripts\release-all.ps1 -ReleaseVersion '1.0.9' -Publish
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Desktop,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Desktop,Android -Publish
 ```
 
-All three paths use the same deterministic orchestrator. It resolves only the selected component's tools, runs the matching gate, reuses and validates only the required established signing identity, verifies signed artifacts, tags the verified commit, creates an empty GitHub draft, uploads only the expected assets sequentially, waits for matching remote SHA-256 digests, and publishes only a prerelease. `-Publish` always requires explicit approval. Rerun the same command and component scope after an interruption; resume is allowed only when the commit, tag, local artifacts, draft asset set, and hashes agree.
+All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag; Android may be selected separately. The orchestrator runs only the matching gates, validates established signing identities, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
 
 Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them when a component release entry point is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
 
-## Part 1: Prepare the release workstation
+## Part 1: Prepare the release workstations
 
 Use the Windows computer that controls the signing keys. It needs:
 
@@ -43,6 +47,8 @@ Use the Windows computer that controls the signing keys. It needs:
 - WebView2;
 - GitHub CLI authenticated to `cbjjensen/mobile-egress`; and
 - the established local Mobile Egress Authenticode publisher identity with an accessible private key.
+
+Desktop releases additionally require ignored/untracked `.local\mac-build-server\release-desktop.psd1`, its configured key, preapproved standard OpenSSH host trust, and the authorized Mac prerequisites below. The release entry point exposes no host, key, credential, verifier, or cleanup override; see [Mac build server over SSH](ios-build-server.md).
 
 Open PowerShell at the repository root and keep the same session for Parts 1–5. If JDK/Android paths are not already configured for your Windows user, set them to the real installed directories before running preflight or release commands:
 
@@ -122,16 +128,24 @@ $codeSigningCertificates
 
 The selected thumbprint must be 40 hexadecimal characters. Check that its expiry covers the release date and keep the private key accessible only while signing.
 
+### macOS Developer ID and notarization prerequisites
+
+The Mac builder must be Apple Silicon with Xcode command-line tools available. User-local Go 1.26.7, Node 24.20.0, and Wails 2.14.0 come from `windows-client/macos/toolchain.lock` under the dedicated build root; no Homebrew installation is required.
+
+The Mac Keychain must contain the approved Developer ID Application and Developer ID Installer identities. The configured Developer ID distribution profile must authorize bundle ID `com.cbjjensen.mobile-egress.controller` and its one private Keychain access group; the configured `notarytool` Keychain profile must be available. Private keys, profile contents, and notary credentials remain on the Mac and never enter logs or Windows. Public identity/authority records are verification inputs, not private signing material. There is no placeholder, ad-hoc, or self-signed Mac fallback. Apple Developer Program enrollment is required; see [Developer ID](https://developer.apple.com/support/developer-id/) and [notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+The signed access-group continuity test is documented in [signed macOS Keychain integration](macos-keychain-integration.md). Changing/installing tools, selecting Xcode, contacting the Mac, signing/notarizing, or publishing requires the appropriate explicit authorization.
+
 ## Part 2: Choose and freeze a version
 
-Use one semantic version everywhere. The examples below use `1.0.0`; replace it with the real version.
+The first coupled Mac Desktop release uses product/package version `1.1.0` and tag `v1.1.0`.
 
 ```powershell
-$releaseVersion = '1.0.0'
+$releaseVersion = '1.1.0'
 $releaseTag = "v$releaseVersion"
 ```
 
-Before committing the release, update `versionCode` and `versionName` in `android\app\build.gradle.kts`. `versionCode` must be higher than every APK previously installed or distributed; `versionName` should equal `$releaseVersion`.
+When Android is selected, update `versionCode` and `versionName` in `android\app\build.gradle.kts`. `versionCode` must be higher than every APK previously installed or distributed; `versionName` must equal `$releaseVersion`. When Android is not selected, do not imply or manufacture a matching APK version.
 
 Review and commit that version change, then run the full gate:
 
@@ -141,29 +155,11 @@ git status --short
 if ($LASTEXITCODE -ne 0) { throw 'The full release gate failed.' }
 ```
 
-`git status --short` must print nothing after the release commit. Tag that exact commit and push the tag:
+`git status --short` must print nothing after the release commit. The guarded release orchestrator owns annotated-tag observation/creation, exact-object push, and publication reconciliation. Do not manually create or push the production tag. It refuses a conflicting tag or source commit. Never move/reuse a published tag; rebuilding requires a new version.
 
-```powershell
-$releaseCommit = git rev-parse HEAD
-git tag -a $releaseTag -m "Mobile Egress $releaseVersion"
-if ($LASTEXITCODE -ne 0) { throw 'Creating the release tag failed.' }
-git push origin $releaseTag
-if ($LASTEXITCODE -ne 0) { throw 'Pushing the release tag failed.' }
-```
+## Part 3: Build and verify the coupled Desktop release
 
-Confirm the tag, checkout, and remote all identify the intended commit:
-
-```powershell
-$tagCommit = git rev-list -n 1 $releaseTag
-$remoteTag = (git ls-remote origin "refs/tags/$releaseTag^{}" | ForEach-Object { ($_ -split "`t")[0] })
-if ($releaseCommit -ne $tagCommit -or $releaseCommit -ne $remoteTag) {
-    throw 'The local checkout, annotated tag, and remote tag do not match.'
-}
-```
-
-Do not move or reuse a published tag. If anything needs rebuilding, increment the version.
-
-## Part 3: Build and verify the signed Windows release
+The production Desktop entry point performs this Windows build as its first stage and captures the exact raw node manifest for the same-commit Mac build. The detailed Windows commands below remain useful for understanding and diagnosing that stage; do not substitute them for the coupled production entry point.
 
 Set the exact certificate thumbprint shown in Part 1, then run the guarded build:
 
@@ -218,6 +214,21 @@ Get-Content -Raw '.\windows-client\build\bin\release-manifest.json'
 
 Every executable should report `Valid` and the same expected signer thumbprint. The manifest must report version `2`; its Client SHA-256 must match `Get-FileHash`; `signerCertificateBase64` must decode byte-for-byte to `windows-signing\mobile-egress-code-signing.cer`; and `signerCertificateSha256` must match the tracked public record in lowercase. It is safe to record artifact hashes and the release-signing subject/thumbprint; do not record any Mobile Egress relay or device certificate.
 
+### macOS artifact and verification record
+
+After the Windows stage freezes the exact source commit and raw node manifest, `release-desktop.ps1` transfers one exact-commit Git bundle plus that manifest and builds the detached same-commit Mac checkout. The Mac stages arm64 for minimum macOS 13.0, signs the nested relay, then app, then installer, notarizes and staples the PKG, and performs its `codesign`, `pkgutil`, `spctl`, and `stapler` checks.
+
+The Windows publisher retrieves and validates:
+
+```text
+windows-client\build\release\mobile-egress-macos-<version>-arm64.pkg
+windows-client\build\release\mobile-egress-macos-<version>-arm64.verification.json
+```
+
+The strict JSON binds the requested version/source commit, node-manifest SHA-256, artifact name/hash, controller/relay identity and packaging evidence. The PKG hash must match on Windows. The verification record is mandatory private/local evidence and is never uploaded to GitHub; only the PKG is a public Desktop asset. Final evidence is promoted record-last and existing outputs are not automatically overwritten.
+
+An SSH timeout/disconnect can leave the result unknown. Preserve the finite failure and inspect the existing request/output state before retrying; never blindly rerun, clobber an output, or broadly clean the Mac repository/build roots.
+
 ## Part 4: Create and protect the Android signing key
 
 Android updates must always use the same signing key. Losing it means existing installations cannot accept your next APK as an update. This publisher workstation keeps the reusable private files at `android\mobile-egress-release.jks` and `android\keystore.properties`; both are ignored. Back up both together in an encrypted location separate from the build computer.
@@ -255,16 +266,16 @@ if ($LASTEXITCODE -ne 0) { throw 'Android signing-input validation failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'The signed Android release failed.' }
 ```
 
-The output is:
+The guarded output is:
 
 ```text
-android\app\build\outputs\apk\release\app-release.apk
+android\app\build\outputs\apk\release\zfnf-mobile-egress-android-<version>.apk
 ```
 
 Record its SHA-256. The release script already runs Build-Tools 35 `apksigner verify`; use `--print-certs` when you need the public signer digest for the release record:
 
 ```powershell
-$androidApk = '.\android\app\build\outputs\apk\release\app-release.apk'
+$androidApk = ".\android\app\build\outputs\apk\release\zfnf-mobile-egress-android-$releaseVersion.apk"
 . '.\scripts\operations-common.ps1'
 $androidSdkRoot = Get-MobileEgressAndroidSdkRoot -RepositoryRoot (Get-Location).Path
 if ([string]::IsNullOrWhiteSpace($androidSdkRoot)) {
@@ -280,43 +291,23 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $androidApk
 
 ## Part 5: Publish the exact artifacts as a prerelease
 
-Start with a GitHub draft so incomplete uploads are never presented as usable. Authenticate and confirm the repository first:
+The non-publishing run creates or confirms the local annotated tag only after artifact verification. An explicitly approved `-Publish` run may then push source/tag state and change GitHub. It verifies the exact tag and commit, creates or reconciles the draft, uploads the expected assets in deterministic order, waits for each matching remote digest, and exposes only a prerelease. Do not issue direct `gh release create/edit/upload` commands for production publication.
 
-```powershell
-gh auth status
-if ($LASTEXITCODE -ne 0) { throw 'GitHub CLI authentication is required.' }
-git remote get-url origin
-```
-
-Create the draft from the already-pushed tag and upload the three required assets:
-
-```powershell
-gh release create $releaseTag $windowsZip $clientExecutable $androidApk `
-    --repo 'cbjjensen/mobile-egress' `
-    --verify-tag `
-    --draft `
-    --title "Mobile Egress $releaseVersion" `
-    --generate-notes
-if ($LASTEXITCODE -ne 0) { throw 'Creating the GitHub draft release failed.' }
-
-gh release view $releaseTag --repo 'cbjjensen/mobile-egress' --json tagName,isDraft,isPrerelease,url,assets
-```
-
-Inspect the draft asset names. They must include:
+A Desktop-scoped prerelease has exactly:
 
 - `mobile-egress-windows-<version>.zip`;
 - `mobile-egress-client.exe`; and
-- `app-release.apk`.
+- `mobile-egress-macos-<version>-arm64.pkg`.
 
-Publish it as a prerelease so the embedded Client URL works during physical acceptance without declaring it stable:
+When Android is selected, it additionally has `zfnf-mobile-egress-android-<version>.apk`. The Mac verification JSON is local/private evidence and is never uploaded.
 
-```powershell
-gh release edit $releaseTag --repo 'cbjjensen/mobile-egress' --draft=false --prerelease
-```
+Managed release notes always render four Downloads links in order: Windows controller, EC2 Client, macOS controller PKG, Android Agent APK. The first three are one same-tag Desktop group. Android may point to a different eligible release; Windows and macOS fallback tags are never mixed.
 
-Use the GitHub Releases page to download the candidate on the acceptance PC and phone. Test the downloaded artifacts, not files left in the build directory. Never replace assets under a published tag; fix the issue and build a new version.
+Existing uploaded assets must form the expected verified set; published tags/assets are immutable and never replaced or clobbered. If a GitHub outcome is unknown, inspect/reconcile the exact draft/assets before retrying. Use GitHub Releases to download the candidate on the acceptance Windows PC, Mac, and phone. Test those downloaded artifacts, not build-directory copies.
 
-## Part 6: Required two-node physical acceptance
+## Part 6: Required physical acceptance
+
+### Windows/Android regression acceptance
 
 Use a release candidate with:
 
@@ -331,7 +322,7 @@ No relay EC2, public EC2 IP, inbound security-group rule, Elastic IP, router cha
 
 Copy [the acceptance record template](templates/physical-acceptance-record.md) outside the source tree and fill it in as you go. Do not record QR contents, credentials, relay/device certificates, destinations, carrier/EC2 IP addresses, or traffic payloads.
 
-### 6.1 Verify and install the downloaded artifacts
+#### 6.1 Verify and install the downloaded artifacts
 
 On the controller PC:
 
@@ -347,7 +338,7 @@ On Android:
 2. Install the APK through your approved sideloading process.
 3. Confirm Android identifies it as Mobile Egress and does not report a signing mismatch.
 
-### 6.2 Set up the local bridge and phone
+#### 6.2 Set up the local bridge and phone
 
 1. In **Bridge**, choose **Install Tailscale** only when the status is **Not installed**, then approve UAC. If Tailscale is already present, the controller shows **Installed · not connected** instead of offering another MSI installation.
 2. Choose **Connect Tailscale** while installed/offline and finish browser login. This starts login and unattended mode without rerunning the installer. Once the status is **Online**, choose **Set up local bridge**. On the first Funnel setup, the controller automatically opens Tailscale's official Funnel approval page while the hidden CLI waits; approve it, then approve relay UAC. Require Funnel active, relay healthy, and a `https://<machine>.<tailnet>.ts.net:8443` public origin.
@@ -363,7 +354,7 @@ Get-NetTCPConnection -State Listen -LocalPort 8443 | Select-Object LocalAddress,
 
 The only relay listener must be `127.0.0.1:8443`.
 
-### 6.3 Connect AWS and install two Clients
+#### 6.3 Connect AWS and install two Clients
 
 1. In **AWS Login**, use the default IAM user access-key path. Choose **Create IAM user** to open the `us-east-1` IAM user creation page. A beginner may sign in to the AWS Console as root only to create an IAM user named `mobile-egress`; root credentials are for console setup only.
 2. Create an access key for the `mobile-egress` IAM user and paste that IAM user's access key into Mobile Egress. Credentials are encrypted with Windows DPAPI. Never create or paste root access keys.
@@ -383,7 +374,7 @@ Get-NetTCPConnection -State Listen -LocalPort 1080,1081 | Select-Object LocalAdd
 
 The service must be automatic/running. Its only proxy listeners must be SOCKS5 at `127.0.0.1:1080` and HTTP forward/CONNECT at `127.0.0.1:1081`. Confirm the EC2 security groups have no Mobile Egress inbound rule before and after setup.
 
-### 6.4 Prove opt-in cellular egress on both nodes
+#### 6.4 Prove opt-in cellular egress on both nodes
 
 In the controller, choose **Copy proxy line** for node A. Client versions older than `1.0.24` show update guidance instead; choose **Update** and wait for the node card to refresh. Transfer the value only into that node's intended workload or private RDP clipboard. For short ordinary-HTTP and HTTPS-through-CONNECT curl tests, parse it from the clipboard so the secret is not written into PowerShell history:
 
@@ -422,7 +413,7 @@ The two-node run proves simultaneous multi-Client routing, but two Clients can o
 
 To test the four-stream Client cap physically, use a controlled HTTPS endpoint that deliberately streams slowly. Start four transfers through one node's proxy and hold them open; a fifth concurrent transfer must fail closed. Do not use an uncontrolled third-party large download or record the proxy URL. Stop the four test transfers afterward. Repeat across eight Clients only when performing the optional 32/33 aggregate capacity run.
 
-### 6.5 Prove cellular-only fail-closed behavior
+#### 6.5 Prove cellular-only fail-closed behavior
 
 1. Leave phone Wi-Fi connected.
 2. Disable cellular data on the phone without stopping Wi-Fi.
@@ -432,7 +423,7 @@ To test the four-stream Client cap physically, use a controlled HTTPS endpoint t
 
 If proxy traffic succeeds over phone Wi-Fi while cellular is disabled, fail the release.
 
-### 6.6 Prove reboot and Repair recovery
+#### 6.6 Prove reboot and Repair recovery
 
 Test one dependency at a time so the failed component is unambiguous:
 
@@ -443,7 +434,7 @@ Test one dependency at a time so the failed component is unambiguous:
 
 To prove **Update**, start the lab from an earlier signed candidate, then open the controller from this candidate and choose **Update**. For a first-ever release, create a lower-version acceptance prerelease from the same reviewed commit before installing the final candidate. Both versions need their own immutable tags/assets; never overwrite one release with the other.
 
-### 6.7 Prove endpoint migration
+#### 6.7 Prove endpoint migration
 
 Tailscale derives the MagicDNS/Funnel FQDN from the device machine name. Use the supported rename control instead of deleting the Tailscale node:
 
@@ -458,7 +449,7 @@ Tailscale derives the MagicDNS/Funnel FQDN from the device machine name. Use the
 
 Tailscale documents that editing a machine name changes its MagicDNS domain: [Machine names](https://tailscale.com/kb/1098/machine-names) and [MagicDNS](https://tailscale.com/docs/features/magicdns). Do not regenerate the tailnet DNS name or delete/re-enroll the node merely to test migration.
 
-### 6.8 Review redaction and cloud/network boundaries
+#### 6.8 Review redaction and cloud/network boundaries
 
 Before signing off:
 
@@ -479,16 +470,28 @@ Inspect ACL entries without printing state contents. Run the relay command on th
 
 Each applicable directory must have inheritance disabled and grant access only to SYSTEM and local Administrators. The relay directory is expected only on the controller; the Client directory is expected only on an EC2 node.
 
+### macOS v1.1.0 controller acceptance
+
+The coupled `v1.1.0` Desktop candidate also requires the separate Mac suite on the available macOS 26.2 Apple-Silicon Mac with one real Windows Server 2019 EC2 Client. This does not replace or reduce the Windows/two-node regression above. Every Mac row in the [acceptance template](templates/physical-acceptance-record.md#macos-v110-controller) starts `NOT RUN` and blocks stable promotion until passed.
+
+Use the quarantined PKG downloaded from GitHub, not a local build. Verify its filename/hash, Developer ID Installer signature, notarization/staple, arm64 controller and relay, macOS 13.0 deployment target, hardened runtime, identifiers, and app layout. Install normally with Apple Installer; do not bypass Gatekeeper.
+
+Start with empty Mac controller/relay state and import no Windows private state. Exercise guided standalone Tailscale installation, system-extension/VPN approval, browser login, raw Funnel 8443, and an already-installed authentic standalone or App Store variant. Exercise `not-registered` and `approval-required`, confirm Login Items opens and no Owner exists before status reaches `enabled`, then complete Setup.
+
+Prove Keychain and relay continuity across close/reopen, quit/relaunch, reboot/login, Repair, and a same-Mac upgrade. Build the private signed/notarized `1.0.999` fixture directly with `scripts/release-macos.sh` from the final source and node manifest, not through the Desktop release command; it is acceptance evidence only and receives no Git tag or GitHub asset. Clean-install-only excludes Windows-to-Mac migration, not this fixture-based upgrade check.
+
+Pair Android, install one real Windows Server 2019 EC2 Client, and prove HTTP, HTTPS CONNECT, and SOCKS5 cellular egress while the direct route remains unchanged. Then prove cellular-loss fail closed/recovery, endpoint rotation, Client Update, relay Repair/restart, and identity/credential preservation. Logging out the controlling Mac account must fail traffic closed; logging back in and reopening must recover the same identities. Review sanitized UI/activity/IPC/SSM output for secret leakage.
+
 ## Part 7: Promote or reject the release
 
-If every required item passes, attach the completed sanitized record to your private release evidence and promote the exact tested prerelease without replacing its assets:
+For `v1.1.0`, promotion requires the exact immutable Desktop prerelease, the preserved Windows/Android regression record, the available-Mac controller record, and matching production signing/notary/SSH/GitHub evidence. If every required item passes, attach the completed sanitized records to private release evidence and promote the exact tested prerelease without replacing its assets:
 
 ```powershell
 gh release edit $releaseTag --repo 'cbjjensen/mobile-egress' --prerelease=false --latest
 gh release view $releaseTag --repo 'cbjjensen/mobile-egress' --json tagName,isDraft,isPrerelease,url,assets
 ```
 
-If a required item fails, do not promote it. Record the finite failure class, fix the source, increment `versionCode`/version, create a new tag, rebuild, and repeat. Never reuse the failed tag or replace its published assets.
+If a required item fails or remains `NOT RUN`, do not promote it. Record the finite failure class, fix the source, increment `versionCode`/version as applicable, create a new tag through the guarded orchestrator, rebuild, and repeat. Never reuse the failed tag or replace its published assets.
 
 ## Minimum AWS permissions
 
@@ -507,3 +510,5 @@ Have the AWS account administrator translate this action list into the organizat
 Normal code rollback preserves `C:\ProgramData\MobileEgress\Relay` and the relay CA. Install a previously accepted signed controller bundle and relay binary only after confirming protocol/schema compatibility. Never restore stale SQLite state as a code rollback because it can reverse revocation or capability consumption.
 
 Back up the entire relay state directory as one unit while `MobileEgressRelay` is stopped, preserving ACLs. The backup contains the CA private key and is as sensitive as live state. If the CA/state, sole Owner identity, Android signing key, or Windows signing key is lost or compromised, stop the affected release/service path and perform a reviewed trust or signing-key recovery. Endpoint rotation is not compromise recovery.
+
+On macOS, normal signed PKG update/repair preserves `/Library/Application Support/ZFNF Mobile Egress/Relay` plus the controlling user's Keychain items. Do not unregister/reregister merely to upgrade, restore stale relay state, export Keychain secrets to files, or import Windows DPAPI/relay private state. If relay CA/state, Owner Keychain state, or a Developer ID identity may be compromised, preserve restricted evidence and perform a reviewed trust reset; endpoint rotation and Tailscale relogin are insufficient.

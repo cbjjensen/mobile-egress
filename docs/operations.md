@@ -2,7 +2,7 @@
 
 ## Normal use
 
-`MobileEgressRelay` and each `MobileEgressClient` run as automatic LocalSystem services. Closing the controller window leaves it in the tray; quitting the controller does not stop those services. Start/stop the Android Agent only through its visible UI or foreground notification.
+On Windows, `MobileEgressRelay` and each `MobileEgressClient` run as automatic LocalSystem services. Closing the controller window leaves it in the tray; quitting does not stop those services. On macOS, the root `com.cbjjensen.mobile-egress.relay` LaunchDaemon survives window close and controller quit, while the controller remains available from the menu bar. The supported Tailscale app is per-user, so quitting is not the same as logging out: logout of the controlling administrator makes the bridge unavailable and proxy traffic must fail closed. Start/stop the Android Agent only through its visible UI or foreground notification.
 
 For a best-effort cellular address change, use **Rotate cellular IP** in the running Android Agent. Confirm stream disconnection, turn Airplane Mode on in the system screen the app opens, wait for the notification countdown, then turn it off. The Agent verifies and reconnects automatically. An unchanged result means the carrier reused the address; retry with the offered 30-second reset. Do not record the displayed addresses in acceptance evidence.
 
@@ -12,16 +12,17 @@ For ordinary HTTP, the Client reuses healthy destination connections instead of 
 
 ## Controller actions
 
+- **Set up local bridge** uses the existing Windows UAC/SCM flow or the macOS Service Management flow. Windows reports relay service state `not-required`. On macOS, a first call can return `approval-required` after opening Login Items; no Owner key is created until an ordinary status poll proves the exact helper is `enabled` and the operator invokes Setup again.
 - **Install Client** validates signed manifest v2 and its embedded publisher certificate, then verifies the GitHub artifact SHA-256 and exact Authenticode signer before installing a LocalSystem service and provisioning a node identity.
 - **Update** repeats the same release/trust checks and replaces the executable while retaining node keys, certificate, and proxy credentials. Nodes older than Client `1.0.24` must be updated before the full HTTP/HTTPS proxy line is enabled.
 - **Repair** performs the signed update and sends a fresh sealed copy of the existing configuration.
 - **Copy proxy line** reveals the authenticated HTTP forward/CONNECT line for Refract; **Copy SOCKS5 URL** reveals the alternate SOCKS form. Neither copied value is written to activity logs.
 - **Rotate endpoint safely** appears when the Tailscale Funnel origin differs from the encrypted Owner origin. Connect AWS first whenever managed nodes exist.
-- **Repair local relay** re-verifies the signed sibling relay, reapplies protected state ACLs, repairs the LocalSystem service configuration, and starts it without changing the CA or identities.
+- **Repair local relay** re-verifies the bundled relay and reapplies the platform service/state protections without changing the CA or identities. Windows repairs the LocalSystem service. macOS uses authenticated relay-admin IPC; `version-mismatch` is repaired without unregistering/reregistering, and a successful response can be followed by a short launchd restart before exact initialized-v1 health returns.
 
 Client installation reserves one of the ten encrypted controller slots before provisioning. The controller writes a recoverable `configuring` record before sending the sealed configuration and commits it to `installed` only after the node service restarts successfully. Endpoint rotation uses the same write-before-apply rule for its desired URL and generation. If either action times out and the node appears in the managed list, use **Repair**; it safely reapplies that desired generation and credentials. If the controller itself exited before the node appeared, choose **Install Client** for that same instance again to resume its durable reservation. A different instance cannot consume the reserved slot.
 
-Only one controller process may run for a Windows user/machine installation; launching it again activates the existing window. If a reserved EC2 instance was terminated or can no longer be recovered, use **Interrupted install reservations → Cancel reservation**, read the warning, and confirm explicitly. Cancellation releases only the local capacity reservation; it does not terminate an instance, revoke a certificate, or mutate AWS.
+Only one controller process may run for a platform installation/session; launching it again activates the existing window. This does not make macOS a headless controller. If a reserved EC2 instance was terminated or can no longer be recovered, use **Interrupted install reservations → Cancel reservation**, read the warning, and confirm explicitly. Cancellation releases only the local capacity reservation; it does not terminate an instance, revoke a certificate, or mutate AWS.
 
 ## EC2 publisher trust bootstrap
 
@@ -35,7 +36,7 @@ The public publisher DER/fingerprints and signed-release URL/hash may appear in 
 
 1. Restore Tailscale login. The controller verifies that Funnel has an enabled `*.ts.net:8443` raw-TCP mapping to `127.0.0.1:8443`; use **Repair Funnel and local relay** if that mapping was reset.
 2. Connect AWS in the controller if any nodes are managed.
-3. Choose **Rotate endpoint safely** and approve UAC. The helper rotates the relay leaf certificate under the existing CA and restarts `MobileEgressRelay`.
+3. Choose **Rotate endpoint safely**. On Windows, approve UAC. On macOS, the controller first requires exact enabled-helper proof and then uses authenticated relay-admin IPC. The relay rotates only its leaf certificate under the existing CA; a Mac repair/rotation restart is launchd-managed.
 4. Review the returned updated/failed node list. Use **Repair** for failures after SSM is online.
 5. On the existing Android app, stop the Agent, choose **Scan QR**, and scan the displayed endpoint-migration QR. Restart the Agent.
 6. Confirm workloads reconnect. No device key, Client serial, Agent certificate, or SOCKS credential should change.
@@ -46,6 +47,15 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 
 | Symptom | Check | Safe response |
 |---|---|---|
+| Unsupported Mac | Intel architecture or macOS below 13 | Use an Apple Silicon Mac running macOS 13 or later. Intel/universal support is out of scope. |
+| Tailscale absent on macOS | `/Applications/Tailscale.app` is missing or fails its fixed bundle/team/signature checks | Choose **Install Tailscale**. The controller verifies the official standalone PKG and opens Apple Installer. Do not use the Windows MSI flow or install both Mac variants. |
+| Tailscale installed but Mac remains offline | System extension/VPN approval or browser login is pending | Finish the macOS prompts and browser login, then choose **Connect Tailscale** again. A valid standalone or App Store variant is accepted. |
+| Relay service not registered | Mac state is `not-registered` | Choose **Set up local bridge** once to register the bundled helper through Service Management. Do not use `launchctl` manually. |
+| Login Items approval required | Mac state is `approval-required` | No Owner key has been generated. Approve ZFNF Mobile Egress in **System Settings → General → Login Items**, return to the app, wait for status to show `enabled`, then choose Setup again. |
+| Relay service update required | Mac state is `version-mismatch` | Choose **Repair local relay**. Do not unregister/reregister, delete state, or replace the helper manually. Repair preserves identities and waits for exact initialized-v1 health after its short restart. |
+| Native service enabled but relay unavailable | Socket/exact-helper proof is missing | Treat it as `unavailable`, not healthy. Use Repair and retain only the redacted stage/version for diagnosis. |
+| Keychain unavailable or controlling user logged out | Controller items cannot be read or per-user Tailscale is absent | Unlock/sign into the controlling administrator account. There is no plaintext fallback; traffic must fail closed while logged out. |
+| Apple Installer was cancelled or cleanup is ambiguous | Another installer may still own the verified staging item | Follow the fixed controller guidance and wait. Do not start overlapping installs or manually delete controller-owned staging. |
 | Tailscale not installed | The controller cannot find the fixed official CLI path | Choose **Install Tailscale**, approve UAC, then use **Connect Tailscale** if sign-in is still required. |
 | Tailscale installed but not connected | The controller found Tailscale but its CLI did not report an online `*.ts.net` identity | Choose **Connect Tailscale**. Complete browser sign-in and check internet/service health if it remains offline. Do not rerun the MSI. |
 | Windows Installer code 1603 while installing Tailscale | First confirm whether `C:\Program Files\Tailscale\tailscale.exe` already exists | If it is already installed, use **Connect Tailscale**; current controllers suppress duplicate MSI installation. Investigate MSI/UAC only when Tailscale is genuinely absent. |
@@ -78,6 +88,8 @@ Owner control can revoke a known certificate serial. Revocation blocks new authe
 
 ## Backup and incident boundary
 
-Relay state lives in `C:\ProgramData\MobileEgress\Relay`; node state lives in `C:\ProgramData\MobileEgress\Client`. Both directories are ACL-restricted. Only the relay directory should be backed up centrally, as one quiescent unit while the service is stopped. Node identities can be deliberately reprovisioned.
+Windows relay state lives in `C:\ProgramData\MobileEgress\Relay`; node state lives in `C:\ProgramData\MobileEgress\Client`. Both directories are ACL-restricted. The Windows relay directory may be backed up as one quiescent unit while the service is stopped. Node identities can be deliberately reprovisioned.
 
-If relay state/CA, Owner DPAPI state, or the signing key may be compromised, stop affected services, preserve a restricted incident copy, revoke/publish artifacts as appropriate, and perform a reviewed full trust reset. Tailscale logout, leaf endpoint rotation, or stale-state restore is not sufficient.
+macOS relay state lives at `/Library/Application Support/ZFNF Mobile Egress/Relay`, root-only mode `0700`; controller private state remains in the controlling user's data-protection Keychain. Routine signed PKG update and Repair preserve both boundaries. There is no supported manual `launchctl` restore, plaintext export, stale-state restore, or Windows-to-Mac migration. The root daemon directory and Keychain items are not interchangeable backup units.
+
+If relay state/CA, Owner DPAPI/Keychain state, or a signing key may be compromised, stop affected services, preserve a restricted incident copy, revoke/publish artifacts as appropriate, and perform a reviewed full trust reset. Tailscale logout, leaf endpoint rotation, or stale-state restore is not sufficient.

@@ -3,9 +3,9 @@
 ## Boundaries
 
 - Tailscale Funnel makes the local relay reachable but does not authorize Mobile Egress roles. Relay-issued mTLS certificates do.
-- The controller user is the Owner. Its private key and AWS fallback credentials are encrypted with Windows DPAPI for that user.
-- The elevated helper receives only public CSR/endpoint/result files and exposes a narrow setup/rotation command surface.
-- Relay CA/state is protected by Windows ACLs for SYSTEM and local Administrators. Local Administrators remain trusted and can access process/service state.
+- The controller user is the Owner. Windows protects its private key and AWS fallback credentials with user DPAPI; macOS uses Security.framework data-protection Keychain items for the signed controlling app.
+- Windows uses the existing narrow elevated helper. macOS uses a root LaunchDaemon and strict local relay-admin socket; Service Management authorization is not reported healthy until authenticated strict-v1 status proves the exact helper.
+- Windows relay CA/state is protected by ACLs for SYSTEM and local Administrators. macOS relay state is root-only mode `0700`; its `root:admin` mode-`0660` socket additionally authenticates the kernel peer UID and permits only the recorded controlling administrator UID or root after first binding.
 - Every EC2 node is a separate Client identity. Its private keys remain in ACL-protected node state.
 - Android private keys remain non-exportable in Android Keystore. Enrollment/migration uses a cellular-bound network.
 
@@ -13,8 +13,8 @@
 
 | Material | Created/stored | May cross SSM? |
 |---|---|---|
-| Relay CA/leaf private keys | Relay ProgramData state | No |
-| Owner private key | Controller process / DPAPI store | No |
+| Relay CA/leaf private keys | Windows ProgramData or root-only macOS relay state | No |
+| Owner private key | Controller process / Windows DPAPI or macOS Keychain | No |
 | Node Client private key | EC2 node ProgramData | No |
 | Node X25519 private key | EC2 node ProgramData | No |
 | Android private key | Android Keystore | No |
@@ -26,19 +26,25 @@
 
 SSM command text contains signed release metadata or a base64 wrapper around the sealed envelope. Command output is constrained to public bootstrap JSON or fixed redacted success JSON. Errors exposed by the controller are finite: release failures may preserve only an allowlisted stage identifier and never concatenate SSM stdout/stderr.
 
+macOS Keychain service `com.cbjjensen.mobile-egress.controller` maps logical names to lowercase SHA-256 account names and sets `kSecAttrSynchronizable=false` plus `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Its one private access group must be authorized by the embedded Developer ID distribution profile. There is no plaintext/file-encryption fallback. Reusing the approved Developer ID Application identity and access group provides same-Mac upgrade continuity; see [signed Keychain integration](macos-keychain-integration.md).
+
+Relay-admin IPC exposes only typed public status/setup/rotate/repair results and allowlisted error codes. Owner private keys, AWS credentials, node metadata, relay CA private keys, proxy secrets, destinations, traffic payloads, and raw native/daemon errors never cross it or enter UI/activity text.
+
 ## AWS safeguards
 
 The controller is hard-coded to `us-east-1`, inventories only running x86-64 Windows Server 2019, and manages at most ten nodes. It never calls EC2 creation/termination, public-address allocation, or security-group ingress APIs. SSM recovery can call `ec2:RebootInstances` only for a supported instance already present in the refreshed inventory and only after an explicit interruption confirmation. The controller waits for a post-request SSM ping before installing; cancelling makes no AWS change.
 
 It never replaces an existing instance profile. For a profile-less instance it rechecks absence before association. Deterministic dedicated roles/profiles are tagged to the instance and reused only when their tags, exact EC2 trust policy, role membership, and absence of unexpected managed/inline policies all match. For an existing role it requires explicit operator confirmation and attaches only `AmazonSSMManagedInstanceCore`.
 
-IAM Identity Center uses the browser/device authorization flow; the AWS password is never entered into Mobile Egress. Access keys are a fallback and are encrypted with DPAPI, but short-lived role credentials are preferred.
+IAM Identity Center uses the browser/device authorization flow; the AWS password is never entered into Mobile Egress. Access keys are a fallback and are encrypted with DPAPI on Windows or stored in the data-protection Keychain on macOS, but short-lived role credentials are preferred.
 
 ## Network safeguards
 
 The relay and all proxy listeners bind loopback. Each EC2 Client exposes authenticated SOCKS5 on `127.0.0.1:1080` and authenticated HTTP forward/CONNECT on `127.0.0.1:1081`; neither is reachable through an EC2 security group. Only Funnel publishes port 8443, which is Mobile Egress TLS relay traffic—not a public proxy. EC2 needs outbound HTTPS/SSM only. Applications opt in individually; the product does not alter the OS default route. HTTPS tunneled through CONNECT remains end-to-end encrypted between the EC2 application and destination. Ordinary HTTP remains plaintext on the cellular-to-destination leg, as it would without Mobile Egress; the Client strips proxy authentication and hop-by-hop proxy headers before forwarding it.
 
 Android requests a cellular transport and creates relay/target sockets from that `Network`. Loss/unavailability fails closed. Destination policy is enforced in both relay and Agent. DNS names, target IPs, URLs, headers, payloads, and credentials are excluded from diagnostics.
+
+On macOS, logout of the controlling user, an unavailable Keychain, or loss of the Tailscale system extension/VPN path also fails the bridge closed. An extant root relay alone is not proof of end-to-end availability. The relay remains loopback-only and Funnel remains the sole ingress.
 
 Guided IP rotation queries `api.ipify.org` and `api6.ipify.org` through the selected cellular network, including network-specific DNS. ipify therefore observes the public source address and normal request metadata. Before/after addresses exist only in transient runtime/UI state and are excluded from storage, application logs, copied diagnostics, and physical-acceptance records. Failure of one address family is isolated, and failure of both produces an unverified result rather than a false success. The app opens system settings but has no privileged ability to change Airplane Mode, mobile data, APNs, or SIM state.
 
@@ -52,8 +58,12 @@ The signed controller embeds node-release manifest v2: the exact GitHub HTTPS UR
 
 On EC2, a bounded machine-global mutex serializes the complete download/trust/install-or-update transaction; abandoned ownership is recovered, while lock timeout fails closed before the transaction starts. SSM first downloads the pinned artifact and verifies its SHA-256. It reconstructs only the manifest-embedded public DER, rechecks its SHA-256/thumbprint, and inspects the artifact's untrusted Authenticode signature. Fresh Windows Server 2019 may classify an otherwise exact self-signed pre-trust signature as `UnknownError`; only this pre-trust status is permitted after both the artifact hash and exact signer bytes match. Unsigned, hash-mismatched, non-exact-certificate, or every other unexpected status fails before trust changes. Every same-thumbprint store entry is inspected before an exact certificate is accepted. Only then may the exact certificate be added to `LocalMachine\Root` and `LocalMachine\TrustedPublisher`; Authenticode must subsequently be `Valid` with the same certificate bytes. Existing exact entries are idempotent. A failed attempt removes exact DER only from stores absent when that mutex-owned transaction began and never removes pre-existing or unrelated certificates. ACL, PowerShell service-management, and Client bootstrap failures are checked immediately so they enter rollback and cannot emit success.
 
+On macOS, guided Tailscale installation accepts only `Tailscale-<version>-macos.pkg` and its digest-only companion from exact `https://pkgs.tailscale.com`, within 250 MiB, with Apple-issued Developer ID Installer trust and Team ID `W5364U7YZB`. A preinstalled app may be the [official standalone or App Store variant](https://tailscale.com/docs/concepts/macos-variants), bundle `io.tailscale.ipn.macsys` or `io.tailscale.ipn.macos`, with the same Team ID and required Apple signature class. Commands use fixed `/Applications/Tailscale.app/Contents/MacOS/Tailscale` with `TAILSCALE_BE_CLI=1`. Supporting Tailscale's App Store app does not make ZFNF Mobile Egress an App Store product.
+
+The ZFNF Apple Silicon app and current component package use identifier `com.cbjjensen.mobile-egress.controller`, minimum target 13.0, hardened runtime, and no App Sandbox. Production signs the nested relay, then app, then installer with approved Developer ID Application/Installer identities, notarizes, staples, and verifies the PKG. Apple Developer Program membership, matching distribution profile/private Keychain identities, public authority records, and a notary Keychain profile are prerequisites; no ad-hoc/self-signed fallback exists. `mobile-egress-macos-<version>-arm64.verification.json` is mandatory private/local evidence and never a GitHub asset.
+
 Protect the code-signing private key separately from build outputs. A compromised signer is a full update-path incident. Unsigned developer binaries intentionally cannot perform production service setup.
 
 ## Explicit non-goals
 
-This is not an anonymity service, VPN/default-route replacement, high-availability proxy, bulk traffic platform, endpoint security product, or defense against a compromised local Administrator/root user. Same-Windows-user malware, malicious download-source substitution before the publisher is first trusted, and a local path race between optional external signature inspection and launch are also outside the relaxed setup threat model. Tailscale Funnel is a public ingress with service limits. Carrier IP rotation is not guaranteed.
+This is not an anonymity service, VPN/default-route replacement, high-availability proxy, bulk traffic platform, endpoint security product, or defense against a compromised local Administrator/root/operator user. Same-Windows-user malware, malicious download-source substitution before the publisher is first trusted, and a local path race between optional external signature inspection and launch are also outside the relaxed setup threat model. Intel/universal Mac builds, Windows-to-Mac private-state migration, a Mac headless Client, ZFNF Mac App Store distribution, and automatic updates are out of scope. Tailscale Funnel is a public ingress with service limits. Carrier IP rotation is not guaranteed.

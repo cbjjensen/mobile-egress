@@ -9,6 +9,23 @@ All public relay traffic is TLS 1.3 authenticated under the relay-local CA. Funn
 - `serve --state-dir ... --listen 127.0.0.1:8443` runs foreground or through the separate Windows SCM path.
 - `--version` prints the release version.
 
+The bundled macOS LaunchDaemon uses the private `daemon` mode with no flags or extra arguments. Its state directory, admin socket, group, and loopback listener are fixed by the signed application; they are not production command-line settings and `daemon` is intentionally omitted from public usage text.
+
+## macOS relay-admin IPC
+
+This is local privileged administration only. It is carried on `/var/run/com.cbjjensen.mobile-egress.relay.sock`, owned `root:admin` with mode `0660`, and is never exposed through Funnel or public relay TLS.
+
+Version 1 uses one strict JSON request and one strict JSON response per bounded frame:
+
+```text
+AdminRequest  = version + requestId + operation + optional typed setup/rotate payload
+AdminResponse = version + requestId + ok + allowlisted errorCode + optional typed result/status
+```
+
+Only `status`, `setup`, `rotate`, and `repair` are accepted. Frames are at most 512 KiB; request IDs carry 128 bits of entropy and the response ID must exactly match; each operation has a five-minute deadline. Unknown versions, operations or fields, malformed/oversized payloads, mismatched IDs, conflicting request-ID reuse, and unauthorized peers fail closed. An exact completed retry receives the cached response and does not repeat the operation.
+
+The daemon authenticates the kernel-reported peer UID. First setup requires a nonzero member of macOS `admin` and records that UID. Later management accepts only the recorded UID or root; root becomes recovery authority only after binding. Responses contain typed public status/results and finite error codes. Owner private keys, AWS credentials, node metadata, relay CA private keys, raw native/daemon errors, proxy secrets, destinations, and traffic payloads are prohibited.
+
 ## Control APIs
 
 | Method/path | Authentication | Purpose |
