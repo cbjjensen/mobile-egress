@@ -146,6 +146,17 @@ final class AgentViewModel: ObservableObject {
         rotationAvailability.requiresConfirmation(for: rotationState)
     }
 
+    var dashboardPresentation: AgentDashboardPresentation {
+        AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: isEnrolled,
+                pairingInProgress: isProcessingScan,
+                pairingState: dashboardPairingState,
+                status: statusSnapshot
+            )
+        )
+    }
+
     func startMonitoring() {
         guard monitorTask == nil else { return }
         monitorTask = Task { [weak self] in
@@ -171,6 +182,10 @@ final class AgentViewModel: ObservableObject {
 
     func cancelScanner() {
         isScannerPresented = false
+    }
+
+    func dismissUserError() {
+        userError = nil
     }
 
     func scannerBecameUnavailable() {
@@ -423,6 +438,20 @@ final class AgentViewModel: ObservableObject {
             ),
             rotation: rotationState
         )
+    }
+
+    private var dashboardPairingState: AgentPairingState {
+        switch userError {
+        case .scannerUnavailable:
+            .scannerUnavailable
+        case .qrNotRecognized:
+            .qrNotRecognized
+        case .enrollmentRejected, .migrationRejected:
+            .failed
+        case .none, .configurationUnavailable, .identityUnavailable, .vpnConfiguration,
+             .vpnStart, .statusUnavailable:
+            isEnrolled ? .paired : .idle
+        }
     }
 
     private static func makeRotationCoordinator(
