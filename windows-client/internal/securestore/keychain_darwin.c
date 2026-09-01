@@ -2,19 +2,27 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
+#include <Security/SecTask.h>
 
 #include <limits.h>
 #include <stdlib.h>
 
 #include "keychain_darwin.h"
 
+static char *mobile_egress_copy_cfstring(CFStringRef value);
+
 static CFMutableDictionaryRef mobile_egress_keychain_query(
+    const char *access_group,
     const char *service,
     const char *account) {
-    if (service == NULL || account == NULL) {
+    if (access_group == NULL || service == NULL || account == NULL) {
         return NULL;
     }
 
+    CFStringRef access_group_value = CFStringCreateWithCString(
+        kCFAllocatorDefault,
+        access_group,
+        kCFStringEncodingUTF8);
     CFStringRef service_value = CFStringCreateWithCString(
         kCFAllocatorDefault,
         service,
@@ -23,7 +31,10 @@ static CFMutableDictionaryRef mobile_egress_keychain_query(
         kCFAllocatorDefault,
         account,
         kCFStringEncodingUTF8);
-    if (service_value == NULL || account_value == NULL) {
+    if (access_group_value == NULL || service_value == NULL || account_value == NULL) {
+        if (access_group_value != NULL) {
+            CFRelease(access_group_value);
+        }
         if (service_value != NULL) {
             CFRelease(service_value);
         }
@@ -40,18 +51,73 @@ static CFMutableDictionaryRef mobile_egress_keychain_query(
         &kCFTypeDictionaryValueCallBacks);
     if (query != NULL) {
         CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
+        CFDictionarySetValue(query, kSecAttrAccessGroup, access_group_value);
         CFDictionarySetValue(query, kSecAttrService, service_value);
         CFDictionarySetValue(query, kSecAttrAccount, account_value);
         CFDictionarySetValue(query, kSecAttrSynchronizable, kCFBooleanFalse);
         CFDictionarySetValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue);
-        // Deliberately use the signed app's default access group. A stable
-        // Developer ID team and bundle identifier therefore retain access
-        // across upgrades without granting access to another application.
     }
 
+    CFRelease(access_group_value);
     CFRelease(service_value);
     CFRelease(account_value);
     return query;
+}
+
+int32_t mobile_egress_keychain_copy_signing_identity(
+    char **application_identifier,
+    char **team_identifier) {
+    if (application_identifier == NULL || team_identifier == NULL) {
+        return errSecParam;
+    }
+    *application_identifier = NULL;
+    *team_identifier = NULL;
+
+    SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (task == NULL) {
+        return errSecMissingEntitlement;
+    }
+    CFErrorRef application_error = NULL;
+    CFErrorRef team_error = NULL;
+    CFTypeRef application_value = SecTaskCopyValueForEntitlement(
+        task,
+        CFSTR("com.apple.application-identifier"),
+        &application_error);
+    CFTypeRef team_value = SecTaskCopyValueForEntitlement(
+        task,
+        CFSTR("com.apple.developer.team-identifier"),
+        &team_error);
+    CFRelease(task);
+    if (application_error != NULL) {
+        CFRelease(application_error);
+    }
+    if (team_error != NULL) {
+        CFRelease(team_error);
+    }
+    if (application_value == NULL || team_value == NULL ||
+        CFGetTypeID(application_value) != CFStringGetTypeID() ||
+        CFGetTypeID(team_value) != CFStringGetTypeID()) {
+        if (application_value != NULL) {
+            CFRelease(application_value);
+        }
+        if (team_value != NULL) {
+            CFRelease(team_value);
+        }
+        return errSecMissingEntitlement;
+    }
+
+    *application_identifier = mobile_egress_copy_cfstring((CFStringRef)application_value);
+    *team_identifier = mobile_egress_copy_cfstring((CFStringRef)team_value);
+    CFRelease(application_value);
+    CFRelease(team_value);
+    if (*application_identifier == NULL || *team_identifier == NULL) {
+        free(*application_identifier);
+        free(*team_identifier);
+        *application_identifier = NULL;
+        *team_identifier = NULL;
+        return errSecAllocate;
+    }
+    return errSecSuccess;
 }
 
 static char *mobile_egress_copy_cfstring(CFStringRef value) {
@@ -76,11 +142,12 @@ static char *mobile_egress_copy_cfstring(CFStringRef value) {
 }
 
 int32_t mobile_egress_keychain_add(
+    const char *access_group,
     const char *service,
     const char *account,
     const void *value,
     size_t value_length) {
-    CFMutableDictionaryRef attributes = mobile_egress_keychain_query(service, account);
+    CFMutableDictionaryRef attributes = mobile_egress_keychain_query(access_group, service, account);
     if (attributes == NULL || value == NULL || value_length > LONG_MAX) {
         if (attributes != NULL) {
             CFRelease(attributes);
@@ -109,11 +176,12 @@ int32_t mobile_egress_keychain_add(
 }
 
 int32_t mobile_egress_keychain_update(
+    const char *access_group,
     const char *service,
     const char *account,
     const void *value,
     size_t value_length) {
-    CFMutableDictionaryRef query = mobile_egress_keychain_query(service, account);
+    CFMutableDictionaryRef query = mobile_egress_keychain_query(access_group, service, account);
     if (query == NULL || value == NULL || value_length > LONG_MAX) {
         if (query != NULL) {
             CFRelease(query);
@@ -150,6 +218,7 @@ int32_t mobile_egress_keychain_update(
 }
 
 int32_t mobile_egress_keychain_copy(
+    const char *access_group,
     const char *service,
     const char *account,
     unsigned char **value,
@@ -160,7 +229,7 @@ int32_t mobile_egress_keychain_copy(
     *value = NULL;
     *value_length = 0;
 
-    CFMutableDictionaryRef query = mobile_egress_keychain_query(service, account);
+    CFMutableDictionaryRef query = mobile_egress_keychain_query(access_group, service, account);
     if (query == NULL) {
         return errSecParam;
     }
@@ -199,8 +268,11 @@ int32_t mobile_egress_keychain_copy(
     return errSecSuccess;
 }
 
-int32_t mobile_egress_keychain_delete(const char *service, const char *account) {
-    CFMutableDictionaryRef query = mobile_egress_keychain_query(service, account);
+int32_t mobile_egress_keychain_delete(
+    const char *access_group,
+    const char *service,
+    const char *account) {
+    CFMutableDictionaryRef query = mobile_egress_keychain_query(access_group, service, account);
     if (query == NULL) {
         return errSecParam;
     }
@@ -209,25 +281,75 @@ int32_t mobile_egress_keychain_delete(const char *service, const char *account) 
     return status;
 }
 
+int32_t mobile_egress_keychain_copy_persistent_reference(
+    const char *access_group,
+    const char *service,
+    const char *account,
+    unsigned char **value,
+    size_t *value_length) {
+    if (value == NULL || value_length == NULL) {
+        return errSecParam;
+    }
+    *value = NULL;
+    *value_length = 0;
+
+    CFMutableDictionaryRef query = mobile_egress_keychain_query(access_group, service, account);
+    if (query == NULL) {
+        return errSecParam;
+    }
+    CFDictionarySetValue(query, kSecReturnPersistentRef, kCFBooleanTrue);
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
+
+    CFTypeRef result = NULL;
+    OSStatus status = SecItemCopyMatching(query, &result);
+    CFRelease(query);
+    if (status != errSecSuccess) {
+        return status;
+    }
+    if (result == NULL || CFGetTypeID(result) != CFDataGetTypeID()) {
+        if (result != NULL) {
+            CFRelease(result);
+        }
+        return errSecInternalError;
+    }
+
+    CFDataRef data = (CFDataRef)result;
+    CFIndex length = CFDataGetLength(data);
+    if (length <= 0) {
+        CFRelease(result);
+        return errSecInternalError;
+    }
+    *value = malloc((size_t)length);
+    if (*value == NULL) {
+        CFRelease(result);
+        return errSecAllocate;
+    }
+    CFDataGetBytes(data, CFRangeMake(0, length), *value);
+    *value_length = (size_t)length;
+    CFRelease(result);
+    return errSecSuccess;
+}
+
 int32_t mobile_egress_keychain_copy_attributes(
+    const char *access_group,
     const char *service,
     const char *account,
     char **stored_service,
     char **stored_account,
-    char **access_group,
+    char **stored_access_group,
     int *synchronizable_state,
     int *when_unlocked_this_device_only) {
-    if (stored_service == NULL || stored_account == NULL || access_group == NULL ||
+    if (stored_service == NULL || stored_account == NULL || stored_access_group == NULL ||
         synchronizable_state == NULL || when_unlocked_this_device_only == NULL) {
         return errSecParam;
     }
     *stored_service = NULL;
     *stored_account = NULL;
-    *access_group = NULL;
+    *stored_access_group = NULL;
     *synchronizable_state = 0;
     *when_unlocked_this_device_only = 0;
 
-    CFMutableDictionaryRef query = mobile_egress_keychain_query(service, account);
+    CFMutableDictionaryRef query = mobile_egress_keychain_query(access_group, service, account);
     if (query == NULL) {
         return errSecParam;
     }
@@ -256,14 +378,14 @@ int32_t mobile_egress_keychain_copy_attributes(
 
     *stored_service = mobile_egress_copy_cfstring(service_value);
     *stored_account = mobile_egress_copy_cfstring(account_value);
-    *access_group = mobile_egress_copy_cfstring(access_group_value);
-    if (*stored_service == NULL || *stored_account == NULL || *access_group == NULL) {
+    *stored_access_group = mobile_egress_copy_cfstring(access_group_value);
+    if (*stored_service == NULL || *stored_account == NULL || *stored_access_group == NULL) {
         free(*stored_service);
         free(*stored_account);
-        free(*access_group);
+        free(*stored_access_group);
         *stored_service = NULL;
         *stored_account = NULL;
-        *access_group = NULL;
+        *stored_access_group = NULL;
         CFRelease(result);
         return errSecAllocate;
     }

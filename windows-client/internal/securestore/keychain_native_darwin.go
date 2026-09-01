@@ -13,16 +13,33 @@ import "unsafe"
 
 type darwinKeychainNative struct{}
 
-func newPlatformKeychainNative() (keychainNative, error) {
-	return darwinKeychainNative{}, nil
+func newPlatformKeychainNative() (keychainNative, string, string, error) {
+	var applicationIdentifier *C.char
+	var teamIdentifier *C.char
+	status := keychainStatus(C.mobile_egress_keychain_copy_signing_identity(
+		&applicationIdentifier,
+		&teamIdentifier,
+	))
+	if applicationIdentifier != nil {
+		defer C.mobile_egress_keychain_free(unsafe.Pointer(applicationIdentifier))
+	}
+	if teamIdentifier != nil {
+		defer C.mobile_egress_keychain_free(unsafe.Pointer(teamIdentifier))
+	}
+	if status != keychainStatusSuccess {
+		return nil, "", "", keychainOperationError("read signed macOS application identity", status)
+	}
+	return darwinKeychainNative{}, C.GoString(applicationIdentifier), C.GoString(teamIdentifier), nil
 }
 
-func (darwinKeychainNative) Add(service, account string, value []byte) keychainStatus {
-	serviceValue, accountValue, data := darwinKeychainArguments(service, account, value)
+func (darwinKeychainNative) Add(accessGroup, service, account string, value []byte) keychainStatus {
+	accessGroupValue, serviceValue, accountValue, data := darwinKeychainArguments(accessGroup, service, account, value)
+	defer C.free(unsafe.Pointer(accessGroupValue))
 	defer C.free(unsafe.Pointer(serviceValue))
 	defer C.free(unsafe.Pointer(accountValue))
 	defer C.free(data)
 	return keychainStatus(C.mobile_egress_keychain_add(
+		accessGroupValue,
 		serviceValue,
 		accountValue,
 		data,
@@ -30,12 +47,14 @@ func (darwinKeychainNative) Add(service, account string, value []byte) keychainS
 	))
 }
 
-func (darwinKeychainNative) Update(service, account string, value []byte) keychainStatus {
-	serviceValue, accountValue, data := darwinKeychainArguments(service, account, value)
+func (darwinKeychainNative) Update(accessGroup, service, account string, value []byte) keychainStatus {
+	accessGroupValue, serviceValue, accountValue, data := darwinKeychainArguments(accessGroup, service, account, value)
+	defer C.free(unsafe.Pointer(accessGroupValue))
 	defer C.free(unsafe.Pointer(serviceValue))
 	defer C.free(unsafe.Pointer(accountValue))
 	defer C.free(data)
 	return keychainStatus(C.mobile_egress_keychain_update(
+		accessGroupValue,
 		serviceValue,
 		accountValue,
 		data,
@@ -43,15 +62,18 @@ func (darwinKeychainNative) Update(service, account string, value []byte) keycha
 	))
 }
 
-func (darwinKeychainNative) Get(service, account string) ([]byte, keychainStatus) {
+func (darwinKeychainNative) Get(accessGroup, service, account string) ([]byte, keychainStatus) {
+	accessGroupValue := C.CString(accessGroup)
 	serviceValue := C.CString(service)
 	accountValue := C.CString(account)
+	defer C.free(unsafe.Pointer(accessGroupValue))
 	defer C.free(unsafe.Pointer(serviceValue))
 	defer C.free(unsafe.Pointer(accountValue))
 
 	var data *C.uchar
 	var length C.size_t
 	status := keychainStatus(C.mobile_egress_keychain_copy(
+		accessGroupValue,
 		serviceValue,
 		accountValue,
 		&data,
@@ -67,16 +89,18 @@ func (darwinKeychainNative) Get(service, account string) ([]byte, keychainStatus
 	return append([]byte(nil), value...), status
 }
 
-func (darwinKeychainNative) Delete(service, account string) keychainStatus {
+func (darwinKeychainNative) Delete(accessGroup, service, account string) keychainStatus {
+	accessGroupValue := C.CString(accessGroup)
 	serviceValue := C.CString(service)
 	accountValue := C.CString(account)
+	defer C.free(unsafe.Pointer(accessGroupValue))
 	defer C.free(unsafe.Pointer(serviceValue))
 	defer C.free(unsafe.Pointer(accountValue))
-	return keychainStatus(C.mobile_egress_keychain_delete(serviceValue, accountValue))
+	return keychainStatus(C.mobile_egress_keychain_delete(accessGroupValue, serviceValue, accountValue))
 }
 
-func darwinKeychainArguments(service, account string, value []byte) (*C.char, *C.char, unsafe.Pointer) {
-	return C.CString(service), C.CString(account), C.CBytes(value)
+func darwinKeychainArguments(accessGroup, service, account string, value []byte) (*C.char, *C.char, *C.char, unsafe.Pointer) {
+	return C.CString(accessGroup), C.CString(service), C.CString(account), C.CBytes(value)
 }
 
 type darwinKeychainAttributes struct {
@@ -87,9 +111,11 @@ type darwinKeychainAttributes struct {
 	whenUnlockedThisDeviceOnly bool
 }
 
-func darwinKeychainItemAttributes(account string) (darwinKeychainAttributes, error) {
+func darwinKeychainItemAttributes(accessGroupValueString, account string) (darwinKeychainAttributes, error) {
+	accessGroupValue := C.CString(accessGroupValueString)
 	serviceValue := C.CString(keychainService)
 	accountValue := C.CString(account)
+	defer C.free(unsafe.Pointer(accessGroupValue))
 	defer C.free(unsafe.Pointer(serviceValue))
 	defer C.free(unsafe.Pointer(accountValue))
 
@@ -99,6 +125,7 @@ func darwinKeychainItemAttributes(account string) (darwinKeychainAttributes, err
 	var synchronizableState C.int
 	var whenUnlockedThisDeviceOnly C.int
 	status := keychainStatus(C.mobile_egress_keychain_copy_attributes(
+		accessGroupValue,
 		serviceValue,
 		accountValue,
 		&storedService,
@@ -126,4 +153,31 @@ func darwinKeychainItemAttributes(account string) (darwinKeychainAttributes, err
 		explicitlyNonSynchronizing: synchronizableState == 1,
 		whenUnlockedThisDeviceOnly: whenUnlockedThisDeviceOnly != 0,
 	}, nil
+}
+
+func darwinKeychainItemPersistentReference(accessGroupValueString, account string) ([]byte, error) {
+	accessGroupValue := C.CString(accessGroupValueString)
+	serviceValue := C.CString(keychainService)
+	accountValue := C.CString(account)
+	defer C.free(unsafe.Pointer(accessGroupValue))
+	defer C.free(unsafe.Pointer(serviceValue))
+	defer C.free(unsafe.Pointer(accountValue))
+
+	var data *C.uchar
+	var length C.size_t
+	status := keychainStatus(C.mobile_egress_keychain_copy_persistent_reference(
+		accessGroupValue,
+		serviceValue,
+		accountValue,
+		&data,
+		&length,
+	))
+	if data != nil {
+		defer C.mobile_egress_keychain_free(unsafe.Pointer(data))
+	}
+	if status != keychainStatusSuccess {
+		return nil, keychainOperationError("read secure value persistent reference", status)
+	}
+	value := unsafe.Slice((*byte)(unsafe.Pointer(data)), int(length))
+	return append([]byte(nil), value...), nil
 }
