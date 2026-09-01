@@ -354,10 +354,17 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         await probeGate.waitUntilEntered()
 
         let checkpoints = store.savedCheckpoints
-        XCTAssertEqual(checkpoints.count, 2)
+        XCTAssertEqual(checkpoints.count, 3)
         XCTAssertEqual(checkpoints[0].pauseDisposition, .pending)
-        if case .paused = checkpoints[1].pauseDisposition {
+        guard case let .pausing(pausingReceipt) = checkpoints[1].pauseDisposition else {
+            XCTFail("Pre-pause checkpoint did not persist the opaque intent")
+            await coordinator.cancel()
+            await probeGate.open()
+            return
+        }
+        if case let .paused(pausedReceipt) = checkpoints[2].pauseDisposition {
             // The original intent is durable before the probe dependency finishes.
+            XCTAssertEqual(pausedReceipt, pausingReceipt)
         } else {
             XCTFail("Post-pause checkpoint did not persist the opaque intent")
         }
