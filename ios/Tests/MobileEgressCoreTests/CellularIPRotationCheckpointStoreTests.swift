@@ -78,6 +78,27 @@ final class CellularIPRotationCheckpointStoreTests: XCTestCase {
         XCTAssertNil(try store.load(expectedAttemptID: 41, at: now.addingTimeInterval(301)))
     }
 
+    func testExpiredReceiptBearingCheckpointRemainsAvailableForTerminalRestoration() throws {
+        let receipt = TunnelRotationReceipt(wasRunning: true, wasOnDemandEnabled: true)
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .verifying(
+                attemptID: 41,
+                before: PublicIPSnapshot(ipv4: "198.51.100.1"),
+                returnedNetworkToken: "cellular-2"
+            ),
+            savedAt: now,
+            pauseDisposition: .paused(receipt)
+        )
+        let store = AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL)
+        try store.save(checkpoint)
+
+        XCTAssertEqual(
+            try store.load(expectedAttemptID: 41, at: now.addingTimeInterval(300)),
+            checkpoint
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.checkpointURL.path))
+    }
+
     func testCheckpointStoreRejectsMalformedAndLegacyMissingTimingData() throws {
         let store = AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL)
         try Data("not-json temporary-token 198.51.100.3".utf8).write(
