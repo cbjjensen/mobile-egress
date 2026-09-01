@@ -123,7 +123,7 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.primaryAgentAction, .stop)
         XCTAssertEqual(presentation.rotationAction, .rotate)
         XCTAssertTrue(presentation.isRotationEnabled)
-        XCTAssertFalse(presentation.requiresActiveStreamConfirmation)
+        XCTAssertTrue(presentation.requiresActiveStreamConfirmation)
         XCTAssertNil(presentation.finiteErrorCopy)
     }
 
