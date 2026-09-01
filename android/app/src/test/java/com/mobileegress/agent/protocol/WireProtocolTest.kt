@@ -41,4 +41,13 @@ class WireProtocolTest {
 
         assertEquals(payload.toList(), parsed.decodePayload().toList())
     }
+
+    @Test
+    fun `accepts a protocol valid thirty two KiB inbound data frame`() {
+        val payload = ByteArray(32 * 1024) { (it % 251).toByte() }
+
+        val parsed = WireProtocol.parseAgentInbound(WireProtocol.encode("data", "stream-32k", payload))
+
+        assertEquals(payload.toList(), parsed.decodePayload().toList())
+    }
 }

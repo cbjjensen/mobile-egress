@@ -8,6 +8,63 @@ import org.junit.Test
 
 class OutboundMailboxTest {
     @Test
+    fun `agent default control lane admits five hundred twelve required frames and then closes session`() {
+        val mailbox = OutboundMailbox()
+        repeat(512) { index ->
+            assertTrue(mailbox.offerRequiredControl(byteArrayOf(index.toByte()), streamId = null) {})
+        }
+        var sessionClosed = false
+
+        assertFalse(
+            mailbox.offerRequiredControl(byteArrayOf(9), streamId = null) {
+                sessionClosed = true
+            },
+        )
+        assertTrue(sessionClosed)
+    }
+
+    @Test
+    fun `agent default data lanes enforce aggregate and per stream bounds`() {
+        val aggregate = OutboundMailbox()
+        repeat(256) { index ->
+            assertTrue(aggregate.offerData("stream-$index", byteArrayOf(index.toByte())))
+        }
+        assertFalse(aggregate.offerData("aggregate-overflow", byteArrayOf(1)))
+
+        val perStream = OutboundMailbox()
+        assertTrue(perStream.offerData("busy", byteArrayOf(1)))
+        assertTrue(perStream.offerData("busy", byteArrayOf(2)))
+        assertFalse(perStream.offerData("busy", byteArrayOf(3)))
+        assertTrue(perStream.offerData("peer", byteArrayOf(4)))
+    }
+
+    @Test
+    fun `agent canceled stream retention is bounded at one thousand twenty four ids`() {
+        val mailbox = OutboundMailbox()
+        repeat(1_025) { index -> mailbox.cancelStream("stream-$index") }
+
+        assertTrue(mailbox.offerData("stream-0", byteArrayOf(1)))
+        assertFalse(mailbox.offerData("stream-1", byteArrayOf(1)))
+        assertFalse(mailbox.offerData("stream-1024", byteArrayOf(1)))
+    }
+
+    @Test
+    fun `agent control remains prioritized and ready streams rotate fairly`() {
+        val mailbox = OutboundMailbox()
+        assertTrue(mailbox.offerData("first", byteArrayOf(1)))
+        assertTrue(mailbox.offerData("first", byteArrayOf(2)))
+        assertTrue(mailbox.offerData("second", byteArrayOf(3)))
+        assertTrue(mailbox.offerData("second", byteArrayOf(4)))
+        assertTrue(mailbox.offerRequiredControl(byteArrayOf(9), streamId = null) {})
+
+        assertEquals(listOf(9.toByte()), pollBytes(mailbox).toList())
+        assertEquals(listOf(1.toByte()), pollBytes(mailbox).toList())
+        assertEquals(listOf(3.toByte()), pollBytes(mailbox).toList())
+        assertEquals(listOf(2.toByte()), pollBytes(mailbox).toList())
+        assertEquals(listOf(4.toByte()), pollBytes(mailbox).toList())
+    }
+
+    @Test
     fun `client close cancels claimed opened and pending eof frames while another stream remains usable`() {
         val mailbox = OutboundMailbox(controlCapacity = 4, dataCapacity = 4, perStreamDataCapacity = 2)
         val closingOpened = byteArrayOf(1)

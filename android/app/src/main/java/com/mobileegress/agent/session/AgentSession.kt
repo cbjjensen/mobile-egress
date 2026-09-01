@@ -15,16 +15,12 @@ import com.mobileegress.agent.status.AgentStatusBus
 import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
 import java.net.InetSocketAddress
-import java.net.Socket
-import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -57,17 +53,15 @@ class AgentSession(
 ) {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.IO)
-    private val outbound = OutboundMailbox(
-        controlCapacity = OUTBOUND_CONTROL_QUEUE_CAPACITY,
-        dataCapacity = OUTBOUND_DATA_QUEUE_CAPACITY,
-        perStreamDataCapacity = OUTBOUND_PER_STREAM_DATA_QUEUE_CAPACITY,
-    )
+    private val outbound = OutboundMailbox()
     private val streams = java.util.concurrent.ConcurrentHashMap<String, TargetStream>()
     private val admission = StreamAdmission(AgentCapacity.MAX_STREAMS)
     private val closed = AtomicBoolean(false)
-    private val tombstoneLock = Any()
-    private val tombstones = ArrayDeque<String>()
-    private val tombstoneSet = HashSet<String>()
+    private val tombstones = StreamTombstones()
+    private val reactor = TargetIoReactor(
+        binder = TargetSocketBinder(network::bindSocket),
+        listener = ReactorListener(),
+    )
     private val client: OkHttpClient
     @Volatile private var webSocket: WebSocket? = null
 
@@ -85,6 +79,7 @@ class AgentSession(
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
             .build()
+        reactor.start()
     }
 
     fun connect() {
@@ -193,27 +188,27 @@ class AgentSession(
             reject(envelope.streamId, "policy_denied")
             return
         }
-        val socket = try {
-            network.socketFactory.createSocket()
-        } catch (_: Exception) {
-            admission.release(envelope.streamId)
-            reject(envelope.streamId, "target_failure")
-            return
-        }
-        val stream = TargetStream(envelope.streamId, socket)
+        val stream = TargetStream(envelope.streamId)
         outbound.allowData(stream.id)
         streams[envelope.streamId] = stream
         publishStreamCount()
-        scope.launch {
-            try {
-                stream.socket.connect(InetSocketAddress(address, target.port), TARGET_CONNECT_TIMEOUT_MILLIS)
-                stream.socket.tcpNoDelay = true
-                if (!stream.isOpen() || closed.get()) return@launch
-                if (!enqueueRequiredControl("opened", stream.id)) return@launch
-                stream.reader = launch { targetReadLoop(stream) }
-                stream.writer = launch { targetWriteLoop(stream) }
-            } catch (_: Exception) {
-                failStream(stream, "target_failure", ErrorClass.TargetConnect)
+        when (reactor.open(stream.id, InetSocketAddress(address, target.port))) {
+            ReactorSubmitResult.Accepted -> Unit
+            ReactorSubmitResult.StreamLimit -> {
+                streams.remove(stream.id, stream)
+                admission.release(stream.id)
+                reject(stream.id, "agent_stream_limit")
+                publishStreamCount()
+            }
+            ReactorSubmitResult.SessionSaturated -> {
+                terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
+            }
+            ReactorSubmitResult.StreamSaturated,
+            ReactorSubmitResult.MissingOrClosed -> {
+                streams.remove(stream.id, stream)
+                admission.release(stream.id)
+                reject(stream.id, "target_failure")
+                publishStreamCount()
             }
         }
     }
@@ -222,8 +217,15 @@ class AgentSession(
         val stream = streams[envelope.streamId]
             ?: throw ProtocolException("Data for an unknown stream")
         val payload = envelope.decodePayload()
-        if (stream.inbound.trySend(payload).isFailure) {
-            failStream(stream, BACKPRESSURE_CLOSE_CODE, ErrorClass.Backpressure)
+        if (!stream.isOpen()) throw ProtocolException("Data for a closed stream")
+        when (reactor.write(stream.id, payload)) {
+            ReactorSubmitResult.Accepted,
+            ReactorSubmitResult.StreamSaturated -> Unit
+            ReactorSubmitResult.SessionSaturated -> {
+                terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
+            }
+            ReactorSubmitResult.StreamLimit,
+            ReactorSubmitResult.MissingOrClosed -> throw ProtocolException("Data for a closed stream")
         }
     }
 
@@ -241,40 +243,6 @@ class AgentSession(
             throw ProtocolException("Close for an unknown stream")
         }
         closeStreamFromRelay(stream)
-    }
-
-    private suspend fun targetReadLoop(stream: TargetStream) {
-        val buffer = ByteArray(STREAM_CHUNK_BYTES)
-        try {
-            val input = stream.socket.getInputStream()
-            while (scope.isActive && stream.isOpen()) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                if (read == 0) continue
-                val chunk = buffer.copyOf(read)
-                if (!trySendData(stream.id, chunk)) {
-                    failStream(stream, BACKPRESSURE_CLOSE_CODE, ErrorClass.Backpressure)
-                    return
-                }
-                AgentStatusBus.update { it.copy(bytesDown = it.bytesDown + read) }
-            }
-            closeStreamAfterDraining(stream, "target_closed")
-        } catch (_: Exception) {
-            failStream(stream, "target_failure", ErrorClass.TargetConnect)
-        }
-    }
-
-    private suspend fun targetWriteLoop(stream: TargetStream) {
-        try {
-            val output = stream.socket.getOutputStream()
-            for (payload in stream.inbound) {
-                output.write(payload)
-                output.flush()
-                AgentStatusBus.update { it.copy(bytesUp = it.bytesUp + payload.size) }
-            }
-        } catch (_: Exception) {
-            failStream(stream, "target_failure", ErrorClass.TargetConnect)
-        }
     }
 
     private fun reject(streamId: String, code: String) {
@@ -320,18 +288,48 @@ class AgentSession(
         releaseStream(stream, errorClass)
     }
 
-    private fun closeStreamFromRelay(stream: TargetStream) {
-        val shouldRelease = synchronized(stream.terminalLock) {
-            when (stream.terminalState) {
-                StreamTerminalState.Released -> return
-                StreamTerminalState.Open,
-                StreamTerminalState.GracefulPending,
-                StreamTerminalState.ForcedPending -> outbound.cancelStream(stream.id)
-            }
+    private fun rejectUnopenedStream(
+        stream: TargetStream,
+        code: String,
+        errorClass: ErrorClass,
+    ) {
+        val shouldReject = synchronized(stream.terminalLock) {
+            if (stream.terminalState != StreamTerminalState.Open || closed.get()) return
             stream.terminalState = StreamTerminalState.Released
             true
         }
-        if (shouldRelease) finalizeStreamRelease(stream, ErrorClass.None)
+        if (!shouldReject) return
+        outbound.blockAndDiscardData(stream.id)
+        finalizeStreamRelease(stream, errorClass)
+        reject(stream.id, code)
+    }
+
+    private fun closeStreamFromRelay(stream: TargetStream) {
+        val waitForCancellation = synchronized(stream.terminalLock) {
+            when (stream.terminalState) {
+                StreamTerminalState.Released -> return
+                StreamTerminalState.Open -> {
+                    outbound.cancelStream(stream.id)
+                    stream.terminalState = StreamTerminalState.CancelPending
+                    true
+                }
+                StreamTerminalState.GracefulPending,
+                StreamTerminalState.ForcedPending,
+                StreamTerminalState.CancelPending -> {
+                    outbound.cancelStream(stream.id)
+                    stream.terminalState = StreamTerminalState.Released
+                    false
+                }
+            }
+        }
+        val result = reactor.cancel(stream.id)
+        if (result == ReactorSubmitResult.SessionSaturated) {
+            terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
+            return
+        }
+        if (!waitForCancellation || result != ReactorSubmitResult.Accepted) {
+            finalizeStreamRelease(stream, ErrorClass.None)
+        }
     }
 
     private fun releaseStream(stream: TargetStream, errorClass: ErrorClass) {
@@ -349,31 +347,24 @@ class AgentSession(
             stream.terminalState = StreamTerminalState.Released
             true
         }
-        if (shouldRelease) finalizeStreamRelease(stream, ErrorClass.None)
+        if (!shouldRelease) return
+        if (reactor.release(stream.id) == ReactorSubmitResult.SessionSaturated) {
+            terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
+            return
+        }
+        finalizeStreamRelease(stream, ErrorClass.None)
     }
 
     private fun finalizeStreamRelease(stream: TargetStream, errorClass: ErrorClass) {
         streams.remove(stream.id, stream)
         admission.release(stream.id)
         rememberTombstone(stream.id)
-        stopStreamIo(stream)
         AgentStatusBus.update {
             it.copy(
                 activeStreams = admission.size,
                 errorClass = if (errorClass == ErrorClass.None) it.errorClass else errorClass,
             )
         }
-    }
-
-    private fun stopStreamIo(stream: TargetStream) {
-        stream.inbound.close()
-        try {
-            stream.socket.close()
-        } catch (_: Exception) {
-            // Stream teardown is best effort and contains no reportable detail.
-        }
-        stream.reader?.cancel()
-        stream.writer?.cancel()
     }
 
     private fun trySendData(streamId: String, payload: ByteArray): Boolean =
@@ -407,9 +398,9 @@ class AgentSession(
             synchronized(stream.terminalLock) {
                 stream.terminalState = StreamTerminalState.Released
             }
-            stopStreamIo(stream)
         }
         streams.clear()
+        reactor.shutdown()
         job.cancel()
         client.connectionPool.evictAll()
         client.dispatcher.executorService.shutdown()
@@ -421,39 +412,71 @@ class AgentSession(
         AgentStatusBus.update { it.copy(activeStreams = admission.size) }
     }
 
-    private fun rememberTombstone(streamId: String) = synchronized(tombstoneLock) {
-        if (!tombstoneSet.add(streamId)) return@synchronized
-        tombstones.addLast(streamId)
-        if (tombstones.size > MAX_TOMBSTONES) {
-            tombstoneSet.remove(tombstones.removeFirst())
-        }
-    }
+    private fun rememberTombstone(streamId: String) = tombstones.remember(streamId)
 
-    private fun isTombstoned(streamId: String): Boolean = synchronized(tombstoneLock) {
-        streamId in tombstoneSet
-    }
+    private fun isTombstoned(streamId: String): Boolean = tombstones.contains(streamId)
 
-    private class TargetStream(val id: String, val socket: Socket) {
-        val inbound = Channel<ByteArray>(capacity = STREAM_INBOUND_QUEUE_CAPACITY)
+    private class TargetStream(val id: String) {
         val terminalLock = Any()
         @Volatile var terminalState = StreamTerminalState.Open
-        @Volatile var reader: Job? = null
-        @Volatile var writer: Job? = null
 
         fun isOpen(): Boolean = terminalState == StreamTerminalState.Open
     }
 
-    private enum class StreamTerminalState { Open, GracefulPending, ForcedPending, Released }
+    private inner class ReactorListener : TargetReactorListener {
+        override fun onOpened(streamId: String) {
+            val stream = streams[streamId] ?: return
+            if (!stream.isOpen() || closed.get()) return
+            enqueueRequiredControl("opened", streamId)
+        }
+
+        override fun onData(streamId: String, payload: ByteArray): Boolean {
+            val stream = streams[streamId] ?: return false
+            if (!stream.isOpen() || closed.get()) return false
+            val accepted = trySendData(streamId, payload)
+            if (accepted) AgentStatusBus.update { it.copy(bytesDown = it.bytesDown + payload.size) }
+            return accepted
+        }
+
+        override fun onBytesWritten(streamId: String, byteCount: Int) {
+            if (byteCount > 0 && streams.containsKey(streamId)) {
+                AgentStatusBus.update { it.copy(bytesUp = it.bytesUp + byteCount) }
+            }
+        }
+
+        override fun onTerminal(streamId: String, reason: TargetTerminalReason) {
+            val stream = streams[streamId] ?: return
+            if (closed.get()) return
+            val action = reason.protocolAction()
+            val code = action.code
+            if (code == null) {
+                if (reason == TargetTerminalReason.Canceled) releaseStream(stream, ErrorClass.None)
+                return
+            }
+            if (action.rejectUnopenedStream) {
+                rejectUnopenedStream(stream, code, action.errorClass)
+            } else if (action.drainOutboundData) {
+                closeStreamAfterDraining(stream, code)
+            } else {
+                failStream(stream, code, action.errorClass)
+            }
+        }
+
+        override fun onFatalFailure() {
+            terminate(ErrorClass.Internal, sendWebSocketClose = false)
+        }
+    }
+
+    private enum class StreamTerminalState {
+        Open,
+        GracefulPending,
+        ForcedPending,
+        CancelPending,
+        Released,
+    }
 
     companion object {
         private const val RELAY_LOG_TAG = "AgentSession"
-        private const val MAX_TOMBSTONES = 32
-        private const val OUTBOUND_CONTROL_QUEUE_CAPACITY = 32
-        private const val OUTBOUND_DATA_QUEUE_CAPACITY = 64
-        private const val OUTBOUND_PER_STREAM_DATA_QUEUE_CAPACITY = 8
-        private const val STREAM_INBOUND_QUEUE_CAPACITY = 4
-        private const val STREAM_CHUNK_BYTES = 32 * 1024
-        private const val TARGET_CONNECT_TIMEOUT_MILLIS = 30_000
         private const val NORMAL_CLOSE = 1000
         private const val POLICY_VIOLATION_CLOSE = 1008
         private const val BACKPRESSURE_CLOSE_CODE = "agent_unavailable"
@@ -461,5 +484,12 @@ class AgentSession(
 }
 
 object AgentCapacity {
-    const val MAX_STREAMS = 32
+    const val MAX_STREAMS = 256
+    const val OUTBOUND_CONTROL_CAPACITY = 512
+    const val OUTBOUND_DATA_CAPACITY = 256
+    const val OUTBOUND_PER_STREAM_DATA_CAPACITY = 2
+    const val REACTOR_COMMAND_CAPACITY = 512
+    const val TARGET_INBOUND_PER_STREAM_CAPACITY = 2
+    const val PREFERRED_TARGET_READ_BYTES = 16 * 1024
+    const val RETAINED_STREAM_CAPACITY = 1_024
 }

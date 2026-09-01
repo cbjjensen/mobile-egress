@@ -19,9 +19,10 @@ class OutboundFrame internal constructor(
 enum class OutboundEmission { Emitted, Canceled, Failed }
 
 class OutboundMailbox(
-    private val controlCapacity: Int,
-    private val dataCapacity: Int,
-    private val perStreamDataCapacity: Int,
+    private val controlCapacity: Int = AgentCapacity.OUTBOUND_CONTROL_CAPACITY,
+    private val dataCapacity: Int = AgentCapacity.OUTBOUND_DATA_CAPACITY,
+    private val perStreamDataCapacity: Int = AgentCapacity.OUTBOUND_PER_STREAM_DATA_CAPACITY,
+    private val retainedStreamCapacity: Int = AgentCapacity.RETAINED_STREAM_CAPACITY,
 ) {
     private val lock = Any()
     private val controls = ArrayDeque<ControlFrame>()
@@ -40,6 +41,7 @@ class OutboundMailbox(
         require(controlCapacity > 0)
         require(dataCapacity > 0)
         require(perStreamDataCapacity in 1..dataCapacity)
+        require(retainedStreamCapacity > 0)
     }
 
     fun offerData(streamId: String, frame: ByteArray): Boolean {
@@ -277,15 +279,11 @@ class OutboundMailbox(
     }
 
     private fun trim(streams: LinkedHashSet<String>) {
-        if (streams.size > MAX_BLOCKED_STREAMS) streams.remove(streams.first())
+        if (streams.size > retainedStreamCapacity) streams.remove(streams.first())
     }
 
     private data class ControlFrame(
         val frame: OutboundFrame,
         val afterDataStreamId: String? = null,
     )
-
-    private companion object {
-        const val MAX_BLOCKED_STREAMS = 128
-    }
 }
