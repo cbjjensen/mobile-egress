@@ -1,6 +1,6 @@
 import Foundation
 
-public typealias CellularPathAvailabilityHandler = (Bool) -> Void
+public typealias CellularPathAvailabilityHandler = @Sendable (Bool) -> Void
 
 public protocol CellularPathObserving: Sendable {
     func start(handler: @escaping CellularPathAvailabilityHandler)
@@ -71,8 +71,14 @@ public final class CellularPathObserver: CellularPathObserving, @unchecked Senda
 }
 
 private final class NWCellularPathMonitor: CellularPathMonitoring, @unchecked Sendable {
-    var pathUpdateHandler: (@Sendable (Bool) -> Void)?
+    private let lock = NSLock()
+    private var storedPathUpdateHandler: (@Sendable (Bool) -> Void)?
     private let monitor: NWPathMonitor
+
+    var pathUpdateHandler: (@Sendable (Bool) -> Void)? {
+        get { lock.withLock { storedPathUpdateHandler } }
+        set { lock.withLock { storedPathUpdateHandler = newValue } }
+    }
 
     init(requiredInterfaceType: NWInterface.InterfaceType) {
         monitor = NWPathMonitor(requiredInterfaceType: requiredInterfaceType)
@@ -80,7 +86,7 @@ private final class NWCellularPathMonitor: CellularPathMonitoring, @unchecked Se
 
     func start(queue: DispatchQueue) {
         monitor.pathUpdateHandler = { [weak self] path in
-            self?.pathUpdateHandler?(
+            self?.deliver(
                 path.status == .satisfied && path.usesInterfaceType(.cellular)
             )
         }
@@ -91,6 +97,11 @@ private final class NWCellularPathMonitor: CellularPathMonitoring, @unchecked Se
         monitor.pathUpdateHandler = nil
         pathUpdateHandler = nil
         monitor.cancel()
+    }
+
+    private func deliver(_ available: Bool) {
+        let handler = lock.withLock { storedPathUpdateHandler }
+        handler?(available)
     }
 }
 #endif

@@ -22,6 +22,7 @@ public struct CellularIPRotationNotificationRequest: Equatable, Sendable {
 
 public enum CellularIPRotationNotificationCueResult: String, Codable, Equatable, Sendable {
     case scheduled
+    case cancelled
     case denied
     case authorizationFailed
     case schedulingFailed
@@ -47,8 +48,15 @@ public protocol CellularIPRotationNotificationCueing: Sendable {
 }
 
 public actor CellularIPRotationNotificationCue: CellularIPRotationNotificationCueing {
+    private struct SchedulingAttempt {
+        let generation: UInt64
+        var cancelled: Bool
+    }
+
     private let center: any CellularIPRotationNotificationCenter
     private let firstUseStore: any CellularIPRotationNotificationFirstUseStoring
+    private var nextGeneration: UInt64 = 0
+    private var schedulingAttempts: [UInt64: SchedulingAttempt] = [:]
 
     public init(
         center: any CellularIPRotationNotificationCenter,
@@ -62,21 +70,41 @@ public actor CellularIPRotationNotificationCue: CellularIPRotationNotificationCu
         attemptID: UInt64,
         holdDeadline: Date
     ) async -> CellularIPRotationNotificationCueResult {
+        nextGeneration &+= 1
+        let generation = nextGeneration
+        schedulingAttempts[attemptID] = SchedulingAttempt(
+            generation: generation,
+            cancelled: false
+        )
+        defer { finishScheduling(attemptID: attemptID, generation: generation) }
+
         let authorization: CellularIPRotationNotificationAuthorization
         if !firstUseStore.hasRequestedAuthorization {
             firstUseStore.hasRequestedAuthorization = true
             let current = await center.authorizationStatus()
+            guard isScheduling(attemptID: attemptID, generation: generation) else {
+                return .cancelled
+            }
             if current == .notDetermined {
                 do {
                     authorization = try await center.requestAuthorization() ? .authorized : .denied
                 } catch {
+                    guard isScheduling(attemptID: attemptID, generation: generation) else {
+                        return .cancelled
+                    }
                     return .authorizationFailed
+                }
+                guard isScheduling(attemptID: attemptID, generation: generation) else {
+                    return .cancelled
                 }
             } else {
                 authorization = current
             }
         } else {
             authorization = await center.authorizationStatus()
+            guard isScheduling(attemptID: attemptID, generation: generation) else {
+                return .cancelled
+            }
         }
 
         switch authorization {
@@ -94,17 +122,40 @@ public actor CellularIPRotationNotificationCue: CellularIPRotationNotificationCu
                         deliveryDate: holdDeadline
                     )
                 )
+                guard isScheduling(attemptID: attemptID, generation: generation) else {
+                    await center.removePendingRequests(
+                        withIdentifiers: [Self.pendingIdentifier(for: attemptID)]
+                    )
+                    return .cancelled
+                }
                 return .scheduled
             } catch {
+                guard isScheduling(attemptID: attemptID, generation: generation) else {
+                    return .cancelled
+                }
                 return .schedulingFailed
             }
         }
     }
 
     public func cancel(attemptID: UInt64) async {
+        if var attempt = schedulingAttempts[attemptID] {
+            attempt.cancelled = true
+            schedulingAttempts[attemptID] = attempt
+        }
         await center.removePendingRequests(
             withIdentifiers: [Self.pendingIdentifier(for: attemptID)]
         )
+    }
+
+    private func isScheduling(attemptID: UInt64, generation: UInt64) -> Bool {
+        guard let attempt = schedulingAttempts[attemptID] else { return false }
+        return attempt.generation == generation && !attempt.cancelled
+    }
+
+    private func finishScheduling(attemptID: UInt64, generation: UInt64) {
+        guard schedulingAttempts[attemptID]?.generation == generation else { return }
+        schedulingAttempts[attemptID] = nil
     }
 
     private static func pendingIdentifier(for attemptID: UInt64) -> String {
