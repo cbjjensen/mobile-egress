@@ -57,10 +57,21 @@ func Initialize(ctx context.Context, options InitOptions) (string, error) {
 	}
 	err = initializeState(ctx, options, func(database *store, _ *x509.Certificate, _ crypto.Signer, _ []byte) error {
 		now := time.Now().UTC()
-		if err := database.insertCapability(ctx, capabilityHash, enrollment.RoleOwner, now, now.Add(capabilityLifetime)); err != nil {
+		transaction, err := database.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin initialized Owner capability transaction: %w", err)
+		}
+		defer transaction.Rollback()
+		if _, err := transaction.ExecContext(ctx,
+			`INSERT INTO pairing_capabilities(capability_hash, role, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+			capabilityHash[:], string(enrollment.RoleOwner), now.Unix(), now.Add(capabilityLifetime).Unix(),
+		); err != nil {
 			return err
 		}
-		return database.setRelayURL(ctx, options.PublicURL)
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES ('relay_url', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, options.PublicURL); err != nil {
+			return err
+		}
+		return transaction.Commit()
 	})
 	if err != nil {
 		return "", err
@@ -94,26 +105,19 @@ func BootstrapOwner(ctx context.Context, options BootstrapOwnerOptions) (Enrollm
 	err = initializeState(ctx, InitOptions{
 		StateDir: options.StateDir, PublicName: options.PublicName, PublicURL: origin,
 	}, func(database *store, caCert *x509.Certificate, caKey crypto.Signer, caCertPEM []byte) error {
-		now := time.Now().UTC()
-		serialNumber, err := randomSerial()
+		transaction, err := database.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin Owner bootstrap transaction: %w", err)
+		}
+		defer transaction.Rollback()
+		issued, err := issueOwnerInTransaction(ctx, transaction, caCert, caKey, caCertPEM, publicKey, origin, nil)
 		if err != nil {
 			return err
 		}
-		serial := strings.ToUpper(serialNumber.Text(16))
-		certificatePEM, err := signDeviceCertificate(caCert, caKey, publicKey, enrollment.RoleOwner, serialNumber, serial, now)
-		if err != nil {
-			return fmt.Errorf("issue Owner certificate: %w", err)
-		}
-		if err := database.createIdentity(ctx, serial, enrollment.RoleOwner, now); err != nil {
+		if err := transaction.Commit(); err != nil {
 			return err
 		}
-		if err := database.setRelayURL(ctx, origin); err != nil {
-			return err
-		}
-		result = EnrollmentResult{
-			CertificatePEM: string(certificatePEM) + string(caCertPEM), CACertificatePEM: string(caCertPEM),
-			Serial: serial, Role: enrollment.RoleOwner,
-		}
+		result = issued
 		return nil
 	})
 	if err != nil {
@@ -140,33 +144,22 @@ func bootstrapOwnerFromExistingState(ctx context.Context, stateDir, origin strin
 		return EnrollmentResult{}, err
 	}
 	defer database.Close()
-	ownerCount, err := database.activeIdentityCount(ctx, enrollment.RoleOwner)
+	transaction, err := database.db.BeginTx(ctx, nil)
 	if err != nil {
 		return EnrollmentResult{}, err
 	}
-	if ownerCount != 0 {
+	defer transaction.Rollback()
+	result, err := issueOwnerInTransaction(ctx, transaction, caCert, caKey, caCertPEM, publicKey, origin, nil)
+	if errors.Is(err, ErrAdminAlreadyInitialized) {
 		return EnrollmentResult{}, errors.New("Owner identity already exists")
 	}
-	now := time.Now().UTC()
-	serialNumber, err := randomSerial()
 	if err != nil {
 		return EnrollmentResult{}, err
 	}
-	serial := strings.ToUpper(serialNumber.Text(16))
-	certificatePEM, err := signDeviceCertificate(caCert, caKey, publicKey, enrollment.RoleOwner, serialNumber, serial, now)
-	if err != nil {
-		return EnrollmentResult{}, fmt.Errorf("issue Owner certificate: %w", err)
+	if err := transaction.Commit(); err != nil {
+		return EnrollmentResult{}, fmt.Errorf("commit Owner bootstrap transaction: %w", err)
 	}
-	if err := database.createIdentity(ctx, serial, enrollment.RoleOwner, now); err != nil {
-		return EnrollmentResult{}, err
-	}
-	if err := database.setRelayURL(ctx, origin); err != nil {
-		return EnrollmentResult{}, err
-	}
-	return EnrollmentResult{
-		CertificatePEM: string(certificatePEM) + string(caCertPEM), CACertificatePEM: string(caCertPEM),
-		Serial: serial, Role: enrollment.RoleOwner,
-	}, nil
+	return result, nil
 }
 
 func initializeState(

@@ -6,14 +6,32 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"mobile-egress/relay/internal/enrollment"
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
+
+const adminMutationReplaySchema = `CREATE TABLE IF NOT EXISTS admin_mutation_replay (
+    request_id TEXT PRIMARY KEY,
+    digest BLOB NOT NULL CHECK(length(digest) = 32),
+    operation TEXT NOT NULL CHECK(operation IN ('setup','rotate','repair')),
+    state TEXT NOT NULL CHECK(state IN ('reserved','executing','completed','indeterminate')),
+    response BLOB,
+    created_at INTEGER NOT NULL,
+    CHECK(length(request_id) = 32
+          AND request_id = lower(request_id)
+          AND request_id NOT GLOB '*[^0-9a-f]*'),
+    CHECK((state = 'completed' AND response IS NOT NULL
+           AND length(response) BETWEEN 1 AND 524288)
+          OR (state <> 'completed' AND response IS NULL))
+) STRICT`
 
 var (
 	errCapabilityInvalid = errors.New("invalid enrollment capability")
@@ -46,17 +64,49 @@ func createStore(path string) (*store, error) {
 }
 
 func openDatabase(path string) (*store, error) {
-	database, err := sql.Open("sqlite", path)
+	// Driver-level pragmas are applied to every replacement connection, not
+	// just the first pooled handle opened below.
+	dsn, err := sqliteDataSourceName(path)
+	if err != nil {
+		return nil, err
+	}
+	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite state: %w", err)
 	}
 	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
 	state := &store{db: database}
 	if err := database.Ping(); err != nil {
 		database.Close()
 		return nil, fmt.Errorf("open SQLite state: %w", err)
 	}
+	if _, err := database.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("configure SQLite foreign keys: %w", err)
+	}
+	if _, err := database.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("configure SQLite busy timeout: %w", err)
+	}
 	return state, nil
+}
+
+func sqliteDataSourceName(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve SQLite state path: %w", err)
+	}
+	uriPath := filepath.ToSlash(absolute)
+	if filepath.VolumeName(absolute) != "" && !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	uri := &url.URL{Scheme: "file", Path: uriPath}
+	query := url.Values{}
+	query.Add("_pragma", "foreign_keys(1)")
+	query.Add("_pragma", "busy_timeout(5000)")
+	uri.RawQuery = query.Encode()
+	return uri.String(), nil
 }
 
 func openStore(path string) (*store, error) {
@@ -76,12 +126,28 @@ func openStore(path string) (*store, error) {
 		state.Close()
 		return nil, fmt.Errorf("read SQLite schema version: %w", err)
 	}
-	if version == 1 {
-		if err := state.migrateFromVersionOne(context.Background()); err != nil {
+	if version <= 0 || version > schemaVersion {
+		state.Close()
+		return nil, fmt.Errorf("unsupported SQLite schema version %d", version)
+	}
+	for version < schemaVersion {
+		switch version {
+		case 1:
+			if err := state.migrateFromVersionOne(context.Background()); err != nil {
+				state.Close()
+				return nil, err
+			}
+			version = 2
+		case 2:
+			if err := state.migrateFromVersionTwo(context.Background()); err != nil {
+				state.Close()
+				return nil, err
+			}
+			version = 3
+		default:
 			state.Close()
-			return nil, err
+			return nil, fmt.Errorf("unsupported SQLite schema version %d", version)
 		}
-		version = schemaVersion
 	}
 	if version != schemaVersion {
 		state.Close()
@@ -91,9 +157,10 @@ func openStore(path string) (*store, error) {
 }
 
 func (state *store) initialize(ctx context.Context) error {
+	if _, err := state.db.ExecContext(ctx, `PRAGMA journal_mode = WAL`); err != nil {
+		return fmt.Errorf("initialize SQLite journal: %w", err)
+	}
 	statements := []string{
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA foreign_keys = ON`,
 		`CREATE TABLE IF NOT EXISTS identities (
             serial TEXT PRIMARY KEY,
             role TEXT NOT NULL CHECK (role IN ('owner', 'agent', 'client')),
@@ -129,12 +196,26 @@ func (state *store) initialize(ctx context.Context) error {
             expires_at INTEGER NOT NULL,
             consumed_at INTEGER
         ) STRICT`,
-		fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion),
+		adminMutationReplaySchema,
 	}
+	transaction, err := state.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SQLite initialization: %w", err)
+	}
+	defer transaction.Rollback()
 	for _, statement := range statements {
-		if _, err := state.db.ExecContext(ctx, statement); err != nil {
+		if _, err := transaction.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("initialize SQLite state: %w", err)
 		}
+	}
+	if err := validSchemaFromQuery(ctx, transaction); err != nil {
+		return fmt.Errorf("validate initialized SQLite state: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set initialized SQLite schema version: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit SQLite initialization: %w", err)
 	}
 	return nil
 }
@@ -160,7 +241,28 @@ func (state *store) migrateFromVersionOne(ctx context.Context) error {
     ) STRICT`); err != nil {
 		return fmt.Errorf("migrate SQLite endpoint migrations: %w", err)
 	}
-	if _, err := transaction.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+	if _, err := transaction.ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
+		return fmt.Errorf("update SQLite schema version: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit SQLite schema migration: %w", err)
+	}
+	return nil
+}
+
+func (state *store) migrateFromVersionTwo(ctx context.Context) error {
+	transaction, err := state.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SQLite schema migration: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, adminMutationReplaySchema); err != nil {
+		return fmt.Errorf("migrate SQLite admin replay journal: %w", err)
+	}
+	if err := validSchemaFromQuery(ctx, transaction); err != nil {
+		return fmt.Errorf("validate migrated SQLite state: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `PRAGMA user_version = 3`); err != nil {
 		return fmt.Errorf("update SQLite schema version: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
@@ -461,11 +563,20 @@ func (state *store) incrementError(ctx context.Context, code string) error {
 }
 
 func (state *store) validSchema(ctx context.Context) error {
+	return validSchemaFromQuery(ctx, state.db)
+}
+
+type schemaQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func validSchemaFromQuery(ctx context.Context, queryer schemaQueryer) error {
 	required := map[string]bool{
 		"identities": false, "pairing_capabilities": false, "metrics": false, "error_metrics": false,
-		"settings": false, "endpoint_migrations": false,
+		"settings": false, "endpoint_migrations": false, "admin_mutation_replay": false,
 	}
-	rows, err := state.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
+	rows, err := queryer.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
 	if err != nil {
 		return err
 	}
@@ -487,5 +598,106 @@ func (state *store) validSchema(ctx context.Context) error {
 			return errors.New("SQLite state is missing required table " + name)
 		}
 	}
+	rows, err = queryer.QueryContext(ctx, `PRAGMA table_info(admin_mutation_replay)`)
+	if err != nil {
+		return err
+	}
+	type columnRequirement struct {
+		columnType string
+		notNull    bool
+		primaryKey bool
+		present    bool
+	}
+	wantColumns := map[string]columnRequirement{
+		"request_id": {columnType: "TEXT", notNull: true, primaryKey: true},
+		"digest":     {columnType: "BLOB", notNull: true},
+		"operation":  {columnType: "TEXT", notNull: true},
+		"state":      {columnType: "TEXT", notNull: true},
+		"response":   {columnType: "BLOB"},
+		"created_at": {columnType: "INTEGER", notNull: true},
+	}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		requirement, ok := wantColumns[name]
+		if !ok {
+			rows.Close()
+			return errors.New("SQLite admin replay journal has unexpected column " + name)
+		}
+		if !strings.EqualFold(columnType, requirement.columnType) || (notNull != 0) != requirement.notNull || (primaryKey != 0) != requirement.primaryKey {
+			rows.Close()
+			return errors.New("SQLite admin replay journal has invalid column " + name)
+		}
+		requirement.present = true
+		wantColumns[name] = requirement
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for name, requirement := range wantColumns {
+		if !requirement.present {
+			return errors.New("SQLite admin replay journal is missing required column " + name)
+		}
+	}
+	var createSQL string
+	if err := queryer.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_mutation_replay'`).Scan(&createSQL); err != nil {
+		return err
+	}
+	if normalizeAdminReplaySchema(createSQL) != normalizeAdminReplaySchema(adminMutationReplaySchema) {
+		return errors.New("SQLite admin replay journal has invalid definition")
+	}
 	return nil
+}
+
+func normalizeAdminReplaySchema(statement string) string {
+	statement = strings.TrimSuffix(strings.TrimSpace(statement), ";")
+	var normalized strings.Builder
+	var quote byte
+	for index := 0; index < len(statement); index++ {
+		character := statement[index]
+		if quote == 0 {
+			switch character {
+			case '\'', '"', '`':
+				quote = character
+				normalized.WriteByte(character)
+			case '[':
+				quote = ']'
+				normalized.WriteByte(character)
+			case ' ', '\t', '\r', '\n', '\f':
+				continue
+			default:
+				if character >= 'A' && character <= 'Z' {
+					character += 'a' - 'A'
+				}
+				normalized.WriteByte(character)
+			}
+			continue
+		}
+		normalized.WriteByte(character)
+		if character != quote {
+			continue
+		}
+		if quote != ']' && index+1 < len(statement) && statement[index+1] == quote {
+			normalized.WriteByte(statement[index+1])
+			index++
+			continue
+		}
+		quote = 0
+	}
+	if quote != 0 {
+		return ""
+	}
+	value := normalized.String()
+	const withOptionalClause = "createtableifnotexistsadmin_mutation_replay"
+	const withoutOptionalClause = "createtableadmin_mutation_replay"
+	if strings.HasPrefix(value, withOptionalClause) {
+		value = withoutOptionalClause + strings.TrimPrefix(value, withOptionalClause)
+	}
+	return value
 }
