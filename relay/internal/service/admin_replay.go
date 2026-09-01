@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"database/sql"
@@ -386,11 +387,22 @@ func (reservation *adminMutationReservation) executeExisting(ctx context.Context
 	}
 	token := &adminMutationTransaction{state: reservation.state, reservation: reservation, database: database, key: key}
 	response, executionErr := execution(ctx, token)
-	if executionErr != nil || ctx.Err() != nil || !validCachedAdminResponse(key, response) {
-		if token.tx != nil {
-			_ = token.tx.Rollback()
-		}
+	return reservation.completeExecutedMutation(ctx, token, response, executionErr)
+}
+
+func (reservation *adminMutationReservation) completeExecutedMutation(
+	ctx context.Context,
+	token *adminMutationTransaction,
+	response []byte,
+	executionErr error,
+) ([]byte, error) {
+	key := reservation.key
+	if executionErr != nil || ctx.Err() != nil || !token.validResponse(response) {
+		rollbackErr := token.rollbackBeforeCommit()
 		reservation.markIndeterminate()
+		if rollbackErr != nil {
+			return nil, relayadmin.ErrMutationIndeterminate
+		}
 		if executionErr != nil {
 			return nil, executionErr
 		}
@@ -405,12 +417,42 @@ func (reservation *adminMutationReservation) executeExisting(ctx context.Context
 	}
 	if _, err := token.tx.ExecContext(ctx, `UPDATE admin_mutation_replay SET state = 'completed', response = ? WHERE request_id = ? AND digest = ? AND operation = ? AND state = 'executing'`,
 		response, key.RequestID, key.Digest[:], string(key.Operation)); err != nil {
-		_ = token.tx.Rollback()
+		_ = token.rollbackBeforeCommit()
 		reservation.markIndeterminate()
 		return nil, relayadmin.ErrMutationIndeterminate
 	}
-	if err := token.tx.Commit(); err != nil {
+	if token.endpoint != nil && reservation.state.endpointFault != nil {
+		if err := reservation.state.endpointFault(adminEndpointBeforeCommit); err != nil {
+			_ = token.rollbackBeforeCommit()
+			reservation.markIndeterminate()
+			return nil, relayadmin.ErrMutationIndeterminate
+		}
+	}
+	if token.endpoint != nil {
+		if err := token.endpoint.validatePromoted(); err != nil {
+			_ = token.rollbackBeforeCommit()
+			reservation.state.markAdminDegraded()
+			reservation.markIndeterminate()
+			return nil, relayadmin.ErrMutationIndeterminate
+		}
+	}
+	if err := reservation.state.commitAdminMutation(token.tx); err != nil {
+		reservation.state.markAdminDegraded()
 		reservation.markIndeterminate()
+		return nil, relayadmin.ErrMutationIndeterminate
+	}
+	if token.endpoint != nil && reservation.state.endpointFault != nil {
+		if err := reservation.state.endpointFault(adminEndpointAfterCommit); err != nil {
+			reservation.state.markAdminDegraded()
+			reservation.finishActive()
+			reservation.notifyFinished()
+			return nil, relayadmin.ErrMutationIndeterminate
+		}
+	}
+	if err := token.finalizeAfterCommit(); err != nil {
+		reservation.state.markAdminDegraded()
+		reservation.finishActive()
+		reservation.notifyFinished()
 		return nil, relayadmin.ErrMutationIndeterminate
 	}
 	reservation.finishActive()
@@ -471,6 +513,10 @@ type adminMutationTransaction struct {
 	tx          *sql.Tx
 	key         relayadmin.ReplayKey
 	setup       *adminSetupStage
+	endpoint    *adminEndpointStage
+	repair      *adminRepairStage
+	adopted     bool
+	cached      []byte
 }
 
 func (transaction *adminMutationTransaction) ReplayKey() relayadmin.ReplayKey { return transaction.key }
@@ -487,6 +533,36 @@ func (transaction *adminMutationTransaction) ensureTransaction(ctx context.Conte
 		return err
 	}
 	transaction.tx = databaseTransaction
+	return nil
+}
+
+func (transaction *adminMutationTransaction) rollbackBeforeCommit() error {
+	var rollbackErr error
+	if transaction.tx != nil {
+		rollbackErr = transaction.tx.Rollback()
+		transaction.tx = nil
+	}
+	if transaction.endpoint != nil {
+		if err := transaction.endpoint.rollback(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	if rollbackErr != nil {
+		transaction.state.markAdminDegraded()
+	}
+	return rollbackErr
+}
+
+func (transaction *adminMutationTransaction) finalizeAfterCommit() error {
+	transaction.tx = nil
+	if transaction.endpoint != nil {
+		if err := transaction.endpoint.finalize(); err != nil {
+			return err
+		}
+	}
+	if transaction.repair != nil {
+		return transaction.repair.finalize()
+	}
 	return nil
 }
 
@@ -545,6 +621,42 @@ func (state *AdminState) newFreshReservationLocked(key relayadmin.ReplayKey) *ad
 func (reservation *adminMutationReservation) executeFresh(ctx context.Context, execution relayadmin.MutationExecution) ([]byte, error) {
 	transaction := &adminMutationTransaction{state: reservation.state, reservation: reservation, key: reservation.key}
 	response, err := execution(ctx, transaction)
+	if transaction.adopted {
+		if len(transaction.cached) != 0 {
+			if err != nil || ctx.Err() != nil || !bytes.Equal(response, transaction.cached) ||
+				!validAdminRepairSuccessResponse(transaction.key, transaction.cached) {
+				_ = transaction.rollbackBeforeCommit()
+				reservation.finishActive()
+				reservation.notifyFinished()
+				if err != nil {
+					return nil, err
+				}
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
+				return nil, relayadmin.ErrMutationIndeterminate
+			}
+			if transaction.tx != nil {
+				if rollbackErr := transaction.tx.Rollback(); rollbackErr != nil {
+					reservation.state.markAdminDegraded()
+					reservation.finishActive()
+					reservation.notifyFinished()
+					return nil, relayadmin.ErrMutationIndeterminate
+				}
+				transaction.tx = nil
+			}
+			if finalizeErr := transaction.finalizeAfterCommit(); finalizeErr != nil {
+				reservation.state.markAdminDegraded()
+				reservation.finishActive()
+				reservation.notifyFinished()
+				return nil, relayadmin.ErrMutationIndeterminate
+			}
+			reservation.finishActive()
+			reservation.notifyFinished()
+			return append([]byte(nil), transaction.cached...), nil
+		}
+		return reservation.completeExecutedMutation(ctx, transaction, response, err)
+	}
 	if transaction.setup == nil {
 		if reservation.databaseLessDegradedRepair {
 			reservation.markFreshRepairIndeterminate()
@@ -749,6 +861,36 @@ func validCachedAdminResponse(key relayadmin.ReplayKey, response []byte) bool {
 	}
 	parsed, err := relayadmin.ParseResponse(response)
 	return err == nil && parsed.Version == relayadmin.Version && parsed.RequestID == key.RequestID && parsed.Operation == key.Operation
+}
+
+func (transaction *adminMutationTransaction) validResponse(response []byte) bool {
+	if transaction == nil || !validCachedAdminResponse(transaction.key, response) {
+		return false
+	}
+	parsed, err := relayadmin.ParseResponse(response)
+	if err != nil {
+		return false
+	}
+	if transaction.endpoint != nil {
+		result, ok := parsed.Result.(relayadmin.EndpointRotationResult)
+		return parsed.OK && ok && result.PublicURL == transaction.endpoint.newURL && result.Serial == transaction.endpoint.serial
+	}
+	if transaction.repair != nil {
+		return validAdminRepairSuccessResponse(transaction.key, response)
+	}
+	return true
+}
+
+func validAdminRepairSuccessResponse(key relayadmin.ReplayKey, response []byte) bool {
+	if key.Operation != relayadmin.OperationRepair || !validCachedAdminResponse(key, response) {
+		return false
+	}
+	parsed, err := relayadmin.ParseResponse(response)
+	if err != nil {
+		return false
+	}
+	result, ok := parsed.Result.(relayadmin.RepairResult)
+	return parsed.OK && ok && result.Ready && result.Restarting
 }
 
 func equalDigest(left, right []byte) bool {

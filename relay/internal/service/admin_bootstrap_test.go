@@ -21,6 +21,7 @@ func TestAdminBootstrapCommitsOwnerURLUIDAndReplayAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer state.Close()
 	key := adminReplayKey("88888888888888888888888888888888", relayadmin.OperationSetup, "bootstrap")
 	_, csr := newDeviceCSR(t)
 	response, result := executeAdminBootstrap(t, state, key, AdminBootstrapOwnerOptions{
@@ -386,8 +387,8 @@ func TestAdminBootstrapCleanupFailureStaysLiveFailClosed(t *testing.T) {
 				repairCallbacks.Add(1)
 				return nil, state.Repair(ctx, transaction)
 			})
-			if !errors.Is(err, errAdminMutationUnavailable) {
-				t.Fatalf("Repair() boundary error = %v, want errAdminMutationUnavailable", err)
+			if !errors.Is(err, ErrAdminStateIncompatible) {
+				t.Fatalf("Repair() boundary error = %v, want ErrAdminStateIncompatible", err)
 			}
 			if repairCallbacks.Load() != 1 {
 				t.Fatalf("repair callback count = %d, want 1", repairCallbacks.Load())
@@ -554,6 +555,7 @@ func TestAdminBootstrapReopenFailureAfterRenameNeverReexecutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer state.Close()
 	injected := errors.New("injected authoritative reopen failure")
 	state.beforeSetupReopen = func() error { return injected }
 	key := adminReplayKey("45454545454545454545454545454545", relayadmin.OperationSetup, "reopen")
@@ -635,16 +637,20 @@ func TestAdminBootstrapReopenFailureAfterRenameNeverReexecutes(t *testing.T) {
 		t.Fatalf("fallback collision while repair active = (%#v, %v), want duplicate", activeFallbackCollision, err)
 	}
 	repairCalled := false
-	_, err = repair.Mutation.Execute(context.Background(), func(ctx context.Context, transaction relayadmin.MutationTransaction) ([]byte, error) {
+	var repairResponse []byte
+	repairResponse, err = repair.Mutation.Execute(context.Background(), func(ctx context.Context, transaction relayadmin.MutationTransaction) ([]byte, error) {
 		repairCalled = true
-		return nil, state.Repair(ctx, transaction)
+		if repairErr := state.Repair(ctx, transaction); repairErr != nil {
+			return nil, repairErr
+		}
+		return relayadmin.MarshalSuccessResponse(repairKey.RequestID, repairKey.Operation, relayadmin.RepairResult{Ready: true, Restarting: true})
 	})
-	if !errors.Is(err, errAdminMutationUnavailable) || !repairCalled {
-		t.Fatalf("repair boundary after authoritative reopen failure = (callback=%t, error=%v), want callback and unavailable boundary", repairCalled, err)
+	if err != nil || !repairCalled {
+		t.Fatalf("repair after authoritative reopen failure = (callback=%t, error=%v), want success", repairCalled, err)
 	}
 	sameRepair, err := state.ReplayStore().Reserve(context.Background(), repairKey)
-	if err != nil || sameRepair.Decision != relayadmin.ReplayBusy {
-		t.Fatalf("same repair retry = (%#v, %v), want busy", sameRepair, err)
+	if err != nil || sameRepair.Decision != relayadmin.ReplayCached || !bytes.Equal(sameRepair.Response, repairResponse) {
+		t.Fatalf("same repair retry = (%#v, %v), want exact cache", sameRepair, err)
 	}
 	repairCollisionKey := adminReplayKey(repairKey.RequestID, relayadmin.OperationRepair, "repair-authoritative-collision")
 	repairCollision, err := state.ReplayStore().Reserve(context.Background(), repairCollisionKey)
@@ -654,13 +660,13 @@ func TestAdminBootstrapReopenFailureAfterRenameNeverReexecutes(t *testing.T) {
 	capacityKey := adminReplayKey("49494949494949494949494949494949", relayadmin.OperationRepair, "repair-authoritative-capacity")
 	capacity, err := state.ReplayStore().Reserve(context.Background(), capacityKey)
 	if err != nil || capacity.Decision != relayadmin.ReplayBusy {
-		t.Fatalf("repair after fallback and indeterminate capacity = (%#v, %v), want busy", capacity, err)
+		t.Fatalf("repair after recovered fallback at capacity = (%#v, %v), want busy", capacity, err)
 	}
 	cached, err = state.ReplayStore().Reserve(context.Background(), key)
 	if err != nil || cached.Decision != relayadmin.ReplayCached || !bytes.Equal(cached.Response, durableResponse) {
 		t.Fatalf("fallback retry after repair boundary = (%#v, %v), want cached", cached, err)
 	}
-	if len(state.active) != 0 || len(state.pending) != 0 || len(state.fallback) != 1 || len(state.uncertain) != 1 || len(state.mutationKeys) != 2 {
+	if len(state.active) != 0 || len(state.pending) != 0 || len(state.fallback) != 0 || len(state.uncertain) != 0 || len(state.mutationKeys) != 2 {
 		t.Fatalf("unexpected fallback repair accounting: active=%d pending=%d fallback=%d uncertain=%d keys=%d",
 			len(state.active), len(state.pending), len(state.fallback), len(state.uncertain), len(state.mutationKeys))
 	}

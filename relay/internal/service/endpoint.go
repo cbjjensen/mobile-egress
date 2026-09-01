@@ -6,9 +6,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"mobile-egress/pairing"
 )
 
 type RotateEndpointOptions struct {
@@ -55,24 +57,60 @@ func RotateEndpoint(ctx context.Context, options RotateEndpointOptions) (RotateE
 	if err != nil {
 		return RotateEndpointResult{}, err
 	}
-
-	rollback, finalize, err := stageRotatedEndpointFiles(stateDir, certificatePEM, privateKeyPEM)
+	database, err := openStore(filepath.Join(stateDir, databaseFilename))
 	if err != nil {
 		return RotateEndpointResult{}, err
 	}
-	state, err := openStore(filepath.Join(stateDir, databaseFilename))
-	if err == nil {
-		err = state.setRelayURL(ctx, origin)
-		closeErr := state.Close()
-		if err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}
+	defer database.Close()
+	oldURL, err := database.relayURL(ctx)
 	if err != nil {
-		rollback()
-		return RotateEndpointResult{}, fmt.Errorf("persist rotated endpoint: %w", err)
+		return RotateEndpointResult{}, err
 	}
-	if err := finalize(); err != nil {
+	oldOrigin, err := pairing.RelayOrigin(oldURL)
+	if err != nil || oldURL != oldOrigin.String() || oldOrigin.Hostname() == "" {
+		return RotateEndpointResult{}, ErrAdminStateIncompatible
+	}
+	oldCertificatePEM, err := readRegularAdminStateFile(filepath.Join(stateDir, relayCertFilename))
+	if err != nil {
+		return RotateEndpointResult{}, err
+	}
+	oldPrivateKeyPEM, err := readRegularAdminStateFile(filepath.Join(stateDir, relayKeyFilename))
+	if err != nil {
+		return RotateEndpointResult{}, err
+	}
+	if _, err := validateRelayEndpointIdentity(oldCertificatePEM, oldPrivateKeyPEM, caCert, oldOrigin.Hostname(), ""); err != nil {
+		return RotateEndpointResult{}, err
+	}
+	requestBytes := make([]byte, 16)
+	if _, err := rand.Read(requestBytes); err != nil {
+		return RotateEndpointResult{}, fmt.Errorf("generate relay endpoint staging ID: %w", err)
+	}
+	requestID := hex.EncodeToString(requestBytes)
+	stage := &adminEndpointStage{
+		stateDir:          stateDir,
+		requestID:         requestID,
+		paths:             adminEndpointArtifactPaths(stateDir, requestID),
+		caCertificate:     caCert,
+		caCertificatePEM:  append([]byte(nil), caCertPEM...),
+		caPrivateKeyPEM:   append([]byte(nil), caKeyPEM...),
+		oldHostname:       oldOrigin.Hostname(),
+		newHostname:       options.PublicName,
+		newURL:            origin,
+		serial:            serial,
+		oldCertificatePEM: append([]byte(nil), oldCertificatePEM...),
+		oldPrivateKeyPEM:  append([]byte(nil), oldPrivateKeyPEM...),
+		newCertificatePEM: append([]byte(nil), certificatePEM...),
+		newPrivateKeyPEM:  append([]byte(nil), privateKeyPEM...),
+	}
+	if err := stage.apply(ctx); err != nil {
+		_ = stage.rollback()
+		return RotateEndpointResult{}, err
+	}
+	if err := database.setRelayURL(ctx, origin); err != nil {
+		rollbackErr := stage.rollback()
+		return RotateEndpointResult{}, fmt.Errorf("persist rotated endpoint: %w", errors.Join(err, rollbackErr))
+	}
+	if err := stage.finalize(); err != nil {
 		return RotateEndpointResult{}, err
 	}
 	return RotateEndpointResult{PublicURL: origin, Serial: serial}, nil
@@ -111,117 +149,4 @@ func generateRelayCertificateState(publicName string, caCert *x509.Certificate, 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: relayDER}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: relayKeyDER}),
 		strings.ToUpper(relaySerial.Text(16)), nil
-}
-
-func stageRotatedEndpointFiles(stateDir string, certificatePEM, privateKeyPEM []byte) (func(), func() error, error) {
-	certificatePath := filepath.Join(stateDir, relayCertFilename)
-	keyPath := filepath.Join(stateDir, relayKeyFilename)
-	temporaryCertificate, err := writeTemporaryStateFile(stateDir, ".relay-cert-", certificatePEM, 0o644)
-	if err != nil {
-		return nil, nil, err
-	}
-	temporaryKey, err := writeTemporaryStateFile(stateDir, ".relay-key-", privateKeyPEM, 0o600)
-	if err != nil {
-		_ = os.Remove(temporaryCertificate)
-		return nil, nil, err
-	}
-	cleanupTemporary := func() {
-		_ = os.Remove(temporaryCertificate)
-		_ = os.Remove(temporaryKey)
-	}
-	if _, err := tls.LoadX509KeyPair(temporaryCertificate, temporaryKey); err != nil {
-		cleanupTemporary()
-		return nil, nil, fmt.Errorf("validate rotated relay identity: %w", err)
-	}
-
-	certificateBackup, err := unusedTemporaryPath(stateDir, ".relay-cert-backup-")
-	if err != nil {
-		cleanupTemporary()
-		return nil, nil, err
-	}
-	keyBackup, err := unusedTemporaryPath(stateDir, ".relay-key-backup-")
-	if err != nil {
-		cleanupTemporary()
-		return nil, nil, err
-	}
-	rollback := func() {
-		_ = os.Remove(certificatePath)
-		_ = os.Remove(keyPath)
-		_ = os.Rename(certificateBackup, certificatePath)
-		_ = os.Rename(keyBackup, keyPath)
-		cleanupTemporary()
-	}
-	if err := os.Rename(certificatePath, certificateBackup); err != nil {
-		cleanupTemporary()
-		return nil, nil, fmt.Errorf("stage relay certificate rotation: %w", err)
-	}
-	if err := os.Rename(keyPath, keyBackup); err != nil {
-		_ = os.Rename(certificateBackup, certificatePath)
-		cleanupTemporary()
-		return nil, nil, fmt.Errorf("stage relay key rotation: %w", err)
-	}
-	if err := os.Rename(temporaryCertificate, certificatePath); err != nil {
-		rollback()
-		return nil, nil, fmt.Errorf("commit relay certificate rotation: %w", err)
-	}
-	if err := os.Rename(temporaryKey, keyPath); err != nil {
-		rollback()
-		return nil, nil, fmt.Errorf("commit relay key rotation: %w", err)
-	}
-	finalize := func() error {
-		if err := os.Remove(certificateBackup); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove relay certificate backup: %w", err)
-		}
-		if err := os.Remove(keyBackup); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove relay key backup: %w", err)
-		}
-		return nil
-	}
-	return rollback, finalize, nil
-}
-
-func writeTemporaryStateFile(directory, pattern string, contents []byte, mode os.FileMode) (string, error) {
-	file, err := os.CreateTemp(directory, pattern)
-	if err != nil {
-		return "", fmt.Errorf("create temporary relay state: %w", err)
-	}
-	path := file.Name()
-	defer func() {
-		if file != nil {
-			_ = file.Close()
-		}
-	}()
-	if err := file.Chmod(mode); err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("protect temporary relay state: %w", err)
-	}
-	if _, err := file.Write(contents); err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("write temporary relay state: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("flush temporary relay state: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("close temporary relay state: %w", err)
-	}
-	file = nil
-	return path, nil
-}
-
-func unusedTemporaryPath(directory, pattern string) (string, error) {
-	file, err := os.CreateTemp(directory, pattern)
-	if err != nil {
-		return "", err
-	}
-	path := file.Name()
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Remove(path); err != nil {
-		return "", err
-	}
-	return path, nil
 }

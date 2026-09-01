@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -590,8 +591,8 @@ func TestAdminPreReservedDegradedRepairsRevalidateBeforeSecondCallback(t *testin
 		firstCallbacks.Add(1)
 		return nil, state.Repair(ctx, transaction)
 	})
-	if !errors.Is(err, errAdminMutationUnavailable) || firstCallbacks.Load() != 1 {
-		t.Fatalf("first recovery repair = (callbacks=%d, error=%v), want one callback and unavailable boundary", firstCallbacks.Load(), err)
+	if !errors.Is(err, ErrAdminStateIncompatible) || firstCallbacks.Load() != 1 {
+		t.Fatalf("first recovery repair = (callbacks=%d, error=%v), want one callback and incompatible state", firstCallbacks.Load(), err)
 	}
 	secondCallbacks := atomic.Int32{}
 	_, err = secondRepair.Mutation.Execute(context.Background(), func(context.Context, relayadmin.MutationTransaction) ([]byte, error) {
@@ -688,11 +689,18 @@ func TestAdminReadyMutationReadsSnapshotThroughOwnedTransaction(t *testing.T) {
 		if snapshotErr != nil || snapshot.Class != AdminStateReady || snapshot.AdministrativeOwnerUID != 501 {
 			return nil, errors.New("second authorization snapshot unavailable")
 		}
-		_, err := state.RotateEndpoint(ctx, transaction, RotateEndpointOptions{})
-		return nil, err
+		result, err := state.RotateEndpoint(ctx, transaction, RotateEndpointOptions{
+			StateDir: stateDir, PublicName: "new.example.ts.net", PublicURL: "https://new.example.ts.net:8443",
+		})
+		if err != nil {
+			return nil, err
+		}
+		return relayadmin.MarshalSuccessResponse(rotateKey.RequestID, rotateKey.Operation, relayadmin.EndpointRotationResult{
+			PublicURL: result.PublicURL, Serial: result.Serial,
+		})
 	})
-	if !errors.Is(err, errAdminMutationUnavailable) {
-		t.Fatalf("ready RotateEndpoint() error = %v, want transaction-local unavailable sentinel", err)
+	if err != nil {
+		t.Fatalf("ready RotateEndpoint() error = %v", err)
 	}
 }
 
@@ -867,6 +875,35 @@ func TestAdminStatePathGuardAndForeignTransactionsFailClosed(t *testing.T) {
 	}
 	if err := state.Repair(context.Background(), foreign); !errors.Is(err, errAdminForeignTransaction) {
 		t.Fatalf("Repair(foreign token) error = %v", err)
+	}
+}
+
+func TestAdminMutationRollbackUncertaintyMarksStateDegraded(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "Relay")
+	state, err := OpenAdminState(AdminStateOptions{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	_, csr := newDeviceCSR(t)
+	executeAdminBootstrap(t, state, adminReplayKey("8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c", relayadmin.OperationSetup, "setup"), AdminBootstrapOwnerOptions{
+		PublicName: "relay.example.ts.net", PublicURL: "https://relay.example.ts.net:8443", CSRPEM: csr, AdministrativeOwnerUID: 501,
+	})
+
+	databaseTransaction, err := state.database.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := databaseTransaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	token := &adminMutationTransaction{state: state, tx: databaseTransaction}
+	if err := token.rollbackBeforeCommit(); !errors.Is(err, sql.ErrTxDone) {
+		t.Fatalf("rollbackBeforeCommit() error = %v, want sql.ErrTxDone", err)
+	}
+	snapshot, err := state.Snapshot(context.Background())
+	if err != nil || snapshot.Class != AdminStateIncompatible {
+		t.Fatalf("Snapshot() = (%#v, %v), want degraded after rollback uncertainty", snapshot, err)
 	}
 }
 

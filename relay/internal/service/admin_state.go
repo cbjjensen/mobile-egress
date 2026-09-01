@@ -23,11 +23,10 @@ import (
 )
 
 var (
-	ErrAdminNotInitialized      = errors.New("relay admin state not initialized")
-	ErrAdminAlreadyInitialized  = errors.New("relay admin state already initialized")
-	ErrAdminStateIncompatible   = errors.New("relay admin state incompatible")
-	errAdminForeignTransaction  = errors.New("relay admin mutation transaction is invalid")
-	errAdminMutationUnavailable = errors.New("relay admin endpoint mutation is unavailable")
+	ErrAdminNotInitialized     = errors.New("relay admin state not initialized")
+	ErrAdminAlreadyInitialized = errors.New("relay admin state already initialized")
+	ErrAdminStateIncompatible  = errors.New("relay admin state incompatible")
+	errAdminForeignTransaction = errors.New("relay admin mutation transaction is invalid")
 )
 
 type AdminStateClass uint8
@@ -106,6 +105,10 @@ type AdminState struct {
 	afterMutationGateAcquire func()
 	beforeReplayDatabase     func(relayadmin.ReplayKey)
 	removeSetupStage         func(string) error
+	now                      func() time.Time
+	endpointFault            func(adminEndpointFaultPoint) error
+	syncEndpointDirectory    func(string) error
+	commitAdminMutation      func(*sql.Tx) error
 }
 
 func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
@@ -122,19 +125,24 @@ func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
 		syncSetupParent = syncDirectory
 	}
 	state := &AdminState{
-		stateDir:         stateDir,
-		pathGuard:        options.PathGuard,
-		mutationFinished: options.MutationFinished,
-		mutationCapacity: capacity,
-		syncSetupParent:  syncSetupParent,
-		statusReplay:     relayadmin.NewMemoryReplayStore(relayadmin.MemoryReplayConfig{}),
-		mutationGate:     make(chan struct{}, 1),
-		active:           make(map[string]*adminMutationReservation),
-		pending:          make(map[string]relayadmin.ReplayKey),
-		mutationKeys:     make(map[string]relayadmin.ReplayKey),
-		fallback:         make(map[string]adminCompletedReplay),
-		uncertain:        make(map[string]relayadmin.ReplayKey),
-		status:           make(map[string]*adminStatusEntry),
+		stateDir:              stateDir,
+		pathGuard:             options.PathGuard,
+		mutationFinished:      options.MutationFinished,
+		mutationCapacity:      capacity,
+		syncSetupParent:       syncSetupParent,
+		statusReplay:          relayadmin.NewMemoryReplayStore(relayadmin.MemoryReplayConfig{}),
+		mutationGate:          make(chan struct{}, 1),
+		active:                make(map[string]*adminMutationReservation),
+		pending:               make(map[string]relayadmin.ReplayKey),
+		mutationKeys:          make(map[string]relayadmin.ReplayKey),
+		fallback:              make(map[string]adminCompletedReplay),
+		uncertain:             make(map[string]relayadmin.ReplayKey),
+		status:                make(map[string]*adminStatusEntry),
+		now:                   func() time.Time { return time.Now().UTC() },
+		syncEndpointDirectory: syncDirectory,
+		commitAdminMutation: func(transaction *sql.Tx) error {
+			return transaction.Commit()
+		},
 	}
 	state.mutationGate <- struct{}{}
 	state.replay = &adminReplayStore{state: state}
@@ -192,7 +200,9 @@ func OpenAdminState(options AdminStateOptions) (*AdminState, error) {
 	state.mutationKeys = mutationKeys
 	state.replayReady = true
 	snapshot, err := adminSnapshotFromQuery(context.Background(), database.db, stateDir)
-	if err == nil && snapshot.Class == AdminStateReady && !recoveryUncertain {
+	evidence, inventoryErr := scanAdminEndpointEvidence(stateDir)
+	endpointInventoryClean := inventoryErr == nil && evidence.requestID == ""
+	if err == nil && snapshot.Class == AdminStateReady && !recoveryUncertain && endpointInventoryClean {
 		state.presence = adminStatePresenceReady
 		snapshot.Class = AdminStateIncompatible
 		state.degraded = snapshot
@@ -253,6 +263,45 @@ func (state *AdminState) Snapshot(ctx context.Context) (AdminSnapshot, error) {
 		}
 	default:
 		return AdminSnapshot{Class: AdminStateIncompatible}, nil
+	}
+	select {
+	case <-ctx.Done():
+		return AdminSnapshot{}, ctx.Err()
+	case <-state.mutationGate:
+		defer func() { state.mutationGate <- struct{}{} }()
+	default:
+		// A mutation owns the gate and may be between endpoint namespace
+		// transitions while its SQL transaction owns the only database
+		// connection. Return the last coherent readiness snapshot instead of
+		// inspecting a transient pair or blocking on that transaction.
+		state.mu.Lock()
+		presence = state.presence
+		degraded = state.degraded
+		database = state.database
+		closed = state.closed
+		state.mu.Unlock()
+		if closed || presence != adminStatePresenceReady || database == nil {
+			degraded.Class = AdminStateIncompatible
+			return degraded, nil
+		}
+		degraded.Class = AdminStateReady
+		return degraded, nil
+	}
+	state.mu.Lock()
+	presence = state.presence
+	degraded = state.degraded
+	database = state.database
+	closed = state.closed
+	state.mu.Unlock()
+	if closed || presence != adminStatePresenceReady || database == nil {
+		degraded.Class = AdminStateIncompatible
+		return degraded, nil
+	}
+	evidence, inventoryErr := scanAdminEndpointEvidence(state.stateDir)
+	if inventoryErr != nil || evidence.requestID != "" {
+		degraded.Class = AdminStateIncompatible
+		state.setAdminDegraded(degraded)
+		return degraded, nil
 	}
 	snapshot, err := adminSnapshotFromQuery(ctx, database.db, state.stateDir)
 	if err == nil && snapshot.Class != AdminStateReady {
@@ -475,10 +524,9 @@ func (state *AdminState) Close() error {
 	return nil
 }
 
-// RotateEndpoint freezes the narrow service-owned transaction boundary used
-// by the privileged runtime. Slice 2 supplies the request-bound endpoint file
-// mutation behind this boundary.
-func (state *AdminState) RotateEndpoint(ctx context.Context, mutation relayadmin.MutationTransaction, _ RotateEndpointOptions) (RotateEndpointResult, error) {
+// RotateEndpoint performs request-bound endpoint rotation inside the narrow
+// service-owned transaction boundary used by the privileged runtime.
+func (state *AdminState) RotateEndpoint(ctx context.Context, mutation relayadmin.MutationTransaction, options RotateEndpointOptions) (RotateEndpointResult, error) {
 	transaction, err := state.adminTransaction(ctx, mutation, relayadmin.OperationRotate)
 	if err != nil {
 		return RotateEndpointResult{}, err
@@ -486,13 +534,13 @@ func (state *AdminState) RotateEndpoint(ctx context.Context, mutation relayadmin
 	if err := state.requireAdminReady(ctx, transaction); err != nil {
 		return RotateEndpointResult{}, err
 	}
-	return RotateEndpointResult{}, errAdminMutationUnavailable
+	return state.rotateEndpoint(ctx, transaction, options)
 }
 
-// Repair freezes the narrow service-owned transaction boundary used by the
-// privileged runtime. Slice 2 supplies identity-preserving repair behavior.
+// Repair performs identity-preserving recovery inside the narrow
+// service-owned transaction boundary used by the privileged runtime.
 func (state *AdminState) Repair(ctx context.Context, mutation relayadmin.MutationTransaction) error {
-	_, err := state.adminTransaction(ctx, mutation, relayadmin.OperationRepair)
+	transaction, err := state.adminTransaction(ctx, mutation, relayadmin.OperationRepair)
 	if err != nil {
 		return err
 	}
@@ -503,9 +551,7 @@ func (state *AdminState) Repair(ctx context.Context, mutation relayadmin.Mutatio
 	case adminStatePresenceAbsent:
 		return ErrAdminNotInitialized
 	case adminStatePresenceReady, adminStatePresenceDegraded:
-		// Slice 1 freezes a callable transaction boundary for both ordinary
-		// and fail-closed recovery. Slice 2 supplies the repair mutation.
-		return errAdminMutationUnavailable
+		return state.repairAdminState(ctx, transaction)
 	default:
 		return ErrAdminStateIncompatible
 	}
