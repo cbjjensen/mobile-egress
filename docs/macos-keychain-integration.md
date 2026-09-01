@@ -13,9 +13,11 @@ go run ./windows-client/cmd/mobile-egress-keychain-integration \
 The harness fails closed unless all of the following agree:
 
 - the profile is a Developer ID distribution profile and authorizes the controller's private Keychain group;
+- the supplied identity resolves to exactly one currently valid code-signing certificate whose exact SHA-1 fingerprint and DER leaf are present in the profile's `DeveloperCertificates` array;
+- that leaf is a Developer ID Application certificate with the exact identity common name and team ID, digital-signature key usage, code-signing extended key usage, and Developer ID Application purpose;
 - `com.apple.application-identifier` is exactly `TEAMID.com.cbjjensen.mobile-egress.controller`;
 - `com.apple.developer.team-identifier`, the identity's team, the bundle ID, and the signed metadata match;
-- the signed executable contains only the exact private group in `keychain-access-groups`; and
+- `codesign` is invoked by the resolved certificate fingerprint, each signed bundle's extracted leaf is the same profile-authorized certificate, and the signed executable has exactly the application ID, team ID, and one private `keychain-access-groups` value with no extra entitlements; and
 - both generated app bundles pass strict `codesign` verification.
 
 The harness builds and signs version A and version B app-like bundles with the same application identity. Version A creates a random test item. Version B reads that exact item, verifies its persistent reference, replaces its non-secret fixture value without changing item identity, verifies the new value, and deletes it. A signed cleanup phase runs after a version-B failure when state remains.
