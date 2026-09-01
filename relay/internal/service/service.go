@@ -25,23 +25,26 @@ type Service struct {
 	serverCert  tls.Certificate
 	clientRoots *x509.CertPool
 
-	mu               sync.RWMutex
-	agentConnected   bool
-	connectedClients int
-	activeStreams    int
-	closed           bool
-	agent            *session
-	sessions         map[string]*session
-	streams          map[string]*stream
-	closedStreams    map[string]closedStreamTombstone
-	maxClientStreams int
-	maxAgentStreams  int
-	openingTimeout   time.Duration
-	idleTimeout      time.Duration
-	sweepInterval    time.Duration
-	janitorOnce      sync.Once
-	stopJanitor      chan struct{}
-	lookupNetIP      lookupNetIPFunc
+	mu                  sync.RWMutex
+	agentConnected      bool
+	connectedClients    int
+	activeStreams       int
+	closed              bool
+	agent               *session
+	sessions            map[string]*session
+	pendingSessions     map[string]struct{}
+	agentPending        chan struct{}
+	streams             map[string]*stream
+	closedStreams       map[string]closedStreamTombstone
+	maxClientStreams    int
+	maxAgentStreams     int
+	openingTimeout      time.Duration
+	idleTimeout         time.Duration
+	sweepInterval       time.Duration
+	janitorOnce         sync.Once
+	stopJanitor         chan struct{}
+	lookupNetIP         lookupNetIPFunc
+	beforeDataAdmission func()
 }
 
 type healthResponse struct {
@@ -132,7 +135,7 @@ func Open(stateDir string) (*Service, error) {
 	return &Service{
 		store: state, caCert: caCert, caCertPEM: caCertPEM, caKey: caKey,
 		serverCert: serverCert, clientRoots: roots,
-		sessions: make(map[string]*session), streams: make(map[string]*stream),
+		sessions: make(map[string]*session), pendingSessions: make(map[string]struct{}), streams: make(map[string]*stream),
 		closedStreams:    make(map[string]closedStreamTombstone),
 		maxClientStreams: 32, maxAgentStreams: 256,
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,

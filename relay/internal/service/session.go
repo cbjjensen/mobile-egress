@@ -152,9 +152,39 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 		writeAPIError(writer, http.StatusConflict, "session_conflict")
 		return
 	}
+	if _, exists := service.pendingSessions[serial]; exists || (role == enrollment.RoleAgent && service.agentPending != nil) {
+		service.mu.Unlock()
+		writeAPIError(writer, http.StatusConflict, "session_conflict")
+		return
+	}
+	if service.pendingSessions == nil {
+		service.pendingSessions = make(map[string]struct{})
+	}
+	service.pendingSessions[serial] = struct{}{}
+	if role == enrollment.RoleAgent {
+		service.agentPending = make(chan struct{})
+	}
+	service.mu.Unlock()
+
 	connection, err := sessionUpgrader.Upgrade(writer, request, nil)
 	if err != nil {
+		service.mu.Lock()
+		service.releasePendingSessionLocked(serial, role)
 		service.mu.Unlock()
+		return
+	}
+
+	service.mu.Lock()
+	service.releasePendingSessionLocked(serial, role)
+	currentRole, revoked, err = service.store.identityStatus(request.Context(), serial)
+	if service.closed || err != nil || revoked || currentRole != role {
+		service.mu.Unlock()
+		_ = connection.Close()
+		return
+	}
+	if _, exists := service.sessions[serial]; exists || (role == enrollment.RoleAgent && service.agent != nil) {
+		service.mu.Unlock()
+		_ = connection.Close()
 		return
 	}
 	activeSession := newSession(service, serial, role, connection)
@@ -171,6 +201,14 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 	service.janitorOnce.Do(func() { go service.runStreamJanitor() })
 	activeSession.readLoop()
 	activeSession.close("session_closed")
+}
+
+func (service *Service) releasePendingSessionLocked(serial string, role enrollment.Role) {
+	delete(service.pendingSessions, serial)
+	if role == enrollment.RoleAgent && service.agentPending != nil {
+		close(service.agentPending)
+		service.agentPending = nil
+	}
 }
 
 func newSession(service *Service, serial string, role enrollment.Role, connection sessionConnection) *session {
@@ -267,65 +305,79 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 		Payload: base64.RawURLEncoding.EncodeToString(forwardPayload),
 	}
 
-	now := time.Now()
-	service.mu.Lock()
-	currentRole, revoked, identityErr := service.store.identityStatus(context.Background(), client.serial)
-	if identityErr != nil || revoked || currentRole != enrollment.RoleClient || !client.registered || service.sessions[client.serial] != client {
-		service.mu.Unlock()
-		return
-	}
-	if _, exists := service.streams[envelope.StreamID]; exists || service.closedStreamIDInUseLocked(envelope.StreamID, now) {
-		service.mu.Unlock()
-		service.rejectOpen(client, envelope.StreamID, "stream_in_use")
-		return
-	}
-	if service.agent == nil {
-		service.mu.Unlock()
-		service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
-		return
-	}
-	clientStreams := 0
-	for _, existing := range service.streams {
-		if existing.client == client {
-			clientStreams++
+	for {
+		now := time.Now()
+		service.mu.Lock()
+		currentRole, revoked, identityErr := service.store.identityStatus(context.Background(), client.serial)
+		if identityErr != nil || revoked || currentRole != enrollment.RoleClient || !client.registered || service.sessions[client.serial] != client {
+			service.mu.Unlock()
+			return
 		}
-	}
-	if clientStreams >= service.maxClientStreams {
-		service.mu.Unlock()
-		service.rejectOpen(client, envelope.StreamID, "client_stream_limit")
-		return
-	}
-	if len(service.streams) >= service.maxAgentStreams {
-		service.mu.Unlock()
-		service.rejectOpen(client, envelope.StreamID, "agent_stream_limit")
-		return
-	}
-	agent := service.agent
-	tracked := &stream{
-		id: envelope.StreamID, client: client, agent: agent, state: streamOpening,
-		openingDeadline: now.Add(service.openingTimeout), lastActivity: now,
-	}
-	service.streams[envelope.StreamID] = tracked
-	service.activeStreams++
-	errorCode := ""
-	if err := service.store.incrementTotalStreams(context.Background()); err != nil {
-		service.removeStreamLocked(tracked)
-		errorCode = "agent_unavailable"
-	}
-	admission := outboundClosed
-	if errorCode == "" {
-		admission = agent.outbound.enqueue(forward)
-		if admission != outboundAdmitted {
+		if _, exists := service.streams[envelope.StreamID]; exists || service.closedStreamIDInUseLocked(envelope.StreamID, now) {
+			service.mu.Unlock()
+			service.rejectOpen(client, envelope.StreamID, "stream_in_use")
+			return
+		}
+		if service.agent == nil && service.agentPending != nil {
+			pendingAgent := service.agentPending
+			service.mu.Unlock()
+			select {
+			case <-pendingAgent:
+				continue
+			case <-resolveContext.Done():
+				service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
+				return
+			}
+		}
+		if service.agent == nil {
+			service.mu.Unlock()
+			service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
+			return
+		}
+		clientStreams := 0
+		for _, existing := range service.streams {
+			if existing.client == client {
+				clientStreams++
+			}
+		}
+		if clientStreams >= service.maxClientStreams {
+			service.mu.Unlock()
+			service.rejectOpen(client, envelope.StreamID, "client_stream_limit")
+			return
+		}
+		if len(service.streams) >= service.maxAgentStreams {
+			service.mu.Unlock()
+			service.rejectOpen(client, envelope.StreamID, "agent_stream_limit")
+			return
+		}
+		agent := service.agent
+		tracked := &stream{
+			id: envelope.StreamID, client: client, agent: agent, state: streamOpening,
+			openingDeadline: now.Add(service.openingTimeout), lastActivity: now,
+		}
+		service.streams[envelope.StreamID] = tracked
+		service.activeStreams++
+		errorCode := ""
+		if err := service.store.incrementTotalStreams(context.Background()); err != nil {
 			service.removeStreamLocked(tracked)
 			errorCode = "agent_unavailable"
 		}
-	}
-	service.mu.Unlock()
-	if admission == outboundControlSaturated {
-		agent.close("session_closed")
-	}
-	if errorCode != "" {
-		service.rejectOpen(client, envelope.StreamID, errorCode)
+		admission := outboundClosed
+		if errorCode == "" {
+			admission = agent.outbound.enqueue(forward)
+			if admission != outboundAdmitted {
+				service.removeStreamLocked(tracked)
+				errorCode = "agent_unavailable"
+			}
+		}
+		service.mu.Unlock()
+		if admission == outboundControlSaturated {
+			agent.close("session_closed")
+		}
+		if errorCode != "" {
+			service.rejectOpen(client, envelope.StreamID, errorCode)
+		}
+		return
 	}
 }
 
@@ -353,6 +405,18 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 	}
 	agent := tracked.agent
 	tracked.lastActivity = time.Now()
+	admission := outboundClosed
+	var notifications []streamNotification
+	if envelope.Type == protocol.TypeData && agent != nil && agent.outbound != nil {
+		if hook := service.beforeDataAdmission; hook != nil {
+			hook()
+		}
+		admission = agent.outbound.enqueue(envelope)
+		if admission == outboundDataSaturated {
+			service.removeStreamLocked(tracked)
+			notifications = service.streamCloseNotificationsLocked(tracked, "agent_unavailable", tracked.agent)
+		}
+	}
 	if envelope.Type == protocol.TypeClose {
 		if !validEnvelopeErrorCode(envelope) {
 			service.mu.Unlock()
@@ -364,16 +428,20 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 	if agent == nil {
 		return nil
 	}
-	if err := agent.send(envelope); errors.Is(err, errOutboundDataSaturated) {
-		service.failStreamUnavailable(tracked)
-		return nil
-	} else if err != nil {
-		return nil
-	}
 	if envelope.Type == protocol.TypeData {
+		if admission == outboundDataSaturated {
+			_ = service.store.incrementError(context.Background(), "agent_unavailable")
+			service.dispatchNotifications(notifications)
+			return nil
+		}
+		if admission != outboundAdmitted {
+			return nil
+		}
 		payload, _ := envelope.DecodePayload()
 		_ = service.store.addBytes(context.Background(), int64(len(payload)))
+		return nil
 	}
+	_ = agent.send(envelope)
 	return nil
 }
 
@@ -420,20 +488,36 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 	}
 	client := tracked.client
 	tracked.lastActivity = time.Now()
+	admission := outboundClosed
+	var notifications []streamNotification
+	if envelope.Type == protocol.TypeData && client != nil && client.outbound != nil {
+		if hook := service.beforeDataAdmission; hook != nil {
+			hook()
+		}
+		admission = client.outbound.enqueue(envelope)
+		if admission == outboundDataSaturated {
+			service.removeStreamLocked(tracked)
+			notifications = service.streamCloseNotificationsLocked(tracked, "agent_unavailable", tracked.agent)
+		}
+	}
 	if envelope.Type == protocol.TypeRejected || envelope.Type == protocol.TypeClose {
 		service.removeStreamLocked(tracked)
 	}
 	service.mu.Unlock()
-	if err := client.send(envelope); errors.Is(err, errOutboundDataSaturated) {
-		service.failStreamUnavailable(tracked)
-		return nil
-	} else if err != nil {
-		return nil
-	}
 	if envelope.Type == protocol.TypeData {
+		if admission == outboundDataSaturated {
+			_ = service.store.incrementError(context.Background(), "agent_unavailable")
+			service.dispatchNotifications(notifications)
+			return nil
+		}
+		if admission != outboundAdmitted {
+			return nil
+		}
 		payload, _ := envelope.DecodePayload()
 		_ = service.store.addBytes(context.Background(), int64(len(payload)))
+		return nil
 	}
+	_ = client.send(envelope)
 	return nil
 }
 
@@ -464,19 +548,6 @@ func (service *Service) rejectOpen(client *session, streamID, code string) {
 	_ = client.send(protocol.Envelope{
 		Version: protocol.Version1, Type: protocol.TypeRejected, StreamID: streamID, Payload: encodeRelayError(code),
 	})
-}
-
-func (service *Service) failStreamUnavailable(tracked *stream) {
-	service.mu.Lock()
-	if current := service.streams[tracked.id]; current != tracked {
-		service.mu.Unlock()
-		return
-	}
-	service.removeStreamLocked(tracked)
-	notifications := service.streamCloseNotificationsLocked(tracked, "agent_unavailable", tracked.agent)
-	service.mu.Unlock()
-	_ = service.store.incrementError(context.Background(), "agent_unavailable")
-	service.dispatchNotifications(notifications)
 }
 
 func (service *Service) protocolViolation(activeSession *session) {

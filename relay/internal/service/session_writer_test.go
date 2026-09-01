@@ -1,9 +1,17 @@
 package service
 
 import (
+	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -13,6 +21,154 @@ import (
 	"mobile-egress/relay/internal/enrollment"
 	"mobile-egress/relay/internal/protocol"
 )
+
+func TestBlockedSessionUpgradeDoesNotHoldServiceMutex(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client")
+	writer := newBlockingUpgradeResponseWriter()
+	defer writer.release()
+	request := authenticatedSessionRequest(t, devices[0])
+
+	done := make(chan struct{})
+	go func() {
+		fixture.service.handleSession(writer, request)
+		close(done)
+	}()
+	waitForSignal(t, writer.connection.writeStarted, "blocked WebSocket handshake write")
+	if !fixture.service.mu.TryLock() {
+		t.Fatal("blocked WebSocket handshake held the global service mutex")
+	}
+	fixture.service.mu.Unlock()
+	writer.release()
+	waitForSignal(t, done, "blocked session upgrade completion")
+}
+
+func TestPendingSessionUpgradeRejectsDuplicateWithoutWaiting(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client")
+	writer := newBlockingUpgradeResponseWriter()
+	defer writer.release()
+	request := authenticatedSessionRequest(t, devices[0])
+
+	firstDone := make(chan struct{})
+	go func() {
+		fixture.service.handleSession(writer, request)
+		close(firstDone)
+	}()
+	waitForSignal(t, writer.connection.writeStarted, "pending WebSocket handshake")
+
+	duplicate := httptest.NewRecorder()
+	duplicateRequest := authenticatedSessionRequest(t, devices[0])
+	duplicateDone := make(chan struct{})
+	go func() {
+		fixture.service.handleSession(duplicate, duplicateRequest)
+		close(duplicateDone)
+	}()
+	select {
+	case <-duplicateDone:
+		if duplicate.Code != http.StatusConflict {
+			t.Fatalf("duplicate pending session status = %d, want 409", duplicate.Code)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("duplicate pending session waited for the first WebSocket handshake")
+	}
+
+	writer.release()
+	waitForSignal(t, firstDone, "first pending session completion")
+}
+
+func TestPendingAgentUpgradeReservesSingleAgentSlot(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "agent", "agent")
+	writer := newBlockingUpgradeResponseWriter()
+	defer writer.release()
+	firstRequest := authenticatedSessionRequest(t, devices[0])
+	secondRequest := authenticatedSessionRequest(t, devices[1])
+
+	firstDone := make(chan struct{})
+	go func() {
+		fixture.service.handleSession(writer, firstRequest)
+		close(firstDone)
+	}()
+	waitForSignal(t, writer.connection.writeStarted, "pending Agent WebSocket handshake")
+
+	second := httptest.NewRecorder()
+	secondDone := make(chan struct{})
+	go func() {
+		fixture.service.handleSession(second, secondRequest)
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		if second.Code != http.StatusConflict {
+			t.Fatalf("second pending Agent status = %d, want 409", second.Code)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("second Agent waited for the pending Agent WebSocket handshake")
+	}
+
+	writer.release()
+	waitForSignal(t, firstDone, "first pending Agent session completion")
+}
+
+func TestFailedSessionUpgradeReleasesPendingReservation(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client")
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		writer := httptest.NewRecorder()
+		fixture.service.handleSession(writer, authenticatedSessionRequest(t, devices[0]))
+		if writer.Code != http.StatusInternalServerError {
+			t.Fatalf("failed upgrade attempt %d status = %d, want 500 instead of a retained reservation", attempt, writer.Code)
+		}
+	}
+}
+
+func TestClientOpenWaitsForPendingAgentWithoutHoldingServiceMutex(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client", "agent")
+	client := newDormantSession(fixture.service, devices[0].serial, enrollment.RoleClient)
+	registerTestSessions(fixture.service, client)
+	agentWriter := newBlockingUpgradeResponseWriter()
+	defer agentWriter.release()
+	agentRequest := authenticatedSessionRequest(t, devices[1])
+
+	agentDone := make(chan struct{})
+	go func() {
+		fixture.service.handleSession(agentWriter, agentRequest)
+		close(agentDone)
+	}()
+	waitForSignal(t, agentWriter.connection.writeStarted, "pending Agent upgrade")
+
+	openDone := make(chan struct{})
+	go func() {
+		fixture.service.handleClientOpen(client, openEnvelope("pending-agent-open", "1.1.1.1", 443))
+		close(openDone)
+	}()
+	openFinishedEarly := false
+	select {
+	case <-openDone:
+		openFinishedEarly = true
+	case <-time.After(250 * time.Millisecond):
+	}
+	if !fixture.service.mu.TryLock() {
+		t.Fatal("Client open waiting for a pending Agent held the global service mutex")
+	}
+	fixture.service.mu.Unlock()
+	agentWriter.release()
+	waitForSignal(t, agentDone, "pending Agent handler completion")
+	if !openFinishedEarly {
+		waitForSignal(t, openDone, "Client open after pending Agent completion")
+	}
+	if openFinishedEarly {
+		t.Fatal("Client open was rejected before the pending Agent handshake completed")
+	}
+}
 
 func TestBlockedAgentWriterDoesNotHoldServiceMutexOrBlockAnotherClientOpen(t *testing.T) {
 	fixture := newRelayFixture(t)
@@ -88,6 +244,155 @@ func TestBlockedClientWriterDoesNotHoldServiceMutexOrBlockAnotherClientRoute(t *
 		t.Fatal("blocked Client writer held the global service mutex")
 	}
 	fixture.service.mu.Unlock()
+}
+
+func TestSessionWriterPrioritizesControlAndRoundRobinsStreamData(t *testing.T) {
+	service := newWriterTestService()
+	connection := newRecordingSessionConnection(true)
+	activeSession := newSession(service, "ordered-writer", enrollment.RoleAgent, connection)
+	registerTestSessions(service, activeSession)
+	defer closeTestSessions(activeSession)
+
+	gate := protocol.Envelope{Version: protocol.Version1, Type: protocol.TypePong}
+	if err := activeSession.send(gate); err != nil {
+		t.Fatalf("gate control enqueue returned an error: %v", err)
+	}
+	waitForSignal(t, connection.writeStarted, "gate write")
+	queued := []protocol.Envelope{
+		dataEnvelope("alpha", "YQ"),
+		dataEnvelope("alpha", "Yg"),
+		dataEnvelope("bravo", "Yw"),
+		{Version: protocol.Version1, Type: protocol.TypeClose, StreamID: "control", Payload: encodeRelayError("client_closed")},
+	}
+	for _, envelope := range queued {
+		if err := activeSession.send(envelope); err != nil {
+			t.Fatalf("enqueue %s/%s returned an error: %v", envelope.Type, envelope.StreamID, err)
+		}
+	}
+	connection.release()
+
+	want := []protocol.Envelope{
+		{Version: 1, Type: protocol.TypePong},
+		{Version: 1, Type: protocol.TypeClose, StreamID: "control", Payload: "Y2xpZW50X2Nsb3NlZA"},
+		{Version: 1, Type: protocol.TypeData, StreamID: "alpha", Payload: "YQ"},
+		{Version: 1, Type: protocol.TypeData, StreamID: "bravo", Payload: "Yw"},
+		{Version: 1, Type: protocol.TypeData, StreamID: "alpha", Payload: "Yg"},
+	}
+	for index, expected := range want {
+		actual := readRecordedEnvelope(t, connection)
+		if actual != expected {
+			t.Fatalf("WebSocket write %d = %#v, want %#v", index+1, actual, expected)
+		}
+	}
+}
+
+func TestCloseCannotLoseToConcurrentDataAdmission(t *testing.T) {
+	tests := []struct {
+		name       string
+		dataRoute  func(*Service, *session, protocol.Envelope) error
+		closeRoute func(*Service, *session, protocol.Envelope) error
+		dataRole   enrollment.Role
+	}{
+		{
+			name: "Client data and Agent close",
+			dataRoute: func(service *Service, sender *session, envelope protocol.Envelope) error {
+				return service.handleClientStreamFrame(sender, envelope)
+			},
+			closeRoute: func(service *Service, sender *session, envelope protocol.Envelope) error {
+				return service.handleAgentStreamFrame(sender, envelope)
+			},
+			dataRole: enrollment.RoleClient,
+		},
+		{
+			name: "Agent data and Client close",
+			dataRoute: func(service *Service, sender *session, envelope protocol.Envelope) error {
+				return service.handleAgentStreamFrame(sender, envelope)
+			},
+			closeRoute: func(service *Service, sender *session, envelope protocol.Envelope) error {
+				return service.handleClientStreamFrame(sender, envelope)
+			},
+			dataRole: enrollment.RoleAgent,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRelayFixture(t)
+			defer fixture.Close()
+			service := fixture.service
+			client := newDormantSession(service, "client", enrollment.RoleClient)
+			agent := newDormantSession(service, "agent", enrollment.RoleAgent)
+			registerTestSessions(service, client, agent)
+			tracked := &stream{id: "racing-stream", client: client, agent: agent, state: streamOpen, lastActivity: time.Now()}
+			service.mu.Lock()
+			service.streams[tracked.id] = tracked
+			service.activeStreams = 1
+			service.mu.Unlock()
+
+			admissionReached := make(chan struct{})
+			releaseAdmission := make(chan struct{})
+			var signalOnce sync.Once
+			service.beforeDataAdmission = func() {
+				signalOnce.Do(func() { close(admissionReached) })
+				<-releaseAdmission
+			}
+			defer func() { service.beforeDataAdmission = nil }()
+
+			dataSender, closeSender := client, agent
+			dataTarget := agent
+			if test.dataRole == enrollment.RoleAgent {
+				dataSender, closeSender = agent, client
+				dataTarget = client
+			}
+			dataDone := make(chan error, 1)
+			go func() {
+				dataDone <- test.dataRoute(service, dataSender, dataEnvelope(tracked.id, "YQ"))
+			}()
+			waitForSignal(t, admissionReached, "data admission race point")
+
+			closeStarted := make(chan struct{})
+			closeDone := make(chan error, 1)
+			go func() {
+				close(closeStarted)
+				closeDone <- test.closeRoute(service, closeSender, streamCloseEnvelope(tracked.id, "client_closed"))
+			}()
+			waitForSignal(t, closeStarted, "concurrent close start")
+			closeFinishedEarly := false
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					t.Fatalf("concurrent close returned an error: %v", err)
+				}
+				closeFinishedEarly = true
+			case <-time.After(250 * time.Millisecond):
+			}
+			close(releaseAdmission)
+			if err := <-dataDone; err != nil {
+				t.Fatalf("concurrent data returned an error: %v", err)
+			}
+			if !closeFinishedEarly {
+				if err := <-closeDone; err != nil {
+					t.Fatalf("concurrent close returned an error: %v", err)
+				}
+			}
+			service.mu.RLock()
+			_, streamStillTracked := service.streams[tracked.id]
+			service.mu.RUnlock()
+			if streamStillTracked {
+				t.Fatal("concurrent close did not remove the stream")
+			}
+
+			for {
+				envelope, ok := dataTarget.outbound.poll()
+				if !ok {
+					break
+				}
+				if envelope.Type == protocol.TypeData && envelope.StreamID == tracked.id {
+					t.Fatal("data was admitted after the stream was removed")
+				}
+			}
+		})
+	}
 }
 
 func TestDataSaturationClosesOnlyAffectedStream(t *testing.T) {
@@ -238,14 +543,16 @@ func TestMassTeardownDoesNotCreateGoroutinePerNotification(t *testing.T) {
 		closeTestSessions(clients...)
 	}()
 
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
 	baseline := runtime.NumGoroutine()
 	service.detachSession(agent, "session_closed")
-	for _, connection := range connections {
-		waitForSignal(t, connection.writeStarted, "teardown notification write")
-	}
 	after := runtime.NumGoroutine()
 	if added := after - baseline; added > 8 {
 		t.Fatalf("mass teardown added %d goroutines, want no per-notification fan-out", added)
+	}
+	for _, connection := range connections {
+		waitForSignal(t, connection.writeStarted, "teardown notification write")
 	}
 }
 
@@ -257,6 +564,13 @@ func newWriterTestService() *Service {
 	return &Service{
 		sessions: make(map[string]*session), streams: make(map[string]*stream),
 		closedStreams: make(map[string]closedStreamTombstone),
+	}
+}
+
+func newDormantSession(service *Service, serial string, role enrollment.Role) *session {
+	return &session{
+		service: service, serial: serial, role: role,
+		conn: newRecordingSessionConnection(false), outbound: newSessionOutboundMailbox(role),
 	}
 }
 
@@ -368,3 +682,93 @@ func (connection *recordingSessionConnection) release() {
 		close(connection.releaseWrites)
 	}
 }
+
+func authenticatedSessionRequest(t *testing.T, device enrolledDevice) *http.Request {
+	t.Helper()
+	block, _ := pem.Decode([]byte(device.certificate))
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatal("enrolled device certificate does not begin with a PEM certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://relay.test/v1/session", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	request.Header.Set("Sec-WebSocket-Version", "13")
+	request.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
+	return request
+}
+
+type blockingUpgradeResponseWriter struct {
+	header     http.Header
+	connection *blockingUpgradeConnection
+}
+
+func newBlockingUpgradeResponseWriter() *blockingUpgradeResponseWriter {
+	return &blockingUpgradeResponseWriter{
+		header: make(http.Header), connection: &blockingUpgradeConnection{
+			writeStarted: make(chan struct{}, 1), releaseWrite: make(chan struct{}), closed: make(chan struct{}),
+		},
+	}
+}
+
+func (writer *blockingUpgradeResponseWriter) Header() http.Header { return writer.header }
+
+func (writer *blockingUpgradeResponseWriter) Write(value []byte) (int, error) { return len(value), nil }
+
+func (writer *blockingUpgradeResponseWriter) WriteHeader(int) {}
+
+func (writer *blockingUpgradeResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return writer.connection, bufio.NewReadWriter(bufio.NewReader(writer.connection), bufio.NewWriter(writer.connection)), nil
+}
+
+func (writer *blockingUpgradeResponseWriter) release() {
+	writer.connection.releaseOnce.Do(func() { close(writer.connection.releaseWrite) })
+}
+
+type blockingUpgradeConnection struct {
+	writeStarted chan struct{}
+	releaseWrite chan struct{}
+	closed       chan struct{}
+	releaseOnce  sync.Once
+	closeOnce    sync.Once
+}
+
+func (connection *blockingUpgradeConnection) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (connection *blockingUpgradeConnection) Write(value []byte) (int, error) {
+	select {
+	case connection.writeStarted <- struct{}{}:
+	default:
+	}
+	select {
+	case <-connection.releaseWrite:
+		return len(value), nil
+	case <-connection.closed:
+		return 0, errors.New("blocked upgrade connection closed")
+	}
+}
+
+func (connection *blockingUpgradeConnection) Close() error {
+	connection.closeOnce.Do(func() { close(connection.closed) })
+	return nil
+}
+
+func (connection *blockingUpgradeConnection) LocalAddr() net.Addr { return fixedTestAddr("local") }
+
+func (connection *blockingUpgradeConnection) RemoteAddr() net.Addr { return fixedTestAddr("remote") }
+
+func (connection *blockingUpgradeConnection) SetDeadline(time.Time) error { return nil }
+
+func (connection *blockingUpgradeConnection) SetReadDeadline(time.Time) error { return nil }
+
+func (connection *blockingUpgradeConnection) SetWriteDeadline(time.Time) error { return nil }
+
+type fixedTestAddr string
+
+func (address fixedTestAddr) Network() string { return "test" }
+
+func (address fixedTestAddr) String() string { return string(address) }
