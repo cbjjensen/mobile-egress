@@ -135,7 +135,29 @@ swift test -Xswiftc -warnings-as-errors
 xcodebuild -list -project MobileEgressAgent.xcodeproj
 xcodebuild -project MobileEgressAgent.xcodeproj -scheme MobileEgressAgent -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build
 xcodebuild -list -workspace .
-xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS"
+run_xcode_package_tests() {
+    local output_path="$checkout/.mobile-egress-xcode-test-output"
+    local test_status
+
+    set +e
+    xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS" 2>&1 | tee "$output_path"
+    test_status="${PIPESTATUS[0]}"
+    set -e
+    if [[ "$test_status" -eq 0 ]]; then
+        return 0
+    fi
+
+    if grep -Fq 'com.apple.testmanagerd.control' "$output_path" && grep -Eiq 'invalidat(e|ed|ing|ion)|unavailable' "$output_path"; then
+        printf '%s\n' 'Known testmanagerd control invalidation detected; retrying final Xcode package tests once.'
+        set +e
+        xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=macOS" 2>&1 | tee "$output_path"
+        test_status="${PIPESTATUS[0]}"
+        set -e
+    fi
+
+    return "$test_status"
+}
+run_xcode_package_tests
 # Keep PowerShell's trailing carriage return inside a Bash comment.
 '@
     $remoteScript = $remoteScript.Replace("`r`n", "`n")
@@ -185,16 +207,13 @@ if ($isMacHost) {
 }
 
 if ($isWindowsHost) {
-    $commit = ''
     if ($UseMacBuildServer) {
         $commit = Assert-ExactCommittedTree
-    }
-    Invoke-PortableSwiftTests
-    if ($UseMacBuildServer) {
         Invoke-MacBuildServerVerification -HostName $MacHost -UserName $MacUser -KeyPath $SshKeyPath -Commit $commit
         Write-Host 'IOS_XCODE_STATUS=PASSED'
         exit 0
     }
+    Invoke-PortableSwiftTests
     Write-Host 'IOS_XCODE_STATUS=UNSUPPORTED_HOST'
     exit 20
 }
