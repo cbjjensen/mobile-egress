@@ -116,7 +116,14 @@ public final class CellularIPRotationCoordinator<
         } else {
             expectedHoldSeconds = 10
         }
+        let availability = CellularIPRotationAvailability(
+            isEnrolled: isEnrolled,
+            isAgentRunning: isAgentRunning,
+            isCellularAvailable: isCellularAvailable,
+            activeStreamCount: activeStreamCount
+        )
         guard holdSeconds == expectedHoldSeconds,
+              availability.isEligible(for: state),
               let currentNetworkToken else { return }
 
         nextAttemptID = max(nextAttemptID, state.attemptID ?? 0)
@@ -126,12 +133,6 @@ public final class CellularIPRotationCoordinator<
         pauseReceipt = nil
         recoveringAttemptID = nil
         timeoutDeadline = nil
-        let availability = CellularIPRotationAvailability(
-            isEnrolled: isEnrolled,
-            isAgentRunning: isAgentRunning,
-            isCellularAvailable: isCellularAvailable,
-            activeStreamCount: activeStreamCount
-        )
         await apply(
             .requested(
                 attemptID: nextAttemptID,
