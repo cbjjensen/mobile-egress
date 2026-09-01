@@ -152,6 +152,7 @@ final class AgentViewModel: ObservableObject {
                 isEnrolled: isEnrolled,
                 pairingInProgress: isProcessingScan,
                 pairingState: dashboardPairingState,
+                tunnelConnectionPhase: vpnStatus.connectionPhase,
                 status: statusSnapshot
             )
         )

@@ -242,7 +242,7 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores the packet-tunnel Agent instead of opening Android system settings; both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes.",
+          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and durably restores the prior packet-tunnel and on-demand intent before publishing the outcome; both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift",
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift"
@@ -300,13 +300,17 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses checked-in Apple asset-catalog AppIcon and header images generated from the selected ZFNF source, with the same approved user-facing product names as Android.",
+          "nativeEquivalenceNotes": "Uses checked-in Apple asset-catalog AppIcon and header images generated from the selected ZFNF source, with the approved ZFNF Mobile Egress host, Agent extension, VPN, and safe-diagnostics names on Apple system surfaces.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift",
+            "ios/MobileEgressAgent/Info.plist",
+            "ios/MobileEgressTunnelExtension/Info.plist",
+            "ios/MobileEgressAgent/TunnelManager.swift",
             "ios/Assets/AppAssets.xcassets/ZFNFHeader.imageset/ZFNFHeader.png"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift",
             "scripts/test-brand-assets.ps1"
           ]
         }

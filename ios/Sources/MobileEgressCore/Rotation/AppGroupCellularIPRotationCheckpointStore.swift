@@ -193,6 +193,14 @@ public final class AppGroupCellularIPRotationCheckpointStore:
         guard checkpoint.state.isActive, checkpoint.state.attemptID != nil else {
             throw CellularIPRotationCheckpointStoreError.inactiveState
         }
+        if case .restoring = checkpoint.state {
+            switch checkpoint.pauseDisposition {
+            case .pausing, .paused:
+                break
+            case .legacyUnknown, .pending:
+                throw CellularIPRotationCheckpointStoreError.malformed
+            }
+        }
         switch checkpoint.state {
         case .awaitingAirplaneMode, .awaitingCellularReturn:
             guard let deadline = checkpoint.timeoutDeadline,
@@ -200,7 +208,8 @@ public final class AppGroupCellularIPRotationCheckpointStore:
             else {
                 throw CellularIPRotationCheckpointStoreError.missingRequiredTiming
             }
-        case .idle, .awaitingConfirmation, .preparing, .holding, .verifying, .completed, .failed:
+        case .idle, .awaitingConfirmation, .preparing, .holding, .verifying, .restoring,
+             .completed, .failed:
             guard checkpoint.timeoutDeadline == nil else {
                 throw CellularIPRotationCheckpointStoreError.malformed
             }

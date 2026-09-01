@@ -1,4 +1,4 @@
-public enum TunnelConnectionPhase: Equatable, Sendable {
+public enum TunnelConnectionPhase: Codable, Equatable, Sendable {
     case invalid
     case disconnected
     case connecting

@@ -214,10 +214,10 @@ final class TunnelManager:
     private func applyBaseConfiguration(to manager: NETunnelProviderManager) {
         let tunnelProtocol = NETunnelProviderProtocol()
         tunnelProtocol.providerBundleIdentifier = configuration.providerBundleIdentifier
-        tunnelProtocol.serverAddress = "Mobile Egress"
+        tunnelProtocol.serverAddress = MobileEgressBranding.displayName
         tunnelProtocol.disconnectOnSleep = false
         manager.protocolConfiguration = tunnelProtocol
-        manager.localizedDescription = "Mobile Egress"
+        manager.localizedDescription = MobileEgressBranding.displayName
         manager.isEnabled = true
         manager.onDemandRules = [NEOnDemandRuleConnect()]
     }
@@ -227,9 +227,9 @@ final class TunnelManager:
             return true
         }
         return tunnelProtocol.providerBundleIdentifier != configuration.providerBundleIdentifier ||
-            tunnelProtocol.serverAddress != "Mobile Egress" ||
+            tunnelProtocol.serverAddress != MobileEgressBranding.displayName ||
             tunnelProtocol.disconnectOnSleep ||
-            manager.localizedDescription != "Mobile Egress" ||
+            manager.localizedDescription != MobileEgressBranding.displayName ||
             !manager.isEnabled ||
             manager.onDemandRules?.contains(where: { $0 is NEOnDemandRuleConnect }) != true
     }

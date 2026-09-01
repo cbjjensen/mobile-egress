@@ -126,6 +126,7 @@ public struct AgentStatusSnapshot: Codable, Equatable, Sendable {
 
     public func safeCopiedStatus(isEnrolled: Bool) -> String {
         [
+            MobileEgressBranding.statusClipboardLabel,
             MobileEgressBranding.agentName,
             "Enrolled: \(isEnrolled ? "yes" : "no")",
             "Agent: \(agentState.rawValue)",
@@ -153,17 +154,20 @@ public struct AgentDashboardState: Codable, Equatable, Sendable {
     public let isEnrolled: Bool
     public let pairingInProgress: Bool
     public let pairingState: AgentPairingState
+    public let tunnelConnectionPhase: TunnelConnectionPhase
     public let status: AgentStatusSnapshot
 
     public init(
         isEnrolled: Bool,
         pairingInProgress: Bool = false,
         pairingState: AgentPairingState = .idle,
+        tunnelConnectionPhase: TunnelConnectionPhase = .disconnected,
         status: AgentStatusSnapshot = .idle
     ) {
         self.isEnrolled = isEnrolled
         self.pairingInProgress = pairingInProgress
         self.pairingState = pairingState
+        self.tunnelConnectionPhase = tunnelConnectionPhase
         self.status = status
     }
 }
@@ -277,7 +281,7 @@ public struct AgentDashboardPresentation: Codable, Equatable, Sendable {
             ),
             rotationConfirmation: resolveRotationConfirmation(for: state.status.rotation),
             rotationCountdownSeconds: resolveRotationCountdown(for: state.status.rotation),
-            showsRotationCancellation: state.status.rotation.isActive,
+            showsRotationCancellation: state.status.rotation.isCancellable,
             cellularHealth: cellularPresentation(state.status.cellular),
             relayHealth: relayPresentation(state.status.relay),
             metrics: [
@@ -372,9 +376,18 @@ private func statusPresentation(for state: AgentDashboardState) -> DashboardStat
             tone: .info
         )
     case .failed:
+        let summary: String
+        switch state.tunnelConnectionPhase {
+        case .invalid, .disconnected:
+            summary = "The Agent stopped after an error. Review the details below, then start it again."
+        case .connected:
+            summary = "The Agent reported an error while the tunnel is connected. Stop it before trying again."
+        case .connecting, .reasserting, .disconnecting:
+            summary = "The tunnel is still in transition. Wait for it to settle before trying again."
+        }
         return DashboardStatusPresentation(
             headline: "Agent needs attention",
-            summary: "The Agent stopped after an error. Review the details below.",
+            summary: summary,
             badge: "Agent error",
             tone: .error
         )
@@ -462,6 +475,13 @@ private func rotationPresentation(
             headline: "Checking your new IP",
             summary: "Cellular is back. The Agent is comparing public addresses before restoring traffic.",
             badge: "Verifying",
+            tone: .info
+        )
+    case .restoring:
+        DashboardStatusPresentation(
+            headline: "Restoring Agent",
+            summary: "The rotation outcome is ready. Restoring the prior Agent connection before finishing.",
+            badge: "Restoring",
             tone: .info
         )
     case let .completed(_, _, _, result):
@@ -567,8 +587,20 @@ private func primaryAction(for state: AgentDashboardState) -> AgentPrimaryAction
         return .start
     case .running:
         return .stop
-    case .starting, .stopping, .failed:
+    case .starting, .stopping:
         return .none
+    case .failed:
+        switch state.tunnelConnectionPhase {
+        case .connecting, .reasserting, .disconnecting:
+            return .none
+        case .invalid, .disconnected, .connected:
+            let decision = TunnelCommandDecision.resolve(
+                providerState: .failed,
+                connectionPhase: state.tunnelConnectionPhase
+            )
+            guard decision.isEnabled else { return .none }
+            return decision.command == .start ? .start : .stop
+        }
     }
 }
 
@@ -579,6 +611,18 @@ private func resolveInactiveAgentMessage(for state: AgentDashboardState) -> Stri
     if state.pairingInProgress {
         return "Finish secure phone pairing before starting the Agent."
     }
+    if state.isEnrolled {
+        switch state.status.agentState {
+        case .starting:
+            return "Wait for Agent startup to finish."
+        case .stopping:
+            return "Wait for Agent shutdown to finish."
+        case .failed:
+            return "Wait for the tunnel transition to settle before choosing another action."
+        case .stopped, .running:
+            return "The Agent action is temporarily unavailable."
+        }
+    }
     return "Pair this phone before starting the Agent."
 }
 
@@ -586,6 +630,9 @@ private func resolveRotationAction(for state: AgentDashboardState) -> CellularIP
     guard state.isEnrolled,
           state.status.agentState == .running,
           !state.status.rotation.isActive else {
+        return .none
+    }
+    if case .failed(_, .checkpointRetirementFailed) = state.status.rotation {
         return .none
     }
     if case .completed(_, _, _, .unchanged) = state.status.rotation {
@@ -635,8 +682,12 @@ private func resolveRotationLabel(for rotation: CellularIPRotationState) -> Stri
         "Waiting for cellular"
     case .verifying:
         "Checking public IP…"
+    case .restoring:
+        "Restoring Agent…"
     case .completed(_, _, _, .unchanged):
         "Retry with 30-second reset"
+    case .failed(_, .checkpointRetirementFailed):
+        "Restart Agent before rotating"
     case .idle, .completed, .failed:
         "Rotate cellular IP"
     }
@@ -672,6 +723,7 @@ private extension CellularIPRotationState {
         case .holding: "cellular detached"
         case .awaitingCellularReturn: "waiting for cellular"
         case .verifying: "verifying"
+        case .restoring: "restoring agent"
         case let .completed(_, _, _, result): result.rawValue
         case let .failed(_, failure): failure.safeDiagnosticName
         }

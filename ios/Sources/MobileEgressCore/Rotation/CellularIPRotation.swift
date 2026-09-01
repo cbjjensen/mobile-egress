@@ -37,6 +37,29 @@ public enum CellularIPRotationFailure: String, Codable, Equatable, Sendable {
     case checkpointRetirementFailed
 }
 
+public enum CellularIPRotationTerminalOutcome: Codable, Equatable, Sendable {
+    case completed(
+        before: PublicIPSnapshot,
+        after: PublicIPSnapshot,
+        result: CellularIPRotationResult
+    )
+    case failed(CellularIPRotationFailure)
+
+    func state(attemptID: UInt64) -> CellularIPRotationState {
+        switch self {
+        case let .completed(before, after, result):
+            .completed(
+                attemptID: attemptID,
+                before: before,
+                after: after,
+                result: result
+            )
+        case let .failed(failure):
+            .failed(attemptID: attemptID, failure: failure)
+        }
+    }
+}
+
 public enum CellularIPRotationState: Codable, Equatable, Sendable {
     case idle
     case awaitingConfirmation(
@@ -70,6 +93,7 @@ public enum CellularIPRotationState: Codable, Equatable, Sendable {
         before: PublicIPSnapshot,
         returnedNetworkToken: String
     )
+    case restoring(attemptID: UInt64, outcome: CellularIPRotationTerminalOutcome)
     case completed(
         attemptID: UInt64,
         before: PublicIPSnapshot,
@@ -88,6 +112,7 @@ public enum CellularIPRotationState: Codable, Equatable, Sendable {
              let .holding(attemptID, _, _, _),
              let .awaitingCellularReturn(attemptID, _),
              let .verifying(attemptID, _, _),
+             let .restoring(attemptID, _),
              let .completed(attemptID, _, _, _),
              let .failed(attemptID, _):
             attemptID
@@ -97,11 +122,26 @@ public enum CellularIPRotationState: Codable, Equatable, Sendable {
     public var isActive: Bool {
         switch self {
         case .awaitingConfirmation, .preparing, .awaitingAirplaneMode, .holding,
-             .awaitingCellularReturn, .verifying:
+             .awaitingCellularReturn, .verifying, .restoring:
             true
         case .idle, .completed, .failed:
             false
         }
+    }
+
+    public var isCancellable: Bool {
+        switch self {
+        case .awaitingConfirmation, .preparing, .awaitingAirplaneMode, .holding,
+             .awaitingCellularReturn, .verifying:
+            true
+        case .idle, .restoring, .completed, .failed:
+            false
+        }
+    }
+
+    fileprivate var blocksNewAttempt: Bool {
+        if case .failed(_, .checkpointRetirementFailed) = self { return true }
+        return false
     }
 
     fileprivate var nextHoldSeconds: Int {
@@ -131,7 +171,11 @@ public struct CellularIPRotationAvailability: Codable, Equatable, Sendable {
     }
 
     public func isEligible(for state: CellularIPRotationState) -> Bool {
-        isEnrolled && isAgentRunning && isCellularAvailable && !state.isActive
+        isEnrolled &&
+            isAgentRunning &&
+            isCellularAvailable &&
+            !state.isActive &&
+            !state.blocksNewAttempt
     }
 
     public func requiresConfirmation(for state: CellularIPRotationState) -> Bool {
@@ -220,7 +264,8 @@ public struct CellularIPRotationCheckpoint: Codable, Equatable, Sendable {
     }
 
     public func isExpired(at date: Date) -> Bool {
-        date >= expiresAt
+        if case .restoring = state { return false }
+        return date >= expiresAt
     }
 
     fileprivate func remainingTimeoutSeconds(at date: Date) -> Int? {
@@ -610,7 +655,7 @@ public struct CellularIPRotationReducer: Sendable {
                 attemptID: attemptID,
                 effectsBeforeResume: [.cancelCellularReturnTimeout(attemptID: attemptID)]
             )
-        case .idle, .completed, .failed:
+        case .idle, .restoring, .completed, .failed:
             return unchanged()
         }
     }
@@ -692,6 +737,11 @@ public struct CellularIPRotationReducer: Sendable {
                     .pauseAgentAndStreams(attemptID: attemptID),
                     .probeAfter(attemptID: attemptID, networkToken: networkToken),
                 ]
+            )
+        case .restoring:
+            CellularIPRotationTransition(
+                state: checkpoint.state,
+                effects: [.resumeAgent(attemptID: attemptID)]
             )
         case .idle, .completed, .failed:
             unchanged()
@@ -802,6 +852,10 @@ public struct CellularIPRotationReducer: Sendable {
             return CellularIPRotationTransition(
                 state: .failed(attemptID: attemptID, failure: .tunnelResumeFailed)
             )
+        case .restoring:
+            return CellularIPRotationTransition(
+                state: .failed(attemptID: attemptID, failure: .tunnelResumeFailed)
+            )
         case let .failed(_, failure) where failure != .tunnelResumeFailed:
             return CellularIPRotationTransition(
                 state: .failed(attemptID: attemptID, failure: .tunnelResumeFailed)
@@ -831,10 +885,14 @@ public struct CellularIPRotationReducer: Sendable {
 
     private func reset() -> CellularIPRotationTransition {
         switch state {
-        case .completed, .failed:
+        case .completed:
+            CellularIPRotationTransition(state: .idle)
+        case .failed(_, .checkpointRetirementFailed):
+            unchanged()
+        case .failed:
             CellularIPRotationTransition(state: .idle)
         case .idle, .awaitingConfirmation, .preparing, .awaitingAirplaneMode, .holding,
-             .awaitingCellularReturn, .verifying:
+             .awaitingCellularReturn, .verifying, .restoring:
             unchanged()
         }
     }
@@ -875,12 +933,17 @@ private extension CellularIPRotationPauseDisposition {
             case .awaitingConfirmation, .preparing:
                 return true
             case .idle, .awaitingAirplaneMode, .holding, .awaitingCellularReturn,
-                 .verifying, .completed, .failed:
+                 .verifying, .restoring, .completed, .failed:
                 return false
             }
         case .pausing:
-            if case .preparing = state { return true }
-            return false
+            switch state {
+            case .preparing, .restoring:
+                return true
+            case .idle, .awaitingConfirmation, .awaitingAirplaneMode, .holding,
+                 .awaitingCellularReturn, .verifying, .completed, .failed:
+                return false
+            }
         case .paused:
             return true
         }

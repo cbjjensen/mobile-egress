@@ -71,24 +71,35 @@ sudo xcodebuild -license accept
 xcodebuild -version
 ```
 
-Install at least one iOS simulator runtime in `Xcode -> Settings -> Platforms`. For physical-device builds, add an Apple ID in `Xcode -> Settings -> Accounts` only after a separate decision to configure signing. A free Apple ID is sufficient for simulator work and may be sufficient for local installs to your own device. TestFlight, App Store, Ad Hoc sharing, and some entitlements require paid Apple Developer Program membership.
+Installing an iOS simulator runtime in `Xcode -> Settings -> Platforms` is an optional simulator-development setup step, not a tracked Mac-gate prerequisite. For physical-device builds, add an Apple ID in `Xcode -> Settings -> Accounts` only after a separate decision to configure signing. A free Apple ID is sufficient for simulator work and may be sufficient for local installs to your own device. TestFlight, App Store, Ad Hoc sharing, and some entitlements require paid Apple Developer Program membership.
 
 ## Readiness check from Windows
 
 The tracked verifier defaults to the configured local Mac host and account, but accepts `-MacHost`, `-MacUser`, and `-SshKeyPath` when the network changes. Its first remote action requires noninteractive SSH with the ignored key, `IdentitiesOnly=yes`, and a matching existing `known_hosts` entry through `StrictHostKeyChecking=yes`. Verify the Mac host key out of band before trusting it. The Mac needs full Xcode and the iPhoneOS SDK. The tracked package-test destination is `platform=macOS`, so this gate does not select a simulator model or require a simulator boot.
 
-The following checks inspect readiness only. Do not install software, change the selected Xcode developer directory, accept licenses, add signing identities, change Apple account state, or publish a build as part of verification:
+The tracked Mac gate needs full Xcode and the iPhoneOS SDK. These checks inspect those prerequisites only. Do not install software, change the selected Xcode developer directory, accept licenses, add signing identities, change Apple account state, or publish a build as part of verification:
 
 ```powershell
 $mac = 'diana@10.0.0.77'
 $key = '.\.local\mac-build-server\id_ed25519'
 ssh -i $key -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $mac 'hostname; sw_vers; xcode-select -p; xcodebuild -version'
-ssh -i $key -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $mac 'xcrun --sdk iphoneos --show-sdk-version; xcrun --sdk iphonesimulator --show-sdk-version; xcrun simctl list runtimes available | head -n 40'
+ssh -i $key -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $mac 'xcrun --sdk iphoneos --show-sdk-version'
+```
+
+The following are optional simulator-development readiness checks. They are not prerequisites or phases of `scripts/test-ios.ps1 -UseMacBuildServer`:
+
+```powershell
+ssh -i $key -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $mac 'xcrun --sdk iphonesimulator --show-sdk-version; xcrun simctl list runtimes available | head -n 40'
 ssh -i $key -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $mac 'xcrun simctl list devices available | head -n 80'
+```
+
+This signing-identity inspection is an optional physical-device/distribution readiness check and is also outside the tracked Mac gate:
+
+```powershell
 ssh -i $key -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes $mac 'security find-identity -v -p codesigning 2>/dev/null'
 ```
 
-Simulator build readiness requires passwordless SSH, `/Applications/Xcode.app/Contents/Developer`, a working `xcodebuild -version`, both iPhone SDK versions, an available iOS runtime, and an available iPhone simulator. Device, TestFlight, App Store, or Ad Hoc readiness additionally requires a valid Apple signing identity and provisioning path; unsigned compilation evidence is not signing or TestFlight evidence.
+Optional simulator build readiness requires passwordless SSH, `/Applications/Xcode.app/Contents/Developer`, a working `xcodebuild -version`, both iPhone SDK versions, an available iOS runtime, and an available iPhone simulator. Device, TestFlight, App Store, or Ad Hoc readiness additionally requires a valid Apple signing identity and provisioning path; unsigned compilation evidence is not signing or TestFlight evidence.
 
 ## Current verified state
 
@@ -170,7 +181,7 @@ Run this on the Mac after confirming that accepting the license is authorized:
 sudo xcodebuild -license accept
 ```
 
-`simctl` is missing or no devices are listed:
+An optional simulator-development check reports that `simctl` is missing or no devices are listed:
 
 Open Xcode on the Mac, approve additional components, then install an iOS simulator runtime in `Xcode -> Settings -> Platforms` after obtaining authorization to change the Mac.
 

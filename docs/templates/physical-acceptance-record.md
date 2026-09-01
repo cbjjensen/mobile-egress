@@ -65,7 +65,7 @@ Use `PASS`, `FAIL`, or `NOT RUN`. A required `FAIL` or `NOT RUN` blocks stable p
 
 ## iOS physical acceptance
 
-Complete every row for an iOS release on a signed physical iPhone. Package tests, an unsigned build, a simulator, Archive validation, or TestFlight upload cannot substitute for these results. Keep Wi-Fi enabled unless a row explicitly changes cellular state, and never record public addresses or private connection material.
+Complete every row for an iOS release on signed physical iPhone and iPad hardware as applicable. Package tests, an unsigned build, a simulator, Archive validation, or TestFlight upload cannot substitute for these results. Keep Wi-Fi enabled unless a row explicitly changes cellular state, and never record public addresses or private connection material.
 
 | Check | Result | Sanitized note |
 |---|---|---|
@@ -79,6 +79,11 @@ Complete every row for an iOS release on a signed physical iPhone. Package tests
 | Backgrounding for Control Center and returning to the foreground resumes the in-flight attempt or bounded checkpoint recovery | | |
 | Completion, cancellation, and recoverable failure leave the Agent/on-demand state restored; explicit restoration failure requires a manual Agent start | | |
 | Cellular loss while Wi-Fi remains usable closes streams and relayed requests continue to fail closed until cellular returns | | Confirms continued no-Wi-Fi fallback. |
+| VoiceOver reads the status hierarchy, health values, metrics, errors, and every action with an unambiguous label/value | | Exercise pairing, running, failed, rotation, and restoration states. |
+| Largest Dynamic Type keeps all finite copy readable and every primary, rotation, scanner, and diagnostic action reachable | | No clipped copy or hidden required control. |
+| Reduce Motion removes nonessential animation without hiding or delaying state, confirmation, countdown, or recovery feedback | | |
+| Scanner camera-permission denial presents finite recovery guidance; granting permission later restores native scanning | | Do not record QR contents. |
+| Signed physical iPad preserves readable dashboard layout and reachable actions in portrait, upside-down portrait, landscape left, and landscape right | | Exercise rotation/restoration copy in every orientation. |
 
 ## Optional extended capacity
 
