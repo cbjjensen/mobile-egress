@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
@@ -22,6 +23,7 @@ import com.mobileegress.agent.network.CellularRequiredController
 import com.mobileegress.agent.network.IpifyPublicIpProbe
 import com.mobileegress.agent.network.NetworkTransport
 import com.mobileegress.agent.network.PathEvent
+import com.mobileegress.agent.network.publicIpProbeFailureDiagnostic
 import com.mobileegress.agent.network.RotationEffect
 import com.mobileegress.agent.network.RotationEvent
 import com.mobileegress.agent.network.RotationFailure
@@ -391,7 +393,8 @@ class AgentForegroundService : LifecycleService() {
                 if (network == null) com.mobileegress.agent.network.PublicIpSnapshot() else publicIpProbe.probe(network)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                Log.w("PublicIpProbe", "Rotation probe failed: ${publicIpProbeFailureDiagnostic(error)}")
                 com.mobileegress.agent.network.PublicIpSnapshot()
             }
             if (rotationController.state.attemptId() == expectedAttempt) {

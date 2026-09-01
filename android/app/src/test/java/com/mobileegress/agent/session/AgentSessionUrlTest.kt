@@ -13,4 +13,14 @@ class AgentSessionUrlTest {
         assertEquals(8443, url.port)
         assertEquals("/v1/session", url.encodedPath)
     }
+
+    @Test
+    fun `relay failure diagnostic includes only failure type and HTTP status`() {
+        val diagnostic = relayFailureDiagnostic(
+            java.net.UnknownHostException("private relay hostname"),
+            responseCode = 503,
+        )
+
+        assertEquals("UnknownHostException http=503", diagnostic)
+    }
 }

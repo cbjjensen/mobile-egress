@@ -1,6 +1,7 @@
 package com.mobileegress.agent.session
 
 import android.net.Network
+import android.util.Log
 import com.mobileegress.agent.network.DestinationRejected
 import com.mobileegress.agent.network.PublicAddressPolicy
 import com.mobileegress.agent.pairing.PairingBundleParser
@@ -43,6 +44,9 @@ internal fun agentSessionUrl(relayOrigin: String) =
     relayOrigin.toHttpUrl().newBuilder()
         .addPathSegments("v1/session")
         .build()
+
+internal fun relayFailureDiagnostic(error: Throwable, responseCode: Int?): String =
+    "${error.javaClass.simpleName} http=${responseCode ?: "none"}"
 
 class AgentSession(
     private val network: Network,
@@ -119,15 +123,18 @@ class AgentSession(
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            Log.w(RELAY_LOG_TAG, "WebSocket closing code=$code")
             webSocket.close(code, null)
             terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            Log.w(RELAY_LOG_TAG, "WebSocket closed code=$code")
             terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
         }
 
         override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
+            Log.w(RELAY_LOG_TAG, relayFailureDiagnostic(error, response?.code))
             val errorClass = when {
                 response?.code == 401 || response?.code == 403 -> ErrorClass.RelayAuth
                 error is javax.net.ssl.SSLException -> ErrorClass.RelayTls
@@ -439,6 +446,7 @@ class AgentSession(
     private enum class StreamTerminalState { Open, GracefulPending, ForcedPending, Released }
 
     companion object {
+        private const val RELAY_LOG_TAG = "AgentSession"
         private const val MAX_TOMBSTONES = 32
         private const val OUTBOUND_CONTROL_QUEUE_CAPACITY = 32
         private const val OUTBOUND_DATA_QUEUE_CAPACITY = 64
