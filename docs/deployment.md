@@ -128,6 +128,8 @@ The selected thumbprint must be 40 hexadecimal characters. Check that its expiry
 
 Use one semantic version everywhere. This release uses `1.1.0`.
 
+The current capacity branch has authoritative `1.1.0` inputs for Windows, Android, and iOS, but it does not yet contain the user's in-progress macOS packaging/version authority. Before treating the cross-platform version freeze as complete, Task 7 must merge the committed macOS work into the capacity branch and reconcile its existing metadata to `1.1.0`. Do not invent a second macOS version field or release macOS from the pre-reconciliation tree.
+
 ```powershell
 $releaseVersion = '1.1.0'
 $releaseTag = "v$releaseVersion"
