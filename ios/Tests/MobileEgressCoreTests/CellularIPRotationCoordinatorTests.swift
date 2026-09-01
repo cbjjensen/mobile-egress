@@ -511,6 +511,60 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         }
     }
 
+    func testCancelBeforeRecoveredPauseApplicationRestoresPersistedIntentExactlyOnce() async {
+        let clock = RotationClockStub()
+        let intents = [
+            TunnelRotationReceipt(wasRunning: false, wasOnDemandEnabled: false),
+            TunnelRotationReceipt(wasRunning: true, wasOnDemandEnabled: true),
+        ]
+
+        for receipt in intents {
+            let pauseGate = RotationPauseApplicationGate()
+            let tunnel = await RotationTunnelStub(
+                isRunning: false,
+                isOnDemandEnabled: false,
+                pauseApplicationGate: pauseGate
+            )
+            let coordinator = await CellularIPRotationCoordinator(
+                clock: clock,
+                sleeper: RotationSleeperStub(),
+                probe: RotationProbeStub(snapshots: [
+                    PublicIPSnapshot(ipv4: "198.51.100.10"),
+                ]),
+                pathObserver: RotationPathObserverStub(),
+                checkpointStore: RotationCheckpointStoreStub(
+                    checkpoint: CellularIPRotationCheckpoint(
+                        state: .preparing(
+                            attemptID: 41,
+                            originalNetworkToken: "cellular-1",
+                            holdSeconds: 10,
+                            cellularLost: false,
+                            returnedNetworkToken: nil
+                        ),
+                        savedAt: clock.now,
+                        pauseDisposition: .pausing(receipt)
+                    )
+                ),
+                notificationCue: RotationNotificationCueStub(),
+                tunnel: tunnel
+            )
+
+            await coordinator.resumeAfterActivation()
+            await pauseGate.waitUntilEntered()
+            let cancelTask = Task { @MainActor in await coordinator.cancel() }
+            await Task.yield()
+            await pauseGate.open()
+            await cancelTask.value
+            await waitUntil { await tunnel.resumeReceipts.count == 1 }
+
+            let restored = await tunnel.intentSnapshot()
+            let resumeReceipts = await tunnel.resumeReceipts
+            XCTAssertEqual(resumeReceipts, [receipt])
+            XCTAssertEqual(restored.isRunning, receipt.wasRunning)
+            XCTAssertEqual(restored.isOnDemandEnabled, receipt.wasOnDemandEnabled)
+        }
+    }
+
     func testLegacyMissingReceiptFailsSafeForEveryLaterActiveRecoveryState() async {
         let clock = RotationClockStub()
         let laterStates: [(CellularIPRotationState, Date?)] = [
