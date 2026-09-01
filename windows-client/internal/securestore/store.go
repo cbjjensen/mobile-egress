@@ -1,4 +1,4 @@
-// Package securestore defines storage for sensitive Windows client state.
+// Package securestore defines platform-native storage for sensitive controller state.
 package securestore
 
 import (

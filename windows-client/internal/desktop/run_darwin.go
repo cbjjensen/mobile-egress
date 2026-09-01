@@ -51,9 +51,8 @@ func newDarwinDesktopApp() (*DesktopApp, error) {
 	})
 }
 
-// Task 2 replaces this fail-closed seam with the Security.framework Keychain store.
 func newDarwinSecureStore() (securestore.Store, error) {
-	return nil, errors.New("macOS Keychain secure storage is not yet supported")
+	return securestore.NewKeychainStore()
 }
 
 type unsupportedDarwinTailscaleInstaller struct{}
