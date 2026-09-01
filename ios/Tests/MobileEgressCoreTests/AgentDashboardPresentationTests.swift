@@ -305,6 +305,43 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertFalse(presentation.requiresActiveStreamConfirmation)
     }
 
+    func testHoldingPresentationExposesCountdownAndCancellationWithoutLeakingAddresses() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(
+                isEnrolled: true,
+                status: AgentStatusSnapshot(
+                    agentState: .running,
+                    cellular: .unavailable,
+                    relay: .disconnected,
+                    activeStreamCount: 0,
+                    bytesUploaded: 0,
+                    bytesDownloaded: 0,
+                    errorClass: .none,
+                    rotation: .holding(
+                        attemptID: 41,
+                        remainingSeconds: 7,
+                        before: PublicIPSnapshot(ipv4: "198.51.100.10", ipv6: "2001:db8::1"),
+                        returnedNetworkToken: nil
+                    )
+                )
+            )
+        )
+
+        XCTAssertEqual(presentation.rotationCountdownSeconds, 7)
+        XCTAssertTrue(presentation.showsRotationCancellation)
+        XCTAssertFalse(presentation.safeStatusText.contains("198.51.100.10"))
+        XCTAssertFalse(presentation.safeStatusText.contains("2001:db8::1"))
+    }
+
+    func testInactiveRotationHasNoCountdownOrCancellationControl() {
+        let presentation = AgentDashboardPresentation.present(
+            AgentDashboardState(isEnrolled: true, status: status(agentState: .stopped, errorClass: .none))
+        )
+
+        XCTAssertNil(presentation.rotationCountdownSeconds)
+        XCTAssertFalse(presentation.showsRotationCancellation)
+    }
+
     func testUnchangedRotationOffersThirtySecondRetry() {
         let unchanged = PublicIPSnapshot(ipv4: "198.51.100.10", ipv6: nil)
         let status = AgentStatusSnapshot(

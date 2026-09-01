@@ -115,6 +115,7 @@ final class XcodeProjectStructureTests: XCTestCase {
         let catalog = try json(at: "Assets/AppAssets.xcassets/Contents.json")
         let accent = try json(at: "Assets/AppAssets.xcassets/AccentColor.colorset/Contents.json")
         let appIcon = try json(at: "Assets/AppAssets.xcassets/AppIcon.appiconset/Contents.json")
+        let header = try json(at: "Assets/AppAssets.xcassets/ZFNFHeader.imageset/Contents.json")
         XCTAssertNotNil(catalog["info"])
         XCTAssertNotNil(accent["colors"])
         let images = try XCTUnwrap(appIcon["images"] as? [[String: Any]])
@@ -130,6 +131,18 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertEqual(iconData.pngDimension(at: 20), 1_024)
         XCTAssertEqual(iconData[safe: 24], 8, "AppIcon must use 8-bit color channels")
         XCTAssertEqual(iconData[safe: 25], 2, "AppIcon must be opaque RGB without an alpha channel")
+
+        let headerImages = try XCTUnwrap(header["images"] as? [[String: Any]])
+        let universalHeader = try XCTUnwrap(headerImages.first {
+            $0["idiom"] as? String == "universal" && $0["scale"] as? String == "1x"
+        })
+        let headerFilename = try XCTUnwrap(universalHeader["filename"] as? String)
+        let headerData = try data(at: "Assets/AppAssets.xcassets/ZFNFHeader.imageset/\(headerFilename)")
+        XCTAssertEqual(Array(headerData.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        XCTAssertEqual(headerData.pngDimension(at: 16), 256)
+        XCTAssertEqual(headerData.pngDimension(at: 20), 256)
+        XCTAssertEqual(headerData[safe: 24], 8, "Header image must use 8-bit color channels")
+        XCTAssertEqual(headerData[safe: 25], 6, "Header image must preserve an alpha channel")
 
         XCTAssertEqual(try swiftFiles(in: "MobileEgressAgent"), Set(expectedAppSources))
         XCTAssertEqual(try swiftFiles(in: "MobileEgressTunnelExtension"), Set(expectedExtensionSources))
@@ -191,7 +204,7 @@ final class XcodeProjectStructureTests: XCTestCase {
         ))
     }
 
-    func testAppCommandPresentationAndActionConsumePortableDecision() throws {
+    func testAppCommandExecutionConsumesPortableDecisionWhileDashboardUsesPortablePresentation() throws {
         let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
         let dashboard = try text(at: "MobileEgressAgent/AgentDashboardView.swift")
 
@@ -202,10 +215,83 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(viewModel.contains("changeTunnelState(command: decision.command)"))
         XCTAssertTrue(viewModel.contains("switch command"))
         XCTAssertFalse(viewModel.contains("if isTunnelActive"))
-        XCTAssertTrue(dashboard.contains("let commandDecision = model.tunnelCommandDecision"))
-        XCTAssertTrue(dashboard.contains("commandDecision.isDestructive"))
-        XCTAssertTrue(dashboard.contains("commandDecision.command == .stop"))
-        XCTAssertTrue(dashboard.contains(".disabled(!model.canToggleTunnel)"))
+        XCTAssertTrue(dashboard.contains("presentation.primaryAgentAction"))
+        XCTAssertFalse(dashboard.contains("model.tunnelCommandDecision"))
+        XCTAssertFalse(dashboard.contains("model.canToggleTunnel"))
+    }
+
+    func testOledDashboardRendersPortablePresentationWithNativeAccessibleActions() throws {
+        let viewModel = try text(at: "MobileEgressAgent/AgentViewModel.swift")
+        let dashboard = try text(at: "MobileEgressAgent/AgentDashboardView.swift")
+
+        XCTAssertTrue(viewModel.contains("var dashboardPresentation: AgentDashboardPresentation"))
+        XCTAssertTrue(viewModel.contains("AgentDashboardPresentation.present("))
+        XCTAssertTrue(viewModel.contains("func dismissUserError()"))
+
+        XCTAssertTrue(dashboard.contains("let presentation = model.dashboardPresentation"))
+        XCTAssertTrue(dashboard.contains("NavigationStack"))
+        XCTAssertTrue(dashboard.contains("ScrollView"))
+        XCTAssertFalse(dashboard.contains("List {"))
+        for component in ["BrandHeader", "PairingCard", "AgentStatusCard", "RotationCard", "DiagnosticCard"] {
+            XCTAssertTrue(dashboard.contains("\(component)("), "Missing OLED hierarchy component: \(component)")
+        }
+        XCTAssertTrue(dashboard.contains("Image(\"ZFNFHeader\")"))
+        XCTAssertTrue(dashboard.contains("presentation.appTitle"))
+        XCTAssertTrue(dashboard.contains("presentation.cellularHealth"))
+        XCTAssertTrue(dashboard.contains("presentation.relayHealth"))
+        XCTAssertTrue(dashboard.contains("presentation.metrics"))
+        XCTAssertTrue(dashboard.contains("presentation.finiteErrorCopy"))
+        XCTAssertTrue(dashboard.contains("presentation.rotationCountdownSeconds"))
+        XCTAssertTrue(dashboard.contains("presentation.showsRotationCancellation"))
+
+        for action in [
+            "model.presentScanner()",
+            "model.toggleTunnel()",
+            "model.requestRotation()",
+            "model.confirmRotationStart()",
+            "model.declineRotation()",
+            "model.cancelRotation()",
+            "model.retryRotation()",
+        ] {
+            XCTAssertTrue(dashboard.contains(action), "Missing dashboard action wiring: \(action)")
+        }
+        XCTAssertTrue(dashboard.contains(".confirmationDialog("))
+        XCTAssertTrue(dashboard.contains(".alert(item:"))
+        XCTAssertTrue(dashboard.contains(".refreshable"))
+        XCTAssertTrue(dashboard.contains(".sheet(isPresented: $model.isScannerPresented)"))
+
+        XCTAssertTrue(dashboard.contains("UIPasteboard.general.string = presentation.safeStatusText"))
+        XCTAssertTrue(dashboard.contains(".accessibilityLabel("))
+        XCTAssertTrue(dashboard.contains(".accessibilityValue("))
+        XCTAssertTrue(dashboard.contains(".frame(minHeight: 44)"))
+        XCTAssertTrue(dashboard.contains(".monospacedDigit()"))
+        XCTAssertTrue(dashboard.contains("@Environment(\\.accessibilityReduceMotion)"))
+        XCTAssertTrue(dashboard.contains("transaction.disablesAnimations = true"))
+
+        for forbiddenState in [
+            "model.rotationState",
+            "model.rotationAvailability",
+            "model.canRotateCellularIP",
+            "model.activeStreamCount",
+            "model.bytesUploaded",
+            "model.bytesDownloaded",
+            "model.vpnStatus",
+            "model.providerStatus",
+            "model.statusTitle",
+            "model.errorMessage",
+        ] {
+            XCTAssertFalse(dashboard.contains(forbiddenState), "SwiftUI bypasses presentation policy: \(forbiddenState)")
+        }
+        for forbiddenDiagnostic in [
+            "localizedDescription",
+            "originalNetworkToken",
+            "relayOrigin",
+            "ipv4",
+            "ipv6",
+            "prefs:root=",
+        ] {
+            XCTAssertFalse(dashboard.contains(forbiddenDiagnostic), "Unsafe dashboard diagnostic surface: \(forbiddenDiagnostic)")
+        }
     }
 
     func testAppleManagerConsumesPortablePreferenceTransaction() throws {
