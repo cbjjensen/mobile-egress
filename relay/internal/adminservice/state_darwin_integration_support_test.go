@@ -84,6 +84,7 @@ type darwinTestRoot struct {
 	spelled   string
 	canonical string
 	identity  os.FileInfo
+	acl       pathACLInspector
 }
 
 func (root darwinTestRoot) Contains(spelled, canonical string) bool {
@@ -92,4 +93,14 @@ func (root darwinTestRoot) Contains(spelled, canonical string) bool {
 	return root.spelled != "" && root.canonical != "" &&
 		!darwinIntegrationPathRefused(spelled, canonical) &&
 		darwinPathWithinFold(spelled, root.spelled) && darwinPathWithinFold(canonical, root.canonical)
+}
+
+func runDarwinAdmittedMutation(root darwinTestRoot, spelled, canonical string, mutate func() error) error {
+	if mutate == nil {
+		return errors.New("Darwin integration mutation callback is required")
+	}
+	if !root.Contains(spelled, canonical) {
+		return errors.New("Darwin integration mutation escaped admitted root")
+	}
+	return mutate()
 }

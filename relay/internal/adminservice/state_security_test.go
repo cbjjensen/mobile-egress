@@ -1351,6 +1351,7 @@ func (filesystem *fakeStateFilesystem) mutations() []stateFilesystemOperation {
 type allowStateACLs struct{}
 
 func (allowStateACLs) Validate(context.Context, openedPath, pathACLPolicy) error { return nil }
+func (allowStateACLs) ValidatePath(context.Context, string, pathACLPolicy) error { return nil }
 
 type stateACLObservation struct {
 	Path   string
@@ -1366,6 +1367,17 @@ type recordingStateACLInspector struct {
 
 func (inspector *recordingStateACLInspector) Validate(_ context.Context, opened openedPath, policy pathACLPolicy) error {
 	path := opened.Path()
+	inspector.observations = append(inspector.observations, stateACLObservation{Path: path, Policy: policy})
+	if path == inspector.failPath {
+		return inspector.failErr
+	}
+	if inspector.afterValidate != nil {
+		inspector.afterValidate(path, policy)
+	}
+	return nil
+}
+
+func (inspector *recordingStateACLInspector) ValidatePath(_ context.Context, path string, policy pathACLPolicy) error {
 	inspector.observations = append(inspector.observations, stateACLObservation{Path: path, Policy: policy})
 	if path == inspector.failPath {
 		return inspector.failErr

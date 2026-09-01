@@ -24,6 +24,7 @@ const (
 	pathTypeUnknown pathObjectType = iota
 	pathTypeDirectory
 	pathTypeRegular
+	pathTypeSocket
 	pathTypeSymlink
 	pathTypeOther
 )
@@ -57,6 +58,7 @@ const (
 
 type pathACLInspector interface {
 	Validate(context.Context, openedPath, pathACLPolicy) error
+	ValidatePath(context.Context, string, pathACLPolicy) error
 }
 
 type stateFilesystem interface {
@@ -684,5 +686,9 @@ var errStateACLUnavailable = errors.New("native relay state ACL inspection is un
 type unavailablePathACLInspector struct{}
 
 func (unavailablePathACLInspector) Validate(context.Context, openedPath, pathACLPolicy) error {
+	return errStateACLUnavailable
+}
+
+func (unavailablePathACLInspector) ValidatePath(context.Context, string, pathACLPolicy) error {
 	return errStateACLUnavailable
 }

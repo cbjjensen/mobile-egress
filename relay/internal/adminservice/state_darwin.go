@@ -203,6 +203,8 @@ func pathMetadataFromDarwinStat(stat unix.Stat_t) pathMetadata {
 		objectType = pathTypeDirectory
 	case uint16(unix.S_IFREG):
 		objectType = pathTypeRegular
+	case uint16(unix.S_IFSOCK):
+		objectType = pathTypeSocket
 	case uint16(unix.S_IFLNK):
 		objectType = pathTypeSymlink
 	}

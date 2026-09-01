@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -241,6 +242,7 @@ func newAdmittedDarwinTestRoot(t *testing.T) darwinTestRoot {
 		t.Fatalf("created Darwin integration fixture root is not a real directory: %v", err)
 	}
 	root.identity = info
+	root.acl = newDarwinACLInspector()
 	root.revalidate(t)
 	return root
 }
@@ -269,17 +271,27 @@ func (root darwinTestRoot) revalidate(t *testing.T) {
 	if root.identity == nil {
 		t.Fatal("Darwin integration fixture root lacks admitted identity")
 	}
-	info, err := os.Lstat(root.spelled)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !os.SameFile(root.identity, info) {
+	if root.acl == nil {
+		t.Fatal("Darwin integration fixture root lacks an ACL inspector")
+	}
+	before, err := os.Lstat(root.spelled)
+	if err != nil || !before.IsDir() || before.Mode()&os.ModeSymlink != 0 || !os.SameFile(root.identity, before) {
 		t.Fatalf("Darwin integration fixture root identity changed: %v", err)
 	}
 	canonical, err := canonicalizeDarwinExistingTestDirectory(root.spelled)
 	if err != nil || !strings.EqualFold(canonical, root.canonical) || darwinIntegrationPathRefused(root.spelled, canonical) {
 		t.Fatalf("Darwin integration fixture root canonical path changed: %q (%v)", canonical, err)
 	}
+	if err := root.acl.ValidatePath(context.Background(), root.spelled, pathACLRejectExtended); err != nil {
+		t.Fatalf("Darwin integration fixture root ACL is unsafe: %v", err)
+	}
+	after, err := os.Lstat(root.spelled)
+	if err != nil || !after.IsDir() || after.Mode()&os.ModeSymlink != 0 || !os.SameFile(before, after) || !os.SameFile(root.identity, after) {
+		t.Fatalf("Darwin integration fixture root changed across ACL validation: %v", err)
+	}
 }
 
-func (root darwinTestRoot) mutationPath(t *testing.T, candidate string, followFinal bool) string {
+func (root darwinTestRoot) mutationCoordinates(t *testing.T, candidate string, followFinal bool) (string, string, string) {
 	t.Helper()
 	root.revalidate(t)
 	abs, err := filepath.Abs(candidate)
@@ -302,82 +314,132 @@ func (root darwinTestRoot) mutationPath(t *testing.T, candidate string, followFi
 		}
 		canonical = filepath.ToSlash(filepath.Clean(resolved))
 	}
-	if !root.Contains(spelled, canonical) {
-		t.Fatalf("Darwin integration mutation escaped admitted root: %q -> %q", spelled, canonical)
+	return abs, spelled, canonical
+}
+
+func (root darwinTestRoot) runMutation(t *testing.T, candidate string, followFinal bool, mutate func(string) error) {
+	t.Helper()
+	abs, spelled, canonical := root.mutationCoordinates(t, candidate, followFinal)
+	err := runDarwinAdmittedMutation(root, spelled, canonical, func() error {
+		root.revalidate(t)
+		return mutate(abs)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return abs
 }
 
 func (root darwinTestRoot) mkdir(t *testing.T, candidate string, mode os.FileMode) {
 	t.Helper()
-	path := root.mutationPath(t, candidate, false)
-	if err := os.Mkdir(path, mode); err != nil {
-		t.Fatal(err)
-	}
+	root.runMutation(t, candidate, false, func(path string) error { return os.Mkdir(path, mode) })
 }
 
 func (root darwinTestRoot) writeFile(t *testing.T, candidate string, data []byte, mode os.FileMode) {
 	t.Helper()
-	path := root.mutationPath(t, candidate, false)
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
+	root.runMutation(t, candidate, false, func(path string) error {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.Write(data)
+		return errors.Join(writeErr, file.Close())
+	})
 }
 
 func (root darwinTestRoot) chmod(t *testing.T, candidate string, mode os.FileMode) {
 	t.Helper()
-	if err := os.Chmod(root.mutationPath(t, candidate, true), mode); err != nil {
-		t.Fatal(err)
-	}
+	root.runMutation(t, candidate, true, func(path string) error { return os.Chmod(path, mode) })
+}
+
+func (root darwinTestRoot) lchown(t *testing.T, candidate string, uid, gid int) {
+	t.Helper()
+	root.runMutation(t, candidate, true, func(path string) error { return unix.Lchown(path, uid, gid) })
 }
 
 func (root darwinTestRoot) remove(t *testing.T, candidate string) {
 	t.Helper()
-	if err := os.Remove(root.mutationPath(t, candidate, false)); err != nil {
-		t.Fatal(err)
+	root.runMutation(t, candidate, false, os.Remove)
+}
+
+func (root darwinTestRoot) removeIfExists(t *testing.T, candidate string) {
+	t.Helper()
+	root.runMutation(t, candidate, false, func(path string) error {
+		err := os.Remove(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
+}
+
+func (root darwinTestRoot) removeAll(t *testing.T) {
+	t.Helper()
+	if !strings.EqualFold(filepath.ToSlash(filepath.Clean(root.spelled)), root.spelled) {
+		t.Fatal("Darwin integration recursive cleanup requires the exact admitted root")
 	}
+	root.runMutation(t, root.spelled, true, os.RemoveAll)
 }
 
 func (root darwinTestRoot) symlink(t *testing.T, target, link string) {
 	t.Helper()
-	target = root.mutationPath(t, target, true)
-	link = root.mutationPath(t, link, false)
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
+	targetPath, targetSpelled, targetCanonical := root.mutationCoordinates(t, target, true)
+	if !root.Contains(targetSpelled, targetCanonical) {
+		t.Fatalf("Darwin integration symlink target escaped admitted root: %q -> %q", targetSpelled, targetCanonical)
 	}
+	root.runMutation(t, link, false, func(linkPath string) error { return os.Symlink(targetPath, linkPath) })
 }
 
 func (root darwinTestRoot) link(t *testing.T, existing, link string) {
 	t.Helper()
-	existing = root.mutationPath(t, existing, true)
-	link = root.mutationPath(t, link, false)
-	if err := os.Link(existing, link); err != nil {
-		t.Fatal(err)
+	existingPath, existingSpelled, existingCanonical := root.mutationCoordinates(t, existing, true)
+	if !root.Contains(existingSpelled, existingCanonical) {
+		t.Fatalf("Darwin integration hard-link source escaped admitted root: %q -> %q", existingSpelled, existingCanonical)
 	}
+	root.runMutation(t, link, false, func(linkPath string) error { return os.Link(existingPath, linkPath) })
+}
+
+func (root darwinTestRoot) rename(t *testing.T, existing, replacement string) {
+	t.Helper()
+	existingPath, existingSpelled, existingCanonical := root.mutationCoordinates(t, existing, true)
+	if !root.Contains(existingSpelled, existingCanonical) {
+		t.Fatalf("Darwin integration rename source escaped admitted root: %q -> %q", existingSpelled, existingCanonical)
+	}
+	root.runMutation(t, replacement, false, func(replacementPath string) error { return os.Rename(existingPath, replacementPath) })
 }
 
 func (root darwinTestRoot) mkfifo(t *testing.T, candidate string, mode os.FileMode) {
 	t.Helper()
-	path := root.mutationPath(t, candidate, false)
-	if err := unix.Mkfifo(path, uint32(mode.Perm())); err != nil {
+	root.runMutation(t, candidate, false, func(path string) error { return unix.Mkfifo(path, uint32(mode.Perm())) })
+}
+
+func (root darwinTestRoot) listenUnix(t *testing.T, candidate string) *net.UnixListener {
+	t.Helper()
+	var listener *net.UnixListener
+	root.runMutation(t, candidate, false, func(path string) error {
+		created, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+		listener = created
+		return err
+	})
+	return listener
+}
+
+func (root darwinTestRoot) leaveUnixSocket(t *testing.T, candidate string) {
+	t.Helper()
+	listener := root.listenUnix(t, candidate)
+	listener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func addDarwinTestACL(t *testing.T, root darwinTestRoot, path, entry string) {
 	t.Helper()
-	path = root.mutationPath(t, path, true)
-	command := exec.Command("/bin/chmod", "+a", entry, path)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("add temp-tree ACL: %v (%s)", err, strings.TrimSpace(string(output)))
-	}
+	root.runMutation(t, path, true, func(admittedPath string) error {
+		command := exec.Command("/bin/chmod", "+a", entry, admittedPath)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("add temp-tree ACL: %w (%s)", err, strings.TrimSpace(string(output)))
+		}
+		return nil
+	})
 }

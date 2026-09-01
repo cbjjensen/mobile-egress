@@ -11,6 +11,7 @@ package adminservice
 #include <uuid/uuid.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 enum {
 	ZFNF_ACL_REJECT_EXTENDED = 1,
@@ -43,19 +44,9 @@ static int zfnf_acl_mutates(acl_permset_t permissions, int *error_number) {
 	return 0;
 }
 
-// Returns 0 for safe, 1 for unsafe, and -1 for an inspection failure.
-// The caller has already opened fd with O_NOFOLLOW and verified its metadata.
-static int zfnf_validate_acl(int fd, int policy, int *error_number) {
-	*error_number = 0;
-	errno = 0;
-	acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
-	if (acl == NULL) {
-		*error_number = errno != 0 ? errno : EIO;
-		return -1;
-	}
+static int zfnf_validate_acl_contents(acl_t acl, int policy, int *error_number) {
 	if (acl_valid(acl) != 0) {
 		*error_number = errno != 0 ? errno : EINVAL;
-		(void)acl_free(acl);
 		return -1;
 	}
 
@@ -136,11 +127,34 @@ static int zfnf_validate_acl(int fd, int policy, int *error_number) {
 		}
 	}
 
+	return outcome;
+}
+
+static int zfnf_validate_acl_object(acl_t acl, int policy, int *error_number) {
+	*error_number = 0;
+	if (acl == NULL) {
+		*error_number = errno != 0 ? errno : EIO;
+		return -1;
+	}
+	int outcome = zfnf_validate_acl_contents(acl, policy, error_number);
 	if (acl_free(acl) != 0 && outcome == 0) {
 		*error_number = errno != 0 ? errno : EIO;
 		return -1;
 	}
 	return outcome;
+}
+
+// The caller opened fd with O_NOFOLLOW_ANY and verified its complete metadata.
+static int zfnf_validate_acl_fd(int fd, int policy, int *error_number) {
+	errno = 0;
+	return zfnf_validate_acl_object(acl_get_fd_np(fd, ACL_TYPE_EXTENDED), policy, error_number);
+}
+
+// acl_get_link_np inspects the named object itself rather than following a final symlink.
+// Go brackets this read with complete Lstat equality checks.
+static int zfnf_validate_acl_path(const char *path, int policy, int *error_number) {
+	errno = 0;
+	return zfnf_validate_acl_object(acl_get_link_np(path, ACL_TYPE_EXTENDED), policy, error_number);
 }
 */
 import "C"
@@ -148,7 +162,9 @@ import "C"
 import (
 	"context"
 	"fmt"
+	"strings"
 	"syscall"
+	"unsafe"
 )
 
 type darwinACLInspector struct{}
@@ -169,17 +185,45 @@ func (darwinACLInspector) Validate(ctx context.Context, opened openedPath, polic
 	if err != nil {
 		return errStatePathUnsafe
 	}
-	var nativePolicy C.int
-	switch policy {
-	case pathACLRejectExtended:
-		nativePolicy = C.ZFNF_ACL_REJECT_EXTENDED
-	case pathACLRejectNonRootMutation:
-		nativePolicy = C.ZFNF_ACL_REJECT_NON_ROOT_MUTATION
-	default:
-		return errStatePathUnsafe
+	nativePolicy, err := nativeDarwinACLPolicy(policy)
+	if err != nil {
+		return err
 	}
 	var errorNumber C.int
-	result := C.zfnf_validate_acl(C.int(fd), nativePolicy, &errorNumber)
+	result := C.zfnf_validate_acl_fd(C.int(fd), nativePolicy, &errorNumber)
+	return darwinACLValidationResult(ctx, result, errorNumber)
+}
+
+func (darwinACLInspector) ValidatePath(ctx context.Context, path string, policy pathACLPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if path == "" || strings.ContainsRune(path, '\x00') {
+		return errStatePathUnsafe
+	}
+	nativePolicy, err := nativeDarwinACLPolicy(policy)
+	if err != nil {
+		return err
+	}
+	nativePath := C.CString(path)
+	defer C.free(unsafe.Pointer(nativePath))
+	var errorNumber C.int
+	result := C.zfnf_validate_acl_path(nativePath, nativePolicy, &errorNumber)
+	return darwinACLValidationResult(ctx, result, errorNumber)
+}
+
+func nativeDarwinACLPolicy(policy pathACLPolicy) (C.int, error) {
+	switch policy {
+	case pathACLRejectExtended:
+		return C.ZFNF_ACL_REJECT_EXTENDED, nil
+	case pathACLRejectNonRootMutation:
+		return C.ZFNF_ACL_REJECT_NON_ROOT_MUTATION, nil
+	default:
+		return 0, errStatePathUnsafe
+	}
+}
+
+func darwinACLValidationResult(ctx context.Context, result C.int, errorNumber C.int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
