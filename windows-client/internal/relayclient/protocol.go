@@ -8,7 +8,10 @@ import (
 	"io"
 )
 
-const maxPayloadBytes = 1 << 20
+const (
+	maxPayloadBytes     = 1 << 20
+	maxDataPayloadBytes = 32 << 10
+)
 
 type wireEnvelope struct {
 	Version  int    `json:"version"`
@@ -31,18 +34,26 @@ func parseWireEnvelope(raw []byte) (wireEnvelope, error) {
 	if keepalive != (envelope.StreamID == "") {
 		return wireEnvelope{}, errors.New("invalid relay envelope stream ID")
 	}
-	if _, err := decodeWirePayload(envelope.Payload); err != nil {
+	payloadLimit := maxPayloadBytes
+	if envelope.Type == "data" {
+		payloadLimit = maxDataPayloadBytes
+	}
+	if _, err := decodeWirePayloadLimit(envelope.Payload, payloadLimit); err != nil {
 		return wireEnvelope{}, err
 	}
 	return envelope, nil
 }
 
 func decodeWirePayload(value string) ([]byte, error) {
-	if base64.RawURLEncoding.DecodedLen(len(value)) > maxPayloadBytes {
+	return decodeWirePayloadLimit(value, maxPayloadBytes)
+}
+
+func decodeWirePayloadLimit(value string, maximumBytes int) ([]byte, error) {
+	if base64.RawURLEncoding.DecodedLen(len(value)) > maximumBytes {
 		return nil, errors.New("relay payload too large")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(payload) > maxPayloadBytes {
+	if err != nil || len(payload) > maximumBytes {
 		return nil, errors.New("invalid relay payload")
 	}
 	return payload, nil

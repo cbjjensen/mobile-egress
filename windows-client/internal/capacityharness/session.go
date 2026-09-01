@@ -27,6 +27,7 @@ import (
 const (
 	maximumHarnessSessionStreams = holderStreams + 1
 	maximumHarnessPayloadBytes   = 1 << 20
+	maximumHarnessDataBytes      = 32 << 10
 	maximumHarnessInboundFrames  = 8
 	maximumHarnessTombstones     = 128
 	maximumControlResponseBytes  = 256 << 10
@@ -538,7 +539,11 @@ func parseCapacityWireEnvelope(raw []byte) (capacityWireEnvelope, error) {
 	if keepalive != (envelope.StreamID == "") {
 		return capacityWireEnvelope{}, errors.New("capacity relay envelope is invalid")
 	}
-	if _, err := decodeCapacityPayload(envelope.Payload); err != nil {
+	payloadLimit := maximumHarnessPayloadBytes
+	if envelope.Type == "data" {
+		payloadLimit = maximumHarnessDataBytes
+	}
+	if _, err := decodeCapacityPayloadLimit(envelope.Payload, payloadLimit); err != nil {
 		return capacityWireEnvelope{}, err
 	}
 	return envelope, nil
@@ -561,11 +566,15 @@ func validCapacityWireType(value string) bool {
 }
 
 func decodeCapacityPayload(encoded string) ([]byte, error) {
-	if base64.RawURLEncoding.DecodedLen(len(encoded)) > maximumHarnessPayloadBytes {
+	return decodeCapacityPayloadLimit(encoded, maximumHarnessPayloadBytes)
+}
+
+func decodeCapacityPayloadLimit(encoded string, maximumBytes int) ([]byte, error) {
+	if base64.RawURLEncoding.DecodedLen(len(encoded)) > maximumBytes {
 		return nil, errors.New("capacity relay payload is invalid")
 	}
 	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
-	if err != nil || len(payload) > maximumHarnessPayloadBytes {
+	if err != nil || len(payload) > maximumBytes {
 		return nil, errors.New("capacity relay payload is invalid")
 	}
 	return payload, nil

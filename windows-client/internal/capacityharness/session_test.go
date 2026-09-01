@@ -27,6 +27,45 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestCapacityWireEnvelopeAcceptsDataAtThirtyTwoKiB(t *testing.T) {
+	raw, err := json.Marshal(capacityWireEnvelope{
+		Version: 1, Type: "data", StreamID: "stream-1",
+		Payload: base64.RawURLEncoding.EncodeToString(make([]byte, 32<<10)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseCapacityWireEnvelope(raw); err != nil {
+		t.Fatalf("parseCapacityWireEnvelope() rejected a 32 KiB data payload: %v", err)
+	}
+}
+
+func TestCapacityWireEnvelopeRejectsDataOverThirtyTwoKiB(t *testing.T) {
+	raw, err := json.Marshal(capacityWireEnvelope{
+		Version: 1, Type: "data", StreamID: "stream-1",
+		Payload: base64.RawURLEncoding.EncodeToString(make([]byte, 32<<10+1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseCapacityWireEnvelope(raw); err == nil {
+		t.Fatal("parseCapacityWireEnvelope() accepted a data payload larger than 32 KiB")
+	}
+}
+
+func TestCapacityWireEnvelopePreservesLargerNonDataPayloadLimit(t *testing.T) {
+	raw, err := json.Marshal(capacityWireEnvelope{
+		Version: 1, Type: "rejected", StreamID: "stream-1",
+		Payload: base64.RawURLEncoding.EncodeToString(make([]byte, 32<<10+1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseCapacityWireEnvelope(raw); err != nil {
+		t.Fatalf("parseCapacityWireEnvelope() applied the data limit to a non-data payload: %v", err)
+	}
+}
+
 func TestProductionSessionDriverUsesMTLSAndReceivesRemoteThirtyThirdStreamLimit(t *testing.T) {
 	t.Parallel()
 

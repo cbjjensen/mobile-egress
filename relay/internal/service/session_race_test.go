@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/netip"
@@ -235,7 +236,7 @@ func TestClosedStreamTombstonesAreBoundedAndPurgedBySweep(t *testing.T) {
 	agent := &session{role: enrollment.RoleAgent}
 	for index := 0; index < 2048; index++ {
 		id := "closed-" + strconv.Itoa(index)
-		tracked := &stream{id: id, client: client, agent: agent}
+		tracked := &stream{id: id, client: client, agent: agent, state: streamOpen}
 		service.streams[id] = tracked
 		service.activeStreams++
 		service.removeStreamLocked(tracked)
@@ -244,29 +245,99 @@ func TestClosedStreamTombstonesAreBoundedAndPurgedBySweep(t *testing.T) {
 		t.Fatalf("closed stream tombstones = %d, want 1024", got)
 	}
 	now := time.Now()
+	lateDataPayload := base64.RawURLEncoding.EncodeToString([]byte("late-data"))
+	wrongClient := &session{role: enrollment.RoleClient}
+	lastStreamID := ""
 	for streamID := range service.closedStreams {
+		lastStreamID = streamID
 		closeEnvelope := protocol.Envelope{Version: 1, Type: protocol.TypeClose, StreamID: streamID, Payload: encodeRelayError("client_closed")}
-		if !service.absorbLateCloseLocked(client, enrollment.RoleClient, closeEnvelope, now) {
+		if !service.absorbLateStreamFrameLocked(client, enrollment.RoleClient, closeEnvelope, now) {
 			t.Fatalf("first late Client close for %q was not absorbed", streamID)
 		}
-		if !service.absorbLateCloseLocked(client, enrollment.RoleClient, closeEnvelope, now) {
+		if !service.absorbLateStreamFrameLocked(client, enrollment.RoleClient, closeEnvelope, now) {
 			t.Fatalf("duplicate late Client close for %q was not absorbed", streamID)
 		}
-		if !service.absorbLateCloseLocked(agent, enrollment.RoleAgent, closeEnvelope, now) {
+		if !service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, closeEnvelope, now) {
 			t.Fatalf("late Agent close for %q was not absorbed", streamID)
 		}
+		dataEnvelope := protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: streamID, Payload: lateDataPayload}
+		if !service.absorbLateStreamFrameLocked(client, enrollment.RoleClient, dataEnvelope, now) {
+			t.Fatalf("late Client data for %q was not absorbed", streamID)
+		}
+		if !service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, dataEnvelope, now) {
+			t.Fatalf("late Agent data for %q was not absorbed", streamID)
+		}
+		if service.absorbLateStreamFrameLocked(wrongClient, enrollment.RoleClient, dataEnvelope, now) {
+			t.Fatalf("wrong Client's late data for %q was incorrectly absorbed", streamID)
+		}
 		rejected := protocol.Envelope{Version: 1, Type: protocol.TypeRejected, StreamID: streamID, Payload: encodeRelayError("target_failure")}
-		if service.absorbLateCloseLocked(agent, enrollment.RoleAgent, rejected, now) {
+		if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, rejected, now) {
 			t.Fatalf("late rejection for %q was incorrectly absorbed as a close", streamID)
 		}
 	}
 	if got := len(service.closedStreams); got != 1024 {
 		t.Fatalf("closed stream tombstones after late-frame churn = %d, want 1024", got)
 	}
+	openedForOpenStream := protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: lastStreamID, Payload: ""}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, openedForOpenStream, now) {
+		t.Fatal("late Agent opened for a formerly open stream was incorrectly absorbed")
+	}
+	rejectedForOpenStream := protocol.Envelope{Version: 1, Type: protocol.TypeRejected, StreamID: lastStreamID, Payload: encodeRelayError("target_failure")}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, rejectedForOpenStream, now) {
+		t.Fatal("late Agent rejection for a formerly open stream was incorrectly absorbed")
+	}
+
+	opening := &stream{id: "closed-opening-opened", client: client, agent: agent, state: streamOpening}
+	service.streams[opening.id] = opening
+	service.activeStreams++
+	service.removeStreamLocked(opening)
+	opened := protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: opening.id, Payload: ""}
+	if !service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, opened, now) {
+		t.Fatal("late Agent opened for a closed opening stream was not absorbed")
+	}
+	openedData := protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: opening.id, Payload: lateDataPayload}
+	if !service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, openedData, now) {
+		t.Fatal("late Agent data following an absorbed opened frame was not absorbed")
+	}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, opened, now) {
+		t.Fatal("duplicate late Agent opened was incorrectly absorbed")
+	}
+	conflictingRejection := protocol.Envelope{Version: 1, Type: protocol.TypeRejected, StreamID: opening.id, Payload: encodeRelayError("target_failure")}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, conflictingRejection, now) {
+		t.Fatal("late Agent rejection after opened was incorrectly absorbed")
+	}
+	invalidOpened := protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: opening.id, Payload: lateDataPayload}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, invalidOpened, now) {
+		t.Fatal("late Agent opened with a payload was incorrectly absorbed")
+	}
+	open := protocol.Envelope{Version: 1, Type: protocol.TypeOpen, StreamID: opening.id, Payload: ""}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, open, now) {
+		t.Fatal("late Agent open for a closed stream was incorrectly absorbed")
+	}
+
+	rejectedOpening := &stream{id: "closed-opening-rejected", client: client, agent: agent, state: streamOpening}
+	service.streams[rejectedOpening.id] = rejectedOpening
+	service.activeStreams++
+	service.removeStreamLocked(rejectedOpening)
+	rejected := protocol.Envelope{Version: 1, Type: protocol.TypeRejected, StreamID: rejectedOpening.id, Payload: encodeRelayError("target_failure")}
+	if !service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, rejected, now) {
+		t.Fatal("late Agent rejection for a closed opening stream was not absorbed")
+	}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, rejected, now) {
+		t.Fatal("duplicate late Agent rejection was incorrectly absorbed")
+	}
+	rejectedData := protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: rejectedOpening.id, Payload: lateDataPayload}
+	if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, rejectedData, now) {
+		t.Fatal("late Agent data following a rejected opening was incorrectly absorbed")
+	}
 
 	service.expireStreams(time.Now().Add(time.Minute))
 	if got := len(service.closedStreams); got != 0 {
 		t.Fatalf("closed stream tombstones after sweep = %d, want 0", got)
+	}
+	expiredData := protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: lastStreamID, Payload: lateDataPayload}
+	if service.absorbLateStreamFrameLocked(client, enrollment.RoleClient, expiredData, time.Now().Add(time.Minute)) {
+		t.Fatal("late data for an expired tombstone was incorrectly absorbed")
 	}
 }
 

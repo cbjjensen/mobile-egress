@@ -50,4 +50,24 @@ class WireProtocolTest {
 
         assertEquals(payload.toList(), parsed.decodePayload().toList())
     }
+
+    @Test
+    fun `rejects inbound data over thirty two KiB`() {
+        val payload = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(ByteArray(32 * 1024 + 1))
+        val raw = """{"version":1,"type":"data","streamId":"stream-over-limit","payload":"$payload"}"""
+
+        assertThrows(ProtocolException::class.java) {
+            WireProtocol.parseAgentInbound(raw.encodeToByteArray())
+        }
+    }
+
+    @Test
+    fun `preserves the larger non data payload limit`() {
+        val payload = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(ByteArray(32 * 1024 + 1))
+        val raw = """{"version":1,"type":"open","streamId":"stream-control","payload":"$payload"}"""
+
+        assertEquals("open", WireProtocol.parseAgentInbound(raw.encodeToByteArray()).type)
+    }
 }

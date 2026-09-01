@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	Version1               = 1
-	MaxDecodedPayloadBytes = 1 << 20
+	Version1                   = 1
+	MaxDecodedPayloadBytes     = 1 << 20
+	MaxDecodedDataPayloadBytes = 32 << 10
 )
 
 var (
@@ -101,7 +102,11 @@ func (envelope Envelope) Validate() error {
 		return fmt.Errorf("%w: stream ID is required", ErrInvalidEnvelope)
 	}
 
-	if _, err := envelope.DecodePayload(); err != nil {
+	payloadLimit := MaxDecodedPayloadBytes
+	if envelope.Type == TypeData {
+		payloadLimit = MaxDecodedDataPayloadBytes
+	}
+	if _, err := decodePayload(envelope.Payload, payloadLimit); err != nil {
 		return err
 	}
 	return nil
@@ -110,14 +115,18 @@ func (envelope Envelope) Validate() error {
 // DecodePayload returns Payload after base64url decoding and enforces the
 // decoded one MiB payload limit.
 func (envelope Envelope) DecodePayload() ([]byte, error) {
-	if base64.RawURLEncoding.DecodedLen(len(envelope.Payload)) > MaxDecodedPayloadBytes {
+	return decodePayload(envelope.Payload, MaxDecodedPayloadBytes)
+}
+
+func decodePayload(value string, maximumBytes int) ([]byte, error) {
+	if base64.RawURLEncoding.DecodedLen(len(value)) > maximumBytes {
 		return nil, fmt.Errorf("%w: payload too large", ErrInvalidEnvelope)
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(envelope.Payload)
+	payload, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid base64url payload", ErrInvalidEnvelope)
 	}
-	if len(payload) > MaxDecodedPayloadBytes {
+	if len(payload) > maximumBytes {
 		return nil, fmt.Errorf("%w: payload too large", ErrInvalidEnvelope)
 	}
 	return payload, nil

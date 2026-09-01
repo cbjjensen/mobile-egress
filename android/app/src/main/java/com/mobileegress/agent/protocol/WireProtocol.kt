@@ -23,6 +23,7 @@ data class AgentOpenTarget(val ip: String, val port: Int)
 object WireProtocol {
     const val MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024
     const val MAX_PAYLOAD_BYTES = 1024 * 1024
+    const val MAX_DATA_PAYLOAD_BYTES = 32 * 1024
     private val STREAM_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
     private val BASE64URL = Regex("^[A-Za-z0-9_-]*$")
     private val ALL_TYPES = setOf("open", "opened", "rejected", "data", "close", "ping", "pong")
@@ -69,9 +70,11 @@ object WireProtocol {
         return json.encodeToString(envelope).encodeToByteArray()
     }
 
-    fun decodePayload(value: String): ByteArray {
+    fun decodePayload(value: String): ByteArray = decodePayload(value, MAX_PAYLOAD_BYTES)
+
+    private fun decodePayload(value: String, maximumBytes: Int): ByteArray {
         if (!BASE64URL.matches(value)) throw ProtocolException("Payload is not unpadded base64url")
-        if ((value.length.toLong() * 3L) / 4L > MAX_PAYLOAD_BYTES) {
+        if ((value.length.toLong() * 3L) / 4L > maximumBytes) {
             throw ProtocolException("Payload is too large")
         }
         val decoded = try {
@@ -79,7 +82,7 @@ object WireProtocol {
         } catch (_: IllegalArgumentException) {
             throw ProtocolException("Payload is not valid base64url")
         }
-        if (decoded.size > MAX_PAYLOAD_BYTES) throw ProtocolException("Payload is too large")
+        if (decoded.size > maximumBytes) throw ProtocolException("Payload is too large")
         return decoded
     }
 
@@ -93,7 +96,8 @@ object WireProtocol {
         val keepalive = envelope.type == "ping" || envelope.type == "pong"
         if (keepalive && envelope.streamId.isNotEmpty()) throw ProtocolException("Keepalive stream ID must be empty")
         if (!keepalive && !STREAM_ID.matches(envelope.streamId)) throw ProtocolException("Invalid stream ID")
-        decodePayload(envelope.payload)
+        val payloadLimit = if (envelope.type == "data") MAX_DATA_PAYLOAD_BYTES else MAX_PAYLOAD_BYTES
+        decodePayload(envelope.payload, payloadLimit)
     }
 
     private val ERROR_CODES = setOf(

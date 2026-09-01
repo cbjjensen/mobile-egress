@@ -61,18 +61,21 @@ type Session struct {
 }
 
 type relayStream struct {
-	session      *Session
-	id           string
-	inbound      chan []byte
-	done         chan struct{}
-	openResult   chan error
-	openOnce     sync.Once
-	finishOnce   sync.Once
-	sendClose    sync.Once
-	readMu       sync.Mutex
-	remaining    []byte
-	terminal     atomic.Bool
-	drainInbound atomic.Bool
+	session    *Session
+	id         string
+	inbound    chan []byte
+	done       chan struct{}
+	openResult chan error
+	// beforeWriteChunk is set only by deterministic concurrency tests.
+	beforeWriteChunk func(int)
+	openOnce         sync.Once
+	finishOnce       sync.Once
+	sendClose        sync.Once
+	sendMu           sync.Mutex
+	readMu           sync.Mutex
+	remaining        []byte
+	terminal         atomic.Bool
+	drainInbound     atomic.Bool
 }
 
 func DialSession(ctx context.Context, identity Identity) (*Session, error) {
@@ -268,6 +271,8 @@ func (session *Session) readLoop() {
 				if session.claimLocalClose(stream) {
 					stream.finish(io.EOF)
 					go func() {
+						stream.sendMu.Lock()
+						defer stream.sendMu.Unlock()
 						_ = session.send(wireEnvelope{
 							Version: 1, Type: "close", StreamID: stream.id,
 							Payload: base64.RawURLEncoding.EncodeToString([]byte("client_closed")),
@@ -397,31 +402,50 @@ func (stream *relayStream) Read(buffer []byte) (int, error) {
 }
 
 func (stream *relayStream) Write(value []byte) (int, error) {
-	select {
-	case <-stream.done:
-		return 0, io.ErrClosedPipe
-	default:
+	if len(value) == 0 {
+		select {
+		case <-stream.done:
+			return 0, io.ErrClosedPipe
+		default:
+			return 0, nil
+		}
 	}
 	written := 0
 	for len(value) > 0 {
+		if stream.beforeWriteChunk != nil {
+			stream.beforeWriteChunk(written / maxOutboundDataChunkSize)
+		}
+		stream.sendMu.Lock()
+		select {
+		case <-stream.done:
+			stream.sendMu.Unlock()
+			return written, io.ErrClosedPipe
+		default:
+		}
 		length := min(len(value), maxOutboundDataChunkSize)
 		chunk := value[:length]
-		if err := stream.session.send(wireEnvelope{
+		err := stream.session.send(wireEnvelope{
 			Version: 1, Type: "data", StreamID: stream.id,
 			Payload: base64.RawURLEncoding.EncodeToString(chunk),
-		}); err != nil {
+		})
+		if err == nil {
+			stream.session.bytesUp.Add(int64(length))
+			written += length
+			value = value[length:]
+		}
+		stream.sendMu.Unlock()
+		if err != nil {
 			stream.session.Close()
 			return written, err
 		}
-		stream.session.bytesUp.Add(int64(length))
-		written += length
-		value = value[length:]
 	}
 	return written, nil
 }
 
 func (stream *relayStream) Close() error {
 	stream.sendClose.Do(func() {
+		stream.sendMu.Lock()
+		defer stream.sendMu.Unlock()
 		if stream.session.claimLocalClose(stream) {
 			_ = stream.session.send(wireEnvelope{
 				Version: 1, Type: "close", StreamID: stream.id,

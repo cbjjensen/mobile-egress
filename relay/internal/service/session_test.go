@@ -125,47 +125,53 @@ func TestClientOpenResolvesPublicTargetAndRoutesOnlyOwningStream(t *testing.T) {
 	}
 }
 
-func TestLateCloseFromWrongClientIsAProtocolViolation(t *testing.T) {
+func TestLateStreamFrameFromWrongClientIsAProtocolViolation(t *testing.T) {
 	t.Parallel()
 
-	fixture := newRelayFixture(t)
-	defer fixture.Close()
-	_, devices := enrollDevices(t, fixture, "client", "client", "agent")
-	owner := mustDialSession(t, fixture, devices[0].client)
-	defer owner.Close()
-	wrongClient := mustDialSession(t, fixture, devices[1].client)
-	defer wrongClient.Close()
-	agent := mustDialSession(t, fixture, devices[2].client)
-	defer agent.Close()
+	for _, lateFrame := range []protocol.Envelope{
+		{Version: 1, Type: protocol.TypeClose, Payload: encodeErrorCode("client_closed")},
+		{Version: 1, Type: protocol.TypeData, Payload: base64.RawURLEncoding.EncodeToString([]byte("wrong-owner-late-data"))},
+	} {
+		lateFrame := lateFrame
+		t.Run(string(lateFrame.Type), func(t *testing.T) {
+			fixture := newRelayFixture(t)
+			defer fixture.Close()
+			_, devices := enrollDevices(t, fixture, "client", "client", "agent")
+			owner := mustDialSession(t, fixture, devices[0].client)
+			defer owner.Close()
+			wrongClient := mustDialSession(t, fixture, devices[1].client)
+			defer wrongClient.Close()
+			agent := mustDialSession(t, fixture, devices[2].client)
+			defer agent.Close()
 
-	writeEnvelope(t, owner, openEnvelope("closed-owner-stream", "1.1.1.1", 443))
-	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "closed-owner-stream" {
-		t.Fatalf("agent received wrong open: %#v", forwarded)
-	}
-	writeEnvelope(t, owner, protocol.Envelope{
-		Version: 1, Type: protocol.TypeClose, StreamID: "closed-owner-stream",
-		Payload: encodeErrorCode("client_closed"),
-	})
-	if closed := readEnvelope(t, agent); closed.Type != protocol.TypeClose {
-		t.Fatalf("agent received %#v, want owner close", closed)
-	}
+			writeEnvelope(t, owner, openEnvelope("closed-owner-stream", "1.1.1.1", 443))
+			if forwarded := readEnvelope(t, agent); forwarded.StreamID != "closed-owner-stream" {
+				t.Fatalf("agent received wrong open: %#v", forwarded)
+			}
+			writeEnvelope(t, owner, protocol.Envelope{
+				Version: 1, Type: protocol.TypeClose, StreamID: "closed-owner-stream",
+				Payload: encodeErrorCode("client_closed"),
+			})
+			if closed := readEnvelope(t, agent); closed.Type != protocol.TypeClose {
+				t.Fatalf("agent received %#v, want owner close", closed)
+			}
 
-	writeEnvelope(t, wrongClient, protocol.Envelope{
-		Version: 1, Type: protocol.TypeClose, StreamID: "closed-owner-stream",
-		Payload: encodeErrorCode("client_closed"),
-	})
-	wrongClient.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, _, err := wrongClient.ReadMessage(); err == nil {
-		t.Fatal("wrong client remained connected after closing another client's tombstone")
-	}
+			lateFrame.StreamID = "closed-owner-stream"
+			writeEnvelope(t, wrongClient, lateFrame)
+			wrongClient.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if _, _, err := wrongClient.ReadMessage(); err == nil {
+				t.Fatalf("wrong client remained connected after sending late %s for another client's tombstone", lateFrame.Type)
+			}
 
-	writeEnvelope(t, owner, openEnvelope("owner-still-usable", "8.8.8.8", 443))
-	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "owner-still-usable" || forwarded.Type != protocol.TypeOpen {
-		t.Fatalf("correct client/agent sessions were damaged: %#v", forwarded)
+			writeEnvelope(t, owner, openEnvelope("owner-still-usable", "8.8.8.8", 443))
+			if forwarded := readEnvelope(t, agent); forwarded.StreamID != "owner-still-usable" || forwarded.Type != protocol.TypeOpen {
+				t.Fatalf("correct client/agent sessions were damaged: %#v", forwarded)
+			}
+		})
 	}
 }
 
-func TestNonCloseFrameForClosedStreamIsAProtocolViolation(t *testing.T) {
+func TestLateDataForClosedStreamFromOriginalOwnerIsAbsorbed(t *testing.T) {
 	t.Parallel()
 
 	fixture := newRelayFixture(t)
@@ -178,6 +184,8 @@ func TestNonCloseFrameForClosedStreamIsAProtocolViolation(t *testing.T) {
 
 	writeEnvelope(t, client, openEnvelope("terminal-stream", "1.1.1.1", 443))
 	_ = readEnvelope(t, agent)
+	writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: "terminal-stream", Payload: ""})
+	_ = readEnvelope(t, client)
 	writeEnvelope(t, client, protocol.Envelope{
 		Version: 1, Type: protocol.TypeClose, StreamID: "terminal-stream",
 		Payload: encodeErrorCode("client_closed"),
@@ -187,14 +195,67 @@ func TestNonCloseFrameForClosedStreamIsAProtocolViolation(t *testing.T) {
 		Version: 1, Type: protocol.TypeData, StreamID: "terminal-stream",
 		Payload: base64.RawURLEncoding.EncodeToString([]byte("late-data")),
 	})
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, _, err := client.ReadMessage(); err == nil {
-		t.Fatal("client remained connected after data for a terminal stream")
+	writeEnvelope(t, client, openEnvelope("owner-still-usable-after-late-data", "8.8.8.8", 443))
+	agent.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if forwarded := readEnvelope(t, agent); forwarded.Type != protocol.TypeOpen || forwarded.StreamID != "owner-still-usable-after-late-data" {
+		t.Fatalf("agent received %#v, want next stream open after absorbed late data", forwarded)
 	}
 
 	writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypePing})
 	if pong := readEnvelope(t, agent); pong.Type != protocol.TypePong {
 		t.Fatalf("agent received %#v, want pong after client protocol violation", pong)
+	}
+}
+
+func TestLateAgentOpeningOutcomeLeavesUnrelatedStreamUsable(t *testing.T) {
+	t.Parallel()
+
+	for _, outcome := range []protocol.Envelope{
+		{Version: 1, Type: protocol.TypeOpened, Payload: ""},
+		{Version: 1, Type: protocol.TypeRejected, Payload: encodeErrorCode("target_failure")},
+	} {
+		outcome := outcome
+		t.Run(string(outcome.Type), func(t *testing.T) {
+			fixture := newRelayFixture(t)
+			defer fixture.Close()
+			_, devices := enrollDevices(t, fixture, "client", "agent")
+			client := mustDialSession(t, fixture, devices[0].client)
+			defer client.Close()
+			agent := mustDialSession(t, fixture, devices[1].client)
+			defer agent.Close()
+
+			writeEnvelope(t, client, openEnvelope("unrelated-open-stream", "1.1.1.1", 443))
+			_ = readEnvelope(t, agent)
+			writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: "unrelated-open-stream", Payload: ""})
+			_ = readEnvelope(t, client)
+
+			writeEnvelope(t, client, openEnvelope("canceled-opening-stream", "8.8.8.8", 443))
+			_ = readEnvelope(t, agent)
+			writeEnvelope(t, client, protocol.Envelope{
+				Version: 1, Type: protocol.TypeClose, StreamID: "canceled-opening-stream",
+				Payload: encodeErrorCode("client_closed"),
+			})
+			if closed := readEnvelope(t, agent); closed.Type != protocol.TypeClose || closed.StreamID != "canceled-opening-stream" {
+				t.Fatalf("agent received %#v, want canceled opening close", closed)
+			}
+
+			outcome.StreamID = "canceled-opening-stream"
+			writeEnvelope(t, agent, outcome)
+			if outcome.Type == protocol.TypeOpened {
+				writeEnvelope(t, agent, protocol.Envelope{
+					Version: 1, Type: protocol.TypeData, StreamID: "canceled-opening-stream",
+					Payload: base64.RawURLEncoding.EncodeToString([]byte("already-in-flight")),
+				})
+			}
+			writeEnvelope(t, agent, protocol.Envelope{
+				Version: 1, Type: protocol.TypeData, StreamID: "unrelated-open-stream",
+				Payload: base64.RawURLEncoding.EncodeToString([]byte("still-usable")),
+			})
+			client.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if data := readEnvelope(t, client); data.Type != protocol.TypeData || data.StreamID != "unrelated-open-stream" {
+				t.Fatalf("client received %#v, want unrelated stream data after late %s", data, outcome.Type)
+			}
+		})
 	}
 }
 
@@ -290,7 +351,7 @@ func TestSessionRoutesThirtyTwoKiBDataAndRetainsOversizeProtocolRejection(t *tes
 
 	writeEnvelope(t, client, protocol.Envelope{
 		Version: 1, Type: protocol.TypeData, StreamID: "frame-boundary",
-		Payload: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("z", (1<<20)+1))),
+		Payload: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("z", 32<<10+1))),
 	})
 	client.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, _, err := client.ReadMessage(); err == nil {
@@ -299,6 +360,36 @@ func TestSessionRoutesThirtyTwoKiBDataAndRetainsOversizeProtocolRejection(t *tes
 		var closeError *websocket.CloseError
 		if !errors.As(err, &closeError) || closeError.Code != websocket.ClosePolicyViolation || closeError.Text != "protocol_error" {
 			t.Fatalf("over-limit payload close = %v, want policy-violation protocol_error", err)
+		}
+	}
+}
+
+func TestSessionRejectsAgentDataOverThirtyTwoKiB(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client", "agent")
+	client := mustDialSession(t, fixture, devices[0].client)
+	defer client.Close()
+	agent := mustDialSession(t, fixture, devices[1].client)
+	defer agent.Close()
+
+	writeEnvelope(t, client, openEnvelope("agent-frame-boundary", "1.1.1.1", 443))
+	_ = readEnvelope(t, agent)
+	writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: "agent-frame-boundary"})
+	_ = readEnvelope(t, client)
+	writeEnvelope(t, agent, protocol.Envelope{
+		Version: 1, Type: protocol.TypeData, StreamID: "agent-frame-boundary",
+		Payload: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("z", 32<<10+1))),
+	})
+	agent.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := agent.ReadMessage(); err == nil {
+		t.Fatal("Agent remained connected after sending a data payload larger than 32 KiB")
+	} else {
+		var closeError *websocket.CloseError
+		if !errors.As(err, &closeError) || closeError.Code != websocket.ClosePolicyViolation || closeError.Text != "protocol_error" {
+			t.Fatalf("over-limit Agent payload close = %v, want policy-violation protocol_error", err)
 		}
 	}
 }

@@ -72,6 +72,39 @@ func TestParseEnvelopeRejectsPayloadOverOneMiB(t *testing.T) {
 	}
 }
 
+func TestParseEnvelopeAcceptsDataAtThirtyTwoKiB(t *testing.T) {
+	t.Parallel()
+
+	payload := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("a", 32<<10)))
+	raw := `{"version":1,"type":"data","streamId":"stream-1","payload":"` + payload + `"}`
+
+	if _, err := ParseEnvelope([]byte(raw)); err != nil {
+		t.Fatalf("ParseEnvelope() rejected a 32 KiB data payload: %v", err)
+	}
+}
+
+func TestParseEnvelopeRejectsDataOverThirtyTwoKiB(t *testing.T) {
+	t.Parallel()
+
+	payload := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("a", 32<<10+1)))
+	raw := `{"version":1,"type":"data","streamId":"stream-1","payload":"` + payload + `"}`
+
+	if _, err := ParseEnvelope([]byte(raw)); err == nil {
+		t.Fatal("ParseEnvelope() accepted a data payload larger than 32 KiB")
+	}
+}
+
+func TestParseEnvelopePreservesLargerNonDataPayloadLimit(t *testing.T) {
+	t.Parallel()
+
+	payload := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("a", 32<<10+1)))
+	raw := `{"version":1,"type":"open","streamId":"stream-1","payload":"` + payload + `"}`
+
+	if _, err := ParseEnvelope([]byte(raw)); err != nil {
+		t.Fatalf("ParseEnvelope() applied the data limit to a non-data payload: %v", err)
+	}
+}
+
 func TestParseEnvelopeRejectsConcatenatedJSONValues(t *testing.T) {
 	t.Parallel()
 

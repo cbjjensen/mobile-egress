@@ -96,9 +96,12 @@ type stream struct {
 }
 
 type closedStreamTombstone struct {
-	client    *session
-	agent     *session
-	expiresAt time.Time
+	client             *session
+	agent              *session
+	state              streamState
+	clientDataAllowed  bool
+	openingOutcomeSeen bool
+	expiresAt          time.Time
 }
 
 type clientOpenRequest struct {
@@ -388,7 +391,7 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 	service.mu.Lock()
 	tracked, exists := service.streams[envelope.StreamID]
 	if !exists {
-		if service.absorbLateCloseLocked(client, enrollment.RoleClient, envelope, time.Now()) {
+		if service.absorbLateStreamFrameLocked(client, enrollment.RoleClient, envelope, time.Now()) {
 			service.mu.Unlock()
 			return nil
 		}
@@ -452,7 +455,7 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 	service.mu.Lock()
 	tracked, exists := service.streams[envelope.StreamID]
 	if !exists {
-		if service.absorbLateCloseLocked(agent, enrollment.RoleAgent, envelope, time.Now()) {
+		if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, envelope, time.Now()) {
 			service.mu.Unlock()
 			return nil
 		}
@@ -646,12 +649,14 @@ func (service *Service) rememberClosedStreamLocked(tracked *stream, now time.Tim
 		delete(service.closedStreams, oldestID)
 	}
 	service.closedStreams[tracked.id] = closedStreamTombstone{
-		client: tracked.client, agent: tracked.agent, expiresAt: now.Add(closedStreamTombstoneLifetime),
+		client: tracked.client, agent: tracked.agent, state: tracked.state,
+		clientDataAllowed: tracked.state == streamOpen,
+		expiresAt:         now.Add(closedStreamTombstoneLifetime),
 	}
 }
 
-func (service *Service) absorbLateCloseLocked(sender *session, role enrollment.Role, envelope protocol.Envelope, now time.Time) bool {
-	if envelope.Type != protocol.TypeClose || !validEnvelopeErrorCode(envelope) {
+func (service *Service) absorbLateStreamFrameLocked(sender *session, role enrollment.Role, envelope protocol.Envelope, now time.Time) bool {
+	if err := envelope.Validate(); err != nil {
 		return false
 	}
 	tombstone, exists := service.closedStreams[envelope.StreamID]
@@ -663,9 +668,44 @@ func (service *Service) absorbLateCloseLocked(sender *session, role enrollment.R
 		return false
 	}
 	if role == enrollment.RoleClient {
-		return tombstone.client == sender
+		if tombstone.client != sender {
+			return false
+		}
+		switch envelope.Type {
+		case protocol.TypeData:
+			return tombstone.clientDataAllowed
+		case protocol.TypeClose:
+			return validEnvelopeErrorCode(envelope)
+		default:
+			return false
+		}
 	}
-	return role == enrollment.RoleAgent && tombstone.agent == sender
+	if role != enrollment.RoleAgent || tombstone.agent != sender {
+		return false
+	}
+	switch envelope.Type {
+	case protocol.TypeOpened:
+		if tombstone.state != streamOpening || tombstone.openingOutcomeSeen || envelope.Payload != "" {
+			return false
+		}
+		tombstone.state = streamOpen
+		tombstone.openingOutcomeSeen = true
+		service.closedStreams[envelope.StreamID] = tombstone
+		return true
+	case protocol.TypeRejected:
+		if tombstone.state != streamOpening || tombstone.openingOutcomeSeen || !validEnvelopeErrorCode(envelope) {
+			return false
+		}
+		tombstone.openingOutcomeSeen = true
+		service.closedStreams[envelope.StreamID] = tombstone
+		return true
+	case protocol.TypeData:
+		return tombstone.state == streamOpen
+	case protocol.TypeClose:
+		return validEnvelopeErrorCode(envelope)
+	default:
+		return false
+	}
 }
 
 func (service *Service) closedStreamIDInUseLocked(streamID string, now time.Time) bool {

@@ -313,6 +313,85 @@ func TestRelayStreamFramesOutboundPayloadsAtSixteenKiB(t *testing.T) {
 	}
 }
 
+func TestRelayStreamCloseCannotInterleaveBetweenOutboundChunks(t *testing.T) {
+	frames := make(chan []wireEnvelope, 1)
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		open := readTestWireEnvelope(t, connection)
+		writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: open.StreamID})
+
+		received := make([]wireEnvelope, 0, 3)
+		for len(received) < cap(received) {
+			if err := connection.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+				t.Error(err)
+				return
+			}
+			_, raw, err := connection.ReadMessage()
+			if err != nil {
+				break
+			}
+			var envelope wireEnvelope
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Error(err)
+				return
+			}
+			received = append(received, envelope)
+		}
+		frames <- received
+	})
+	defer fixture.Close()
+
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	opened, err := session.OpenStream(context.Background(), "close-race.example", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := opened.(*relayStream)
+
+	secondChunkReady := make(chan struct{})
+	allowSecondChunk := make(chan struct{})
+	stream.beforeWriteChunk = func(index int) {
+		if index == 1 {
+			close(secondChunkReady)
+			<-allowSecondChunk
+		}
+	}
+	type writeResult struct {
+		count int
+		err   error
+	}
+	result := make(chan writeResult, 1)
+	go func() {
+		count, writeErr := stream.Write(bytes.Repeat([]byte("x"), 32<<10))
+		result <- writeResult{count: count, err: writeErr}
+	}()
+
+	select {
+	case <-secondChunkReady:
+	case <-time.After(time.Second):
+		t.Fatal("write did not reach its second chunk")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(allowSecondChunk)
+
+	write := <-result
+	if write.count != 16<<10 || !errors.Is(write.err, io.ErrClosedPipe) {
+		t.Fatalf("Write() after concurrent close = (%d, %v), want (%d, io.ErrClosedPipe)", write.count, write.err, 16<<10)
+	}
+	got := <-frames
+	if len(got) != 2 || got[0].Type != "data" || got[1].Type != "close" {
+		t.Fatalf("outbound frame order = %#v, want data then close only", got)
+	}
+	if count, err := stream.Write(nil); count != 0 || !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("empty Write() after close = (%d, %v), want (0, io.ErrClosedPipe)", count, err)
+	}
+}
+
 type sessionFixture struct {
 	server      *httptest.Server
 	identity    Identity
