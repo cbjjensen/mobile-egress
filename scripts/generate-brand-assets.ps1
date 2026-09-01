@@ -175,6 +175,72 @@ function Save-LogoIco {
     }
 }
 
+function Write-BigEndianUInt32 {
+    param(
+        [Parameter(Mandatory)][System.IO.BinaryWriter]$Writer,
+        [Parameter(Mandatory)][uint32]$Value
+    )
+
+    $bytes = [BitConverter]::GetBytes($Value)
+    if ([BitConverter]::IsLittleEndian) {
+        [Array]::Reverse($bytes)
+    }
+    $Writer.Write($bytes)
+}
+
+function Save-LogoIcns {
+    param(
+        [Parameter(Mandatory)][System.Drawing.Image]$Source,
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $representations = @(
+        @{ Type = 'icp4'; Size = 16 },
+        @{ Type = 'icp5'; Size = 32 },
+        @{ Type = 'icp6'; Size = 64 },
+        @{ Type = 'ic07'; Size = 128 },
+        @{ Type = 'ic08'; Size = 256 },
+        @{ Type = 'ic09'; Size = 512 },
+        @{ Type = 'ic10'; Size = 1024 }
+    )
+    $frames = @()
+    foreach ($representation in $representations) {
+        $bitmap = New-LogoBitmap -Source $Source -Size $representation.Size -Transparent $false
+        $stream = [System.IO.MemoryStream]::new()
+        try {
+            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+            $frames += [pscustomobject]@{
+                Type = $representation.Type
+                Data = $stream.ToArray()
+            }
+        } finally {
+            $stream.Dispose()
+            $bitmap.Dispose()
+        }
+    }
+
+    $length = 8
+    foreach ($frame in $frames) {
+        $length += 8 + $frame.Data.Length
+    }
+
+    New-DirectoryForFile -Path $Path
+    $file = [System.IO.File]::Create($Path)
+    $writer = [System.IO.BinaryWriter]::new($file)
+    try {
+        $writer.Write([Text.Encoding]::ASCII.GetBytes('icns'))
+        Write-BigEndianUInt32 -Writer $writer -Value $length
+        foreach ($frame in $frames) {
+            $writer.Write([Text.Encoding]::ASCII.GetBytes($frame.Type))
+            Write-BigEndianUInt32 -Writer $writer -Value (8 + $frame.Data.Length)
+            $writer.Write($frame.Data)
+        }
+    } finally {
+        $writer.Dispose()
+        $file.Dispose()
+    }
+}
+
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
     throw "Canonical logo source is missing: $sourcePath"
 }
@@ -186,7 +252,9 @@ $outputRelativePaths = @(
     'windows-client\frontend\public\zfnf-logo.png',
     'windows-client\internal\desktop\zfnf-logo.ico',
     'ios\Assets\AppAssets.xcassets\AppIcon.appiconset\MobileEgressAppIcon.png',
-    'ios\Assets\AppAssets.xcassets\ZFNFHeader.imageset\ZFNFHeader.png'
+    'ios\Assets\AppAssets.xcassets\ZFNFHeader.imageset\ZFNFHeader.png',
+    'windows-client\internal\desktop\zfnf-menu-bar.png',
+    'windows-client\macos\appicon.icns'
 )
 $generationRoot = $repositoryRoot
 $checkRoot = $null
@@ -204,6 +272,8 @@ try {
     Save-LogoIco -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[4])
     Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[5]) -Size 1024 -Transparent $false -Scale 0.84 -OpaqueRGB $true
     Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[6]) -Size 256 -Transparent $true -Scale 0.9
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[7]) -Size 36 -Transparent $true -Scale 0.9
+    Save-LogoIcns -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[8])
 } finally {
     $source.Dispose()
 }
@@ -233,8 +303,8 @@ if ($Check) {
             Remove-Item -LiteralPath $resolvedCheckRoot -Recurse -Force
         }
     }
-    Write-Host 'Generated Android, Windows, and iOS branding assets are current.'
+    Write-Host 'Generated Android, Windows, iOS, and macOS branding assets are current.'
     exit 0
 }
 
-Write-Host 'Generated Android, Windows, and iOS branding assets from assets\branding\zfnf-logo-source.png.'
+Write-Host 'Generated Android, Windows, iOS, and macOS branding assets from assets\branding\zfnf-logo-source.png.'

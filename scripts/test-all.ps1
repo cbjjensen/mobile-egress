@@ -110,6 +110,7 @@ try {
     Invoke-RequiredCommand -Name 'Release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-all.ps1') }
 
     if ($Components -contains 'Windows') {
+        Invoke-RequiredCommand -Name 'Desktop release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-desktop.ps1') }
         & (Join-Path $PSScriptRoot 'preflight.ps1') -Components Go, Node
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE

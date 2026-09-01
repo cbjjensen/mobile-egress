@@ -43,13 +43,13 @@ test('macOS bridge copy explains PKG, system-extension, Service Management, and 
   })
 })
 
-test('macOS relay service states provide exact labels and approval guidance', () => {
+test('macOS relay service states provide exact labels and recovery guidance', () => {
   const expected = {
     'not-registered': ['Relay service not registered', 'Set up the local bridge to register its signed background service.'],
     'approval-required': ['Login Items approval required', 'Open System Settings → General → Login Items and approve ZFNF Mobile Egress, then return here.'],
     enabled: ['Relay service enabled', ''],
-    'version-mismatch': ['Relay service update required', 'Repair the local bridge to register the relay version bundled with this controller.'],
-    unavailable: ['Relay service unavailable', 'Service Management is unavailable. Confirm this Mac is running macOS 13 or later.'],
+    'version-mismatch': ['Relay service update required', 'Repair the local bridge to update and restart the bundled relay helper.'],
+    unavailable: ['Relay service unavailable', 'Verify Service Management approval and that the signed relay is running, then try again.'],
   }
 
   for (const [state, [label, guidance]] of Object.entries(expected)) {

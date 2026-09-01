@@ -7,4 +7,4 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-& (Join-Path $PSScriptRoot 'release-all.ps1') -ReleaseVersion $ReleaseVersion -Components 'Windows' -Publish:$Publish
+throw 'Windows desktop releases are coupled with macOS. Use scripts\release-desktop.ps1 with the same -ReleaseVersion and optional -Publish.'

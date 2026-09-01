@@ -18,6 +18,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"mobile-egress/internal/relayadmin"
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/assets"
 	"mobile-egress/windows-client/internal/awssdk"
@@ -25,6 +26,7 @@ import (
 	"mobile-egress/windows-client/internal/cloud"
 	"mobile-egress/windows-client/internal/localbridge"
 	"mobile-egress/windows-client/internal/relayclient"
+	"mobile-egress/windows-client/internal/relayservice"
 	"mobile-egress/windows-client/internal/securestore"
 	"mobile-egress/windows-client/internal/tailscale"
 )
@@ -39,9 +41,10 @@ const (
 type DesktopApp struct {
 	platform         desktopPlatform
 	relayState       func() relayServiceState
+	relayService     relayservice.Controller
 	native           desktopNative
 	core             *client.Core
-	bridge           *localbridge.Manager
+	bridge           localBridgeController
 	tailscale        *tailscale.Controller
 	tailscaleInstall tailscaleInstaller
 	cloudRepository  *cloud.Repository
@@ -50,6 +53,7 @@ type DesktopApp struct {
 
 	mu              sync.RWMutex
 	provisioning    sync.Mutex
+	bridgeWorkflow  chan struct{}
 	ctx             context.Context
 	awsClient       *awssdk.Client
 	identityLogin   *awssdk.IdentityCenterLogin
@@ -61,6 +65,12 @@ type DesktopApp struct {
 
 type tailscaleInstaller interface {
 	Install(context.Context) (tailscale.Release, error)
+}
+
+type localBridgeController interface {
+	Setup(context.Context) (localbridge.BridgeStatus, error)
+	Rotate(context.Context, relayclient.Identity) (localbridge.BridgeStatus, relayclient.Identity, error)
+	Repair(context.Context) error
 }
 
 type desktopPlatform string
@@ -96,8 +106,10 @@ type desktopControllerConfig struct {
 	Tailscale         *tailscale.Controller
 	TailscaleInstall  tailscaleInstaller
 	NewBridge         func(*tailscale.Controller, localbridge.OwnerSink) *localbridge.Manager
+	Bridge            localBridgeController
 	BrowserOpenURL    func(context.Context, string)
 	RelayServiceState func() relayServiceState
+	RelayService      relayservice.Controller
 	Native            desktopNative
 }
 
@@ -108,6 +120,10 @@ const awsIAMUserCreateURL = "https://console.aws.amazon.com/iam/home?region=us-e
 // Authenticode-signed. Node release trust is therefore rooted in the signed
 // controller instead of mutable files beside it.
 var embeddedReleaseManifestBase64 string
+
+// controllerVersion is linked to the canonical desktop release version by the
+// packaging pipeline. Development and test builds intentionally default to dev.
+var controllerVersion = "dev"
 
 type AgentQrView struct {
 	ImageDataURL string `json:"imageDataUrl"`
@@ -147,13 +163,19 @@ func newDesktopApp(ctx context.Context, config desktopControllerConfig) (*Deskto
 		return nil, err
 	}
 	application := &DesktopApp{
-		platform: config.Platform, relayState: config.RelayServiceState, native: config.Native,
+		platform: config.Platform, relayState: config.RelayServiceState, relayService: config.RelayService, native: config.Native,
 		core: core, tailscale: config.Tailscale, tailscaleInstall: config.TailscaleInstall,
 		cloudRepository: cloud.NewRepository(config.Store), ownerRepository: client.NewRepository(config.Store),
 		browserOpenURL: config.BrowserOpenURL,
 	}
-	if config.NewBridge != nil {
+	if config.Bridge != nil {
+		application.bridge = config.Bridge
+	} else if config.NewBridge != nil {
 		application.bridge = config.NewBridge(config.Tailscale, coreOwnerSink{core: core})
+	}
+	if config.Platform == platformMacOS {
+		application.bridgeWorkflow = make(chan struct{}, 1)
+		application.bridgeWorkflow <- struct{}{}
 	}
 	if config.Tailscale != nil {
 		config.Tailscale.SetFunnelApprovalHandler(application.openFunnelApproval)
@@ -235,10 +257,13 @@ func (app *DesktopApp) GetStatus() client.Status { return app.core.Status() }
 
 func (app *DesktopApp) GetBridgeStatus() BridgeView {
 	platform := app.desktopPlatform()
-	relayState := app.currentRelayServiceState()
-	view := BridgeView{Platform: string(platform), RelayServiceState: string(relayState), OwnerReady: app.core.Status().OwnerReady}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	relayState := app.currentRelayServiceState()
+	if platform == platformMacOS && app.relayService != nil {
+		relayState = relayStateFromObservation(app.relayService.Observe(ctx))
+	}
+	view := BridgeView{Platform: string(platform), RelayServiceState: string(relayState), OwnerReady: app.core.Status().OwnerReady}
 	owner, _, ownerErr := app.ownerRepository.LoadOwnerIdentity(ctx)
 	if ownerErr == nil {
 		if health, healthErr := relayclient.Health(ctx, owner); healthErr == nil {
@@ -267,12 +292,62 @@ func bridgeReady(platform desktopPlatform, relayState relayServiceState, view Br
 	return view.TailscaleOnline && view.FunnelReady && view.RelayReady && view.OwnerReady && relayServiceReady && !view.NeedsRotation
 }
 
+func relayStateFromObservation(observation relayservice.Observation) relayServiceState {
+	switch observation.State {
+	case relayservice.StateNotRegistered:
+		return relayServiceNotRegistered
+	case relayservice.StateApprovalRequired:
+		return relayServiceApprovalRequired
+	case relayservice.StateEnabled:
+		return relayServiceEnabled
+	case relayservice.StateVersionMismatch:
+		return relayServiceVersionMismatch
+	default:
+		return relayServiceUnavailable
+	}
+}
+
+func (app *DesktopApp) bridgeViewForObservation(observation relayservice.Observation) BridgeView {
+	relayState := relayStateFromObservation(observation)
+	view := BridgeView{
+		Platform: string(platformMacOS), RelayServiceState: string(relayState),
+		OwnerReady: app.core != nil && app.core.Status().OwnerReady,
+	}
+	view.Ready = bridgeReady(platformMacOS, relayState, view)
+	return view
+}
+
+func (app *DesktopApp) acquireBridgeWorkflow(ctx context.Context) (func(), error) {
+	if app.desktopPlatform() != platformMacOS || app.bridgeWorkflow == nil {
+		return func() {}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-app.bridgeWorkflow:
+		return func() { app.bridgeWorkflow <- struct{}{} }, nil
+	}
+}
+
 func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	release, err := app.acquireBridgeWorkflow(ctx)
+	if err != nil {
+		return EndpointMigrationView{}, err
+	}
+	defer release()
 	if app.bridge == nil {
 		return EndpointMigrationView{}, errors.New("Local bridge rotation is unavailable in this build.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
+	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
+		if gate := app.relayService.GateRotate(ctx); !gate.Proceed {
+			return EndpointMigrationView{}, errors.New("The relay service must be enabled and running the bundled helper before rotation.")
+		}
+	}
 	owner, _, err := app.ownerRepository.LoadOwnerIdentity(ctx)
 	if err != nil {
 		return EndpointMigrationView{}, errors.New("Set up the local Owner before rotating the Funnel endpoint.")
@@ -287,6 +362,9 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 	}
 	_, rotatedOwner, err := app.bridge.Rotate(ctx, owner)
 	if err != nil {
+		if app.desktopPlatform() == platformMacOS {
+			return EndpointMigrationView{}, errors.New("Unable to rotate the local relay endpoint. Complete any Tailscale browser prompt and verify the relay service is enabled, then try again.")
+		}
 		return EndpointMigrationView{}, errors.New("Unable to rotate the local relay endpoint. Approve browser and UAC prompts, then try again.")
 	}
 	migration, err := relayclient.IssueEndpointMigration(ctx, rotatedOwner)
@@ -349,25 +427,74 @@ func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
 }
 
 func (app *DesktopApp) SetupLocalBridge() (BridgeView, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return app.setupLocalBridge(ctx)
+}
+
+func (app *DesktopApp) setupLocalBridge(ctx context.Context) (BridgeView, error) {
+	release, err := app.acquireBridgeWorkflow(ctx)
+	if err != nil {
+		return BridgeView{}, err
+	}
+	defer release()
 	if app.bridge == nil {
 		return BridgeView{}, errors.New("Local bridge setup is unavailable in this build.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
+		gate := app.relayService.PrepareSetup(ctx)
+		switch gate.Decision {
+		case relayservice.SetupAwaitingApproval:
+			return app.bridgeViewForObservation(gate.Observation), nil
+		case relayservice.SetupProceed:
+			// The exact bundled helper is reachable and uninitialized.
+		default:
+			return BridgeView{}, errors.New("The signed relay service is not ready for setup. Approve it in Login Items, then try again.")
+		}
+	}
 	if _, err := app.bridge.Setup(ctx); err != nil {
+		if app.desktopPlatform() == platformMacOS {
+			return BridgeView{}, errors.New("Unable to finish the local relay and Funnel setup. Verify Service Management and Tailscale, then try again.")
+		}
 		return BridgeView{}, fmt.Errorf("Unable to finish the local relay and Funnel setup: %w", err)
 	}
 	return app.GetBridgeStatus(), nil
 }
 
 func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
-	if app.bridge == nil || !app.core.Status().OwnerReady {
+	timeout := 10 * time.Minute
+	if app.desktopPlatform() == platformMacOS {
+		timeout = relayadmin.OperationTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	release, err := app.acquireBridgeWorkflow(ctx)
+	if err != nil {
+		return BridgeView{}, err
+	}
+	defer release()
+	if app.bridge == nil {
 		return BridgeView{}, errors.New("Set up the local bridge before repairing it.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
+		if gate := app.relayService.GateRepair(ctx); !gate.Proceed {
+			return BridgeView{}, errors.New("The relay service is not in a repairable initialized state.")
+		}
+	}
+	if !app.core.Status().OwnerReady {
+		return BridgeView{}, errors.New("Set up the local bridge before repairing it.")
+	}
 	if err := app.bridge.Repair(ctx); err != nil {
+		if app.desktopPlatform() == platformMacOS {
+			return BridgeView{}, errors.New("Unable to repair the signed local relay service through Service Management. Keep the controller open while macOS restarts it, then try again.")
+		}
 		return BridgeView{}, errors.New("Unable to repair the signed local relay service. Approve UAC and try again.")
+	}
+	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
+		observation := app.relayService.WaitForExactHelper(ctx)
+		if observation.State != relayservice.StateEnabled || !observation.StrictV1 || !observation.ExactHelper || !observation.Initialized {
+			return BridgeView{}, errors.New("macOS did not restart the bundled relay helper before the repair deadline.")
+		}
 	}
 	return app.GetBridgeStatus(), nil
 }
@@ -384,6 +511,9 @@ func (app *DesktopApp) SaveAWSAccessKeys(accessKeyID, secretAccessKey, sessionTo
 	if err := app.cloudRepository.SaveAccessKeys(ctx, cloud.StoredAccessKeys{
 		AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, SessionToken: sessionToken,
 	}); err != nil {
+		if app.desktopPlatform() == platformMacOS {
+			return errors.New("Unable to protect AWS credentials in macOS Keychain.")
+		}
 		return errors.New("Unable to protect AWS credentials with Windows DPAPI.")
 	}
 	app.mu.Lock()
