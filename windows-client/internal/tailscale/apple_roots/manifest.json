@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "roots": [
+    {
+      "filename": "AppleIncRootCertificate.cer",
+      "sha256": "b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024",
+      "sourceURL": "https://www.apple.com/appleca/AppleIncRootCertificate.cer",
+      "subject": "CN=Apple Root CA,OU=Apple Certification Authority,O=Apple Inc.,C=US",
+      "serial": "02",
+      "notBefore": "2006-04-25T21:40:36Z",
+      "notAfter": "2035-02-09T21:40:36Z"
+    },
+    {
+      "filename": "AppleRootCA-G2.cer",
+      "sha256": "c2b9b042dd57830e7d117dac55ac8ae19407d38e41d88f3215bc3a890444a050",
+      "sourceURL": "https://www.apple.com/certificateauthority/AppleRootCA-G2.cer",
+      "subject": "CN=Apple Root CA - G2,OU=Apple Certification Authority,O=Apple Inc.,C=US",
+      "serial": "01e0e5b58367a3e0",
+      "notBefore": "2014-04-30T18:10:09Z",
+      "notAfter": "2039-04-30T18:10:09Z"
+    },
+    {
+      "filename": "AppleRootCA-G3.cer",
+      "sha256": "63343abfb89a6a03ebb57e9b3f5fa7be7c4f5c756f3017b3a8c488c3653e9179",
+      "sourceURL": "https://www.apple.com/certificateauthority/AppleRootCA-G3.cer",
+      "subject": "CN=Apple Root CA - G3,OU=Apple Certification Authority,O=Apple Inc.,C=US",
+      "serial": "2dc5fc88d2c54b95",
+      "notBefore": "2014-04-30T18:19:06Z",
+      "notAfter": "2039-04-30T18:19:06Z"
+    }
+  ]
+}
