@@ -213,11 +213,14 @@ final class XcodeProjectStructureTests: XCTestCase {
         XCTAssertTrue(viewModel.contains("tunnelCommandDecision.isEnabled"))
         XCTAssertTrue(viewModel.contains("let decision = tunnelCommandDecision"))
         XCTAssertTrue(viewModel.contains("changeTunnelState(command: decision.command)"))
+        XCTAssertTrue(viewModel.contains("func confirmStopAgent()"))
+        XCTAssertTrue(viewModel.contains("TunnelCommandDecision.confirmedStopCommand("))
         XCTAssertTrue(viewModel.contains("switch command"))
         XCTAssertFalse(viewModel.contains("if isTunnelActive"))
         XCTAssertTrue(dashboard.contains("presentation.primaryAgentAction"))
         XCTAssertFalse(dashboard.contains("model.tunnelCommandDecision"))
         XCTAssertFalse(dashboard.contains("model.canToggleTunnel"))
+        XCTAssertTrue(dashboard.contains("model.confirmStopAgent()"))
     }
 
     func testOledDashboardRendersPortablePresentationWithNativeAccessibleActions() throws {

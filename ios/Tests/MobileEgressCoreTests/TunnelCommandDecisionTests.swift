@@ -79,6 +79,31 @@ final class TunnelCommandDecisionTests: XCTestCase {
             XCTAssertEqual(decision.isDestructive, value.isDestructive, value.description)
         }
     }
+
+    func testConfirmedStopCommandBecomesNoOpWhenCurrentStateNoLongerPermitsStop() {
+        XCTAssertEqual(
+            TunnelCommandDecision.confirmedStopCommand(
+                providerState: .running,
+                connectionPhase: .connected
+            ),
+            .stop
+        )
+
+        let driftedCases: [(TunnelProviderLifecycleState, TunnelConnectionPhase)] = [
+            (.stopped, .disconnected),
+            (.failed, .invalid),
+            (.stopping, .disconnecting),
+        ]
+        for (providerState, connectionPhase) in driftedCases {
+            XCTAssertNil(
+                TunnelCommandDecision.confirmedStopCommand(
+                    providerState: providerState,
+                    connectionPhase: connectionPhase
+                ),
+                "A stale destructive confirmation must never resolve to Start"
+            )
+        }
+    }
 }
 
 private struct Case {
