@@ -107,6 +107,38 @@ class TargetIoReactorTest {
     }
 
     @Test
+    fun `release is missing after eof stream closes before mailbox emission`() {
+        val clock = MutableNanoClock()
+        val connection = FakeConnection("stream", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1, terminalCount = 1)
+        val reactor = reactor(
+            backend,
+            listener,
+            idleTimeoutMillis = 100,
+            nanoTime = clock::read,
+        )
+        reactor.start()
+        try {
+            assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream", targetAddress()))
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            connection.enqueueEof()
+            backend.ready("stream", readable = true)
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+
+            clock.advanceMillis(100)
+            backend.ready("stream")
+            waitUntil { connection.closeCalls.get() == 1 }
+
+            assertEquals(ReactorSubmitResult.MissingOrClosed, reactor.release("stream"))
+            assertEquals(listOf(TargetTerminalReason.TargetClosed), listener.terminalReasons["stream"])
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
     fun `cancellation closes once and ignores stale readiness`() {
         val connection = FakeConnection("stream", connectedImmediately = true)
         val backend = FakeSelectorBackend(connection)

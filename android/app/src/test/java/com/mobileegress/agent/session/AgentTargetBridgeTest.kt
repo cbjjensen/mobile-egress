@@ -756,6 +756,142 @@ class AgentTargetBridgeTest {
     }
 
     @Test
+    fun `reactor release before graceful emission preserves ordered target closed`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.reactor.releaseResult = ReactorSubmitResult.MissingOrClosed
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        assertTrue(fixture.listener.onData("stream", token, "prior".encodeToByteArray()))
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+
+        fixture.listener.onReleased("stream", token)
+
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertEquals(emptyList<FakeReactor.Call>(), fixture.reactor.releases)
+        assertEquals(
+            listOf(
+                WireProtocol.encode("data", "stream", "prior".encodeToByteArray()).toList(),
+                WireProtocol.encode("close", "stream", "target_closed".encodeToByteArray()).toList(),
+            ),
+            fixture.emittedFrames().map(ByteArray::toList),
+        )
+        assertEquals(listOf(FakeReactor.Call("stream", token)), fixture.reactor.releases)
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        fixture.listener.onReleased("stream", token)
+        assertEquals(listOf(1, 0), fixture.status.activeCounts)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `reactor release during target closed sender finalizes only after send`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.reactor.releaseResult = ReactorSubmitResult.MissingOrClosed
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val targetClosed = requireNotNull(fixture.mailbox.poll())
+        val sent = mutableListOf<ByteArray>()
+        var activeBeforeSenderCompleted = -1
+
+        val result = fixture.mailbox.emit(targetClosed) { bytes ->
+            fixture.listener.onReleased("stream", token)
+            activeBeforeSenderCompleted = fixture.bridge.activeStreamCount
+            sent += bytes
+            true
+        }
+
+        assertEquals(OutboundEmission.Emitted, result)
+        assertEquals(1, activeBeforeSenderCompleted)
+        assertEquals(
+            listOf(WireProtocol.encode("close", "stream", "target_closed".encodeToByteArray()).toList()),
+            sent.map(ByteArray::toList),
+        )
+        assertEquals(listOf(FakeReactor.Call("stream", token)), fixture.reactor.releases)
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        fixture.listener.onReleased("stream", token)
+        assertEquals(listOf(1, 0), fixture.status.activeCounts)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `relay close cancels a graceful terminal after early reactor release`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val targetClosed = requireNotNull(fixture.mailbox.poll())
+        fixture.listener.onReleased("stream", token)
+
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        fixture.bridge.closeFromRelay("stream")
+
+        var senderCalled = false
+        assertEquals(
+            OutboundEmission.Canceled,
+            fixture.mailbox.emit(targetClosed) {
+                senderCalled = true
+                true
+            },
+        )
+        assertFalse(senderCalled)
+        assertEquals(listOf(FakeReactor.Call("stream", token)), fixture.reactor.cancels)
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertEquals(listOf(1, 0), fixture.status.activeCounts)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `shutdown releases a graceful terminal whose reactor already released`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
+        val targetClosed = requireNotNull(fixture.mailbox.poll())
+        fixture.listener.onReleased("stream", token)
+
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        assertTrue(fixture.bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+
+        var senderCalled = false
+        assertEquals(
+            OutboundEmission.Canceled,
+            fixture.mailbox.emit(targetClosed) {
+                senderCalled = true
+                true
+            },
+        )
+        assertFalse(senderCalled)
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertTrue(fixture.reactor.shutdown.get())
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+    }
+
+    @Test
+    fun `duplicate relay closes submit one cancel and cannot saturate the session`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("stream", targetAddress())
+        val token = fixture.reactor.opened.getValue("stream")
+        fixture.reactor.cancelAction = {
+            if (fixture.reactor.cancels.size == 1) {
+                ReactorSubmitResult.Accepted
+            } else {
+                ReactorSubmitResult.SessionSaturated
+            }
+        }
+
+        repeat(513) { fixture.bridge.closeFromRelay("stream") }
+
+        assertEquals(listOf(FakeReactor.Call("stream", token)), fixture.reactor.cancels)
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+        assertEquals(1, fixture.bridge.activeStreamCount)
+        fixture.listener.onTerminal("stream", token, TargetTerminalReason.Canceled)
+        fixture.listener.onReleased("stream", token)
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertEquals(listOf(1, 0), fixture.status.activeCounts)
+    }
+
+    @Test
     fun `production bridge and nio reactor drain a crossing write after loopback eof`() {
         val mailbox = OutboundMailbox()
         val failures = Collections.synchronizedList(mutableListOf<ErrorClass>())
@@ -998,6 +1134,8 @@ class AgentTargetBridgeTest {
         val releaseCalled = CountDownLatch(1)
         @Volatile var writeAction: ((Write) -> ReactorSubmitResult)? = null
         @Volatile var cancelResult = ReactorSubmitResult.Accepted
+        @Volatile var cancelAction: ((Call) -> ReactorSubmitResult)? = null
+        @Volatile var releaseResult = ReactorSubmitResult.Accepted
         val shutdown = AtomicBoolean(false)
         val shutdownCalled = CountDownLatch(1)
         val allowStopped = CountDownLatch(1)
@@ -1029,14 +1167,15 @@ class AgentTargetBridgeTest {
         }
 
         override fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult {
-            cancels += Call(streamId, correlationToken)
-            return cancelResult
+            val call = Call(streamId, correlationToken)
+            cancels += call
+            return cancelAction?.invoke(call) ?: cancelResult
         }
 
         override fun release(streamId: String, correlationToken: Long): ReactorSubmitResult {
             releases += Call(streamId, correlationToken)
             releaseCalled.countDown()
-            return ReactorSubmitResult.Accepted
+            return releaseResult
         }
 
         override fun shutdown() {

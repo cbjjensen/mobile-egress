@@ -173,6 +173,7 @@ internal class AgentTargetBridge(
                 StreamState.Open,
                 StreamState.GracefulPending -> Unit
                 StreamState.ReleasePending,
+                StreamState.ReleaseAwaitingReactor,
                 StreamState.ForcedPending,
                 StreamState.Released -> return
                 StreamState.CancelPending -> throw ProtocolException("Data for a closed stream")
@@ -211,7 +212,13 @@ internal class AgentTargetBridge(
             }
         }
         val shouldCancel = synchronized(stream.lock) {
-            if (stream.finalized || stream.state == StreamState.Released) return
+            if (
+                stream.finalized ||
+                stream.state == StreamState.Released ||
+                stream.state == StreamState.CancelPending
+            ) {
+                return
+            }
             outbound.cancelStream(stream.id)
             stream.state = StreamState.CancelPending
             true
@@ -319,7 +326,15 @@ internal class AgentTargetBridge(
 
     override fun onReleased(streamId: String, correlationToken: Long) {
         val stream = current(streamId, correlationToken) ?: return
-        finalizeStream(stream, ErrorClass.None)
+        synchronized(stream.lock) {
+            if (
+                stream.state == StreamState.GracefulPending ||
+                stream.state == StreamState.ReleasePending
+            ) {
+                return
+            }
+            finalizeStream(stream, ErrorClass.None)
+        }
     }
 
     override fun onFatalFailure() {
@@ -360,7 +375,12 @@ internal class AgentTargetBridge(
 
     private fun onGracefulCloseEmitted(stream: TargetStream) {
         val shouldRelease = synchronized(stream.lock) {
-            !stream.finalized && stream.state == StreamState.ReleasePending
+            if (stream.finalized || stream.state != StreamState.ReleasePending) {
+                false
+            } else {
+                stream.state = StreamState.ReleaseAwaitingReactor
+                true
+            }
         }
         if (!shouldRelease) return
         when (reactor?.release(stream.id, stream.correlationToken)) {
@@ -462,6 +482,7 @@ internal class AgentTargetBridge(
         Open,
         GracefulPending,
         ReleasePending,
+        ReleaseAwaitingReactor,
         ForcedPending,
         CancelPending,
         Released,
