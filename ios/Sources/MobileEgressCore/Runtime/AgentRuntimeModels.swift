@@ -116,13 +116,26 @@ public struct TargetConnectionConfiguration: Equatable, Hashable, Sendable {
     public let requiredInterfaceType: TransportInterfaceType = .cellular
     public let prohibitedInterfaceTypes: Set<TransportInterfaceType> = [.wifi, .wiredEthernet]
     public let allowsProxyFallback = false
-    public let readChunkBytes = 32 * 1024
-    public let inboundQueueCapacity = 4
-    public let connectTimeout: TimeInterval = 30
+    public let readChunkBytes: Int
+    public let inboundQueueCapacity: Int
+    public let connectTimeout: TimeInterval
 
-    public init(ipLiteral: String, port: Int) throws {
+    public init(
+        ipLiteral: String,
+        port: Int,
+        readChunkBytes: Int = 16 * 1_024,
+        inboundQueueCapacity: Int = 2,
+        connectTimeout: TimeInterval = 30
+    ) throws {
+        guard readChunkBytes > 0,
+              inboundQueueCapacity > 0,
+              connectTimeout > 0
+        else { throw CoreValidationError.invalidPairing }
         self.ipLiteral = try PublicAddressPolicy.validate(ipLiteral: ipLiteral, port: port)
         self.port = port
+        self.readChunkBytes = readChunkBytes
+        self.inboundQueueCapacity = inboundQueueCapacity
+        self.connectTimeout = connectTimeout
     }
 }
 
@@ -172,15 +185,17 @@ struct AgentRuntimeLimits: Equatable, Sendable {
     let outboundDataPerStream: Int
     let targetInbound: Int
     let targetReadChunkBytes: Int
+    let maximumInboundDataBytes: Int
 
     static let production = AgentRuntimeLimits(
-        maximumStreams: 32,
-        tombstones: 32,
-        outboundControls: 32,
-        outboundData: 64,
-        outboundDataPerStream: 8,
-        targetInbound: 4,
-        targetReadChunkBytes: 32 * 1024
+        maximumStreams: 256,
+        tombstones: 1_024,
+        outboundControls: 512,
+        outboundData: 256,
+        outboundDataPerStream: 2,
+        targetInbound: 2,
+        targetReadChunkBytes: 16 * 1_024,
+        maximumInboundDataBytes: 32 * 1_024
     )
 }
 

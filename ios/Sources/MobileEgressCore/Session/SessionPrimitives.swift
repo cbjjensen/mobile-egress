@@ -1,5 +1,64 @@
 import Foundation
 
+final class BoundedDeque<Element>: @unchecked Sendable {
+    private var storage: [Element?]
+    private var head = 0
+    private(set) var count = 0
+
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        storage = Array(repeating: nil, count: capacity)
+    }
+
+    var isEmpty: Bool { count == 0 }
+    var isFull: Bool { count == storage.count }
+    var backingCapacity: Int { storage.count }
+    var occupiedSlotCount: Int { storage.reduce(into: 0) { $0 += $1 == nil ? 0 : 1 } }
+
+    @discardableResult
+    func append(_ element: Element) -> Bool {
+        guard !isFull else { return false }
+        storage[(head + count) % storage.count] = element
+        count += 1
+        return true
+    }
+
+    func popFirst() -> Element? {
+        guard count > 0 else { return nil }
+        let index = head
+        let element = storage[index]
+        storage[index] = nil
+        head = (head + 1) % storage.count
+        count -= 1
+        return element
+    }
+
+    func removeAll(where shouldRemove: (Element) -> Bool) {
+        let originalCount = count
+        for _ in 0 ..< originalCount {
+            guard let element = popFirst() else { preconditionFailure("Bounded deque count is inconsistent") }
+            if !shouldRemove(element) {
+                precondition(append(element))
+            }
+        }
+    }
+
+    func removeAll() {
+        while popFirst() != nil {}
+    }
+
+    func copy() -> BoundedDeque<Element> {
+        let duplicate = BoundedDeque<Element>(capacity: storage.count)
+        for offset in 0 ..< count {
+            guard let element = storage[(head + offset) % storage.count] else {
+                preconditionFailure("Bounded deque storage is inconsistent")
+            }
+            precondition(duplicate.append(element))
+        }
+        return duplicate
+    }
+}
+
 public final class StreamAdmission: @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
@@ -72,6 +131,26 @@ public enum OutboundEmission: Equatable, Sendable {
     case failed
 }
 
+struct OutboundMailboxRetentionSnapshot: Equatable, Sendable {
+    let blockedDataStreams: Int
+    let canceledDataStreams: Int
+    let canceledStreams: Int
+}
+
+struct OutboundMailboxBookkeepingSnapshot: Equatable, Sendable {
+    let streamCancellationRecords: Int
+    let dataCancellationRecords: Int
+    let outstandingStreamFrames: Int
+    let outstandingDataFrames: Int
+
+    static let empty = OutboundMailboxBookkeepingSnapshot(
+        streamCancellationRecords: 0,
+        dataCancellationRecords: 0,
+        outstandingStreamFrames: 0,
+        outstandingDataFrames: 0
+    )
+}
+
 public final class OutboundMailbox: @unchecked Sendable {
     private struct ControlFrame {
         let frame: OutboundFrame
@@ -82,25 +161,57 @@ public final class OutboundMailbox: @unchecked Sendable {
     private let controlCapacity: Int
     private let dataCapacity: Int
     private let perStreamDataCapacity: Int
-    private var controls: [ControlFrame] = []
-    private var dataByStream: [String: [OutboundFrame]] = [:]
-    private var readyStreams: [String] = []
-    private var blockedDataStreams = BoundedOrderedSet(limit: 128)
-    private var canceledDataStreams = BoundedOrderedSet(limit: 128)
-    private var canceledStreams = BoundedOrderedSet(limit: 128)
+    private let controls: BoundedDeque<ControlFrame>
+    private var dataByStream: [String: BoundedDeque<OutboundFrame>] = [:]
+    private let readyStreams: BoundedDeque<String>
+    private let blockedDataStreams: BoundedOrderedSet
+    private let canceledDataStreams: BoundedOrderedSet
+    private let canceledStreams: BoundedOrderedSet
     private var streamCancellations: [String: OutboundCancellation] = [:]
     private var dataCancellations: [String: OutboundCancellation] = [:]
     private var dataCount = 0
     private var nextFrameID: UInt64 = 1
     private var closed = false
 
-    public init(controlCapacity: Int, dataCapacity: Int, perStreamDataCapacity: Int) {
+    public init(
+        controlCapacity: Int,
+        dataCapacity: Int,
+        perStreamDataCapacity: Int,
+        cancellationHistoryCapacity: Int = 1_024
+    ) {
         precondition(controlCapacity > 0)
         precondition(dataCapacity > 0)
         precondition((1 ... dataCapacity).contains(perStreamDataCapacity))
+        precondition(cancellationHistoryCapacity > 0)
         self.controlCapacity = controlCapacity
         self.dataCapacity = dataCapacity
         self.perStreamDataCapacity = perStreamDataCapacity
+        controls = BoundedDeque(capacity: controlCapacity)
+        readyStreams = BoundedDeque(capacity: dataCapacity)
+        blockedDataStreams = BoundedOrderedSet(limit: cancellationHistoryCapacity)
+        canceledDataStreams = BoundedOrderedSet(limit: cancellationHistoryCapacity)
+        canceledStreams = BoundedOrderedSet(limit: cancellationHistoryCapacity)
+    }
+
+    var retentionSnapshot: OutboundMailboxRetentionSnapshot {
+        lock.withLock {
+            OutboundMailboxRetentionSnapshot(
+                blockedDataStreams: blockedDataStreams.count,
+                canceledDataStreams: canceledDataStreams.count,
+                canceledStreams: canceledStreams.count
+            )
+        }
+    }
+
+    var bookkeepingSnapshot: OutboundMailboxBookkeepingSnapshot {
+        lock.withLock {
+            OutboundMailboxBookkeepingSnapshot(
+                streamCancellationRecords: streamCancellations.count,
+                dataCancellationRecords: dataCancellations.count,
+                outstandingStreamFrames: streamCancellations.values.reduce(0) { $0 + $1.outstanding },
+                outstandingDataFrames: dataCancellations.values.reduce(0) { $0 + $1.outstanding }
+            )
+        }
     }
 
     public func allowData(_ streamID: String) {
@@ -116,11 +227,27 @@ public final class OutboundMailbox: @unchecked Sendable {
     public func offerData(_ frame: Data, streamID: String) -> Bool {
         lock.withLock {
             guard !closed, !blockedDataStreams.contains(streamID), dataCount < dataCapacity else { return false }
-            var frames = dataByStream[streamID, default: []]
+            let frames: BoundedDeque<OutboundFrame>
+            let insertedStream: Bool
+            if let existing = dataByStream[streamID] {
+                frames = existing
+                insertedStream = false
+            } else {
+                frames = BoundedDeque(capacity: perStreamDataCapacity)
+                guard readyStreams.append(streamID) else { return false }
+                dataByStream[streamID] = frames
+                insertedStream = true
+            }
             guard frames.count < perStreamDataCapacity else { return false }
-            if frames.isEmpty { readyStreams.append(streamID) }
-            frames.append(makeFrame(bytes: frame, streamID: streamID, isData: true))
-            dataByStream[streamID] = frames
+            let outboundFrame = makeFrame(bytes: frame, streamID: streamID, isData: true)
+            guard frames.append(outboundFrame) else {
+                release(outboundFrame)
+                if insertedStream {
+                    dataByStream.removeValue(forKey: streamID)
+                    readyStreams.removeAll { $0 == streamID }
+                }
+                return false
+            }
             dataCount += 1
             return true
         }
@@ -133,11 +260,10 @@ public final class OutboundMailbox: @unchecked Sendable {
     ) -> Bool {
         let accepted = lock.withLock {
             guard !closed, controls.count < controlCapacity else { return false }
-            controls.append(ControlFrame(
+            return controls.append(ControlFrame(
                 frame: makeFrame(bytes: frame, streamID: streamID, isData: false),
                 afterDataStreamID: nil
             ))
-            return true
         }
         if !accepted { onSaturated() }
         return accepted
@@ -151,11 +277,10 @@ public final class OutboundMailbox: @unchecked Sendable {
         let accepted = lock.withLock {
             guard !closed, controls.count < controlCapacity else { return false }
             blockDataStream(streamID)
-            controls.append(ControlFrame(
+            return controls.append(ControlFrame(
                 frame: makeFrame(bytes: frame, streamID: streamID, isData: false),
                 afterDataStreamID: streamID
             ))
-            return true
         }
         if !accepted { onSaturated() }
         return accepted
@@ -215,9 +340,16 @@ public final class OutboundMailbox: @unchecked Sendable {
         lock.withLock {
             guard !closed else { return }
             closed = true
-            controls.removeAll(keepingCapacity: false)
+            while let control = controls.popFirst() {
+                release(control.frame)
+            }
+            for frames in dataByStream.values {
+                while let frame = frames.popFirst() {
+                    release(frame)
+                }
+            }
             dataByStream.removeAll(keepingCapacity: false)
-            readyStreams.removeAll(keepingCapacity: false)
+            readyStreams.removeAll()
             blockedDataStreams.removeAll()
             canceledDataStreams.removeAll()
             canceledStreams.removeAll()
@@ -230,27 +362,27 @@ public final class OutboundMailbox: @unchecked Sendable {
     }
 
     private func pollEligibleControl() -> OutboundFrame? {
-        for _ in controls.indices {
-            let control = controls.removeFirst()
+        let candidateCount = controls.count
+        for _ in 0 ..< candidateCount {
+            guard let control = controls.popFirst() else { return nil }
             if control.afterDataStreamID == nil || dataByStream[control.afterDataStreamID!] == nil {
                 return control.frame
             }
-            controls.append(control)
+            precondition(controls.append(control))
         }
         return nil
     }
 
     private func pollData() -> OutboundFrame? {
-        guard !readyStreams.isEmpty else { return nil }
-        let streamID = readyStreams.removeFirst()
-        guard var frames = dataByStream[streamID], !frames.isEmpty else { return nil }
-        let frame = frames.removeFirst()
+        guard let streamID = readyStreams.popFirst(),
+              let frames = dataByStream[streamID],
+              let frame = frames.popFirst()
+        else { return nil }
         dataCount -= 1
         if frames.isEmpty {
             dataByStream.removeValue(forKey: streamID)
         } else {
-            dataByStream[streamID] = frames
-            readyStreams.append(streamID)
+            precondition(readyStreams.append(streamID))
         }
         return frame
     }
@@ -258,7 +390,9 @@ public final class OutboundMailbox: @unchecked Sendable {
     private func discardData(_ streamID: String) {
         if let discarded = dataByStream.removeValue(forKey: streamID) {
             dataCount -= discarded.count
-            discarded.forEach(release)
+            while let frame = discarded.popFirst() {
+                release(frame)
+            }
         }
         readyStreams.removeAll { $0 == streamID }
     }
@@ -319,31 +453,40 @@ public final class OutboundMailbox: @unchecked Sendable {
     }
 }
 
-private struct BoundedOrderedSet {
+private final class BoundedOrderedSet {
     let limit: Int
     private var values: Set<String> = []
-    private var order: [String] = []
+    private let order: BoundedDeque<String>
 
     init(limit: Int) {
+        precondition(limit > 0)
         self.limit = limit
+        order = BoundedDeque(capacity: limit)
     }
 
-    mutating func insert(_ value: String) {
-        guard values.insert(value).inserted else { return }
-        order.append(value)
-        if order.count > limit {
-            values.remove(order.removeFirst())
+    var count: Int { values.count }
+
+    func insert(_ value: String) {
+        if values.contains(value) {
+            order.removeAll { $0 == value }
+            precondition(order.append(value))
+            return
         }
+        if order.isFull, let evicted = order.popFirst() {
+            values.remove(evicted)
+        }
+        values.insert(value)
+        precondition(order.append(value))
     }
 
-    mutating func remove(_ value: String) {
+    func remove(_ value: String) {
         guard values.remove(value) != nil else { return }
         order.removeAll { $0 == value }
     }
 
-    mutating func removeAll() {
+    func removeAll() {
         values.removeAll(keepingCapacity: false)
-        order.removeAll(keepingCapacity: false)
+        order.removeAll()
     }
 
     func contains(_ value: String) -> Bool {
@@ -351,33 +494,60 @@ private struct BoundedOrderedSet {
     }
 }
 
-public struct TombstoneWindow: Sendable {
-    private let limit: Int
-    private var ordered: [String] = []
-    private var values: Set<String> = []
+private final class TombstoneStorage: @unchecked Sendable {
+    let limit: Int
+    let ordered: BoundedDeque<String>
+    var values: Set<String>
+
+    init(limit: Int, ordered: BoundedDeque<String>? = nil, values: Set<String> = []) {
+        self.limit = limit
+        self.ordered = ordered ?? BoundedDeque(capacity: limit)
+        self.values = values
+    }
+
+    func copy() -> TombstoneStorage {
+        TombstoneStorage(limit: limit, ordered: ordered.copy(), values: values)
+    }
+}
+
+public struct TombstoneWindow: @unchecked Sendable {
+    private var storage: TombstoneStorage
 
     public init(limit: Int) {
         precondition(limit > 0)
-        self.limit = limit
+        storage = TombstoneStorage(limit: limit)
     }
 
-    public var count: Int { values.count }
+    public var count: Int { storage.values.count }
 
     public mutating func insert(_ streamID: String) {
-        guard values.insert(streamID).inserted else { return }
-        ordered.append(streamID)
-        if ordered.count > limit {
-            values.remove(ordered.removeFirst())
+        ensureUniqueStorage()
+        if storage.values.contains(streamID) {
+            storage.ordered.removeAll { $0 == streamID }
+            precondition(storage.ordered.append(streamID))
+            return
         }
+        if storage.ordered.isFull, let evicted = storage.ordered.popFirst() {
+            storage.values.remove(evicted)
+        }
+        storage.values.insert(streamID)
+        precondition(storage.ordered.append(streamID))
     }
 
     public func contains(_ streamID: String) -> Bool {
-        values.contains(streamID)
+        storage.values.contains(streamID)
     }
 
     public mutating func removeAll() {
-        ordered.removeAll(keepingCapacity: false)
-        values.removeAll(keepingCapacity: false)
+        ensureUniqueStorage()
+        storage.ordered.removeAll()
+        storage.values.removeAll(keepingCapacity: false)
+    }
+
+    private mutating func ensureUniqueStorage() {
+        if !isKnownUniquelyReferenced(&storage) {
+            storage = storage.copy()
+        }
     }
 }
 

@@ -1,5 +1,10 @@
 import Foundation
 
+struct AgentSessionCapacitySnapshot: Equatable, Sendable {
+    let tombstones: Int
+    let targetOutstandingFrames: [String: Int]
+}
+
 struct AgentSessionStateMachine {
     private enum StreamPhase {
         case creating
@@ -17,12 +22,23 @@ struct AgentSessionStateMachine {
         let token: UInt64
         var phase: StreamPhase
         var hasTarget: Bool
-        var inboundQueue: [Data] = []
+        let inboundQueue: BoundedDeque<Data>
         var writeInFlight: TargetWrite?
         var writeFailed = false
 
+        init(token: UInt64, phase: StreamPhase, hasTarget: Bool, inboundCapacity: Int) {
+            self.token = token
+            self.phase = phase
+            self.hasTarget = hasTarget
+            inboundQueue = BoundedDeque(capacity: inboundCapacity)
+        }
+
         var canWrite: Bool {
             !writeFailed && (phase == .open || phase == .gracefulPending)
+        }
+
+        var targetOutstandingFrameCount: Int {
+            inboundQueue.count + (writeInFlight == nil ? 0 : 1)
         }
     }
 
@@ -52,7 +68,8 @@ struct AgentSessionStateMachine {
         outbound = OutboundMailbox(
             controlCapacity: limits.outboundControls,
             dataCapacity: limits.outboundData,
-            perStreamDataCapacity: limits.outboundDataPerStream
+            perStreamDataCapacity: limits.outboundDataPerStream,
+            cancellationHistoryCapacity: limits.tombstones
         )
         tombstones = TombstoneWindow(limit: limits.tombstones)
     }
@@ -64,6 +81,13 @@ struct AgentSessionStateMachine {
             bytesUploaded: bytesUploaded,
             bytesDownloaded: bytesDownloaded,
             errorClass: errorClass
+        )
+    }
+
+    var capacitySnapshot: AgentSessionCapacitySnapshot {
+        AgentSessionCapacitySnapshot(
+            tombstones: tombstones.count,
+            targetOutstandingFrames: streams.mapValues(\.targetOutstandingFrameCount)
         )
     }
 
@@ -175,7 +199,7 @@ struct AgentSessionStateMachine {
         if !succeeded {
             stream.writeInFlight = nil
             if stream.phase == .gracefulPending {
-                stream.inboundQueue.removeAll(keepingCapacity: false)
+                stream.inboundQueue.removeAll()
                 stream.writeFailed = true
                 let shouldCancelTarget = stream.hasTarget
                 stream.hasTarget = false
@@ -274,7 +298,12 @@ struct AgentSessionStateMachine {
         }
         let configuration: TargetConnectionConfiguration
         do {
-            configuration = try TargetConnectionConfiguration(ipLiteral: target.ip, port: target.port)
+            configuration = try TargetConnectionConfiguration(
+                ipLiteral: target.ip,
+                port: target.port,
+                readChunkBytes: limits.targetReadChunkBytes,
+                inboundQueueCapacity: limits.targetInbound
+            )
         } catch {
             admission.release(envelope.streamID)
             errorClass = .targetPolicy
@@ -283,20 +312,28 @@ struct AgentSessionStateMachine {
         let token = nextStreamToken
         nextStreamToken &+= 1
         outbound.allowData(envelope.streamID)
-        streams[envelope.streamID] = Stream(token: token, phase: .creating, hasTarget: false)
+        streams[envelope.streamID] = Stream(
+            token: token,
+            phase: .creating,
+            hasTarget: false,
+            inboundCapacity: limits.targetInbound
+        )
         return [.createTarget(streamID: envelope.streamID, token: token, configuration: configuration)]
     }
 
     private mutating func routeData(_ envelope: WireEnvelope) -> [AgentRuntimeEffect] {
         guard let stream = streams[envelope.streamID] else { return protocolFailure() }
         guard let payload = try? envelope.decodedPayload() else { return protocolFailure() }
+        guard payload.count <= limits.maximumInboundDataBytes else { return protocolFailure() }
         if stream.phase == .gracefulPending, stream.writeFailed {
             return []
         }
         if stream.canWrite, stream.writeInFlight == nil {
             return beginTargetWrite(streamID: envelope.streamID, token: stream.token, data: payload)
         }
-        guard stream.inboundQueue.count < limits.targetInbound else {
+        guard stream.targetOutstandingFrameCount < limits.targetInbound,
+              stream.inboundQueue.append(payload)
+        else {
             return failStream(
                 streamID: envelope.streamID,
                 token: stream.token,
@@ -304,9 +341,6 @@ struct AgentSessionStateMachine {
                 error: .backpressure
             )
         }
-        var updated = stream
-        updated.inboundQueue.append(payload)
-        streams[envelope.streamID] = updated
         return []
     }
 
@@ -341,11 +375,10 @@ struct AgentSessionStateMachine {
     }
 
     private mutating func startNextTargetWrite(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
-        guard var stream = streams[streamID], stream.token == token,
-              stream.canWrite, stream.writeInFlight == nil, !stream.inboundQueue.isEmpty
+        guard let stream = streams[streamID], stream.token == token,
+              stream.canWrite, stream.writeInFlight == nil,
+              let data = stream.inboundQueue.popFirst()
         else { return [] }
-        let data = stream.inboundQueue.removeFirst()
-        streams[streamID] = stream
         return beginTargetWrite(streamID: streamID, token: token, data: data)
     }
 

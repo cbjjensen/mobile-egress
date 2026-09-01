@@ -94,8 +94,10 @@ public actor AgentSessionRuntime {
 
     private func process(_ initialEffects: [AgentRuntimeEffect]) {
         var effects = initialEffects
-        while !effects.isEmpty {
-            let effect = effects.removeFirst()
+        var nextEffectIndex = 0
+        while nextEffectIndex < effects.count {
+            let effect = effects[nextEffectIndex]
+            nextEffectIndex += 1
             switch effect {
             case .startRelay:
                 relay.start { [weak self] event in
