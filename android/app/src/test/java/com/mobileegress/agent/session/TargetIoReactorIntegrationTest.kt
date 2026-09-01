@@ -146,23 +146,29 @@ class TargetIoReactorIntegrationTest {
         val received = ConcurrentHashMap<String, ByteArray>()
         val terminalReasons = ConcurrentHashMap<String, MutableList<TargetTerminalReason>>()
 
-        override fun onOpened(streamId: String) {
+        override fun onOpened(streamId: String, correlationToken: Long) {
             firstOpen.countDown()
             opens.countDown()
         }
 
-        override fun onData(streamId: String, payload: ByteArray): Boolean {
+        override fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean {
             received.merge(streamId, payload) { left, right -> left + right }
             data.countDown()
             return true
         }
 
-        override fun onBytesWritten(streamId: String, byteCount: Int) = Unit
+        override fun onBytesWritten(streamId: String, correlationToken: Long, byteCount: Int) = Unit
 
-        override fun onTerminal(streamId: String, reason: TargetTerminalReason) {
+        override fun onTerminal(
+            streamId: String,
+            correlationToken: Long,
+            reason: TargetTerminalReason,
+        ) {
             terminalReasons.computeIfAbsent(streamId) { Collections.synchronizedList(mutableListOf()) }.add(reason)
             terminals.countDown()
         }
+
+        override fun onReleased(streamId: String, correlationToken: Long) = Unit
 
         override fun onFatalFailure() = Unit
     }

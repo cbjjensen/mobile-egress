@@ -14,7 +14,7 @@ internal class StreamTombstones(
     }
 
     fun remember(streamId: String) = synchronized(lock) {
-        if (!values.add(streamId)) return@synchronized
+        if (!values.add(streamId)) ordered.remove(streamId)
         ordered.addLast(streamId)
         if (ordered.size > capacity) values.remove(ordered.removeFirst())
     }

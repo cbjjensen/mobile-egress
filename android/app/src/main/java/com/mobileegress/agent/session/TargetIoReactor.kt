@@ -35,11 +35,23 @@ internal enum class TargetTerminalReason {
 }
 
 internal interface TargetReactorListener {
-    fun onOpened(streamId: String)
-    fun onData(streamId: String, payload: ByteArray): Boolean
-    fun onBytesWritten(streamId: String, byteCount: Int)
-    fun onTerminal(streamId: String, reason: TargetTerminalReason)
+    fun onOpened(streamId: String, correlationToken: Long)
+    fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean
+    fun onBytesWritten(streamId: String, correlationToken: Long, byteCount: Int)
+    fun onTerminal(streamId: String, correlationToken: Long, reason: TargetTerminalReason)
+    fun onReleased(streamId: String, correlationToken: Long)
     fun onFatalFailure()
+}
+
+internal interface TargetReactorPort {
+    fun start(): Boolean
+    fun open(streamId: String, correlationToken: Long, address: InetSocketAddress): ReactorSubmitResult
+    fun write(streamId: String, correlationToken: Long, payload: ByteArray): ReactorSubmitResult
+    fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult
+    fun release(streamId: String, correlationToken: Long): ReactorSubmitResult
+    fun shutdown()
+    fun awaitStopped(timeout: Long, unit: TimeUnit): Boolean
+    fun isReactorThread(): Boolean
 }
 
 internal class TargetIoReactor(
@@ -51,15 +63,18 @@ internal class TargetIoReactor(
     private val readChunkBytes: Int = READ_CHUNK_BYTES,
     connectTimeoutMillis: Long = CONNECT_TIMEOUT_MILLIS,
     idleTimeoutMillis: Long = IDLE_TIMEOUT_MILLIS,
-    private val backend: TargetSelectorBackend = NioTargetSelectorBackend(),
+    backend: TargetSelectorBackend? = null,
+    private val backendFactory: () -> TargetSelectorBackend = { NioTargetSelectorBackend() },
     private val nanoTime: () -> Long = System::nanoTime,
-) {
+) : TargetReactorPort {
     private val lock = Any()
+    private val lifecycleLock = Any()
     private val commands = ArrayDeque<ReactorCommand>()
-    private val reservations = HashMap<String, Long>()
+    private val reservations = HashMap<String, Reservation>()
     private val outstandingWrites = HashMap<String, WriteCount>()
     private val saturatedStreams = HashMap<String, Long>()
     private val terminalSignals = HashMap<String, Long>()
+    private val releaseRequests = HashMap<String, Long>()
     private val active = HashMap<String, ReactorStream>()
     private val started = AtomicBoolean(false)
     private val shutdownRequested = AtomicBoolean(false)
@@ -67,6 +82,9 @@ internal class TargetIoReactor(
     private val connectTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(connectTimeoutMillis)
     private val idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(idleTimeoutMillis)
     private var nextGeneration = 1L
+    private var nextImplicitCorrelation = 1L
+    private val suppliedBackend = backend
+    @Volatile private var activeBackend: TargetSelectorBackend? = null
     @Volatile private var reactorThread: Thread? = null
 
     init {
@@ -78,16 +96,46 @@ internal class TargetIoReactor(
         require(idleTimeoutMillis > 0)
     }
 
-    fun start() {
-        if (!started.compareAndSet(false, true)) return
-        Thread(::runLoop, REACTOR_THREAD_NAME).also { thread ->
-            thread.isDaemon = true
-            reactorThread = thread
+    override fun start(): Boolean = synchronized(lifecycleLock) {
+        if (shutdownRequested.get()) return@synchronized false
+        if (started.get()) return@synchronized activeBackend != null
+        val selectedBackend = try {
+            suppliedBackend ?: backendFactory()
+        } catch (_: Exception) {
+            shutdownRequested.set(true)
+            stopped.countDown()
+            return@synchronized false
+        }
+        val thread = Thread(::runLoop, REACTOR_THREAD_NAME).also { it.isDaemon = true }
+        activeBackend = selectedBackend
+        reactorThread = thread
+        started.set(true)
+        try {
             thread.start()
+            true
+        } catch (_: Exception) {
+            shutdownRequested.set(true)
+            activeBackend = null
+            try {
+                selectedBackend.close()
+            } catch (_: Exception) {
+                // A failed thread start still owns and closes its backend.
+            }
+            stopped.countDown()
+            false
         }
     }
 
     fun open(streamId: String, address: InetSocketAddress): ReactorSubmitResult {
+        val correlationToken = synchronized(lock) { nextImplicitCorrelation++ }
+        return open(streamId, correlationToken, address)
+    }
+
+    override fun open(
+        streamId: String,
+        correlationToken: Long,
+        address: InetSocketAddress,
+    ): ReactorSubmitResult {
         val result = synchronized(lock) {
             if (shutdownRequested.get() || streamId in reservations) {
                 return@synchronized ReactorSubmitResult.MissingOrClosed
@@ -95,27 +143,44 @@ internal class TargetIoReactor(
             if (reservations.size >= maxStreams) return@synchronized ReactorSubmitResult.StreamLimit
             if (commands.size >= commandCapacity) return@synchronized ReactorSubmitResult.SessionSaturated
             val generation = nextGeneration++
-            reservations[streamId] = generation
+            reservations[streamId] = Reservation(generation, correlationToken)
             commands.addLast(
                 ReactorCommand.Open(
                     streamId = streamId,
                     generation = generation,
+                    correlationToken = correlationToken,
                     address = address,
                     connectDeadlineNanos = deadlineAfter(nanoTime(), connectTimeoutNanos),
                 ),
             )
             ReactorSubmitResult.Accepted
         }
-        if (result == ReactorSubmitResult.Accepted) backend.wakeup()
+        if (result == ReactorSubmitResult.Accepted) wakeup()
         return result
     }
 
     fun write(streamId: String, payload: ByteArray): ReactorSubmitResult {
+        val correlationToken = synchronized(lock) {
+            reservations[streamId]?.correlationToken
+                ?: return ReactorSubmitResult.MissingOrClosed
+        }
+        return write(streamId, correlationToken, payload)
+    }
+
+    override fun write(
+        streamId: String,
+        correlationToken: Long,
+        payload: ByteArray,
+    ): ReactorSubmitResult {
         val result = synchronized(lock) {
-            val generation = reservations[streamId]
+            val reservation = reservations[streamId]
                 ?: return@synchronized ReactorSubmitResult.MissingOrClosed
+            if (reservation.correlationToken != correlationToken) {
+                return@synchronized ReactorSubmitResult.MissingOrClosed
+            }
+            val generation = reservation.generation
             if (shutdownRequested.get()) return@synchronized ReactorSubmitResult.MissingOrClosed
-            if (terminalSignals[streamId] == generation) {
+            if (releaseRequests[streamId] == generation) {
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
             if (saturatedStreams[streamId] == generation) {
@@ -139,52 +204,87 @@ internal class TargetIoReactor(
             ReactorSubmitResult.Accepted
         }
         if (result == ReactorSubmitResult.Accepted || result == ReactorSubmitResult.StreamSaturated) {
-            backend.wakeup()
+            wakeup()
         }
         return result
     }
 
     fun cancel(streamId: String): ReactorSubmitResult {
+        val correlationToken = synchronized(lock) {
+            reservations[streamId]?.correlationToken
+                ?: return ReactorSubmitResult.MissingOrClosed
+        }
+        return cancel(streamId, correlationToken)
+    }
+
+    override fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult {
         val result = synchronized(lock) {
-            val generation = reservations[streamId]
+            val reservation = reservations[streamId]
                 ?: return@synchronized ReactorSubmitResult.MissingOrClosed
+            if (reservation.correlationToken != correlationToken) {
+                return@synchronized ReactorSubmitResult.MissingOrClosed
+            }
+            val generation = reservation.generation
             if (shutdownRequested.get()) return@synchronized ReactorSubmitResult.MissingOrClosed
             if (commands.size >= commandCapacity) return@synchronized ReactorSubmitResult.SessionSaturated
             commands.addLast(ReactorCommand.Cancel(streamId, generation))
             ReactorSubmitResult.Accepted
         }
-        if (result == ReactorSubmitResult.Accepted) backend.wakeup()
+        if (result == ReactorSubmitResult.Accepted) wakeup()
         return result
     }
 
     fun release(streamId: String): ReactorSubmitResult {
+        val correlationToken = synchronized(lock) {
+            reservations[streamId]?.correlationToken
+                ?: return ReactorSubmitResult.MissingOrClosed
+        }
+        return release(streamId, correlationToken)
+    }
+
+    override fun release(streamId: String, correlationToken: Long): ReactorSubmitResult {
         val result = synchronized(lock) {
-            val generation = reservations[streamId]
+            val reservation = reservations[streamId]
                 ?: return@synchronized ReactorSubmitResult.MissingOrClosed
+            if (reservation.correlationToken != correlationToken) {
+                return@synchronized ReactorSubmitResult.MissingOrClosed
+            }
+            val generation = reservation.generation
             if (shutdownRequested.get() || terminalSignals[streamId] != generation) {
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
+            if (releaseRequests[streamId] == generation) return@synchronized ReactorSubmitResult.Accepted
             if (commands.size >= commandCapacity) return@synchronized ReactorSubmitResult.SessionSaturated
+            releaseRequests[streamId] = generation
             commands.addLast(ReactorCommand.Release(streamId, generation))
             ReactorSubmitResult.Accepted
         }
-        if (result == ReactorSubmitResult.Accepted) backend.wakeup()
+        if (result == ReactorSubmitResult.Accepted) wakeup()
         return result
     }
 
-    fun shutdown() {
-        if (!shutdownRequested.compareAndSet(false, true)) return
-        backend.wakeup()
-        start()
+    override fun shutdown() {
+        val closeInline = synchronized(lifecycleLock) {
+            if (!shutdownRequested.compareAndSet(false, true)) return
+            !started.get()
+        }
+        if (closeInline) {
+            closeWithoutStarting()
+            return
+        }
+        wakeup()
     }
 
-    fun awaitStopped(timeout: Long, unit: TimeUnit): Boolean {
+    override fun awaitStopped(timeout: Long, unit: TimeUnit): Boolean {
         if (Thread.currentThread() === reactorThread) return false
         return stopped.await(timeout, unit)
     }
 
+    override fun isReactorThread(): Boolean = Thread.currentThread() === reactorThread
+
     private fun runLoop() {
         var fatalFailure = false
+        val backend = requireNotNull(activeBackend)
         try {
             while (!shutdownRequested.get()) {
                 drainCommands()
@@ -192,6 +292,8 @@ internal class TargetIoReactor(
                 expireDeadlines()
                 if (shutdownRequested.get()) break
                 val ready = backend.select(nextSelectTimeoutMillis())
+                expireDeadlines()
+                if (shutdownRequested.get()) break
                 ready.forEach(::handleReady)
             }
         } catch (_: Exception) {
@@ -215,6 +317,25 @@ internal class TargetIoReactor(
         }
     }
 
+    private fun closeWithoutStarting() {
+        try {
+            closeEverything(TargetTerminalReason.Shutdown)
+            suppliedBackend?.close()
+        } catch (_: Exception) {
+            // A never-started reactor still has a bounded best-effort teardown path.
+        } finally {
+            stopped.countDown()
+        }
+    }
+
+    private fun wakeup() {
+        try {
+            activeBackend?.wakeup()
+        } catch (_: Exception) {
+            shutdownRequested.set(true)
+        }
+    }
+
     private fun drainCommands() {
         for (ignored in 0 until commandCapacity) {
             val command = synchronized(lock) { commands.pollFirst() } ?: break
@@ -235,16 +356,22 @@ internal class TargetIoReactor(
         }
         var openedStream: ReactorStream? = null
         try {
-            val connection = backend.open(
+            val connection = requireNotNull(activeBackend).open(
                 command.streamId,
                 command.generation,
                 command.address,
                 binder,
             )
             val now = nanoTime()
+            if (now >= command.connectDeadlineNanos) {
+                connection.close()
+                terminatePending(command.streamId, command.generation, TargetTerminalReason.TargetFailure)
+                return
+            }
             val stream = ReactorStream(
                 id = command.streamId,
                 generation = command.generation,
+                correlationToken = command.correlationToken,
                 connection = connection,
                 connected = connection.connectedImmediately,
                 connectDeadlineNanos = command.connectDeadlineNanos,
@@ -257,8 +384,8 @@ internal class TargetIoReactor(
             )
             active[command.streamId] = stream
             openedStream = stream
-            if (stream.connected) listener.onOpened(stream.id)
             updateInterests(stream)
+            if (stream.connected) listener.onOpened(stream.id, stream.correlationToken)
         } catch (error: Exception) {
             val reason = if (error is TargetOpenException && !error.connectInitiated) {
                 TargetTerminalReason.OpenSetupFailure
@@ -294,7 +421,10 @@ internal class TargetIoReactor(
             }
         } else if (reservationMatches(command.streamId, command.generation)) {
             if (terminalWasSignaled(command.streamId, command.generation)) {
-                releaseReservation(command.streamId, command.generation)
+                val reservation = releaseReservation(command.streamId, command.generation)
+                if (reservation != null) {
+                    listener.onReleased(command.streamId, reservation.correlationToken)
+                }
             } else {
                 terminatePending(command.streamId, command.generation, TargetTerminalReason.Canceled)
             }
@@ -308,7 +438,12 @@ internal class TargetIoReactor(
             stream.generation == command.generation &&
             terminalWasSignaled(stream.id, stream.generation)
         ) {
-            closeWithoutTerminal(stream)
+            stream.releaseAfterWrites = true
+            if (stream.writes.isEmpty()) {
+                closeWithoutTerminal(stream)
+            } else {
+                updateInterests(stream)
+            }
         }
     }
 
@@ -329,12 +464,18 @@ internal class TargetIoReactor(
         if (stream.generation != ready.connection.generation || stream.connection !== ready.connection) return
         try {
             if (!stream.connected && ready.connectable && stream.connection.finishConnect()) {
+                if (nanoTime() >= stream.connectDeadlineNanos) {
+                    terminateStream(stream, TargetTerminalReason.TargetFailure)
+                    return
+                }
                 stream.connected = true
                 stream.idleDeadlineNanos = deadlineAfter(nanoTime(), idleTimeoutNanos)
-                listener.onOpened(stream.id)
+                listener.onOpened(stream.id, stream.correlationToken)
+                if (shutdownRequested.get()) return
             }
             if (stream.connected && ready.readable && active[stream.id] === stream) {
                 readOnce(stream)
+                if (shutdownRequested.get()) return
             }
             if (stream.connected && ready.writable && active[stream.id] === stream) {
                 writeOnce(stream)
@@ -357,7 +498,7 @@ internal class TargetIoReactor(
                 buffer.flip()
                 val payload = ByteArray(read)
                 buffer.get(payload)
-                if (!listener.onData(stream.id, payload)) {
+                if (!listener.onData(stream.id, stream.correlationToken, payload)) {
                     terminateStream(stream, TargetTerminalReason.Backpressure)
                 }
             }
@@ -370,11 +511,14 @@ internal class TargetIoReactor(
         if (written < 0) throw IllegalStateException("Negative target write")
         if (written > 0) {
             stream.idleDeadlineNanos = deadlineAfter(nanoTime(), idleTimeoutNanos)
-            listener.onBytesWritten(stream.id, written)
+            listener.onBytesWritten(stream.id, stream.correlationToken, written)
         }
         if (!chunk.hasRemaining()) {
             stream.writes.removeFirst()
             completeWrite(stream.id, stream.generation)
+            if (stream.releaseAfterWrites && stream.writes.isEmpty()) {
+                closeWithoutTerminal(stream)
+            }
         }
     }
 
@@ -422,14 +566,16 @@ internal class TargetIoReactor(
             // The terminal result is already fixed; close is best effort.
         }
         releaseReservation(stream.id, stream.generation)
-        listener.onTerminal(stream.id, reason)
+        listener.onTerminal(stream.id, stream.correlationToken, reason)
+        listener.onReleased(stream.id, stream.correlationToken)
     }
 
     private fun signalTargetEof(stream: ReactorStream) {
-        if (stream.readEof || !markTerminalSignaled(stream.id, stream.generation)) return
+        if (stream.readEof || terminalWasSignaled(stream.id, stream.generation)) return
         stream.readEof = true
         updateInterests(stream)
-        listener.onTerminal(stream.id, TargetTerminalReason.TargetClosed)
+        if (!markTerminalSignaled(stream.id, stream.generation)) return
+        listener.onTerminal(stream.id, stream.correlationToken, TargetTerminalReason.TargetClosed)
     }
 
     private fun closeWithoutTerminal(stream: ReactorStream) {
@@ -440,11 +586,13 @@ internal class TargetIoReactor(
             // The stream has already emitted its one terminal result.
         }
         releaseReservation(stream.id, stream.generation)
+        listener.onReleased(stream.id, stream.correlationToken)
     }
 
     private fun terminatePending(streamId: String, generation: Long, reason: TargetTerminalReason) {
-        if (!releaseReservation(streamId, generation)) return
-        listener.onTerminal(streamId, reason)
+        val reservation = releaseReservation(streamId, generation) ?: return
+        listener.onTerminal(streamId, reservation.correlationToken, reason)
+        listener.onReleased(streamId, reservation.correlationToken)
     }
 
     private fun closeEverything(reason: TargetTerminalReason) {
@@ -456,9 +604,11 @@ internal class TargetIoReactor(
             }
         }
         val pending = synchronized(lock) { reservations.toMap() }
-        pending.forEach { (streamId, generation) ->
+        pending.forEach { (streamId, reservation) ->
+            val generation = reservation.generation
             if (terminalWasSignaled(streamId, generation)) {
-                releaseReservation(streamId, generation)
+                val released = releaseReservation(streamId, generation)
+                if (released != null) listener.onReleased(streamId, released.correlationToken)
             } else {
                 terminatePending(streamId, generation, reason)
             }
@@ -467,19 +617,21 @@ internal class TargetIoReactor(
     }
 
     private fun reservationMatches(streamId: String, generation: Long): Boolean =
-        synchronized(lock) { reservations[streamId] == generation }
+        synchronized(lock) { reservations[streamId]?.generation == generation }
 
-    private fun releaseReservation(streamId: String, generation: Long): Boolean = synchronized(lock) {
-        if (reservations[streamId] != generation) return@synchronized false
+    private fun releaseReservation(streamId: String, generation: Long): Reservation? = synchronized(lock) {
+        val reservation = reservations[streamId]
+        if (reservation?.generation != generation) return@synchronized null
         reservations.remove(streamId)
         outstandingWrites.remove(streamId)
         saturatedStreams.remove(streamId)
         terminalSignals.remove(streamId)
-        true
+        releaseRequests.remove(streamId)
+        reservation
     }
 
     private fun markTerminalSignaled(streamId: String, generation: Long): Boolean = synchronized(lock) {
-        if (reservations[streamId] != generation || terminalSignals[streamId] == generation) {
+        if (reservations[streamId]?.generation != generation || terminalSignals[streamId] == generation) {
             return@synchronized false
         }
         terminalSignals[streamId] = generation
@@ -506,6 +658,7 @@ internal class TargetIoReactor(
         data class Open(
             override val streamId: String,
             override val generation: Long,
+            val correlationToken: Long,
             val address: InetSocketAddress,
             val connectDeadlineNanos: Long,
         ) : ReactorCommand
@@ -529,9 +682,15 @@ internal class TargetIoReactor(
 
     private data class WriteCount(val generation: Long, var count: Int)
 
+    private data class Reservation(
+        val generation: Long,
+        val correlationToken: Long,
+    )
+
     private data class ReactorStream(
         val id: String,
         val generation: Long,
+        val correlationToken: Long,
         val connection: TargetReactorConnection,
         var connected: Boolean,
         val connectDeadlineNanos: Long,
@@ -539,6 +698,7 @@ internal class TargetIoReactor(
         val writes: ArrayDeque<ByteBuffer> = ArrayDeque(),
         val readBuffer: ByteBuffer,
         var readEof: Boolean = false,
+        var releaseAfterWrites: Boolean = false,
     )
 
     internal companion object {

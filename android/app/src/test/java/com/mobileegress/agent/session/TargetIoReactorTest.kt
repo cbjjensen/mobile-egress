@@ -89,14 +89,16 @@ class TargetIoReactorTest {
         assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
         assertEquals(listOf(TargetTerminalReason.TargetClosed), listener.terminalReasons["stream"])
         assertEquals(0, connection.closeCalls.get())
-        assertEquals(ReactorSubmitResult.MissingOrClosed, reactor.write("stream", byteArrayOf(9)))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", byteArrayOf(9)))
 
         backend.ready("stream", writable = true)
         waitUntil { connection.written().decodeToString() == "abcd" }
         backend.ready("stream", writable = true)
         waitUntil { connection.written().decodeToString() == "abcdef" }
         assertEquals(ReactorSubmitResult.Accepted, reactor.release("stream"))
+        backend.ready("stream", writable = true)
         waitUntil { connection.closeCalls.get() == 1 }
+        assertEquals("abcdef\t", connection.written().decodeToString())
         assertEquals(1, listener.terminalReasons.getValue("stream").size)
 
         reactor.shutdown()
@@ -170,6 +172,152 @@ class TargetIoReactorTest {
             assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
             assertEquals(listOf(TargetTerminalReason.TargetFailure), listener.terminalReasons["late"])
             assertEquals(0, backend.openCalls.get())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `slow backend open crossing connect deadline never emits opened`() {
+        val clock = MutableNanoClock()
+        val backend = FakeSelectorBackend(FakeConnection("late", connectedImmediately = true)).apply {
+            beforeOpen = { clock.advanceMillis(40) }
+        }
+        val listener = RecordingListener(terminalCount = 1)
+        val reactor = reactor(
+            backend,
+            listener,
+            connectTimeoutMillis = 40,
+            nanoTime = clock::read,
+        )
+        reactor.start()
+        try {
+            assertEquals(ReactorSubmitResult.Accepted, reactor.open("late", targetAddress()))
+
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(emptyList<String>(), listener.opened)
+            assertEquals(listOf(TargetTerminalReason.TargetFailure), listener.terminalReasons["late"])
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `connect readiness exactly at deadline loses to timeout`() {
+        val clock = MutableNanoClock()
+        val connection = FakeConnection("late", connectedImmediately = false)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(terminalCount = 1)
+        val reactor = reactor(
+            backend,
+            listener,
+            connectTimeoutMillis = 40,
+            nanoTime = clock::read,
+        )
+        reactor.start()
+        try {
+            reactor.open("late", targetAddress())
+            backend.connection("late")
+
+            backend.beforeSelectReturn = { clock.advanceMillis(40) }
+            backend.ready("late", connectable = true)
+
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(0, connection.finishConnectCalls.get())
+            assertEquals(emptyList<String>(), listener.opened)
+            assertEquals(listOf(TargetTerminalReason.TargetFailure), listener.terminalReasons["late"])
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `read and write readiness exactly at idle deadline lose to timeout`() {
+        val clock = MutableNanoClock()
+        val connection = FakeConnection("idle", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1, terminalCount = 1)
+        val reactor = reactor(
+            backend,
+            listener,
+            idleTimeoutMillis = 40,
+            nanoTime = clock::read,
+        )
+        reactor.start()
+        try {
+            reactor.open("idle", targetAddress())
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("idle", byteArrayOf(7)))
+            connection.enqueueRead(byteArrayOf(9))
+            backend.beforeSelectReturn = { clock.advanceMillis(40) }
+            backend.ready("idle", readable = true, writable = true)
+
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(0, connection.writeCalls.get())
+            assertFalse(listener.received.containsKey("idle"))
+            assertEquals(listOf(TargetTerminalReason.IdleTimeout), listener.terminalReasons["idle"])
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `eof interest update failure still emits exactly one target failure`() {
+        val connection = FakeConnection("stream", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1, terminalCount = 1)
+        val reactor = reactor(backend, listener)
+        reactor.start()
+        try {
+            reactor.open("stream", targetAddress())
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            connection.failInterestsNow.set(true)
+            connection.enqueueEof()
+
+            backend.ready("stream", readable = true)
+
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(listOf(TargetTerminalReason.TargetFailure), listener.terminalReasons["stream"])
+            assertEquals(1, connection.closeCalls.get())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `graceful release drains accepted partial writes before closing`() {
+        val connection = FakeConnection("stream", connectedImmediately = true, maxWriteBytes = 2)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1, terminalCount = 1)
+        val reactor = reactor(backend, listener)
+        reactor.start()
+        try {
+            reactor.open("stream", targetAddress())
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", "abcdef".encodeToByteArray()))
+            waitUntil { connection.writeInterested.get() }
+            backend.ready("stream", writable = true)
+            waitUntil { connection.written().decodeToString() == "ab" }
+            connection.enqueueEof()
+            backend.ready("stream", readable = true)
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", "gh".encodeToByteArray()))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.release("stream"))
+            assertEquals(ReactorSubmitResult.MissingOrClosed, reactor.write("stream", byteArrayOf(1)))
+            repeat(3) {
+                backend.ready("stream", writable = true)
+                Thread.sleep(5)
+            }
+
+            waitUntil { connection.closeCalls.get() == 1 }
+            assertEquals("abcdefgh", connection.written().decodeToString())
+            assertEquals(1, listener.terminalReasons.getValue("stream").size)
         } finally {
             reactor.shutdown()
             assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
@@ -383,20 +531,123 @@ class TargetIoReactorTest {
     }
 
     @Test
+    fun `selector backend ownership begins at start and factory failure leaks nothing`() {
+        val created = AtomicInteger()
+        val backend = FakeSelectorBackend()
+        val listener = RecordingListener()
+        val reactor = TargetIoReactor(
+            binder = TargetSocketBinder {},
+            listener = listener,
+            backendFactory = {
+                created.incrementAndGet()
+                backend
+            },
+        )
+
+        assertEquals(0, created.get())
+        assertTrue(reactor.start())
+        assertEquals(1, created.get())
+        reactor.shutdown()
+        assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        assertTrue(backend.closed.get())
+
+        val failed = TargetIoReactor(
+            binder = TargetSocketBinder {},
+            listener = RecordingListener(),
+            backendFactory = { throw IllegalStateException("selector creation failed") },
+        )
+        assertFalse(failed.start())
+        assertTrue(failed.awaitStopped(2, TimeUnit.SECONDS))
+        assertEquals(
+            0,
+            Thread.getAllStackTraces().keys.count { it.name == TargetIoReactor.REACTOR_THREAD_NAME },
+        )
+    }
+
+    @Test
+    fun `non reactor shutdown barrier waits for channels backend and thread to stop`() {
+        val connection = FakeConnection("stream", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1, terminalCount = 1)
+        val reactor = reactor(backend, listener)
+        reactor.start()
+        reactor.open("stream", targetAddress())
+        assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+        backend.blockClose.set(true)
+
+        reactor.shutdown()
+
+        assertTrue(backend.closeEntered.await(2, TimeUnit.SECONDS))
+        assertFalse(reactor.awaitStopped(25, TimeUnit.MILLISECONDS))
+        assertEquals(1, connection.closeCalls.get())
+        backend.allowClose.countDown()
+        assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        assertTrue(backend.closed.get())
+        assertTrue(
+            Thread.getAllStackTraces().keys.none { it.name == TargetIoReactor.REACTOR_THREAD_NAME },
+        )
+    }
+
+    @Test
+    fun `shutdown racing backend creation cannot satisfy barrier before backend stops`() {
+        val factoryEntered = CountDownLatch(1)
+        val allowFactory = CountDownLatch(1)
+        val backend = FakeSelectorBackend()
+        val reactor = TargetIoReactor(
+            binder = TargetSocketBinder {},
+            listener = RecordingListener(),
+            backendFactory = {
+                factoryEntered.countDown()
+                allowFactory.await(2, TimeUnit.SECONDS)
+                backend
+            },
+        )
+        val startReturned = AtomicBoolean(false)
+        val barrierReturned = AtomicBoolean(false)
+        val starter = Thread {
+            reactor.start()
+            startReturned.set(true)
+        }.apply { start() }
+        assertTrue(factoryEntered.await(2, TimeUnit.SECONDS))
+        val closer = Thread {
+            reactor.shutdown()
+            barrierReturned.set(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }.apply { start() }
+
+        Thread.sleep(25)
+        assertFalse(barrierReturned.get())
+        allowFactory.countDown()
+        starter.join(2_000)
+        closer.join(2_000)
+
+        assertTrue(startReturned.get())
+        assertTrue(barrierReturned.get())
+        assertTrue(backend.closed.get())
+        assertTrue(
+            Thread.getAllStackTraces().keys.none { it.name == TargetIoReactor.REACTOR_THREAD_NAME },
+        )
+    }
+
+    @Test
     fun `shutdown requested from reactor terminal callback never joins itself`() {
         val backend = FakeSelectorBackend(FakeConnection("stream", connectedImmediately = true))
         val terminal = CountDownLatch(1)
         val reasons = Collections.synchronizedList(mutableListOf<TargetTerminalReason>())
         lateinit var reactor: TargetIoReactor
         val listener = object : TargetReactorListener {
-            override fun onOpened(streamId: String) = Unit
-            override fun onData(streamId: String, payload: ByteArray): Boolean = true
-            override fun onBytesWritten(streamId: String, byteCount: Int) = Unit
-            override fun onTerminal(streamId: String, reason: TargetTerminalReason) {
+            override fun onOpened(streamId: String, correlationToken: Long) = Unit
+            override fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean = true
+            override fun onBytesWritten(streamId: String, correlationToken: Long, byteCount: Int) = Unit
+            override fun onTerminal(
+                streamId: String,
+                correlationToken: Long,
+                reason: TargetTerminalReason,
+            ) {
                 reasons += reason
                 reactor.shutdown()
                 terminal.countDown()
             }
+            override fun onReleased(streamId: String, correlationToken: Long) = Unit
             override fun onFatalFailure() = Unit
         }
         reactor = TargetIoReactor(TargetSocketBinder {}, listener, backend = backend)
@@ -486,24 +737,30 @@ class TargetIoReactorTest {
         val fatal = AtomicBoolean(false)
         val fatalCalls = AtomicInteger()
 
-        override fun onOpened(streamId: String) {
+        override fun onOpened(streamId: String, correlationToken: Long) {
             opened += streamId
             opens.countDown()
         }
 
-        override fun onData(streamId: String, payload: ByteArray): Boolean {
+        override fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean {
             receivedChunks += payload
             received.merge(streamId, payload) { left, right -> left + right }
             data.countDown()
             return true
         }
 
-        override fun onBytesWritten(streamId: String, byteCount: Int) = Unit
+        override fun onBytesWritten(streamId: String, correlationToken: Long, byteCount: Int) = Unit
 
-        override fun onTerminal(streamId: String, reason: TargetTerminalReason) {
+        override fun onTerminal(
+            streamId: String,
+            correlationToken: Long,
+            reason: TargetTerminalReason,
+        ) {
             terminalReasons.computeIfAbsent(streamId) { Collections.synchronizedList(mutableListOf()) }.add(reason)
             terminals.countDown()
         }
+
+        override fun onReleased(streamId: String, correlationToken: Long) = Unit
 
         override fun onFatalFailure() {
             fatal.set(true)
@@ -520,6 +777,11 @@ class TargetIoReactorTest {
         val closed = AtomicBoolean(false)
         val failSelect = AtomicBoolean(false)
         val openCalls = AtomicInteger()
+        val blockClose = AtomicBoolean(false)
+        val closeEntered = CountDownLatch(1)
+        val allowClose = CountDownLatch(1)
+        @Volatile var beforeOpen: (() -> Unit)? = null
+        @Volatile var beforeSelectReturn: (() -> Unit)? = null
 
         override fun open(
             streamId: String,
@@ -528,6 +790,7 @@ class TargetIoReactorTest {
             binder: TargetSocketBinder,
         ): TargetReactorConnection {
             openCalls.incrementAndGet()
+            beforeOpen?.invoke()
             val connection = synchronized(lock) { planned.removeFirst() }
             check(connection.plannedStreamId == streamId)
             connection.assign(generation)
@@ -539,6 +802,8 @@ class TargetIoReactorTest {
             if (ready.isEmpty() && !wakeup && !failSelect.get()) lock.wait(timeoutMillis)
             wakeup = false
             if (failSelect.get()) throw IllegalStateException("selector failed")
+            beforeSelectReturn?.invoke()
+            beforeSelectReturn = null
             buildList {
                 while (ready.isNotEmpty()) add(ready.removeFirst())
             }
@@ -584,6 +849,8 @@ class TargetIoReactorTest {
         }
 
         override fun close() {
+            closeEntered.countDown()
+            if (blockClose.get()) allowClose.await(2, TimeUnit.SECONDS)
             closed.set(true)
             wakeup()
         }
@@ -603,7 +870,7 @@ class TargetIoReactorTest {
         val plannedStreamId: String,
         override val connectedImmediately: Boolean,
         private val maxWriteBytes: Int = Int.MAX_VALUE,
-        private val failInterests: Boolean = false,
+        failInterests: Boolean = false,
     ) : TargetReactorConnection {
         private val readActions = ArrayDeque<ReadAction>()
         private var currentRead: ByteBuffer? = null
@@ -616,6 +883,7 @@ class TargetIoReactorTest {
         val closeCalls = AtomicInteger()
         val writeCalls = AtomicInteger()
         val writeInterested = AtomicBoolean(false)
+        val failInterestsNow = AtomicBoolean(failInterests)
 
         fun assign(value: Long) {
             generation = value
@@ -661,7 +929,7 @@ class TargetIoReactorTest {
         fun written(): ByteArray = synchronized(output) { output.toByteArray() }
 
         override fun setInterests(connect: Boolean, read: Boolean, write: Boolean) {
-            if (failInterests) throw IllegalStateException("interest update failed")
+            if (failInterestsNow.get()) throw IllegalStateException("interest update failed")
             writeInterested.set(write)
         }
 

@@ -25,4 +25,17 @@ class StreamTombstonesTest {
         assertTrue(tombstones.contains("first"))
         assertTrue(tombstones.contains("second"))
     }
+
+    @Test
+    fun `remembering a duplicate refreshes its recency under churn`() {
+        val tombstones = StreamTombstones(capacity = 2)
+        tombstones.remember("x")
+        tombstones.remember("y")
+        tombstones.remember("x")
+        tombstones.remember("z")
+
+        assertTrue(tombstones.contains("x"))
+        assertFalse(tombstones.contains("y"))
+        assertTrue(tombstones.contains("z"))
+    }
 }
