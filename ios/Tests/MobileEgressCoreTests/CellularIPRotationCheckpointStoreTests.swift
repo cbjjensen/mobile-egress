@@ -128,7 +128,39 @@ final class CellularIPRotationCheckpointStoreTests: XCTestCase {
         }
     }
 
+    func testRetirementPreventsReplayWhenPhysicalDeletionFailsWithoutLeakingCheckpointData() throws {
+        let store = AppGroupCellularIPRotationCheckpointStore(
+            containerURL: containerURL,
+            fileRemover: { _ in throw CheckpointFileRemovalError.injected }
+        )
+        let checkpoint = CellularIPRotationCheckpoint(
+            state: .awaitingAirplaneMode(
+                attemptID: 41,
+                originalNetworkToken: "private-network-token",
+                holdSeconds: 10,
+                before: PublicIPSnapshot(ipv4: "198.51.100.77")
+            ),
+            savedAt: now,
+            timeoutDeadline: now.addingTimeInterval(120)
+        )
+        try store.save(checkpoint)
+
+        try store.retire(attemptID: 41)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.checkpointURL.path))
+        let marker = try String(contentsOf: store.retirementURL, encoding: .utf8)
+        XCTAssertFalse(marker.contains("private-network-token"))
+        XCTAssertFalse(marker.contains("198.51.100.77"))
+
+        let relaunchedStore = AppGroupCellularIPRotationCheckpointStore(containerURL: containerURL)
+        XCTAssertNil(try relaunchedStore.load(at: now.addingTimeInterval(1)))
+    }
+
     private var now: Date {
         Date(timeIntervalSince1970: 2_100_000_000)
     }
+}
+
+private enum CheckpointFileRemovalError: Error {
+    case injected
 }
