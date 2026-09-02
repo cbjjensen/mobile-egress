@@ -207,7 +207,7 @@ func validateAdminSocketParent(ctx context.Context, config adminSocketConfig) er
 		if err != nil {
 			return fmt.Errorf("inspect relay admin socket ancestor: %w", err)
 		}
-		if metadata.Type != pathTypeDirectory || metadata.UID != 0 || metadata.Permissions&0o022 != 0 {
+		if !safeAdminSocketAncestor(config, ancestor, metadata) {
 			return errAdminSocketUnsafe
 		}
 		if err := validateAdminPathACL(ctx, config, ancestor, metadata, pathACLRejectNonRootMutation); err != nil {
@@ -215,6 +215,18 @@ func validateAdminSocketParent(ctx context.Context, config adminSocketConfig) er
 		}
 	}
 	return ctx.Err()
+}
+
+func safeAdminSocketAncestor(config adminSocketConfig, ancestor string, metadata pathMetadata) bool {
+	if metadata.Type == pathTypeDirectory && metadata.UID == 0 && metadata.Permissions&0o022 == 0 {
+		return true
+	}
+	// macOS owns its runtime directory as root:daemon with mode 0775. Its
+	// daemon group is not an operator-writable group, so accept only that exact
+	// platform-owned directory; all other ancestors remain non-writable.
+	return config.LexicalParent == "/var/run" && config.CanonicalParent == "/private/var/run" &&
+		ancestor == "/private/var/run" && metadata.Type == pathTypeDirectory &&
+		metadata.UID == 0 && metadata.GID == 1 && metadata.Permissions == 0o775
 }
 
 func openVerifiedAdminLock(ctx context.Context, config adminSocketConfig) (adminLock, error) {

@@ -118,11 +118,14 @@ func TestAdminSocketCreatesOrOpensPersistentLockSafely(t *testing.T) {
 func TestAdminSocketOpensDarwinVarRunLockThroughValidatedCanonicalParent(t *testing.T) {
 	harness := newSocketTestHarness()
 	harness.platform.canonicalParent = "/private/var/run"
+	darwinRuntimeDirectory := socketTestDirectoryMetadata(4)
+	darwinRuntimeDirectory.GID = 1
+	darwinRuntimeDirectory.Permissions = 0o775
 	harness.platform.metadata = map[string][]socketTestMetadataResult{
 		"/":                {{metadata: socketTestDirectoryMetadata(1)}},
 		"/private":         {{metadata: socketTestDirectoryMetadata(2)}},
 		"/private/var":     {{metadata: socketTestDirectoryMetadata(3)}},
-		"/private/var/run": {{metadata: socketTestDirectoryMetadata(4)}},
+		"/private/var/run": {{metadata: darwinRuntimeDirectory}},
 		"/var/run/admin.lock": {
 			{metadata: socketTestLockMetadata()},
 			{metadata: socketTestLockMetadata()},
