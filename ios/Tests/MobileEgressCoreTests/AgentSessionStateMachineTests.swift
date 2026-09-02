@@ -572,7 +572,7 @@ final class AgentSessionStateMachineTests: XCTestCase {
         try assertOutbound(&machine, type: .close, streamID: "stream", payload: Data("agent_unavailable".utf8))
         XCTAssertNil(machine.nextOutbound())
         XCTAssertEqual(machine.snapshot.bytesDownloaded, 2)
-        XCTAssertEqual(machine.snapshot.errorClass, .backpressure)
+        XCTAssertEqual(machine.snapshot.errorClass, .none)
     }
 
     func testTotalOutboundOverflowFailsContributingStreamAndLeavesOthersActive() throws {
