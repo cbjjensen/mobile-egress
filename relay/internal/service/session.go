@@ -24,6 +24,7 @@ import (
 const (
 	maxWebSocketMessageBytes      = 2 << 20
 	webSocketWriteTimeout         = time.Second
+	agentSessionLivenessTimeout   = 65 * time.Second
 	maxClosedStreamTombstones     = 1024
 	closedStreamTombstoneLifetime = 30 * time.Second
 )
@@ -59,14 +60,16 @@ type session struct {
 	role    enrollment.Role
 	conn    sessionConnection
 
-	outbound   *outboundMailbox
-	writeMu    sync.Mutex
-	closeOnce  sync.Once
-	registered bool
+	outbound    *outboundMailbox
+	writeMu     sync.Mutex
+	closeOnce   sync.Once
+	registered  bool
+	lastInbound time.Time
 }
 
 type sessionConnection interface {
 	SetReadLimit(int64)
+	SetPingHandler(func(string) error)
 	ReadMessage() (int, []byte, error)
 	SetWriteDeadline(time.Time) error
 	WriteMessage(int, []byte) error
@@ -217,8 +220,12 @@ func (service *Service) releasePendingSessionLocked(serial string, role enrollme
 func newSession(service *Service, serial string, role enrollment.Role, connection sessionConnection) *session {
 	activeSession := &session{
 		service: service, serial: serial, role: role, conn: connection,
-		outbound: newSessionOutboundMailbox(role),
+		outbound: newSessionOutboundMailbox(role), lastInbound: time.Now(),
 	}
+	connection.SetPingHandler(func(payload string) error {
+		activeSession.noteInbound(time.Now())
+		return connection.WriteControl(websocket.PongMessage, []byte(payload), time.Now().Add(webSocketWriteTimeout))
+	})
 	go activeSession.writeLoop()
 	return activeSession
 }
@@ -230,6 +237,7 @@ func (activeSession *session) readLoop() {
 		if err != nil {
 			return
 		}
+		activeSession.noteInbound(time.Now())
 		if messageType != websocket.BinaryMessage {
 			activeSession.service.protocolViolation(activeSession)
 			return
@@ -258,6 +266,14 @@ func (activeSession *session) readLoop() {
 			return
 		}
 	}
+}
+
+func (activeSession *session) noteInbound(now time.Time) {
+	activeSession.service.mu.Lock()
+	if activeSession.registered {
+		activeSession.lastInbound = now
+	}
+	activeSession.service.mu.Unlock()
 }
 
 func (service *Service) routeEnvelope(sender *session, envelope protocol.Envelope) error {
@@ -741,6 +757,7 @@ func (service *Service) expireStreams(now time.Time) {
 		}
 	}
 	expiredCodes := make([]string, 0)
+	expiredSessions := make([]*session, 0)
 	notifications := make([]streamNotification, 0)
 	agent := service.agent
 	for _, tracked := range service.streams {
@@ -756,7 +773,15 @@ func (service *Service) expireStreams(now time.Time) {
 			notifications = append(notifications, service.streamCloseNotificationsLocked(tracked, code, agent)...)
 		}
 	}
+	for _, activeSession := range service.sessions {
+		if activeSession.role == enrollment.RoleAgent && !now.Before(activeSession.lastInbound.Add(agentSessionLivenessTimeout)) {
+			expiredSessions = append(expiredSessions, activeSession)
+		}
+	}
 	service.mu.Unlock()
+	for _, activeSession := range expiredSessions {
+		activeSession.close("session_closed")
+	}
 	for _, code := range expiredCodes {
 		_ = service.store.incrementError(context.Background(), code)
 	}

@@ -75,6 +75,36 @@ func TestSessionRequiresActiveClientOrAgentCertificateAndOneAgent(t *testing.T) 
 	}
 }
 
+func TestStaleAgentSessionExpiresAndReleasesSlotForReconnect(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "agent", "agent")
+
+	stale := mustDialSession(t, fixture, devices[0].client)
+	defer stale.Close()
+
+	fixture.service.mu.Lock()
+	fixture.service.agent.lastInbound = time.Now().Add(-agentSessionLivenessTimeout)
+	fixture.service.mu.Unlock()
+	fixture.service.expireStreams(time.Now())
+
+	replacement, response, err := dialSession(fixture, devices[1].client)
+	if err != nil {
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		t.Fatalf("replacement Agent session failed: response %#v, error %v", response, err)
+	}
+	defer replacement.Close()
+
+	fixture.service.mu.RLock()
+	activeAgent := fixture.service.agent
+	fixture.service.mu.RUnlock()
+	if activeAgent == nil || activeAgent.serial != devices[1].serial {
+		t.Fatal("stale Agent remained registered after liveness expiry")
+	}
+}
+
 func TestClientOpenResolvesPublicTargetAndRoutesOnlyOwningStream(t *testing.T) {
 	t.Parallel()
 

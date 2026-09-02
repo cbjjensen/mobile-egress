@@ -627,6 +627,8 @@ func newRecordingSessionConnection(blockWrites bool) *recordingSessionConnection
 
 func (connection *recordingSessionConnection) SetReadLimit(int64) {}
 
+func (connection *recordingSessionConnection) SetPingHandler(func(string) error) {}
+
 func (connection *recordingSessionConnection) ReadMessage() (int, []byte, error) {
 	return 0, nil, errors.New("recording connection has no reader")
 }
