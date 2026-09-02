@@ -122,11 +122,14 @@
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/session/StreamAdmission.kt",
-            "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt"
+            "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/session/StreamAdmissionTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorIntegrationTest.kt"
           ]
         },
         "ios": {
@@ -137,7 +140,8 @@
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
-            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift"
+            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift"
           ]
         }
       }
@@ -206,16 +210,18 @@
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt",
-            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt"
+            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt",
+            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/service/AgentNotificationPresentationTest.kt"
           ]
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses a SwiftUI host surface backed by tunnel state rather than Android foreground-service presentation while preserving visible enrollment, relay, and runtime status.",
+          "nativeEquivalenceNotes": "Uses a SwiftUI host surface backed by tunnel state rather than Android's coalesced foreground-service notification while preserving visible enrollment, relay, and runtime status; it does not claim Android notification behavior on iOS.",
           "sourceEvidence": [
             "ios/MobileEgressAgent/AgentDashboardView.swift",
             "ios/Sources/MobileEgressCore/Runtime/TunnelConnectionState.swift"

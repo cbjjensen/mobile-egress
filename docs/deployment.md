@@ -2,7 +2,7 @@
 
 This is the operator runbook for producing the signed artifacts that friends download and proving them on real Windows and macOS controllers, an Android or iOS cellular Agent device, and Windows Server 2019 EC2 nodes. Normal friends do not perform these steps; they follow the root README after an accepted release is published. Android APK packaging and cellular-IP rotation are covered here. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
 
-The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A normal public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version; Android remains independently selectable. The immutable v1.1.0 prerelease is a narrow Windows-and-Android exception. The approved v1.1.1 proxy hotfix is Windows-only, falls back to the published v1.1.0 Android APK in its managed notes, and marks macOS unavailable while Apple Developer Program enrollment remains pending.
+The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A normal public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version; Android remains independently selectable. The immutable v1.1.0 prerelease is a narrow Windows-and-Android exception. The approved v1.1.1 proxy hotfix is Windows-only, falls back to the published v1.1.0 Android APK in its managed notes, and marks macOS unavailable while Apple Developer Program enrollment remains pending. The prepared v1.1.2 candidate is Android-only: it delivers bounded mobile target ingress for browser bursts while Windows/macOS remain v1.1.1; iOS version metadata is updated separately for its TestFlight path.
 
 ## Routine release commands
 
@@ -24,6 +24,13 @@ For an Android-only change, first set Android `versionName` to the release versi
 ```powershell
 & .\scripts\release-android.ps1 -ReleaseVersion '<version>'
 & .\scripts\release-android.ps1 -ReleaseVersion '<version>' -Publish
+```
+
+For the v1.1.2 browser-burst fix, Android is the only selected component. Its tracked metadata must be versionName `1.1.2` and versionCode `17`; run the Android entry point and do not select Windows or macOS:
+
+```powershell
+& .\scripts\release-android.ps1 -ReleaseVersion '1.1.2'
+& .\scripts\release-android.ps1 -ReleaseVersion '1.1.2' -Publish
 ```
 
 Use the full path when a protocol/shared compatibility change requires Desktop plus Android:
@@ -51,7 +58,7 @@ For the explicitly approved v1.1.1 Windows proxy hotfix while macOS signing is u
 
 That release contains only the Windows ZIP and EC2 Client. Its notes link the published v1.1.0 Android APK and mark macOS unavailable; do not select, rebuild, or version-bump Android.
 
-All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag. The uncoupled selector is restricted to exactly `Windows,Android` for v1.1.0 and exactly `Windows` for v1.1.1; every other Windows-affecting release uses Desktop, and Android may otherwise be selected separately. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
+All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag. The uncoupled selector is restricted to exactly `Windows,Android` for v1.1.0 and exactly `Windows` for v1.1.1; every other Windows-affecting release uses Desktop, and Android may otherwise be selected separately. In particular, v1.1.2 with `Android` alone is an executable accepted scope. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
 
 Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them when a component release entry point is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
 
@@ -159,16 +166,20 @@ The signed access-group continuity test is documented in [signed macOS Keychain 
 
 ## Part 2: Choose and freeze a version
 
-Use one semantic version for every artifact selected in a release. This Windows hotfix uses `1.1.1`.
+Use one semantic version for every artifact selected in a release. The prepared v1.1.2 candidate selects Android only; Windows and macOS remain at `1.1.1`.
 
 The first coupled Mac Desktop release will use a version later than `1.1.1`, after Apple Developer Program enrollment and production signing/notary setup are complete.
 
 ```powershell
-$releaseVersion = '1.1.1'
+$releaseVersion = '1.1.2'
 $releaseTag = "v$releaseVersion"
 ```
 
-When Android is selected, update `versionCode` and `versionName` in `android\app\build.gradle.kts`. `versionCode` must be higher than every APK previously installed or distributed; `versionName` must equal `$releaseVersion`. Android is not selected for v1.1.1: leave `versionName` `1.1.0` and `versionCode` `16` unchanged, and use the published v1.1.0 APK only as the managed-download fallback.
+When Android is selected, update `versionCode` and `versionName` in `android\app\build.gradle.kts`. `versionCode` must be higher than every APK previously installed or distributed; `versionName` must equal `$releaseVersion`. For v1.1.2, require versionName `1.1.2` and versionCode `17`. iOS uses MARKETING_VERSION `1.1.2` and CURRENT_PROJECT_VERSION `3` for its separate TestFlight path; neither setting selects it in this Android release. Do not change Windows/macOS v1.1.1 metadata for this scope.
+
+## Browser-burst target ingress boundary
+
+Browsers can open several target connections in a short burst. Both mobile Agents bound ingress to eight outstanding frames per target and 512 frames / 8 MiB across the Agent session. A full per-target, aggregate-frame, or aggregate-byte budget closes only the contributing target with a finite capacity result; it refunds the reservation and leaves peer targets and the relay session connected. This is a memory and liveness boundary, not a promise to prioritize any browser tab or to preserve an overloaded target.
 
 Review and commit that version change, then run the full gate:
 
@@ -513,7 +524,7 @@ Pair Android, install one real Windows Server 2019 EC2 Client, and prove HTTP, H
 
 ## Part 7: Promote or reject the release
 
-For the `v1.1.1` Windows hotfix, promotion requires its exact two immutable Windows artifacts and the Windows/Android regression record using the published v1.1.0 APK fallback. The immutable v1.1.0 artifacts remain unchanged. A Mac-bearing release later than v1.1.1 separately requires the available-Mac controller record and matching production signing/notary/SSH/GitHub evidence. If every gate applicable to a release passes, attach the completed sanitized records to private release evidence and promote the exact tested prerelease without replacing its assets:
+For the v1.1.2 Android-only candidate, promotion requires its exact immutable APK and the Android browser-burst plus Windows/Android regression record. The immutable v1.1.0 artifacts and v1.1.1 Windows artifacts remain unchanged. A Mac-bearing release later than v1.1.1 separately requires the available-Mac controller record and matching production signing/notary/SSH/GitHub evidence. If every gate applicable to a release passes, attach the completed sanitized records to private release evidence and promote the exact tested prerelease without replacing its assets:
 
 ```powershell
 gh release edit $releaseTag --repo 'cbjjensen/mobile-egress' --prerelease=false --latest

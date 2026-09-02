@@ -67,6 +67,7 @@ try {
     $futureWindowsExceptionRejected = $_.Exception.Message -match 'only approved for v1.1.0 or v1.1.1'
 }
 Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain rejected after the explicit v1.1.1 hotfix exception.'
+Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Android')
 $desktopWindowsConflictRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('Desktop', 'Windows')
@@ -427,9 +428,9 @@ Assert-Condition $staleVersionCodeRejected 'A new Android release must increase 
 $trackedAndroidBuildFile = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'android\app\build.gradle.kts')
 Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent $trackedAndroidBuildFile `
-    -ExpectedVersion '1.1.0' `
-    -MaximumPriorVersionCode 15
-Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*16\s*$') 'The tracked Android v1.1.0 release must use versionCode 16.'
+    -ExpectedVersion '1.1.2' `
+    -MaximumPriorVersionCode 16
+Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*17\s*$') 'The tracked Android v1.1.2 release must use versionCode 17.'
 
 $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-release-zip-test-" + [guid]::NewGuid().ToString('N'))
 try {
