@@ -7,6 +7,7 @@ package adminservice
 
 #include <sys/types.h>
 #include <sys/acl.h>
+#include <sys/stat.h>
 #include <membership.h>
 #include <uuid/uuid.h>
 #include <errno.h>
@@ -154,7 +155,18 @@ static int zfnf_validate_acl_fd(int fd, int policy, int *error_number) {
 // Go brackets this read with complete Lstat equality checks.
 static int zfnf_validate_acl_path(const char *path, int policy, int *error_number) {
 	errno = 0;
-	return zfnf_validate_acl_object(acl_get_link_np(path, ACL_TYPE_EXTENDED), policy, error_number);
+	acl_t acl = acl_get_link_np(path, ACL_TYPE_EXTENDED);
+	if (acl == NULL && errno == ENOENT) {
+		// APFS reports ENOENT when an existing system path has no extended ACL.
+		// Confirm the named object still exists without following a final symlink;
+		// Go brackets this check with full no-follow Lstat identity validation.
+		struct stat metadata;
+		if (lstat(path, &metadata) == 0) {
+			*error_number = 0;
+			return 0;
+		}
+	}
+	return zfnf_validate_acl_object(acl, policy, error_number);
 }
 */
 import "C"
