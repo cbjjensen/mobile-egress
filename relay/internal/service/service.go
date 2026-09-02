@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"mobile-egress/internal/capacity"
 )
 
 type Service struct {
@@ -25,26 +27,27 @@ type Service struct {
 	serverCert  tls.Certificate
 	clientRoots *x509.CertPool
 
-	mu                  sync.RWMutex
-	agentConnected      bool
-	connectedClients    int
-	activeStreams       int
-	closed              bool
-	agent               *session
-	sessions            map[string]*session
-	pendingSessions     map[string]struct{}
-	agentPending        chan struct{}
-	streams             map[string]*stream
-	closedStreams       map[string]closedStreamTombstone
-	maxClientStreams    int
-	maxAgentStreams     int
-	openingTimeout      time.Duration
-	idleTimeout         time.Duration
-	sweepInterval       time.Duration
-	janitorOnce         sync.Once
-	stopJanitor         chan struct{}
-	lookupNetIP         lookupNetIPFunc
-	beforeDataAdmission func()
+	mu                   sync.RWMutex
+	agentConnected       bool
+	connectedClients     int
+	activeStreams        int
+	closed               bool
+	agent                *session
+	sessions             map[string]*session
+	pendingSessions      map[string]struct{}
+	agentPending         chan struct{}
+	streams              map[string]*stream
+	closedStreams        map[string]closedStreamTombstone
+	maxClientStreams     int
+	maxAgentStreams      int
+	openingTimeout       time.Duration
+	idleTimeout          time.Duration
+	sweepInterval        time.Duration
+	janitorOnce          sync.Once
+	stopJanitor          chan struct{}
+	lookupNetIP          lookupNetIPFunc
+	beforeDataAdmission  func()
+	agentToClientsBudget *outboundDataBudget
 }
 
 type healthResponse struct {
@@ -136,8 +139,9 @@ func Open(stateDir string) (*Service, error) {
 		store: state, caCert: caCert, caCertPEM: caCertPEM, caKey: caKey,
 		serverCert: serverCert, clientRoots: roots,
 		sessions: make(map[string]*session), pendingSessions: make(map[string]struct{}), streams: make(map[string]*stream),
-		closedStreams:    make(map[string]closedStreamTombstone),
-		maxClientStreams: 32, maxAgentStreams: 256,
+		closedStreams:        make(map[string]closedStreamTombstone),
+		agentToClientsBudget: newOutboundDataBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane),
+		maxClientStreams:     capacity.ClientMaxConcurrentStreams, maxAgentStreams: capacity.AgentMaxConcurrentStreams,
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
 		lookupNetIP: defaultLookupNetIP,

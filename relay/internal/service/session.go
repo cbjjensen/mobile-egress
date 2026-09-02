@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
+	"mobile-egress/internal/capacity"
 	"mobile-egress/relay/internal/enrollment"
 	"mobile-egress/relay/internal/policy"
 	"mobile-egress/relay/internal/protocol"
@@ -25,7 +26,7 @@ const (
 	maxWebSocketMessageBytes      = 2 << 20
 	webSocketWriteTimeout         = time.Second
 	agentSessionLivenessTimeout   = 65 * time.Second
-	maxClosedStreamTombstones     = 1024
+	maxClosedStreamTombstones     = capacity.StreamTombstones
 	closedStreamTombstoneLifetime = 30 * time.Second
 )
 
@@ -219,9 +220,16 @@ func (service *Service) releasePendingSessionLocked(serial string, role enrollme
 }
 
 func newSession(service *Service, serial string, role enrollment.Role, connection sessionConnection) *session {
+	dataBudget := service.agentToClientsBudget
+	if role == enrollment.RoleAgent {
+		dataBudget = newOutboundDataBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane)
+	} else if dataBudget == nil {
+		dataBudget = newOutboundDataBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane)
+		service.agentToClientsBudget = dataBudget
+	}
 	activeSession := &session{
 		service: service, serial: serial, role: role, conn: connection,
-		outbound: newSessionOutboundMailbox(role), lastInbound: time.Now(),
+		outbound: newSessionOutboundMailbox(role, dataBudget), lastInbound: time.Now(),
 	}
 	connection.SetPingHandler(func(payload string) error {
 		activeSession.noteInbound(time.Now())
@@ -809,11 +817,11 @@ func (activeSession *session) send(envelope protocol.Envelope) error {
 
 func (activeSession *session) writeLoop() {
 	for {
-		envelope, ok := activeSession.outbound.wait()
+		item, ok := activeSession.outbound.wait()
 		if !ok {
 			return
 		}
-		message, err := json.Marshal(envelope)
+		message, err := json.Marshal(item.envelope)
 		if err == nil {
 			activeSession.writeMu.Lock()
 			deadline := time.Now().Add(webSocketWriteTimeout)
@@ -823,6 +831,7 @@ func (activeSession *session) writeLoop() {
 			}
 			activeSession.writeMu.Unlock()
 		}
+		item.complete()
 		if err != nil {
 			activeSession.close("session_closed")
 			return

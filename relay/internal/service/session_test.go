@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"mobile-egress/relay/internal/enrollment"
 	"mobile-egress/relay/internal/protocol"
 )
 
@@ -290,58 +291,33 @@ func TestLateAgentOpeningOutcomeLeavesUnrelatedStreamUsable(t *testing.T) {
 }
 
 func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
-	t.Parallel()
-
 	fixture := newRelayFixture(t)
 	defer fixture.Close()
-	_, devices := enrollDevices(t, fixture,
-		"client", "client", "client", "client", "client", "client", "client", "client", "client", "agent",
-	)
-	clients := make([]*websocket.Conn, 0, 9)
-	for index := 0; index < 9; index++ {
-		client := mustDialSession(t, fixture, devices[index].client)
-		defer client.Close()
-		clients = append(clients, client)
-	}
-	clientOne := clients[0]
-	agent := mustDialSession(t, fixture, devices[9].client)
-	defer agent.Close()
+	_, devices := enrollDevices(t, fixture, "client", "client", "agent")
+	clientOne := newDormantSession(fixture.service, devices[0].serial, enrollment.RoleClient)
+	clientTwo := newDormantSession(fixture.service, devices[1].serial, enrollment.RoleClient)
+	agent := newDormantSession(fixture.service, devices[2].serial, enrollment.RoleAgent)
+	registerTestSessions(fixture.service, agent, clientOne, clientTwo)
+	defer closeTestSessions(agent, clientOne, clientTwo)
 
-	for index := 0; index < 32; index++ {
-		streamID := "client-one-" + string(rune('a'+index))
-		writeEnvelope(t, clientOne, openEnvelope(streamID, "1.1.1.1", 443))
-		if forwarded := readEnvelope(t, agent); forwarded.StreamID != streamID || forwarded.Type != protocol.TypeOpen {
-			t.Fatalf("agent received wrong open: %#v", forwarded)
+	for index := 0; index < 256; index++ {
+		streamID := fmt.Sprintf("client-one-%d", index+1)
+		fixture.service.handleClientOpen(clientOne, openEnvelope(streamID, "1.1.1.1", 443))
+		fixture.service.mu.RLock()
+		_, admitted := fixture.service.streams[streamID]
+		fixture.service.mu.RUnlock()
+		if !admitted {
+			t.Fatalf("per-Client stream %d was rejected, want streams 1-256 admitted", index+1)
 		}
 	}
-	writeEnvelope(t, clientOne, openEnvelope("client-one-over-limit", "1.1.1.1", 443))
-	if rejected := readEnvelope(t, clientOne); rejected.Type != protocol.TypeRejected || decodedErrorCode(t, rejected) != "client_stream_limit" {
-		t.Fatalf("per-client limit response = %#v", rejected)
+	fixture.service.handleClientOpen(clientOne, openEnvelope("client-one-over-limit", "1.1.1.1", 443))
+	if rejected, ok := clientOne.outbound.poll(); !ok || rejected.envelope.Type != protocol.TypeRejected || decodedErrorCode(t, rejected.envelope) != "client_stream_limit" {
+		t.Fatalf("per-client stream 257 response = %#v/%t, want client_stream_limit rejection", rejected, ok)
 	}
 
-	writeEnvelope(t, clientOne, protocol.Envelope{
-		Version: 1, Type: protocol.TypeClose, StreamID: "client-one-a", Payload: encodeErrorCode("client_closed"),
-	})
-	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "client-one-a" || forwarded.Type != protocol.TypeClose {
-		t.Fatalf("agent received wrong close: %#v", forwarded)
-	}
-	writeEnvelope(t, clientOne, openEnvelope("client-one-reused-slot", "1.1.1.1", 443))
-	if forwarded := readEnvelope(t, agent); forwarded.StreamID != "client-one-reused-slot" || forwarded.Type != protocol.TypeOpen {
-		t.Fatalf("agent received wrong replacement open: %#v", forwarded)
-	}
-
-	for clientIndex := 1; clientIndex < 8; clientIndex++ {
-		for streamIndex := 0; streamIndex < 32; streamIndex++ {
-			streamID := fmt.Sprintf("client-%d-%d", clientIndex+1, streamIndex+1)
-			writeEnvelope(t, clients[clientIndex], openEnvelope(streamID, "1.1.1.1", 443))
-			if forwarded := readEnvelope(t, agent); forwarded.StreamID != streamID || forwarded.Type != protocol.TypeOpen {
-				t.Fatalf("agent received wrong open: %#v", forwarded)
-			}
-		}
-	}
-	writeEnvelope(t, clients[8], openEnvelope("agent-over-limit", "1.1.1.1", 443))
-	if rejected := readEnvelope(t, clients[8]); rejected.Type != protocol.TypeRejected || decodedErrorCode(t, rejected) != "agent_stream_limit" {
-		t.Fatalf("agent-wide limit response = %#v", rejected)
+	fixture.service.handleClientOpen(clientTwo, openEnvelope("agent-over-limit", "1.1.1.1", 443))
+	if rejected, ok := clientTwo.outbound.poll(); !ok || rejected.envelope.Type != protocol.TypeRejected || decodedErrorCode(t, rejected.envelope) != "agent_stream_limit" {
+		t.Fatalf("aggregate stream 257 response = %#v/%t, want agent_stream_limit rejection", rejected, ok)
 	}
 }
 

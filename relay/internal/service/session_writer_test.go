@@ -286,6 +286,63 @@ func TestSessionWriterPrioritizesControlAndRoundRobinsStreamData(t *testing.T) {
 	}
 }
 
+func TestSessionWriterCompletionRefundsInFlightReservation(t *testing.T) {
+	service := newWriterTestService()
+	service.agentToClientsBudget = newOutboundDataBudget(1, 2)
+	connection := newRecordingSessionConnection(true)
+	activeSession := newSession(service, "completion-refund", enrollment.RoleClient, connection)
+	registerTestSessions(service, activeSession)
+	defer closeTestSessions(activeSession)
+
+	if err := activeSession.send(dataEnvelope("alpha", "YQ")); err != nil {
+		t.Fatalf("first data enqueue returned an error: %v", err)
+	}
+	waitForSignal(t, connection.writeStarted, "in-flight data write")
+	if err := activeSession.send(dataEnvelope("bravo", "Yg")); !errors.Is(err, errOutboundDataSaturated) {
+		t.Fatalf("second data enqueue while first is in flight = %v, want saturation", err)
+	}
+	connection.release()
+	_ = readRecordedEnvelope(t, connection)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := activeSession.send(dataEnvelope("bravo", "Yg"))
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, errOutboundDataSaturated) {
+			t.Fatalf("second data enqueue after completion = %v, want admitted", err)
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("writer completion did not refund the in-flight reservation")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestSessionWriterFailureRefundsInFlightReservation(t *testing.T) {
+	service := newWriterTestService()
+	service.agentToClientsBudget = newOutboundDataBudget(1, 2)
+	failingConnection := newRecordingSessionConnection(false)
+	failingConnection.failWrites.Store(true)
+	peerConnection := newRecordingSessionConnection(false)
+	failing := newSession(service, "failing-data", enrollment.RoleClient, failingConnection)
+	peer := newSession(service, "peer-data", enrollment.RoleClient, peerConnection)
+	registerTestSessions(service, failing, peer)
+	defer closeTestSessions(failing, peer)
+
+	if err := failing.send(dataEnvelope("alpha", "YQ")); err != nil {
+		t.Fatalf("failed writer data enqueue returned an error: %v", err)
+	}
+	waitForSignal(t, failingConnection.closed, "failed data writer session close")
+	if err := peer.send(dataEnvelope("bravo", "Yg")); err != nil {
+		t.Fatalf("peer data enqueue after writer failure = %v, want admitted", err)
+	}
+	if envelope := readRecordedEnvelope(t, peerConnection); envelope.StreamID != "bravo" || envelope.Type != protocol.TypeData {
+		t.Fatalf("peer received %#v after writer failure, want bravo data", envelope)
+	}
+}
+
 func TestCloseCannotLoseToConcurrentDataAdmission(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -383,10 +440,12 @@ func TestCloseCannotLoseToConcurrentDataAdmission(t *testing.T) {
 			}
 
 			for {
-				envelope, ok := dataTarget.outbound.poll()
+				item, ok := dataTarget.outbound.poll()
 				if !ok {
 					break
 				}
+				envelope := item.envelope
+				item.complete()
 				if envelope.Type == protocol.TypeData && envelope.StreamID == tracked.id {
 					t.Fatal("data was admitted after the stream was removed")
 				}
@@ -400,6 +459,7 @@ func TestDataSaturationClosesOnlyAffectedStream(t *testing.T) {
 	defer fixture.Close()
 	_, devices := enrollDevices(t, fixture, "client", "agent")
 
+	fixture.service.agentToClientsBudget = newOutboundDataBudget(3, 64)
 	clientConnection := newRecordingSessionConnection(true)
 	agentConnection := newRecordingSessionConnection(false)
 	client := newSession(fixture.service, devices[0].serial, enrollment.RoleClient, clientConnection)
@@ -465,7 +525,7 @@ func TestRequiredControlSaturationTerminatesOnlyAffectedSession(t *testing.T) {
 		t.Fatalf("initial control enqueue returned an error: %v", err)
 	}
 	waitForSignal(t, blockedConnection.writeStarted, "blocked control write")
-	for index := 0; index < 64; index++ {
+	for index := 0; index < 512; index++ {
 		envelope := protocol.Envelope{Version: 1, Type: protocol.TypeClose, StreamID: fmt.Sprintf("control-%d", index), Payload: encodeRelayError("client_closed")}
 		if err := blocked.send(envelope); err != nil {
 			t.Fatalf("control enqueue %d returned an error: %v", index+1, err)
@@ -585,14 +645,22 @@ func dataEnvelope(streamID, payload string) protocol.Envelope {
 func newWriterTestService() *Service {
 	return &Service{
 		sessions: make(map[string]*session), streams: make(map[string]*stream),
-		closedStreams: make(map[string]closedStreamTombstone),
+		closedStreams:        make(map[string]closedStreamTombstone),
+		agentToClientsBudget: newOutboundDataBudget(8_192, 64<<20),
 	}
 }
 
 func newDormantSession(service *Service, serial string, role enrollment.Role) *session {
+	dataBudget := service.agentToClientsBudget
+	if role == enrollment.RoleAgent {
+		dataBudget = newOutboundDataBudget(8_192, 64<<20)
+	} else if dataBudget == nil {
+		dataBudget = newOutboundDataBudget(8_192, 64<<20)
+		service.agentToClientsBudget = dataBudget
+	}
 	return &session{
 		service: service, serial: serial, role: role,
-		conn: newRecordingSessionConnection(false), outbound: newSessionOutboundMailbox(role),
+		conn: newRecordingSessionConnection(false), outbound: newSessionOutboundMailbox(role, dataBudget),
 	}
 }
 

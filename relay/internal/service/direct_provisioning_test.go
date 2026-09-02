@@ -143,7 +143,7 @@ func TestOwnerCanProvisionClientCSRDirectly(t *testing.T) {
 	}
 }
 
-func TestRelayDefaultsToThirtyTwoClientAndTwoHundredFiftySixAgentStreams(t *testing.T) {
+func TestRelayProductionStreamLimitsMatchCapacityContract(t *testing.T) {
 	t.Parallel()
 
 	stateDir := filepath.Join(t.TempDir(), "state")
@@ -155,8 +155,8 @@ func TestRelayDefaultsToThirtyTwoClientAndTwoHundredFiftySixAgentStreams(t *test
 		t.Fatal(err)
 	}
 	defer relay.Close()
-	if relay.maxClientStreams != 32 || relay.maxAgentStreams != 256 {
-		t.Fatalf("stream limits = %d per Client/%d aggregate, want 32/256", relay.maxClientStreams, relay.maxAgentStreams)
+	if relay.maxClientStreams != 256 || relay.maxAgentStreams != 256 {
+		t.Fatalf("stream limits = %d per Client/%d aggregate, want 256/256", relay.maxClientStreams, relay.maxAgentStreams)
 	}
 }
 
