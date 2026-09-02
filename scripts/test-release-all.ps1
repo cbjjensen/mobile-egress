@@ -64,10 +64,18 @@ $futureWindowsExceptionRejected = $false
 try {
     Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Windows')
 } catch {
-    $futureWindowsExceptionRejected = $_.Exception.Message -match 'only approved for v1.1.0 or v1.1.1'
+    $futureWindowsExceptionRejected = $_.Exception.Message -match 'v1.1.3'
 }
-Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain rejected after the explicit v1.1.1 hotfix exception.'
+Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain rejected outside the explicit v1.1.0, v1.1.1, and v1.1.3 exceptions.'
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Android')
+Assert-MobileEgressApprovedReleaseScope -Version '1.1.3' -Components @('Windows', 'Android')
+$postLivenessWindowsExceptionRejected = $false
+try {
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.4' -Components @('Windows', 'Android')
+} catch {
+    $postLivenessWindowsExceptionRejected = $_.Exception.Message -match 'v1.1.3'
+}
+Assert-Condition $postLivenessWindowsExceptionRejected 'The v1.1.3 Windows-and-Android exception must not authorize later uncoupled Windows releases.'
 $desktopWindowsConflictRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('Desktop', 'Windows')
@@ -428,9 +436,9 @@ Assert-Condition $staleVersionCodeRejected 'A new Android release must increase 
 $trackedAndroidBuildFile = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'android\app\build.gradle.kts')
 Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent $trackedAndroidBuildFile `
-    -ExpectedVersion '1.1.2' `
+    -ExpectedVersion '1.1.3' `
     -MaximumPriorVersionCode 16
-Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*17\s*$') 'The tracked Android v1.1.2 release must use versionCode 17.'
+Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*18\s*$') 'The tracked Android v1.1.3 release must use versionCode 18.'
 
 $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-release-zip-test-" + [guid]::NewGuid().ToString('N'))
 try {

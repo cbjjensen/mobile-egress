@@ -482,8 +482,14 @@ function Assert-MobileEgressApprovedReleaseScope {
         }
         return
     }
+    if ($Version -eq '1.1.3') {
+        if ($scope -cne 'Windows,Android') {
+            throw 'The v1.1.3 relay-liveness release must contain exactly Windows and Android.'
+        }
+        return
+    }
     if ($resolved -contains 'Windows') {
-        throw 'The uncoupled Windows selector is only approved for v1.1.0 or v1.1.1: select exactly Windows and Android for v1.1.0 or exactly Windows for v1.1.1; use Desktop for later releases.'
+        throw 'The uncoupled Windows selector is only approved for v1.1.0, v1.1.1, or v1.1.3: select exactly Windows and Android for v1.1.0 or v1.1.3, exactly Windows for v1.1.1, or use Desktop for later releases.'
     }
 }
 
