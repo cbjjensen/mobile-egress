@@ -124,7 +124,7 @@ public struct TargetConnectionConfiguration: Equatable, Hashable, Sendable {
         ipLiteral: String,
         port: Int,
         readChunkBytes: Int = 16 * 1_024,
-        inboundQueueCapacity: Int = 2,
+        inboundQueueCapacity: Int = 8,
         connectTimeout: TimeInterval = 30
     ) throws {
         guard readChunkBytes > 0,
