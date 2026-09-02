@@ -615,6 +615,12 @@ function Resolve-MobileEgressReleaseDownloadLinks {
 
     $releasedNames = @($ReleasedArtifacts | ForEach-Object { $_.Name })
     $currentWindowsReleased = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key 'windows' -Name $_ }).Count -gt 0
+    $isV111WindowsHotfix = `
+        $CurrentTag -ceq 'v1.1.1' -and `
+        $Version -ceq '1.1.1' -and `
+        $releasedNames.Count -eq 2 -and `
+        $releasedNames -ccontains 'mobile-egress-windows-1.1.1.zip' -and `
+        $releasedNames -ccontains 'mobile-egress-client.exe'
     foreach ($item in @(Get-MobileEgressReleaseDownloadItemDefinitions -Version $Version)) {
         $currentMatch = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $_ } | Select-Object -First 1)
         if ($currentMatch.Count -ne 0) {
@@ -630,18 +636,29 @@ function Resolve-MobileEgressReleaseDownloadLinks {
         }
 
         $fallback = $null
-        foreach ($release in @($PublishedReleases | Where-Object { -not $_.isDraft })) {
-            foreach ($asset in @($release.assets)) {
-                if (Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $asset.name) {
-                    $fallback = [pscustomobject]@{
-                        Tag = $release.tagName
-                        Name = $asset.name
+        $publishedFallbackDisabled = $isV111WindowsHotfix -and $item.Key -eq 'macos'
+        if (-not $publishedFallbackDisabled) {
+            foreach ($release in @($PublishedReleases | Where-Object { -not $_.isDraft })) {
+                if ($isV111WindowsHotfix -and $item.Key -eq 'android' -and [string]$release.tagName -cne 'v1.1.0') {
+                    continue
+                }
+                foreach ($asset in @($release.assets)) {
+                    $assetMatches = if ($isV111WindowsHotfix -and $item.Key -eq 'android') {
+                        [string]$asset.name -ceq 'zfnf-mobile-egress-android-1.1.0.apk'
+                    } else {
+                        Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $asset.name
                     }
+                    if ($assetMatches) {
+                        $fallback = [pscustomobject]@{
+                            Tag = $release.tagName
+                            Name = $asset.name
+                        }
+                        break
+                    }
+                }
+                if ($null -ne $fallback) {
                     break
                 }
-            }
-            if ($null -ne $fallback) {
-                break
             }
         }
 

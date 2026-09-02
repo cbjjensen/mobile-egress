@@ -151,6 +151,14 @@ Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'android' }
 
 $hotfixDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.1' -Version '1.1.1' -ReleasedArtifacts $hotfixDefinitions -PublishedReleases @(
     [pscustomobject]@{
+        tagName = 'v1.2.0'
+        isDraft = $false
+        assets = @(
+            [pscustomobject]@{ name = 'mobile-egress-macos-1.2.0-arm64.pkg' },
+            [pscustomobject]@{ name = 'zfnf-mobile-egress-android-1.2.0.apk' }
+        )
+    },
+    [pscustomobject]@{
         tagName = 'v1.1.0'
         isDraft = $false
         assets = @(
@@ -162,9 +170,12 @@ $hotfixDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v
 ))
 Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.1/mobile-egress-windows-1.1.1.zip') 'The v1.1.1 notes must link the current Windows ZIP.'
 Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'client' }).Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.1/mobile-egress-client.exe') 'The v1.1.1 notes must link the current EC2 Client.'
+$hotfixAndroidDownload = $hotfixDownloadLinks | Where-Object { $_.Key -eq 'android' }
+Assert-Condition ($hotfixAndroidDownload.Tag -ceq 'v1.1.0') 'The v1.1.1 notes must pin the Android fallback tag to v1.1.0 even when another published Android release is listed first.'
+Assert-Condition ($hotfixAndroidDownload.Name -ceq 'zfnf-mobile-egress-android-1.1.0.apk') 'The v1.1.1 notes must pin the Android fallback asset to the versioned v1.1.0 APK.'
 Assert-Condition ([string]::IsNullOrWhiteSpace(($hotfixDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Url)) 'The v1.1.1 notes must not manufacture a macOS download.'
 Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The v1.1.1 notes must mark macOS unavailable.'
-Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'android' }).Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.0/zfnf-mobile-egress-android-1.1.0.apk') 'The v1.1.1 notes must fall back to the published v1.1.0 Android APK.'
+Assert-Condition ($hotfixAndroidDownload.Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.0/zfnf-mobile-egress-android-1.1.0.apk') 'The v1.1.1 notes must fall back to the published v1.1.0 Android APK.'
 
 $downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $desktopDownloadLinks
 Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'
