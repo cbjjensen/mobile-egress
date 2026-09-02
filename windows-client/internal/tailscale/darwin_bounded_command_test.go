@@ -182,6 +182,7 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 		status           darwinBoundedCommandLeaderStatus
 		statusErr        error
 		polls            []darwinBoundedCommandTestPoll
+		signalErrs       []error
 		terminationClock bool
 		wantEvents       []string
 		wantLifecycleErr bool
@@ -210,6 +211,52 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 			status:     darwinBoundedCommandLeaderLive,
 			polls:      []darwinBoundedCommandTestPoll{{exited: true}},
 			wantEvents: []string{"register", "status", "signal", "poll", "signal", "wait"},
+		},
+		{
+			name:     "output overflow final signal converges after transient EPERM",
+			overflow: true,
+			status:   darwinBoundedCommandLeaderLive,
+			polls: []darwinBoundedCommandTestPoll{
+				{exited: true},
+				{exited: false},
+			},
+			signalErrs: []error{nil, unix.EPERM, nil},
+			wantEvents: []string{
+				"register", "status", "signal", "poll", "signal", "poll", "signal", "wait",
+			},
+		},
+		{
+			name:             "output overflow final signal EPERM remains unresolved at deadline",
+			overflow:         true,
+			status:           darwinBoundedCommandLeaderLive,
+			polls:            []darwinBoundedCommandTestPoll{{exited: true}},
+			signalErrs:       []error{nil, unix.EPERM},
+			terminationClock: true,
+			wantEvents:       []string{"register", "status", "signal", "poll", "signal", "wait"},
+			wantLifecycleErr: true,
+		},
+		{
+			name:             "output overflow final signal non-EPERM fails closed",
+			overflow:         true,
+			status:           darwinBoundedCommandLeaderLive,
+			polls:            []darwinBoundedCommandTestPoll{{exited: true}},
+			signalErrs:       []error{nil, errors.New("signal uncertainty")},
+			wantEvents:       []string{"register", "status", "signal", "poll", "signal", "wait"},
+			wantLifecycleErr: true,
+		},
+		{
+			name:     "output overflow final signal retry poll uncertainty fails closed",
+			overflow: true,
+			status:   darwinBoundedCommandLeaderLive,
+			polls: []darwinBoundedCommandTestPoll{
+				{exited: true},
+				{err: errors.New("retry poll uncertainty")},
+			},
+			signalErrs: []error{nil, unix.EPERM},
+			wantEvents: []string{
+				"register", "status", "signal", "poll", "signal", "poll", "wait",
+			},
+			wantLifecycleErr: true,
 		},
 		{
 			name:             "registration failure",
@@ -262,6 +309,7 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			events := []string{}
 			reaped := false
+			signalErrs := append([]error(nil), test.signalErrs...)
 			monitor := &darwinBoundedCommandTestMonitor{
 				events: &events, registerErr: test.registerErr, status: test.status,
 				statusErr: test.statusErr,
@@ -317,7 +365,12 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 						t.Fatalf("signaled PID = %d, want %d", pid, process.pid)
 					}
 					events = append(events, "signal")
-					return nil
+					if len(signalErrs) == 0 {
+						return nil
+					}
+					err := signalErrs[0]
+					signalErrs = signalErrs[1:]
+					return err
 				},
 				now,
 			)
@@ -327,6 +380,9 @@ func TestDarwinBoundedCommandSupervisorSignalsOnlyWhileLeaderIsUnreaped(t *testi
 			}
 			if fmt.Sprint(events) != fmt.Sprint(test.wantEvents) {
 				t.Fatalf("events = %v, want %v", events, test.wantEvents)
+			}
+			if len(signalErrs) != 0 {
+				t.Fatalf("unused signal errors = %v", signalErrs)
 			}
 			if !reaped {
 				t.Fatal("supervisor returned before the direct leader was reaped")

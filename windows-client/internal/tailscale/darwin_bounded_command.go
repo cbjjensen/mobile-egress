@@ -238,6 +238,26 @@ func superviseDarwinBoundedCommandWithClock(
 			}
 		}
 	}
+	signalExitedGroupWhileAnchored := func(deadline time.Time) {
+		for {
+			err := signalProcessGroup(process.pid)
+			if err == nil {
+				return
+			}
+			if !errors.Is(err, unix.EPERM) || !now().Before(deadline) {
+				cleanupFailure = true
+				return
+			}
+			// XNU can report EPERM while a descendant from an earlier successful
+			// group kill is still transitioning to a zombie. Keep the exact
+			// leader unreaped as the process-group anchor and use the existing
+			// monitor poll interval as a bounded convergence wait.
+			if _, pollErr := monitor.Poll(darwinBoundedCommandPollInterval); pollErr != nil {
+				cleanupFailure = true
+				return
+			}
+		}
+	}
 	reapObservedZombie := func() (error, error) {
 		signalWhileAnchored()
 		waitErr := process.wait()
@@ -295,7 +315,10 @@ func superviseDarwinBoundedCommandWithClock(
 		if exited {
 			// The direct leader is now a zombie, not reaped. It still pins the
 			// process-group identity while this final descendant cleanup runs.
-			signalWhileAnchored()
+			if terminationDeadline.IsZero() {
+				terminationDeadline = now().Add(darwinBoundedCommandTreeExitDelay)
+			}
+			signalExitedGroupWhileAnchored(terminationDeadline)
 			break
 		}
 		if terminationRequested && !now().Before(terminationDeadline) {
