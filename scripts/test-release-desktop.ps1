@@ -54,6 +54,9 @@ try {
         ApplicationIdentity = 'Developer ID Application: Example (ABCDEFGHIJ)'
         InstallerIdentity = 'Developer ID Installer: Example (ABCDEFGHIJ)'
         NotaryKeychainProfile = 'mobile-egress-notary'
+        NotaryApiKeyPath = '/Users/builder/secrets/AuthKey_ABCDEFGHIJ.p8'
+        NotaryApiKeyID = 'ABCDEFGHIJ'
+        NotaryApiIssuerID = '11111111-2222-3333-4444-555555555555'
         ProvisioningProfilePath = '/Users/builder/signing/controller.provisionprofile'
     }
 
@@ -86,6 +89,11 @@ try {
                 $actual = [System.IO.File]::ReadAllText($Context.ManifestPath)
                 Assert-Condition ($actual -ceq $manifestContent) 'The exact generated Windows node manifest must be handed to the Mac.'
                 Assert-Condition ($Context.ManifestSha256 -ceq $expectedManifestHash) 'The manifest handoff must carry its exact SHA-256.'
+            }
+            if ($Action -eq 'release') {
+                Assert-Condition ($Context.NotaryApiKeyPath -eq $config.NotaryApiKeyPath) 'The Desktop flow must pass the notary API key path to the Mac release script.'
+                Assert-Condition ($Context.NotaryApiKeyID -eq $config.NotaryApiKeyID) 'The Desktop flow must pass the notary API key ID to the Mac release script.'
+                Assert-Condition ($Context.NotaryApiIssuerID -eq $config.NotaryApiIssuerID) 'The Desktop flow must pass the notary API issuer ID to the Mac release script.'
             }
             if ($Action -eq 'remote-hash') {
                 return $expectedPkgHash
@@ -210,6 +218,13 @@ try {
         $wrongCommitRejected = $_.Exception.Message -match 'Task 5 macOS verification-record validation failed'
     }
     Assert-Condition $wrongCommitRejected 'The Windows orchestrator must use Task 5 validation to reject a record from a different source commit.'
+
+    $desktopScriptSource = Get-Content -Raw $releaseDesktopScript
+    $macScriptSource = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\release-macos.sh')
+    Assert-Condition ($desktopScriptSource -match 'NotaryApiKeyPath') 'The Desktop release config must support a notary API key path.'
+    Assert-Condition ($desktopScriptSource -match 'notary-api-key') 'The Desktop orchestrator must pass notary API-key arguments to the Mac script.'
+    Assert-Condition ($macScriptSource -match '--notary-api-key') 'The Mac release script must accept a notary API key path.'
+    Assert-Condition ($macScriptSource -match 'notarytool submit[^\r\n]+--key[^\r\n]+--key-id[^\r\n]+--issuer') 'The Mac release script must notarize with App Store Connect API-key credentials.'
 } finally {
     if (Test-Path -LiteralPath $fixtureRoot -PathType Container) {
         $resolvedFixture = [System.IO.Path]::GetFullPath($fixtureRoot)

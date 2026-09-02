@@ -93,6 +93,9 @@ function Get-MobileEgressDesktopConfig {
         'ApplicationIdentity',
         'InstallerIdentity',
         'NotaryKeychainProfile',
+        'NotaryApiKeyPath',
+        'NotaryApiKeyID',
+        'NotaryApiIssuerID',
         'ProvisioningProfilePath'
     )
     foreach ($name in $required) {
@@ -113,11 +116,20 @@ function Get-MobileEgressDesktopConfig {
     if ([string]$data.TeamID -notmatch '^[A-Z0-9]{10}$') {
         throw 'Desktop release TeamID must contain ten uppercase letters or digits.'
     }
-    foreach ($name in @('ApplicationIdentity', 'InstallerIdentity', 'NotaryKeychainProfile', 'ProvisioningProfilePath')) {
+    foreach ($name in @('ApplicationIdentity', 'InstallerIdentity', 'NotaryKeychainProfile', 'NotaryApiKeyPath', 'NotaryApiKeyID', 'NotaryApiIssuerID', 'ProvisioningProfilePath')) {
         $value = [string]$data[$name]
         if ($value.IndexOf([char]0) -ge 0 -or $value.Contains("`r") -or $value.Contains("`n")) {
             throw "Desktop release configuration value must be single-line text: $name"
         }
+    }
+    if ([string]$data.NotaryApiKeyPath -notmatch '^/') {
+        throw 'Desktop release NotaryApiKeyPath must be an absolute macOS path.'
+    }
+    if ([string]$data.NotaryApiKeyID -notmatch '^[A-Z0-9]{10,}$') {
+        throw 'Desktop release NotaryApiKeyID must contain at least ten uppercase letters or digits.'
+    }
+    if ([string]$data.NotaryApiIssuerID -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+        throw 'Desktop release NotaryApiIssuerID must be a UUID.'
     }
     if ([string]$data.ProvisioningProfilePath -notmatch '^/') {
         throw 'Desktop release ProvisioningProfilePath must be an absolute macOS path.'
@@ -152,6 +164,9 @@ function Get-MobileEgressDesktopConfig {
         ApplicationIdentity = [string]$data.ApplicationIdentity
         InstallerIdentity = [string]$data.InstallerIdentity
         NotaryKeychainProfile = [string]$data.NotaryKeychainProfile
+        NotaryApiKeyPath = [string]$data.NotaryApiKeyPath
+        NotaryApiKeyID = [string]$data.NotaryApiKeyID
+        NotaryApiIssuerID = [string]$data.NotaryApiIssuerID
         ProvisioningProfilePath = [string]$data.ProvisioningProfilePath
     }
 }
@@ -234,7 +249,10 @@ function Invoke-MobileEgressMacDesktopAction {
             $application = ConvertTo-MobileEgressPosixLiteral $Context.ApplicationIdentity
             $installer = ConvertTo-MobileEgressPosixLiteral $Context.InstallerIdentity
             $notary = ConvertTo-MobileEgressPosixLiteral $Context.NotaryKeychainProfile
-            $command = "set -eu; cd -- $repo; /bin/sh $scriptPath --release-version $version --node-manifest $manifest --source-commit $commit --profile $profile --team-id $team --application-identity $application --installer-identity $installer --notary-keychain-profile $notary"
+            $notaryApiKey = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyPath
+            $notaryApiKeyID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyID
+            $notaryApiIssuerID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiIssuerID
+            $command = "set -eu; cd -- $repo; /bin/sh $scriptPath --release-version $version --node-manifest $manifest --source-commit $commit --profile $profile --team-id $team --application-identity $application --installer-identity $installer --notary-keychain-profile $notary --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
             $output = Invoke-MobileEgressDesktopSsh -Context $Context -Command $command -Description 'Building signed notarized macOS release'
             if (-not [string]::IsNullOrWhiteSpace($output)) {
                 Write-Host $output
@@ -388,6 +406,9 @@ function Invoke-MobileEgressDesktopBuild {
         ApplicationIdentity = $Config.ApplicationIdentity
         InstallerIdentity = $Config.InstallerIdentity
         NotaryKeychainProfile = $Config.NotaryKeychainProfile
+        NotaryApiKeyPath = $Config.NotaryApiKeyPath
+        NotaryApiKeyID = $Config.NotaryApiKeyID
+        NotaryApiIssuerID = $Config.NotaryApiIssuerID
         ProvisioningProfilePath = $Config.ProvisioningProfilePath
         ManifestPath = Join-Path $RepositoryRoot 'windows-client\build\bin\release-manifest.json'
         ManifestSha256 = ''

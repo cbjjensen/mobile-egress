@@ -6,7 +6,7 @@ Production Desktop distribution requires Apple Developer Program membership, app
 
 ## Known hosts
 
-Desktop releases use the ignored/untracked PowerShell data file `.local/mac-build-server/release-desktop.psd1`. It has exactly eight keys: `SshTarget`, `SshKeyPath`, `RepositoryPath`, `TeamID`, `ApplicationIdentity`, `InstallerIdentity`, `NotaryKeychainProfile`, and `ProvisioningProfilePath`. `ssh` and `scp` use the configured key and the standard OpenSSH `known_hosts`.
+Desktop releases use the ignored/untracked PowerShell data file `.local/mac-build-server/release-desktop.psd1`. It has exactly eleven keys: `SshTarget`, `SshKeyPath`, `RepositoryPath`, `TeamID`, `ApplicationIdentity`, `InstallerIdentity`, `NotaryKeychainProfile`, `NotaryApiKeyPath`, `NotaryApiKeyID`, `NotaryApiIssuerID`, and `ProvisioningProfilePath`. `NotaryKeychainProfile` remains a compatibility label, while notarization uses the App Store Connect API key fields so the SSH release does not depend on unlocking the login Keychain. `ssh` and `scp` use the configured key and the standard OpenSSH `known_hosts`.
 
 The following values are retained for the separate iOS development path:
 
@@ -21,7 +21,7 @@ The following values are retained for the separate iOS development path:
 
 ## Secret boundary
 
-The Desktop PSD1 and SSH private key live under ignored `.local/` and must remain untracked. Never commit, print, paste, copy, release, log, or place them in a report. Developer ID/iOS signing private keys, provisioning profiles, Apple/notary credentials, and export options with team-specific values are also private.
+The Desktop PSD1 and SSH private key live under ignored `.local/` and must remain untracked. Never commit, print, paste, copy, release, log, or place them in a report. Developer ID/iOS signing private keys, App Store Connect API `.p8` keys, provisioning profiles, Apple/notary credentials, and export options with team-specific values are also private.
 
 Before any SSH use, run this from the checkout that owns the key:
 
@@ -67,7 +67,7 @@ Y9YD7JN54M.local
 
 The Mac must be Apple Silicon. The release bootstrap installs the pinned user-local Go 1.26.7, Node 24.20.0, and Wails 2.14.0 toolchain from `windows-client/macos/toolchain.lock` under the dedicated build root without Homebrew.
 
-The Mac Keychain must contain the configured Developer ID Application and Installer identities. The distribution profile must authorize `com.cbjjensen.mobile-egress.controller` and its Keychain access group, and the configured `notarytool` profile must work. These production prerequisites require Apple Developer Program enrollment.
+The Mac Keychain must contain the configured Developer ID Application and Installer identities. The distribution profile must authorize `com.cbjjensen.mobile-egress.controller` and its Keychain access group, and the configured App Store Connect API key must work with `notarytool`. These production prerequisites require Apple Developer Program enrollment.
 
 ### iOS development
 

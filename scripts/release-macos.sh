@@ -14,6 +14,9 @@ TEAM_ID=''
 APPLICATION_IDENTITY=''
 INSTALLER_IDENTITY=''
 NOTARY_PROFILE=''
+NOTARY_API_KEY=''
+NOTARY_API_KEY_ID=''
+NOTARY_API_ISSUER_ID=''
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --release-version) RELEASE_VERSION=${2-}; shift 2 ;;
@@ -24,6 +27,9 @@ while [ "$#" -gt 0 ]; do
         --application-identity) APPLICATION_IDENTITY=${2-}; shift 2 ;;
         --installer-identity) INSTALLER_IDENTITY=${2-}; shift 2 ;;
         --notary-keychain-profile) NOTARY_PROFILE=${2-}; shift 2 ;;
+        --notary-api-key) NOTARY_API_KEY=${2-}; shift 2 ;;
+        --notary-api-key-id) NOTARY_API_KEY_ID=${2-}; shift 2 ;;
+        --notary-api-issuer-id) NOTARY_API_ISSUER_ID=${2-}; shift 2 ;;
         *) fail "unknown or incomplete argument: $1" ;;
     esac
 done
@@ -34,7 +40,11 @@ printf '%s' "$TEAM_ID" | /usr/bin/grep -Eq '^[A-Z0-9]{10}$' || fail 'ten-charact
 [ -n "$APPLICATION_IDENTITY" ] || fail 'Developer ID Application identity is required'
 [ -n "$INSTALLER_IDENTITY" ] || fail 'Developer ID Installer identity is required'
 [ -n "$NOTARY_PROFILE" ] || fail 'notarytool Keychain profile name is required'
+[ -n "$NOTARY_API_KEY" ] || fail 'notary API key path is required'
+printf '%s' "$NOTARY_API_KEY_ID" | /usr/bin/grep -Eq '^[A-Z0-9]{10,}$' || fail 'notary API key ID is required'
+printf '%s' "$NOTARY_API_ISSUER_ID" | /usr/bin/grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || fail 'notary API issuer ID must be a UUID'
 [ -f "$PROFILE" ] && [ ! -L "$PROFILE" ] || fail 'Developer ID provisioning profile must be a regular non-symlink file'
+[ -f "$NOTARY_API_KEY" ] && [ ! -L "$NOTARY_API_KEY" ] || fail 'notary API key must be a regular non-symlink file'
 [ "$(/usr/bin/uname -s)" = 'Darwin' ] || fail 'macOS is required'
 [ "$(/usr/bin/uname -m)" = 'arm64' ] || fail 'Apple Silicon is required'
 
@@ -119,7 +129,7 @@ BUILD_VERSION=${RELEASE_VERSION%%-*}
 /usr/bin/grep -F "($TEAM_ID)" "$WORK/pkg-signature.txt" >/dev/null || fail 'PKG signer Team ID mismatch'
 /usr/sbin/spctl -a -t install -vv "$PKG"
 
-/usr/bin/xcrun notarytool submit "$PKG" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json > "$WORK/notary.json"
+/usr/bin/xcrun notarytool submit "$PKG" --key "$NOTARY_API_KEY" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID" --wait --output-format json > "$WORK/notary.json"
 [ "$(/usr/bin/plutil -extract status raw -o - "$WORK/notary.json")" = 'Accepted' ] || fail 'Apple notarization was not accepted'
 /usr/bin/xcrun stapler staple "$PKG"
 /usr/bin/xcrun stapler validate "$PKG"
