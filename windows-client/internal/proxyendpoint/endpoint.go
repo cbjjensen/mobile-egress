@@ -12,13 +12,16 @@ const (
 	HTTPConnectPort = uint16(1081)
 )
 
-const (
-	SOCKSAddress       = Host + ":1080"
-	HTTPConnectAddress = Host + ":1081"
-)
-
 func Address(port uint16) string {
 	return net.JoinHostPort(Host, strconv.Itoa(int(port)))
+}
+
+func SOCKSAddress() string {
+	return Address(SOCKSPort)
+}
+
+func HTTPConnectAddress() string {
+	return Address(HTTPConnectPort)
 }
 
 func IP() net.IP {

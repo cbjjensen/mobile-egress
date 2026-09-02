@@ -196,7 +196,7 @@ func (repository *Repository) NodeViews(ctx context.Context) ([]ManagedNodeView,
 	for _, node := range nodes {
 		views = append(views, ManagedNodeView{
 			InstanceID: node.InstanceID, ClientSerial: node.ClientSerial, ServiceVersion: node.ServiceVersion,
-			Health: node.Health, Proxy: proxyendpoint.HTTPConnectAddress + ":***:***", ProxyReady: supportsManagedNodeProxy(node.ServiceVersion),
+			Health: node.Health, Proxy: proxyendpoint.HTTPConnectAddress() + ":***:***", ProxyReady: supportsManagedNodeProxy(node.ServiceVersion),
 		})
 	}
 	return views, nil
@@ -212,7 +212,7 @@ func (repository *Repository) ProxyLine(ctx context.Context, instanceID string) 
 			if !supportsManagedNodeProxy(node.ServiceVersion) {
 				return "", errors.New("managed EC2 Client must be updated before proxy copying")
 			}
-			return fmt.Sprintf("%s:%s:%s", proxyendpoint.HTTPConnectAddress, node.SOCKSUsername, node.SOCKSPassword), nil
+			return fmt.Sprintf("%s:%s:%s", proxyendpoint.HTTPConnectAddress(), node.SOCKSUsername, node.SOCKSPassword), nil
 		}
 	}
 	return "", errors.New("managed EC2 node was not found")
@@ -228,7 +228,7 @@ func (repository *Repository) SOCKSProxyURL(ctx context.Context, instanceID stri
 			if !supportsManagedNodeProxy(node.ServiceVersion) {
 				return "", errors.New("managed EC2 Client must be updated before proxy copying")
 			}
-			return fmt.Sprintf("socks5://%s:%s@%s", node.SOCKSUsername, node.SOCKSPassword, proxyendpoint.SOCKSAddress), nil
+			return fmt.Sprintf("socks5://%s:%s@%s", node.SOCKSUsername, node.SOCKSPassword, proxyendpoint.SOCKSAddress()), nil
 		}
 	}
 	return "", errors.New("managed EC2 node was not found")

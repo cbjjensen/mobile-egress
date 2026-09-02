@@ -441,7 +441,3 @@ func (writer countingWriter) Write(value []byte) (int, error) {
 	writer.count.Add(int64(written))
 	return written, err
 }
-
-func loopbackAddress(port uint16) string {
-	return proxyendpoint.Address(port)
-}

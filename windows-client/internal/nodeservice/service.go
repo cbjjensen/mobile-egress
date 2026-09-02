@@ -73,7 +73,7 @@ func (service *Service) Run(ctx context.Context) error {
 		return err
 	}
 	service.setStatus(ServiceStatus{
-		Running: true, Address: proxyendpoint.SOCKSAddress, HTTPAddress: proxyendpoint.HTTPConnectAddress, Serial: runtime.Identity.Serial,
+		Running: true, Address: proxyendpoint.SOCKSAddress(), HTTPAddress: proxyendpoint.HTTPConnectAddress(), Serial: runtime.Identity.Serial,
 	})
 	defer func() {
 		_ = httpProxy.Stop()

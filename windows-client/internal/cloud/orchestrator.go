@@ -19,6 +19,7 @@ import (
 
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/nodeservice"
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/sealedconfig"
 )
@@ -105,12 +106,12 @@ func (orchestrator *Orchestrator) Install(ctx context.Context, instanceID string
 	configuration := nodeservice.Configuration{
 		Version: 1, Generation: 1, RelayURL: issued.RelayURL, Role: issued.Role, Serial: strings.ToUpper(issued.Serial),
 		CertificatePEM: issued.CertificatePEM, CACertificatePEM: issued.CACertificatePEM,
-		SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
+		SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: proxyendpoint.SOCKSPort,
 	}
 	node := ManagedNode{
 		InstanceID: instanceID, ClientSerial: strings.ToUpper(issued.Serial),
 		ConfigurationPublicKey: bootstrap.ConfigurationPublicKey, ConfigurationGeneration: 1, ServiceVersion: release.Version,
-		Health: "configuring", SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: 1080,
+		Health: "configuring", SOCKSUsername: username, SOCKSPassword: password, SOCKSPort: proxyendpoint.SOCKSPort,
 		RelayURL: issued.RelayURL, CertificatePEM: issued.CertificatePEM, CACertificatePEM: issued.CACertificatePEM,
 	}
 	if err := orchestrator.store.SaveNode(ctx, node); err != nil {

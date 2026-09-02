@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"mobile-egress/pairing"
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/sealedconfig"
 	"mobile-egress/windows-client/internal/securestore"
@@ -321,7 +322,7 @@ func containsFingerprint(fingerprints []string, candidate string) bool {
 }
 
 func validateConfiguration(privateKeyPEM string, configuration Configuration) error {
-	if configuration.Version != configurationVersion || configuration.Generation == 0 || configuration.Role != "client" || configuration.SOCKSPort != 1080 {
+	if configuration.Version != configurationVersion || configuration.Generation == 0 || configuration.Role != "client" || configuration.SOCKSPort != proxyendpoint.SOCKSPort {
 		return errors.New("invalid configuration metadata")
 	}
 	if _, err := pairing.RelayOrigin(configuration.RelayURL); err != nil {
