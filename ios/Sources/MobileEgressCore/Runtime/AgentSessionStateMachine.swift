@@ -164,7 +164,13 @@ struct AgentSessionStateMachine {
             return failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect)
         }
         guard outbound.offerData(frame, streamID: streamID) else {
-            return failStream(streamID: streamID, token: token, code: "agent_unavailable", error: .backpressure)
+            return failStream(
+                streamID: streamID,
+                token: token,
+                code: "agent_unavailable",
+                error: .backpressure,
+                updatesPersistentErrorClass: false
+            )
         }
         bytesDownloaded = adding(bytesDownloaded, data.count)
         return []
