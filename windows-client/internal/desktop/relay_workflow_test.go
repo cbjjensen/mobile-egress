@@ -134,7 +134,7 @@ func TestMacBridgeWorkflowWaitCanBeCancelledWithoutCallingBridge(t *testing.T) {
 		Observation: relayservice.Observation{State: relayservice.StateEnabled, StrictV1: true, ExactHelper: true},
 		Decision:    relayservice.SetupProceed,
 	}}}
-	bridge := &desktopBridgeSpy{setupEntered: make(chan struct{}), setupRelease: make(chan struct{})}
+	bridge := &desktopBridgeSpy{setupEntered: make(chan struct{}, 1), setupRelease: make(chan struct{})}
 	app := newMacWorkflowTestApp(t, securestore.NewMemoryStore(), service, bridge)
 
 	firstDone := make(chan error, 1)
