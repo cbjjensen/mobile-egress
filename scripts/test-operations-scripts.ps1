@@ -100,7 +100,7 @@ Assert-Condition ($windowsReleaseScript -match 'TimeStamperCertificate') 'Window
 Assert-Condition ($windowsReleaseScript -match 'CertificateSha256') 'Windows release packaging must verify the exact SHA-256 certificate identity.'
 Assert-Condition ($windowsReleaseScript -match 'release-manifest\.json') 'Windows release packaging must produce the headless Client manifest.'
 Assert-Condition ($windowsReleaseScript -match 'embeddedReleaseManifestBase64') 'The signed controller must embed its node-release trust manifest.'
-Assert-Condition ($windowsProject.info.productVersion -eq '1.1.0') 'The tracked Wails product metadata must match the Windows v1.1.0 release.'
+Assert-Condition ($windowsProject.info.productVersion -eq '1.1.1') 'The tracked Wails product metadata must match the Windows v1.1.1 hotfix release.'
 Assert-Condition ($windowsReleaseScript -match 'desktop\.controllerVersion=\$ReleaseVersion') 'The signed controller must link its canonical release version instead of retaining the development value.'
 Assert-Condition ($windowsReleaseScript -match 'ProductVersion.*ReleaseVersion') 'Windows packaging must reject Wails product metadata that differs from the requested release.'
 Assert-Condition ($windowsReleaseScript -match 'signerThumbprint') 'The node-release manifest must pin the exact Authenticode signer.'

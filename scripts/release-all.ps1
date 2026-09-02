@@ -476,8 +476,14 @@ function Assert-MobileEgressApprovedReleaseScope {
         }
         return
     }
+    if ($Version -eq '1.1.1') {
+        if ($scope -cne 'Windows') {
+            throw 'The v1.1.1 Windows hotfix release must contain exactly Windows.'
+        }
+        return
+    }
     if ($resolved -contains 'Windows') {
-        throw 'The uncoupled Windows selector is only approved for v1.1.0 with Android; use Desktop for later releases.'
+        throw 'The uncoupled Windows selector is only approved for v1.1.0 or v1.1.1: select exactly Windows and Android for v1.1.0 or exactly Windows for v1.1.1; use Desktop for later releases.'
     }
 }
 

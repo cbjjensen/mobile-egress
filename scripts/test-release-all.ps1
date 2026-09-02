@@ -24,6 +24,13 @@ Assert-Condition (($windowsComponents -join ',') -eq 'Windows') 'An explicitly s
 $interimComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Windows', 'Android'))
 Assert-Condition (($interimComponents -join ',') -eq 'Windows,Android') 'An interim Windows and Android release must be deduplicated into deterministic order.'
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.0' -Components $interimComponents
+$windowsOnlyInterimScopeRejected = $false
+try {
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.0' -Components @('Windows')
+} catch {
+    $windowsOnlyInterimScopeRejected = $_.Exception.Message -match 'exactly Windows and Android'
+}
+Assert-Condition $windowsOnlyInterimScopeRejected 'The immutable v1.1.0 scope must remain exactly Windows and Android.'
 $narrowInterimScopeRejected = $false
 try {
     Assert-MobileEgressApprovedReleaseScope -Version '1.1.0' -Components @('Android')
@@ -31,13 +38,35 @@ try {
     $narrowInterimScopeRejected = $_.Exception.Message -match 'exactly Windows and Android'
 }
 Assert-Condition $narrowInterimScopeRejected 'The frozen v1.1.0 release must not resume or publish with a narrowed component set.'
-$futureWindowsExceptionRejected = $false
+Assert-MobileEgressApprovedReleaseScope -Version '1.1.1' -Components @('Windows')
+$hotfixAndroidScopeRejected = $false
+try {
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.1' -Components @('Android')
+} catch {
+    $hotfixAndroidScopeRejected = $_.Exception.Message -match 'exactly Windows'
+}
+Assert-Condition $hotfixAndroidScopeRejected 'The v1.1.1 hotfix must reject Android-only release scope.'
+$hotfixDesktopScopeRejected = $false
+try {
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.1' -Components @('Desktop')
+} catch {
+    $hotfixDesktopScopeRejected = $_.Exception.Message -match 'exactly Windows'
+}
+Assert-Condition $hotfixDesktopScopeRejected 'The v1.1.1 hotfix must reject coupled Desktop release scope.'
+$hotfixWindowsAndroidScopeRejected = $false
 try {
     Assert-MobileEgressApprovedReleaseScope -Version '1.1.1' -Components @('Windows', 'Android')
 } catch {
-    $futureWindowsExceptionRejected = $_.Exception.Message -match 'only approved for v1.1.0'
+    $hotfixWindowsAndroidScopeRejected = $_.Exception.Message -match 'exactly Windows'
 }
-Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain a one-version exception instead of silently changing future Desktop policy.'
+Assert-Condition $hotfixWindowsAndroidScopeRejected 'The v1.1.1 hotfix must reject Windows and Android release scope.'
+$futureWindowsExceptionRejected = $false
+try {
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Windows')
+} catch {
+    $futureWindowsExceptionRejected = $_.Exception.Message -match 'only approved for v1.1.0 or v1.1.1'
+}
+Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain rejected after the explicit v1.1.1 hotfix exception.'
 $desktopWindowsConflictRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('Desktop', 'Windows')
@@ -70,6 +99,8 @@ $desktopDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRo
 Assert-Condition (($desktopDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg') 'A Desktop release must publish the Windows bundle, EC2 Client, and macOS PKG together.'
 $windowsDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows'))
 Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe') 'An interim Windows release must publish only the signed Windows bundle and EC2 Client.'
+$hotfixDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.1.1' -Components @('Windows'))
+Assert-Condition (($hotfixDefinitions.Name -join ',') -ceq 'mobile-egress-windows-1.1.1.zip,mobile-egress-client.exe') 'The v1.1.1 Windows-only hotfix must contain only the Windows ZIP and EC2 Client.'
 $androidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Android'))
 Assert-Condition (($androidDefinitions.Name -join ',') -eq 'zfnf-mobile-egress-android-1.2.3.apk') 'An Android release must publish only the versioned ZFNF APK.'
 $interimDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
@@ -118,11 +149,31 @@ Assert-Condition ([string]::IsNullOrWhiteSpace(($interimDownloadLinks | Where-Ob
 Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The interim release must explain why macOS is deferred.'
 Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.1.0') 'The interim release must link its Android APK from the current tag.'
 
+$hotfixDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.1' -Version '1.1.1' -ReleasedArtifacts $hotfixDefinitions -PublishedReleases @(
+    [pscustomobject]@{
+        tagName = 'v1.1.0'
+        isDraft = $false
+        assets = @(
+            [pscustomobject]@{ name = 'mobile-egress-windows-1.1.0.zip' },
+            [pscustomobject]@{ name = 'mobile-egress-client.exe' },
+            [pscustomobject]@{ name = 'zfnf-mobile-egress-android-1.1.0.apk' }
+        )
+    }
+))
+Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.1/mobile-egress-windows-1.1.1.zip') 'The v1.1.1 notes must link the current Windows ZIP.'
+Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'client' }).Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.1/mobile-egress-client.exe') 'The v1.1.1 notes must link the current EC2 Client.'
+Assert-Condition ([string]::IsNullOrWhiteSpace(($hotfixDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Url)) 'The v1.1.1 notes must not manufacture a macOS download.'
+Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The v1.1.1 notes must mark macOS unavailable.'
+Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'android' }).Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.0/zfnf-mobile-egress-android-1.1.0.apk') 'The v1.1.1 notes must fall back to the published v1.1.0 Android APK.'
+
 $downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $desktopDownloadLinks
 Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'
 Assert-Condition ($downloadSection -match '\[zfnf-mobile-egress-android-1\.2\.2\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.2/zfnf-mobile-egress-android-1\.2\.2\.apk\)') 'The download section must render fallback assets as direct GitHub download links.'
 $interimDownloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $interimDownloadLinks
 Assert-Condition ($interimDownloadSection -match 'macOS controller PKG.*Deferred to a later release pending Apple Developer Program enrollment') 'The interim release notes must state the macOS deferral explicitly.'
+$hotfixDownloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $hotfixDownloadLinks
+Assert-Condition ($hotfixDownloadSection -match '\[zfnf-mobile-egress-android-1\.1\.0\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.1\.0/zfnf-mobile-egress-android-1\.1\.0\.apk\)') 'The v1.1.1 release notes must render the published v1.1.0 Android fallback link.'
+Assert-Condition ($hotfixDownloadSection -match 'macOS controller PKG.*Deferred to a later release pending Apple Developer Program enrollment') 'The v1.1.1 release notes must state that macOS is unavailable.'
 
 $updatedBody = Update-MobileEgressReleaseBodyDownloadSection -Body "Generated notes`n`n<!-- mobile-egress-downloads:start -->`nold`n<!-- mobile-egress-downloads:end -->`n" -DownloadSection $downloadSection
 Assert-Condition (($updatedBody | Select-String -Pattern '<!-- mobile-egress-downloads:start -->' -AllMatches).Matches.Count -eq 1) 'Updating release notes must replace the managed Downloads section instead of appending duplicates.'

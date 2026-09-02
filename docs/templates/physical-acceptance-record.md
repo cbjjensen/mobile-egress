@@ -18,9 +18,9 @@ Save a copy of this template with the private release evidence. Do not record QR
 | Notarization / staple | `NOT RUN` |
 | Node-manifest SHA-256 | |
 | Mac verification-record private path / SHA-256 | Private evidence; not a GitHub asset / |
-| Android APK filename / SHA-256 (if Android) | |
-| Android public signer digest (if Android) | |
-| Android versionCode / versionName (if Android) | |
+| Android APK filename / SHA-256 (if selected or linked fallback) | |
+| Android public signer digest (if selected or linked fallback) | |
+| Android versionCode / versionName (if selected or linked fallback) | |
 | iOS bundle ID / TestFlight build (if iOS) | |
 | Private same-Mac upgrade fixture | Signed/notarized `1.0.999`, built from final source; no Git tag or GitHub asset |
 
@@ -42,9 +42,9 @@ Use lab labels such as node A/node B instead of instance IDs.
 
 ## Required results
 
-### Coupled Windows/Android baseline
+### v1.1.1 Windows / v1.1.0 Android baseline
 
-Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Android capacity-host rows below as `PENDING` until actually run. A required `FAIL`, `NOT RUN`, or `PENDING` blocks the affected stable promotion.
+For the Windows-only v1.1.1 hotfix, record the current Windows ZIP and Client plus the published v1.1.0 Android APK linked by the managed release notes; Android is fallback evidence, not part of the v1.1.1 component scope. Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Android capacity-host rows below as `PENDING` until actually run. A required `FAIL`, `NOT RUN`, or `PENDING` blocks the affected stable promotion.
 
 | Check | Result | Sanitized note |
 |---|---|---|
@@ -54,8 +54,8 @@ Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Andr
 | Relay listens only on `127.0.0.1:8443` | `NOT RUN` | |
 | Android pairs and connects over cellular with Wi-Fi enabled | `NOT RUN` | |
 | Two SSM-managed Clients install with distinct identities | `NOT RUN` | |
-| Each SOCKS listener is authenticated and `127.0.0.1:1080` only | `NOT RUN` | Application opt-in on the same EC2 node; not system-wide/VPN/public/UDP/QUIC. |
-| Each ordinary-HTTP/HTTPS-CONNECT listener is authenticated and `127.0.0.1:1081` only | `NOT RUN` | Application opt-in on the same EC2 node; not controller-host or system-wide. |
+| Each SOCKS listener is authenticated and `127.0.0.2:1080` only | `NOT RUN` | Application opt-in on the same EC2 node; no `.1` compatibility listener and not system-wide/VPN/public/UDP/QUIC. |
+| Each ordinary-HTTP/HTTPS-CONNECT listener is authenticated and `127.0.0.2:1081` only | `NOT RUN` | Application opt-in on the same EC2 node; no `.1` compatibility listener and not controller-host or system-wide. |
 | Node A direct/proxied egress differ; values not recorded | `NOT RUN` | |
 | Node B direct/proxied egress differ; values not recorded | `NOT RUN` | |
 | Both Clients route simultaneously without changing default routes | `NOT RUN` | |
@@ -68,7 +68,7 @@ Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Andr
 | Controller PC reboot recovery | `NOT RUN` | |
 | EC2 node A/B reboot recovery | `NOT RUN` | |
 | Android reboot plus explicit Start recovery | `NOT RUN` | |
-| Signed Client Update retains identity/credentials | `NOT RUN` | |
+| Signed Client Update activates the `.2` listeners and retains identity/credentials; both values are recopied | `NOT RUN` | |
 | Repair restores service/config without identity change | `NOT RUN` | |
 | Tailscale-name endpoint migration out and back | `NOT RUN` | |
 | SSM/log review finds no plaintext secrets | `NOT RUN` | |
@@ -77,7 +77,7 @@ Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Andr
 
 ### Future macOS controller
 
-This section is not applicable to the Mac-free v1.1.0 interim release. Complete it only for a later release whose component scope includes Desktop.
+This section is not applicable to the Mac-free v1.1.0 interim release or the v1.1.1 Windows hotfix. Complete it only for a later release whose component scope includes Desktop; the first Mac-bearing version must be later than v1.1.1.
 
 Clean-install-only means the first Mac bridge begins with empty Mac controller/relay state and imports no Windows private state. Test same-Mac upgrade with the private signed/notarized `1.0.999` fixture built from the final source; do not create a tag or GitHub asset for the fixture.
 
