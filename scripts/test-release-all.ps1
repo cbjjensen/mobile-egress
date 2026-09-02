@@ -438,9 +438,9 @@ Assert-Condition $staleVersionCodeRejected 'A new Android release must increase 
 $trackedAndroidBuildFile = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'android\app\build.gradle.kts')
 Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent $trackedAndroidBuildFile `
-    -ExpectedVersion '1.1.3' `
+    -ExpectedVersion '1.1.4' `
     -MaximumPriorVersionCode 16
-Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*18\s*$') 'The tracked Android v1.1.3 release must use versionCode 18.'
+Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*18\s*$') 'The tracked Android v1.1.4 release must use versionCode 18.'
 
 $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-release-zip-test-" + [guid]::NewGuid().ToString('N'))
 try {

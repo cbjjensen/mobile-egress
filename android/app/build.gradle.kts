@@ -13,7 +13,7 @@ val releaseProperties = Properties().apply {
         releasePropertiesFile.inputStream().use(::load)
     }
 }
-val androidVersionName = "1.1.3"
+val androidVersionName = "1.1.4"
 
 android {
     namespace = "com.mobileegress.agent"
