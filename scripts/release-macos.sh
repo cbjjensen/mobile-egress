@@ -121,7 +121,10 @@ if /usr/bin/plutil -extract com.apple.security.app-sandbox raw -o - "$WORK/obser
 fi
 
 BUILD_VERSION=${RELEASE_VERSION%%-*}
-/usr/bin/pkgbuild --component "$APP" --install-location /Applications --identifier com.cbjjensen.mobile-egress.controller --version "$BUILD_VERSION" --ownership recommended "$UNSIGNED_PKG"
+PKG_ROOT="$WORK/pkg-root"
+/bin/mkdir -p "$PKG_ROOT/Applications"
+/usr/bin/ditto "$APP" "$PKG_ROOT/Applications/ZFNF Mobile Egress.app"
+/usr/bin/pkgbuild --root "$PKG_ROOT" --component-plist "$WINDOWS_CLIENT_ROOT/macos/component.plist" --install-location / --identifier com.cbjjensen.mobile-egress.controller --version "$BUILD_VERSION" --ownership recommended "$UNSIGNED_PKG"
 /usr/bin/productsign --timestamp --sign "$INSTALLER_IDENTITY" "$UNSIGNED_PKG" "$PKG"
 /bin/rm -f "$UNSIGNED_PKG"
 /usr/sbin/pkgutil --check-signature "$PKG" > "$WORK/pkg-signature.txt"

@@ -76,6 +76,25 @@ func TestPrepareSetupRegistersBeforeAllowingOwnerBootstrap(t *testing.T) {
 	}
 }
 
+func TestPrepareSetupRegistersWhenServiceManagementInitiallyReportsNotFound(t *testing.T) {
+	t.Parallel()
+
+	native := &fakeNative{statuses: []NativeStatus{NativeNotFound, NativeEnabled}}
+	admin := &fakeAdmin{result: relayadmin.StatusResult{
+		ProtocolVersion: relayadmin.Version,
+		HelperVersion:   "1.1.0",
+	}}
+	service := mustService(t, native, admin)
+
+	gate := service.PrepareSetup(context.Background())
+	if gate.Decision != SetupProceed || gate.Observation.State != StateEnabled {
+		t.Fatalf("PrepareSetup() = %#v, want enabled proceed", gate)
+	}
+	if got := native.calls(); got != "status,register,status" {
+		t.Fatalf("native calls = %q, want status,register,status", got)
+	}
+}
+
 func TestPrepareSetupOpensLoginItemsAndDoesNotProbeOrProceedWhileApprovalIsPending(t *testing.T) {
 	t.Parallel()
 

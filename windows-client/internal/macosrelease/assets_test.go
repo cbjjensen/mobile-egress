@@ -137,6 +137,26 @@ func TestMacReleasePublishesPackageBeforeCompletionRecord(t *testing.T) {
 	}
 }
 
+func TestMacPackageDisablesBundleRelocation(t *testing.T) {
+	component, err := os.ReadFile("../../macos/component.plist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(component), "<key>BundleIsRelocatable</key>") ||
+		!strings.Contains(string(component), "<false/>") {
+		t.Fatal("macOS package component must disable bundle relocation")
+	}
+
+	script, err := os.ReadFile("../../../scripts/release-macos.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), `PKG_ROOT="$WORK/pkg-root"`) ||
+		!strings.Contains(string(script), `--root "$PKG_ROOT" --component-plist "$WINDOWS_CLIENT_ROOT/macos/component.plist"`) {
+		t.Fatal("macOS release must stage a non-relocatable app root for pkgbuild")
+	}
+}
+
 func plistValues(t *testing.T, document string) map[string]string {
 	t.Helper()
 	decoder := xml.NewDecoder(strings.NewReader(document))

@@ -161,7 +161,7 @@ func (service *Service) PrepareSetup(ctx context.Context) SetupGate {
 		release()
 		return SetupGate{Observation: unavailable(status, FailureNative)}
 	}
-	if status == NativeNotRegistered {
+	if status == NativeNotRegistered || status == NativeNotFound {
 		registerClass := service.native.Register(ctx)
 		if ctx.Err() != nil {
 			release()
