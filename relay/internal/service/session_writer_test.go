@@ -246,6 +246,130 @@ func TestBlockedClientWriterDoesNotHoldServiceMutexOrBlockAnotherClientRoute(t *
 	fixture.service.mu.Unlock()
 }
 
+func TestProductionSessionWiringSharesClientBudgetAndKeepsAgentBudgetIndependent(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	_, devices := enrollDevices(t, fixture, "client", "client", "agent")
+
+	sharedAgentToClients := newOutboundDataBudget(1, 2)
+	fixture.service.agentToClientsBudget = sharedAgentToClients
+	clientOneConnection := newRecordingSessionConnection(true)
+	clientTwoConnection := newRecordingSessionConnection(false)
+	agentConnection := newRecordingSessionConnection(true)
+	agent := newSession(fixture.service, devices[2].serial, enrollment.RoleAgent, agentConnection)
+	clientOne := newSession(fixture.service, devices[0].serial, enrollment.RoleClient, clientOneConnection)
+	clientTwo := newSession(fixture.service, devices[1].serial, enrollment.RoleClient, clientTwoConnection)
+	registerTestSessions(fixture.service, agent, clientOne, clientTwo)
+	defer closeTestSessions(agent, clientOne, clientTwo)
+
+	fixture.service.mu.Lock()
+	for streamID, client := range map[string]*session{
+		"agent-to-client-one":  clientOne,
+		"agent-to-client-two":  clientTwo,
+		"client-to-agent-gate": clientOne,
+		"client-to-agent-full": clientTwo,
+		"client-to-agent-peer": clientTwo,
+	} {
+		fixture.service.streams[streamID] = &stream{id: streamID, client: client, agent: agent, state: streamOpen, lastActivity: time.Now()}
+		fixture.service.activeStreams++
+	}
+	fixture.service.mu.Unlock()
+
+	if err := fixture.service.handleAgentStreamFrame(agent, dataEnvelope("agent-to-client-one", "YQ")); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, clientOneConnection.writeStarted, "first Client mailbox write")
+	assertOutboundBudgetUsage(t, sharedAgentToClients, 1, 2)
+
+	if err := fixture.service.handleClientStreamFrame(clientOne, dataEnvelope("client-to-agent-gate", "Yg")); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, agentConnection.writeStarted, "independent Agent mailbox write")
+	agentInitialBudget := agent.outbound.dataBudget
+	assertOutboundBudgetUsage(t, agentInitialBudget, 1, 2)
+
+	if err := fixture.service.handleAgentStreamFrame(agent, dataEnvelope("agent-to-client-two", "Yw")); err != nil {
+		t.Fatal(err)
+	}
+	sharedClose := readRecordedEnvelope(t, clientTwoConnection)
+	if sharedClose.Type != protocol.TypeClose || sharedClose.StreamID != "agent-to-client-two" || decodedErrorCode(t, sharedClose) != "agent_unavailable" {
+		t.Fatalf("second Client received %#v, want shared-budget agent_unavailable close", sharedClose)
+	}
+	fixture.service.mu.RLock()
+	_, sharedSaturatedStreamExists := fixture.service.streams["agent-to-client-two"]
+	_, independentStreamExists := fixture.service.streams["client-to-agent-gate"]
+	allSessionsRegistered := fixture.service.sessions[agent.serial] == agent && fixture.service.sessions[clientOne.serial] == clientOne && fixture.service.sessions[clientTwo.serial] == clientTwo
+	fixture.service.mu.RUnlock()
+	if sharedSaturatedStreamExists || !independentStreamExists || !allSessionsRegistered {
+		t.Fatalf("shared saturation state = saturated:%t independent:%t sessions:%t, want false/true/true", sharedSaturatedStreamExists, independentStreamExists, allSessionsRegistered)
+	}
+
+	injectedClientToAgent := newOutboundDataBudget(1, 2)
+	agent.outbound.mu.Lock()
+	agent.outbound.dataBudget = injectedClientToAgent
+	agent.outbound.mu.Unlock()
+	if err := fixture.service.handleClientStreamFrame(clientTwo, dataEnvelope("client-to-agent-full", "ZA")); err != nil {
+		t.Fatal(err)
+	}
+	assertOutboundBudgetUsage(t, injectedClientToAgent, 1, 2)
+	if err := fixture.service.handleClientStreamFrame(clientTwo, dataEnvelope("client-to-agent-full", "ZQ")); err != nil {
+		t.Fatalf("Client-to-Agent saturation returned an error: %v", err)
+	}
+	clientToAgentClose := readRecordedEnvelope(t, clientTwoConnection)
+	if clientToAgentClose.Type != protocol.TypeClose || clientToAgentClose.StreamID != "client-to-agent-full" || decodedErrorCode(t, clientToAgentClose) != "agent_unavailable" {
+		t.Fatalf("contributing Client received %#v, want agent_unavailable close", clientToAgentClose)
+	}
+	assertOutboundBudgetUsage(t, injectedClientToAgent, 0, 0)
+
+	fixture.service.mu.RLock()
+	_, saturatedStreamExists := fixture.service.streams["client-to-agent-full"]
+	_, peerStreamExists := fixture.service.streams["client-to-agent-peer"]
+	allSessionsRegistered = fixture.service.sessions[agent.serial] == agent && fixture.service.sessions[clientOne.serial] == clientOne && fixture.service.sessions[clientTwo.serial] == clientTwo
+	fixture.service.mu.RUnlock()
+	if saturatedStreamExists || !peerStreamExists || !allSessionsRegistered {
+		t.Fatalf("Client-to-Agent saturation state = saturated:%t peer:%t sessions:%t, want false/true/true", saturatedStreamExists, peerStreamExists, allSessionsRegistered)
+	}
+	for name, connection := range map[string]*recordingSessionConnection{"Agent": agentConnection, "Client one": clientOneConnection, "Client two": clientTwoConnection} {
+		select {
+		case <-connection.closed:
+			t.Fatalf("%s session closed after data saturation", name)
+		default:
+		}
+	}
+	if err := fixture.service.handleClientStreamFrame(clientTwo, dataEnvelope("client-to-agent-peer", "Zg")); err != nil {
+		t.Fatalf("peer Client-to-Agent route after saturation returned an error: %v", err)
+	}
+	assertOutboundBudgetUsage(t, injectedClientToAgent, 1, 2)
+}
+
+func TestSessionTeardownRefundsQueuedAndInFlightDirectionalDataExactlyOnce(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	reservations := prepareBlockedDirectionalReservations(t, fixture.service)
+
+	reservations.client.close("session_closed")
+	reservations.client.close("session_closed")
+	reservations.agent.close("session_closed")
+	reservations.agent.close("session_closed")
+
+	assertDirectionalBudgetUsageEventually(t, reservations, 0, 0)
+}
+
+func TestServiceTeardownRefundsQueuedAndInFlightDirectionalDataExactlyOnce(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	reservations := prepareBlockedDirectionalReservations(t, fixture.service)
+
+	if err := fixture.service.Close(); err != nil {
+		t.Fatalf("first Service.Close() returned an error: %v", err)
+	}
+	if err := fixture.service.Close(); err != nil {
+		t.Fatalf("second Service.Close() returned an error: %v", err)
+	}
+
+	assertDirectionalBudgetUsageEventually(t, reservations, 0, 0)
+}
+
 func TestSessionWriterPrioritizesControlAndRoundRobinsStreamData(t *testing.T) {
 	service := newWriterTestService()
 	connection := newRecordingSessionConnection(true)
@@ -683,6 +807,85 @@ func closeTestSessions(sessions ...*session) {
 	for _, activeSession := range sessions {
 		activeSession.close("session_closed")
 	}
+}
+
+type blockedDirectionalReservations struct {
+	agent          *session
+	client         *session
+	agentToClients *outboundDataBudget
+	clientToAgent  *outboundDataBudget
+}
+
+func prepareBlockedDirectionalReservations(t *testing.T, service *Service) blockedDirectionalReservations {
+	t.Helper()
+	agentToClients := newOutboundDataBudget(4, 16)
+	service.agentToClientsBudget = agentToClients
+	clientConnection := newRecordingSessionConnection(true)
+	agentConnection := newRecordingSessionConnection(true)
+	client := newSession(service, "teardown-client", enrollment.RoleClient, clientConnection)
+	agent := newSession(service, "teardown-agent", enrollment.RoleAgent, agentConnection)
+	registerTestSessions(service, agent, client)
+
+	service.mu.Lock()
+	tracked := &stream{id: "teardown-stream", client: client, agent: agent, state: streamOpen, lastActivity: time.Now()}
+	service.streams[tracked.id] = tracked
+	service.activeStreams = 1
+	service.mu.Unlock()
+
+	if err := service.handleAgentStreamFrame(agent, dataEnvelope(tracked.id, "YQ")); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, clientConnection.writeStarted, "in-flight Agent-to-Client data")
+	if err := service.handleAgentStreamFrame(agent, dataEnvelope(tracked.id, "YWI")); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.handleClientStreamFrame(client, dataEnvelope(tracked.id, "Yw")); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, agentConnection.writeStarted, "in-flight Client-to-Agent data")
+	if err := service.handleClientStreamFrame(client, dataEnvelope(tracked.id, "Y2Q")); err != nil {
+		t.Fatal(err)
+	}
+
+	clientToAgent := agent.outbound.dataBudget
+	assertOutboundBudgetUsage(t, agentToClients, 2, 5)
+	assertOutboundBudgetUsage(t, clientToAgent, 2, 5)
+	return blockedDirectionalReservations{
+		agent: agent, client: client, agentToClients: agentToClients, clientToAgent: clientToAgent,
+	}
+}
+
+func assertOutboundBudgetUsage(t *testing.T, budget *outboundDataBudget, wantFrames, wantBytes int) {
+	t.Helper()
+	budget.mu.Lock()
+	frames, bytes := budget.frames, budget.bytes
+	budget.mu.Unlock()
+	if frames != wantFrames || bytes != wantBytes {
+		t.Fatalf("outbound budget usage = %d frames/%d bytes, want %d/%d", frames, bytes, wantFrames, wantBytes)
+	}
+}
+
+func assertDirectionalBudgetUsageEventually(t *testing.T, reservations blockedDirectionalReservations, wantFrames, wantBytes int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		agentToClientsFrames, agentToClientsBytes := outboundBudgetUsage(reservations.agentToClients)
+		clientToAgentFrames, clientToAgentBytes := outboundBudgetUsage(reservations.clientToAgent)
+		if agentToClientsFrames == wantFrames && agentToClientsBytes == wantBytes && clientToAgentFrames == wantFrames && clientToAgentBytes == wantBytes {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("directional budget usage = Agent-to-Clients %d frames/%d bytes, Client-to-Agent %d/%d; want both %d/%d",
+				agentToClientsFrames, agentToClientsBytes, clientToAgentFrames, clientToAgentBytes, wantFrames, wantBytes)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func outboundBudgetUsage(budget *outboundDataBudget) (int, int) {
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	return budget.frames, budget.bytes
 }
 
 func readRecordedEnvelope(t *testing.T, connection *recordingSessionConnection) protocol.Envelope {
