@@ -91,6 +91,13 @@ func TestDarwinStateACLInspectorAcceptsTempObjectWithoutExtendedACL(t *testing.T
 	}
 }
 
+func TestDarwinACLInspectorAcceptsSystemRunDirectoryWithoutExtendedACL(t *testing.T) {
+	inspector := newDarwinACLInspector()
+	if err := inspector.ValidatePath(context.Background(), "/private/var/run", pathACLRejectNonRootMutation); err != nil {
+		t.Fatalf("ValidatePath(/private/var/run without an extended ACL) error = %v", err)
+	}
+}
+
 func TestDarwinRootStateGuardValidatesAndRepairsRootOwnedTempTree(t *testing.T) {
 	requireDarwinRootStateTest(t)
 
