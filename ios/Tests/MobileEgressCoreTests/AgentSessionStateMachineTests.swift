@@ -471,6 +471,57 @@ final class AgentSessionStateMachineTests: XCTestCase {
         XCTAssertEqual(afterTargetFailure.configuration.inboundQueueCapacity, 8)
     }
 
+    func testGracefulTargetFailureReleasesPendingIngressAndIgnoresLateWriteCompletion() throws {
+        var machine = connectedMachine(limits: targetIngressLimits(frameLimit: 2, byteLimit: 2))
+        let target = try openReadyTarget(&machine, streamID: "target")
+        let inFlight = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "target",
+            payload: Data([0x41])
+        )).singleTargetWrite)
+        XCTAssertTrue(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "target",
+            payload: Data([0x42])
+        )).isEmpty)
+        XCTAssertTrue(machine.targetEnded(streamID: "target", token: target.token).isEmpty)
+
+        XCTAssertEqual(
+            machine.targetFailed(streamID: "target", token: target.token),
+            [.cancelTarget(streamID: "target", token: target.token)]
+        )
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "target",
+            token: target.token,
+            writeID: inFlight.writeID,
+            succeeded: true
+        ).isEmpty)
+        XCTAssertEqual(machine.snapshot.bytesUploaded, 0)
+
+        let replacement = try openTarget(&machine, streamID: "replacement", ip: "8.8.8.8", port: 443)
+        XCTAssertTrue(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "replacement",
+            payload: Data([0x43, 0x44])
+        )).isEmpty)
+        machine.targetWasCreated(streamID: "replacement", token: replacement.token)
+        let replacementWrite = try XCTUnwrap(
+            machine.targetConnected(streamID: "replacement", token: replacement.token).singleTargetWrite
+        )
+        XCTAssertEqual(replacementWrite.data, Data([0x43, 0x44]))
+
+        let gracefulClose = try popOutbound(
+            &machine,
+            type: .close,
+            streamID: "target",
+            payload: Data("target_closed".utf8)
+        )
+        XCTAssertTrue(machine.completeOutbound(gracefulClose, accepted: true).isEmpty)
+        try assertOutbound(&machine, type: .opened, streamID: "replacement", payload: Data())
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1)
+        XCTAssertEqual(machine.snapshot.errorClass, .none)
+    }
+
     func testTargetIngressPressurePreservesAnExistingRuntimeErrorClass() throws {
         var machine = connectedMachine(limits: targetIngressLimits())
         let failed = try openTarget(&machine, streamID: "failed", ip: "8.8.8.8", port: 443)

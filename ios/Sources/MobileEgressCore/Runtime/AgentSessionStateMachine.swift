@@ -178,9 +178,22 @@ struct AgentSessionStateMachine {
     }
 
     mutating func targetFailed(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
-        guard let stream = streams[streamID], stream.token == token,
-              stream.phase == .connecting || stream.phase == .open
-        else { return [] }
+        guard var stream = streams[streamID], stream.token == token else { return [] }
+        if stream.phase == .gracefulPending {
+            releaseTargetIngress(stream)
+            stream.writeInFlight = nil
+            stream.inboundQueue.removeAll()
+            stream.queuedInboundBytes = 0
+            stream.writeFailed = true
+            let shouldCancelTarget = stream.hasTarget
+            stream.hasTarget = false
+            streams[streamID] = stream
+            let cancelEffects: [AgentRuntimeEffect] = shouldCancelTarget
+                ? [.cancelTarget(streamID: streamID, token: token)]
+                : []
+            return cancelEffects + enqueueGracefulCloseIfDrained(streamID: streamID, token: token)
+        }
+        guard stream.phase == .connecting || stream.phase == .open else { return [] }
         return failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect)
     }
 
