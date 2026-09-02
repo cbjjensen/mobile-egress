@@ -636,6 +636,59 @@ class TargetIoReactorTest {
     }
 
     @Test
+    fun `terminated stream discards queued writes before refunded capacity is reused`() {
+        val backend = FakeSelectorBackend(
+            FakeConnection("terminated", connectedImmediately = true),
+            FakeConnection("replacement", connectedImmediately = true),
+        )
+        val terminalEntered = CountDownLatch(1)
+        val allowTerminalReturn = CountDownLatch(1)
+        val listener = object : TargetReactorListener {
+            override fun onOpened(streamId: String, correlationToken: Long) = Unit
+            override fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean = true
+            override fun onBytesWritten(streamId: String, correlationToken: Long, byteCount: Int) = Unit
+            override fun onTerminal(
+                streamId: String,
+                correlationToken: Long,
+                reason: TargetTerminalReason,
+            ) {
+                terminalEntered.countDown()
+                allowTerminalReturn.await(2, TimeUnit.SECONDS)
+            }
+            override fun onReleased(streamId: String, correlationToken: Long) = Unit
+            override fun onFatalFailure() = Unit
+        }
+        val reactor = reactor(
+            backend = backend,
+            listener = listener,
+            maxStreams = 1,
+            dataCommandCapacity = 2,
+            totalCommandCapacity = 3,
+            commandsPerCycle = 1,
+            perStreamWriteCapacity = 1,
+            sessionWriteCapacity = 1,
+            sessionWriteByteCapacity = 2,
+        )
+        assertEquals(ReactorSubmitResult.Accepted, reactor.open("terminated", targetAddress()))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("terminated", byteArrayOf(1, 2)))
+        assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("terminated", byteArrayOf(3)))
+        assertTrue(reactor.start())
+        try {
+            assertTrue(terminalEntered.await(2, TimeUnit.SECONDS))
+            val afterTermination = reactor.snapshot()
+
+            assertEquals(ReactorSubmitResult.Accepted, reactor.open("replacement", targetAddress()))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("replacement", byteArrayOf(4, 5)))
+            assertEquals(TargetIoReactorSnapshot(2, 1, 1, 2), reactor.snapshot())
+            assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), afterTermination)
+        } finally {
+            allowTerminalReturn.countDown()
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
     fun `backpressure diagnostics use only fixed source categories`() {
         assertEquals(
             listOf(
@@ -1104,7 +1157,7 @@ class TargetIoReactorTest {
 
     private fun reactor(
         backend: FakeSelectorBackend,
-        listener: RecordingListener,
+        listener: TargetReactorListener,
         maxStreams: Int = 256,
         dataCommandCapacity: Int = AgentCapacity.REACTOR_DATA_COMMAND_CAPACITY,
         totalCommandCapacity: Int = AgentCapacity.REACTOR_COMMAND_CAPACITY,

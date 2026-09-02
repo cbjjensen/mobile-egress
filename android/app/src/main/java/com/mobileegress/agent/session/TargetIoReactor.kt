@@ -720,11 +720,30 @@ internal class TargetIoReactor(
         val reservation = reservations[streamId]
         if (reservation?.generation != generation) return@synchronized null
         reservations.remove(streamId)
+        discardQueuedWrites(streamId, generation)
         refundOutstandingWrites(streamId, generation)
         saturatedStreams.remove(streamId)
         terminalSignals.remove(streamId)
         releaseRequests.remove(streamId)
         reservation
+    }
+
+    private fun discardQueuedWrites(streamId: String, generation: Long) {
+        var discarded = 0
+        val iterator = commands.iterator()
+        while (iterator.hasNext()) {
+            val command = iterator.next()
+            if (
+                command is ReactorCommand.Write &&
+                command.streamId == streamId &&
+                command.generation == generation
+            ) {
+                iterator.remove()
+                discarded += 1
+            }
+        }
+        queuedDataCommands -= discarded
+        check(queuedDataCommands >= 0)
     }
 
     private fun markTerminalSignaled(streamId: String, generation: Long): Boolean = synchronized(lock) {
