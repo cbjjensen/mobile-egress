@@ -76,6 +76,12 @@ check_member_list() {
     /usr/bin/awk -F/ 'BEGIN { ok=1 } /^\// { ok=0 } { for (i=1; i<=NF; i++) if ($i == "..") ok=0 } END { exit ok ? 0 : 1 }' "$list" || fail 'archive contains an unsafe member path'
 }
 
+wails_version() {
+    binary=$1
+    output=$("$binary" version) || return 1
+    printf '%s\n' "$output" | /usr/bin/awk 'NR == 1 { print; exit }'
+}
+
 GO_FINAL="$BUILD_ROOT/toolchains/go/1.26.7"
 if [ ! -x "$GO_FINAL/bin/go" ]; then
     archive=$(download_verified 'go1.26.7.darwin-arm64.tar.gz' 'https://go.dev/dl/go1.26.7.darwin-arm64.tar.gz' '020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d' '64772572')
@@ -124,10 +130,10 @@ if [ ! -x "$WAILS_FINAL/bin/wails" ]; then
         GOPATH="$BUILD_ROOT/gopath" GOMODCACHE="$BUILD_ROOT/gomodcache" GOCACHE="$BUILD_ROOT/gocache" \
         "$GO_FINAL/bin/go" build -trimpath -o "$work/install/bin/wails" ./cmd/wails
     )
-    [ "$($work/install/bin/wails version)" = 'v2.14.0' ] || fail 'built Wails version is unexpected'
+    [ "$(wails_version "$work/install/bin/wails")" = 'v2.14.0' ] || fail 'built Wails version is unexpected'
     /bin/mv "$work/install" "$WAILS_FINAL"
     /bin/rm -rf "$work"
 fi
-[ "$($WAILS_FINAL/bin/wails version)" = 'v2.14.0' ] || fail 'installed Wails does not match the lock'
+[ "$(wails_version "$WAILS_FINAL/bin/wails")" = 'v2.14.0' ] || fail 'installed Wails does not match the lock'
 
 printf 'Pinned macOS toolchain is ready under %s\n' "$BUILD_ROOT"
