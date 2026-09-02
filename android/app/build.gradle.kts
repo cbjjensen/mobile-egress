@@ -13,7 +13,7 @@ val releaseProperties = Properties().apply {
         releasePropertiesFile.inputStream().use(::load)
     }
 }
-val androidVersionName = "1.1.4"
+val androidVersionName = "1.1.6"
 
 android {
     namespace = "com.mobileegress.agent"
@@ -23,7 +23,7 @@ android {
         applicationId = "com.mobileegress.agent"
         minSdk = 29
         targetSdk = 35
-        versionCode = 19
+        versionCode = 20
         versionName = androidVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
