@@ -45,7 +45,7 @@ func TestLaunchDaemonPlistSemanticContract(t *testing.T) {
 		}
 		entries[key.text] = value
 	}
-	wantKeys := []string{"BundleProgram", "GroupName", "KeepAlive", "Label", "ProcessType", "ProgramArguments", "RunAtLoad", "Sockets", "UserName"}
+	wantKeys := []string{"BundleProgram", "KeepAlive", "Label", "ProcessType", "ProgramArguments", "RunAtLoad", "Sockets", "UserName"}
 	gotKeys := make([]string, 0, len(entries))
 	for key := range entries {
 		gotKeys = append(gotKeys, key)
@@ -57,7 +57,6 @@ func TestLaunchDaemonPlistSemanticContract(t *testing.T) {
 	assertPlistString(t, entries["Label"], "com.cbjjensen.mobile-egress.relay")
 	assertPlistString(t, entries["BundleProgram"], "Contents/Resources/mobile-egress-relay")
 	assertPlistString(t, entries["UserName"], "root")
-	assertPlistString(t, entries["GroupName"], "root")
 	assertPlistString(t, entries["ProcessType"], "Background")
 	assertPlistBoolean(t, entries["RunAtLoad"], true)
 	assertPlistBoolean(t, entries["KeepAlive"], true)
