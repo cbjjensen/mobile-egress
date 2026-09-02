@@ -24,18 +24,108 @@ class OutboundMailboxTest {
     }
 
     @Test
-    fun `agent default data lanes enforce aggregate and per stream bounds`() {
-        val aggregate = OutboundMailbox()
-        repeat(256) { index ->
+    fun `agent data lanes enforce thirty two per stream and injected aggregate bounds`() {
+        val perStream = OutboundMailbox(
+            dataCapacity = 33,
+            perStreamDataCapacity = 32,
+            dataByteCapacity = 64,
+        )
+        repeat(32) { index ->
+            assertTrue(perStream.offerData("busy", byteArrayOf(index.toByte())))
+        }
+        assertFalse(perStream.offerData("busy", byteArrayOf(33)))
+        assertTrue(perStream.offerData("peer", byteArrayOf(34)))
+
+        val aggregate = OutboundMailbox(
+            dataCapacity = 3,
+            perStreamDataCapacity = 3,
+            dataByteCapacity = 16,
+        )
+        repeat(3) { index ->
             assertTrue(aggregate.offerData("stream-$index", byteArrayOf(index.toByte())))
         }
         assertFalse(aggregate.offerData("aggregate-overflow", byteArrayOf(1)))
+    }
 
-        val perStream = OutboundMailbox()
-        assertTrue(perStream.offerData("busy", byteArrayOf(1)))
-        assertTrue(perStream.offerData("busy", byteArrayOf(2)))
-        assertFalse(perStream.offerData("busy", byteArrayOf(3)))
-        assertTrue(perStream.offerData("peer", byteArrayOf(4)))
+    @Test
+    fun `polled outbound data remains charged until emission`() {
+        val mailbox = OutboundMailbox(
+            dataCapacity = 2,
+            perStreamDataCapacity = 1,
+            dataByteCapacity = 3,
+        )
+        assertTrue(mailbox.offerData("first", byteArrayOf(1, 2)))
+        val claimed = requireNotNull(mailbox.poll())
+
+        assertEquals(OutboundMailboxSnapshot(1, 2), mailbox.snapshot())
+        assertFalse(mailbox.offerData("first", byteArrayOf(3)))
+        assertFalse(mailbox.offerData("peer", byteArrayOf(3, 4)))
+
+        assertEquals(OutboundEmission.Emitted, mailbox.emit(claimed) { true })
+        assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+        assertTrue(mailbox.offerData("peer", byteArrayOf(3, 4)))
+    }
+
+    @Test
+    fun `outbound encoded byte boundary and zero length frame are independent`() {
+        val mailbox = OutboundMailbox(
+            dataCapacity = 3,
+            perStreamDataCapacity = 3,
+            dataByteCapacity = 3,
+        )
+
+        assertTrue(mailbox.offerData("stream", byteArrayOf(1, 2)))
+        assertTrue(mailbox.offerData("stream", byteArrayOf(3)))
+        assertFalse(mailbox.offerData("peer", byteArrayOf(4)))
+        assertTrue(mailbox.offerData("peer", byteArrayOf()))
+        assertEquals(OutboundMailboxSnapshot(3, 3), mailbox.snapshot())
+    }
+
+    @Test
+    fun `outbound cancellation and close refund queued and claimed data exactly once`() {
+        val canceled = OutboundMailbox(
+            dataCapacity = 3,
+            perStreamDataCapacity = 3,
+            dataByteCapacity = 8,
+        )
+        assertTrue(canceled.offerData("stream", byteArrayOf(1, 2)))
+        assertTrue(canceled.offerData("stream", byteArrayOf(3, 4, 5)))
+        val claimed = requireNotNull(canceled.poll())
+
+        canceled.blockAndDiscardData("stream")
+        assertEquals(OutboundMailboxSnapshot(0, 0), canceled.snapshot())
+        assertEquals(OutboundEmission.Canceled, canceled.emit(claimed) { true })
+        assertEquals(OutboundMailboxSnapshot(0, 0), canceled.snapshot())
+
+        val closed = OutboundMailbox(
+            dataCapacity = 2,
+            perStreamDataCapacity = 2,
+            dataByteCapacity = 8,
+        )
+        assertTrue(closed.offerData("stream", byteArrayOf(1, 2)))
+        val claimedAtClose = requireNotNull(closed.poll())
+        assertTrue(closed.offerData("stream", byteArrayOf(3, 4, 5)))
+
+        closed.close()
+        assertEquals(OutboundMailboxSnapshot(0, 0), closed.snapshot())
+        assertEquals(OutboundEmission.Canceled, closed.emit(claimedAtClose) { true })
+        assertEquals(OutboundMailboxSnapshot(0, 0), closed.snapshot())
+    }
+
+    @Test
+    fun `failed outbound emission refunds its reservation`() {
+        val mailbox = OutboundMailbox(
+            dataCapacity = 1,
+            perStreamDataCapacity = 1,
+            dataByteCapacity = 2,
+        )
+        assertTrue(mailbox.offerData("stream", byteArrayOf(1, 2)))
+        val frame = requireNotNull(mailbox.poll())
+
+        assertEquals(OutboundEmission.Failed, mailbox.emit(frame) { false })
+
+        assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+        assertTrue(mailbox.offerData("peer", byteArrayOf(3, 4)))
     }
 
     @Test

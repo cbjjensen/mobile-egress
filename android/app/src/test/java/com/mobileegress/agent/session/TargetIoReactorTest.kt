@@ -450,7 +450,7 @@ class TargetIoReactorTest {
     }
 
     @Test
-    fun `target ingress accepts eight frames then closes only the ninth for that stream`() {
+    fun `target ingress accepts thirty two frames then closes only the thirty third for that stream`() {
         val backend = FakeSelectorBackend(FakeConnection("busy", connectedImmediately = true))
         val listener = RecordingListener(openCount = 1, terminalCount = 1)
         val reactor = reactor(backend, listener)
@@ -459,10 +459,10 @@ class TargetIoReactorTest {
             assertEquals(ReactorSubmitResult.Accepted, reactor.open("busy", targetAddress()))
             assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
 
-            repeat(8) { index ->
+            repeat(32) { index ->
                 assertEquals(ReactorSubmitResult.Accepted, reactor.write("busy", byteArrayOf(index.toByte())))
             }
-            assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("busy", byteArrayOf(8)))
+            assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("busy", byteArrayOf(32)))
 
             assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
             assertEquals(listOf(TargetTerminalReason.Backpressure), listener.terminalReasons["busy"])
@@ -474,31 +474,30 @@ class TargetIoReactorTest {
     }
 
     @Test
-    fun `target ingress caps the session at five hundred twelve frames independently of streams`() {
-        val connections = Array(65) { index ->
+    fun `target ingress caps an injected session frame budget independently of streams`() {
+        val connections = Array(3) { index ->
             FakeConnection("stream-$index", connectedImmediately = true)
         }
         val reports = Collections.synchronizedList(mutableListOf<BackpressureSource>())
         val backend = FakeSelectorBackend(*connections)
-        val listener = RecordingListener(openCount = 65, terminalCount = 1)
-        val reactor = reactor(backend, listener, backpressureReporter = reports::add)
+        val listener = RecordingListener(openCount = 3, terminalCount = 1)
+        val reactor = reactor(
+            backend,
+            listener,
+            sessionWriteCapacity = 2,
+            backpressureReporter = reports::add,
+        )
         reactor.start()
         try {
-            repeat(65) { index ->
+            repeat(3) { index ->
                 assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream-$index", targetAddress()))
             }
             assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
-            repeat(64) { stream ->
-                repeat(8) { frame ->
-                    assertEquals(
-                        ReactorSubmitResult.Accepted,
-                        reactor.write("stream-$stream", byteArrayOf(frame.toByte())),
-                    )
-                }
-            }
-            waitUntil { connections.take(64).all { it.writeInterested.get() } }
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-0", byteArrayOf(1)))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-1", byteArrayOf(2)))
+            waitUntil { connections.take(2).all { it.writeInterested.get() } }
 
-            assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("stream-64", byteArrayOf(1)))
+            assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("stream-2", byteArrayOf(3)))
             assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
             assertEquals("TargetSessionFrameLimit", reports.single().name)
             assertFalse(listener.fatal.get())
@@ -509,32 +508,66 @@ class TargetIoReactorTest {
     }
 
     @Test
-    fun `target ingress admits legal thirty two KiB frames until the eight MiB session ceiling`() {
-        val connections = Array(33) { index ->
+    fun `target ingress enforces an injected decoded byte boundary`() {
+        val connections = Array(3) { index ->
             FakeConnection("stream-$index", connectedImmediately = true)
         }
         val reports = Collections.synchronizedList(mutableListOf<BackpressureSource>())
         val backend = FakeSelectorBackend(*connections)
-        val listener = RecordingListener(openCount = 33, terminalCount = 1)
-        val reactor = reactor(backend, listener, backpressureReporter = reports::add)
-        val legalFrame = ByteArray(32 * 1024) { 7 }
+        val listener = RecordingListener(openCount = 3, terminalCount = 1)
+        val reactor = reactor(
+            backend,
+            listener,
+            sessionWriteByteCapacity = 3,
+            backpressureReporter = reports::add,
+        )
         reactor.start()
         try {
-            repeat(33) { index ->
+            repeat(3) { index ->
                 assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream-$index", targetAddress()))
             }
             assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
-            repeat(32) { stream ->
-                repeat(8) {
-                    assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-$stream", legalFrame))
-                }
-            }
-            waitUntil { connections.take(32).all { it.writeInterested.get() } }
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-0", byteArrayOf(1, 2)))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-1", byteArrayOf(3)))
+            waitUntil { connections.take(2).all { it.writeInterested.get() } }
 
-            assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("stream-32", legalFrame))
+            assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("stream-2", byteArrayOf(4)))
             assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
             assertEquals("TargetSessionByteLimit", reports.single().name)
             assertFalse(listener.fatal.get())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `partial target write retains frame and byte reservations until final write`() {
+        val connection = FakeConnection("stream", connectedImmediately = true, maxWriteBytes = 1)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1)
+        val reactor = reactor(
+            backend = backend,
+            listener = listener,
+            perStreamWriteCapacity = 1,
+            sessionWriteCapacity = 1,
+            sessionWriteByteCapacity = 2,
+        )
+        reactor.start()
+        try {
+            assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream", targetAddress()))
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", byteArrayOf(1, 2)))
+            waitUntil { connection.writeInterested.get() }
+            assertEquals(TargetIoReactorSnapshot(0, 0, 1, 2), reactor.snapshot())
+
+            backend.ready("stream", writable = true)
+            waitUntil { connection.written().size == 1 }
+            assertEquals(TargetIoReactorSnapshot(0, 0, 1, 2), reactor.snapshot())
+
+            backend.ready("stream", writable = true)
+            waitUntil { connection.written().size == 2 }
+            assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), reactor.snapshot())
         } finally {
             reactor.shutdown()
             assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
@@ -583,6 +616,10 @@ class TargetIoReactorTest {
             }
             assertTrue(reactor.start())
             assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(0, reactor.snapshot().outstandingWriteFrames)
+            assertEquals(0, reactor.snapshot().outstandingWriteBytes)
+            waitUntil { reactor.snapshot().queuedCommands == 0 }
+            assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), reactor.snapshot())
 
             assertEquals(ReactorSubmitResult.Accepted, reactor.open("replacement", targetAddress()))
             assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
@@ -660,7 +697,9 @@ class TargetIoReactorTest {
         val perStream = reactor(
             backend = perStreamBackend,
             listener = perStreamListener,
-            commandCapacity = 16,
+            dataCommandCapacity = 16,
+            totalCommandCapacity = 16,
+            perStreamWriteCapacity = 8,
             backpressureReporter = reports::add,
         )
         assertEquals(ReactorSubmitResult.Accepted, perStream.open("busy", targetAddress()))
@@ -681,7 +720,8 @@ class TargetIoReactorTest {
         val aggregate = reactor(
             backend = aggregateBackend,
             listener = aggregateListener,
-            commandCapacity = 2,
+            dataCommandCapacity = 2,
+            totalCommandCapacity = 2,
             backpressureReporter = reports::add,
         )
         assertEquals(ReactorSubmitResult.Accepted, aggregate.open("aggregate", targetAddress()))
@@ -703,54 +743,88 @@ class TargetIoReactorTest {
     }
 
     @Test
-    fun `required command overflow is session fatal but shutdown cannot be stranded`() {
+    fun `data commands cannot consume reserved control slots and FIFO order is preserved`() {
         val backend = FakeSelectorBackend(
-            FakeConnection("one", connectedImmediately = true),
-            FakeConnection("two", connectedImmediately = true),
-            FakeConnection("three", connectedImmediately = true),
+            FakeConnection("busy", connectedImmediately = true),
         )
-        val listener = RecordingListener(terminalCount = 2)
-        val reactor = reactor(backend, listener, commandCapacity = 2, maxStreams = 3)
-        assertEquals(ReactorSubmitResult.Accepted, reactor.open("one", targetAddress()))
-        assertEquals(ReactorSubmitResult.Accepted, reactor.open("two", targetAddress()))
-        assertEquals(ReactorSubmitResult.SessionSaturated, reactor.open("three", targetAddress()))
+        val listener = RecordingListener(terminalCount = 1)
+        val reactor = reactor(
+            backend = backend,
+            listener = listener,
+            maxStreams = 2,
+            dataCommandCapacity = 2,
+            totalCommandCapacity = 4,
+            commandsPerCycle = 4,
+        )
+        assertEquals(ReactorSubmitResult.Accepted, reactor.open("busy", targetAddress()))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("busy", byteArrayOf(1)))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("busy", byteArrayOf(2)))
+        assertEquals(ReactorSubmitResult.StreamSaturated, reactor.write("busy", byteArrayOf(3)))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.cancel("busy"))
+        assertEquals(ReactorSubmitResult.SessionSaturated, reactor.open("peer", targetAddress()))
 
         reactor.start()
-        waitUntil { listener.opened.size == 2 }
-        assertEquals(ReactorSubmitResult.Accepted, reactor.write("one", byteArrayOf(1)))
-        assertEquals(ReactorSubmitResult.Accepted, reactor.write("two", byteArrayOf(2)))
-        assertEquals(ReactorSubmitResult.SessionSaturated, reactor.cancel("one"))
-        reactor.shutdown()
-
-        assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
-        assertTrue(backend.closed.get())
-        assertEquals(listOf(TargetTerminalReason.Shutdown), listener.terminalReasons["one"])
-        assertEquals(listOf(TargetTerminalReason.Shutdown), listener.terminalReasons["two"])
+        try {
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(listOf(TargetTerminalReason.Canceled), listener.terminalReasons["busy"])
+            assertEquals(2, backend.connection("busy").writeInterestTrueCalls.get())
+            assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), reactor.snapshot())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
     }
 
     @Test
-    fun `default command queue admits five hundred twelve commands and shutdown drains out of band`() {
-        val backend = FakeSelectorBackend()
-        val listener = RecordingListener(terminalCount = 512)
-        val reactor = reactor(backend, listener, maxStreams = 513)
-        repeat(512) { index ->
+    fun `selector processes at most configured commands before each select`() {
+        val connections = Array(3) { index ->
+            FakeConnection("stream-$index", connectedImmediately = true)
+        }
+        val backend = FakeSelectorBackend(*connections)
+        val listener = RecordingListener(openCount = 3)
+        val openedBeforeFirstSelect = AtomicInteger(-1)
+        backend.beforeSelectReturn = { openedBeforeFirstSelect.compareAndSet(-1, backend.openCalls.get()) }
+        val reactor = reactor(
+            backend = backend,
+            listener = listener,
+            maxStreams = 3,
+            dataCommandCapacity = 1,
+            totalCommandCapacity = 3,
+            commandsPerCycle = 2,
+        )
+        repeat(3) { index ->
             assertEquals(
                 ReactorSubmitResult.Accepted,
                 reactor.open("stream-$index", targetAddress()),
             )
         }
-        assertEquals(
-            ReactorSubmitResult.SessionSaturated,
-            reactor.open("stream-512", targetAddress()),
+        reactor.start()
+        try {
+            waitUntil { openedBeforeFirstSelect.get() >= 0 }
+            assertEquals(2, openedBeforeFirstSelect.get())
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `shutdown refunds queued target reservations without starting selector`() {
+        val reactor = reactor(
+            backend = FakeSelectorBackend(),
+            listener = RecordingListener(terminalCount = 1),
+            maxStreams = 1,
+            dataCommandCapacity = 1,
+            totalCommandCapacity = 2,
         )
+        assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream", targetAddress()))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", byteArrayOf(1, 2)))
+        assertEquals(TargetIoReactorSnapshot(2, 1, 1, 2), reactor.snapshot())
 
         reactor.shutdown()
-
-        assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
         assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
-        assertTrue(backend.closed.get())
-        assertEquals(512, listener.terminalReasons.size)
-        assertTrue(listener.terminalReasons.values.all { it == listOf(TargetTerminalReason.Shutdown) })
+        assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), reactor.snapshot())
     }
 
     @Test
@@ -1008,9 +1082,12 @@ class TargetIoReactorTest {
         backend: FakeSelectorBackend,
         listener: RecordingListener,
         maxStreams: Int = 256,
-        commandCapacity: Int = 512,
-        sessionWriteCapacity: Int = 512,
-        sessionWriteByteCapacity: Long = 8L * 1024 * 1024,
+        dataCommandCapacity: Int = AgentCapacity.REACTOR_DATA_COMMAND_CAPACITY,
+        totalCommandCapacity: Int = AgentCapacity.REACTOR_COMMAND_CAPACITY,
+        commandsPerCycle: Int = AgentCapacity.REACTOR_COMMANDS_PER_CYCLE,
+        perStreamWriteCapacity: Int = AgentCapacity.TARGET_INBOUND_PER_STREAM_CAPACITY,
+        sessionWriteCapacity: Int = AgentCapacity.TARGET_INBOUND_SESSION_FRAME_CAPACITY,
+        sessionWriteByteCapacity: Long = AgentCapacity.TARGET_INBOUND_SESSION_BYTE_CAPACITY.toLong(),
         connectTimeoutMillis: Long = 30_000,
         idleTimeoutMillis: Long = 5 * 60_000,
         nanoTime: () -> Long = System::nanoTime,
@@ -1019,7 +1096,10 @@ class TargetIoReactorTest {
         binder = TargetSocketBinder {},
         listener = listener,
         maxStreams = maxStreams,
-        commandCapacity = commandCapacity,
+        dataCommandCapacity = dataCommandCapacity,
+        totalCommandCapacity = totalCommandCapacity,
+        commandsPerCycle = commandsPerCycle,
+        perStreamWriteCapacity = perStreamWriteCapacity,
         sessionWriteCapacity = sessionWriteCapacity,
         sessionWriteByteCapacity = sessionWriteByteCapacity,
         connectTimeoutMillis = connectTimeoutMillis,
@@ -1201,6 +1281,7 @@ class TargetIoReactorTest {
         val finishConnectCalls = AtomicInteger()
         val closeCalls = AtomicInteger()
         val writeCalls = AtomicInteger()
+        val writeInterestTrueCalls = AtomicInteger()
         val writeInterested = AtomicBoolean(false)
         val failInterestsNow = AtomicBoolean(failInterests)
 
@@ -1249,6 +1330,7 @@ class TargetIoReactorTest {
 
         override fun setInterests(connect: Boolean, read: Boolean, write: Boolean) {
             if (failInterestsNow.get()) throw IllegalStateException("interest update failed")
+            if (write) writeInterestTrueCalls.incrementAndGet()
             writeInterested.set(write)
         }
 
