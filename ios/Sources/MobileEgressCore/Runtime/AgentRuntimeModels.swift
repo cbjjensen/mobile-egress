@@ -124,7 +124,7 @@ public struct TargetConnectionConfiguration: Equatable, Hashable, Sendable {
         ipLiteral: String,
         port: Int,
         readChunkBytes: Int = 16 * 1_024,
-        inboundQueueCapacity: Int = 8,
+        inboundQueueCapacity: Int = 32,
         connectTimeout: TimeInterval = 30
     ) throws {
         guard readChunkBytes > 0,
@@ -183,6 +183,7 @@ struct AgentRuntimeLimits: Equatable, Sendable {
     let outboundControls: Int
     let outboundData: Int
     let outboundDataPerStream: Int
+    let outboundDataBytes: Int
     let targetInbound: Int
     let targetInboundSessionFrames: Int
     let targetInboundSessionBytes: Int
@@ -193,11 +194,12 @@ struct AgentRuntimeLimits: Equatable, Sendable {
         maximumStreams: 256,
         tombstones: 1_024,
         outboundControls: 512,
-        outboundData: 256,
-        outboundDataPerStream: 2,
-        targetInbound: 8,
-        targetInboundSessionFrames: 512,
-        targetInboundSessionBytes: 8 * 1_024 * 1_024,
+        outboundData: 8_192,
+        outboundDataPerStream: 32,
+        outboundDataBytes: 64 * 1_024 * 1_024,
+        targetInbound: 32,
+        targetInboundSessionFrames: 8_192,
+        targetInboundSessionBytes: 64 * 1_024 * 1_024,
         targetReadChunkBytes: 16 * 1_024,
         maximumInboundDataBytes: 32 * 1_024
     )

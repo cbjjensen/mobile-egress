@@ -3,6 +3,9 @@ import Foundation
 struct AgentSessionCapacitySnapshot: Equatable, Sendable {
     let tombstones: Int
     let targetOutstandingFrames: [String: Int]
+    let targetOutstandingBytes: [String: Int]
+    let targetSessionOutstandingFrames: Int
+    let targetSessionOutstandingBytes: Int
 }
 
 struct AgentSessionStateMachine {
@@ -42,6 +45,10 @@ struct AgentSessionStateMachine {
         var targetOutstandingFrameCount: Int {
             inboundQueue.count + (writeInFlight == nil ? 0 : 1)
         }
+
+        var targetOutstandingByteCount: Int {
+            queuedInboundBytes + (writeInFlight?.data.count ?? 0)
+        }
     }
 
     private enum RelayTermination {
@@ -73,6 +80,7 @@ struct AgentSessionStateMachine {
             controlCapacity: limits.outboundControls,
             dataCapacity: limits.outboundData,
             perStreamDataCapacity: limits.outboundDataPerStream,
+            dataByteCapacity: limits.outboundDataBytes,
             cancellationHistoryCapacity: limits.tombstones
         )
         tombstones = TombstoneWindow(limit: limits.tombstones)
@@ -91,7 +99,10 @@ struct AgentSessionStateMachine {
     var capacitySnapshot: AgentSessionCapacitySnapshot {
         AgentSessionCapacitySnapshot(
             tombstones: tombstones.count,
-            targetOutstandingFrames: streams.mapValues(\.targetOutstandingFrameCount)
+            targetOutstandingFrames: streams.mapValues(\.targetOutstandingFrameCount),
+            targetOutstandingBytes: streams.mapValues(\.targetOutstandingByteCount),
+            targetSessionOutstandingFrames: targetInboundOutstandingFrames,
+            targetSessionOutstandingBytes: targetInboundOutstandingBytes
         )
     }
 

@@ -182,6 +182,7 @@ final class AgentSessionStateMachineTests: XCTestCase {
             outboundControls: 13,
             outboundData: 5,
             outboundDataPerStream: 2,
+            outboundDataBytes: 1_024,
             targetInbound: 1,
             targetInboundSessionFrames: 3,
             targetInboundSessionBytes: 12 * 1_024,
@@ -235,22 +236,22 @@ final class AgentSessionStateMachineTests: XCTestCase {
         try assertOutbound(&machine, type: .opened, streamID: "stream-0", payload: Data())
     }
 
-    func testTargetBoundOutstandingLimitAcceptsEightFramesThenClosesOnlyTheNinth() throws {
+    func testTargetBoundOutstandingLimitAcceptsThirtyTwoFramesThenClosesOnlyTheThirtyThird() throws {
         var machine = connectedMachine()
         let opened = try openReadyTarget(&machine, streamID: "stream")
 
         let first = machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([0])))
         XCTAssertNotNil(first.singleTargetWrite)
-        for value in 1 ..< 8 {
+        for value in 1 ..< 32 {
             XCTAssertTrue(machine.receiveRelay(try binary(
                 type: .data,
                 streamID: "stream",
-                payload: Data([UInt8(value)])
+                payload: Data([UInt8(truncatingIfNeeded: value)])
             )).isEmpty)
         }
-        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 8)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 32)
 
-        let overflow = machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([8])))
+        let overflow = machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: Data([32])))
 
         XCTAssertEqual(overflow, [.cancelTarget(streamID: "stream", token: opened.token)])
         try assertOutbound(&machine, type: .close, streamID: "stream", payload: Data("agent_unavailable".utf8))
@@ -261,86 +262,130 @@ final class AgentSessionStateMachineTests: XCTestCase {
     }
 
     func testTargetIngressGlobalFrameLimitClosesOnlyContributingStreamAndKeepsErrorClass() throws {
-        var machine = connectedMachine()
-        var opened: [(streamID: String, token: UInt64)] = []
-        for index in 0 ..< 65 {
-            let streamID = "stream-\(index)"
-            let target = try openReadyTarget(&machine, streamID: streamID)
-            opened.append((streamID, target.token))
-        }
+        var machine = connectedMachine(limits: targetIngressLimits(perStreamLimit: 2, frameLimit: 2, byteLimit: 8))
+        let contributor = try openReadyTarget(&machine, streamID: "contributor")
+        let peer = try openReadyTarget(&machine, streamID: "peer")
+        XCTAssertNotNil(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "contributor",
+            payload: Data([0x41])
+        )).singleTargetWrite)
+        let peerWrite = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "peer",
+            payload: Data([0x42])
+        )).singleTargetWrite)
 
-        for stream in opened.prefix(64) {
-            for value in 0 ..< 8 {
-                let effects = machine.receiveRelay(try binary(
-                    type: .data,
-                    streamID: stream.streamID,
-                    payload: Data([UInt8(value)])
-                ))
-                if value == 0 {
-                    XCTAssertNotNil(effects.singleTargetWrite)
-                } else {
-                    XCTAssertTrue(effects.isEmpty)
-                }
-            }
-        }
-
-        let overflow = try XCTUnwrap(opened.last)
         XCTAssertEqual(
             machine.receiveRelay(try binary(
                 type: .data,
-                streamID: overflow.streamID,
+                streamID: "contributor",
                 payload: Data([0xFF])
             )),
-            [.cancelTarget(streamID: overflow.streamID, token: overflow.token)]
+            [.cancelTarget(streamID: "contributor", token: contributor.token)]
         )
         try assertOutbound(
             &machine,
             type: .close,
-            streamID: overflow.streamID,
+            streamID: "contributor",
             payload: Data("agent_unavailable".utf8)
         )
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 64)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1)
         XCTAssertEqual(machine.snapshot.connectionState, .connected)
         XCTAssertEqual(machine.snapshot.errorClass, .none)
-        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream-0"], 8)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["peer"], 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 1)
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "peer",
+            token: peer.token,
+            writeID: peerWrite.writeID,
+            succeeded: true
+        ).isEmpty)
     }
 
-    func testTargetIngressEightMiBLimitWithThirtyTwoKiBFramesClosesOnlyContributingStream() throws {
-        var machine = connectedMachine()
-        var opened: [(streamID: String, token: UInt64)] = []
-        for index in 0 ..< 256 {
-            let streamID = "stream-\(index)"
-            let target = try openReadyTarget(&machine, streamID: streamID)
-            opened.append((streamID, target.token))
-        }
+    func testTargetIngressByteLimitClosesOnlyContributingStream() throws {
+        var machine = connectedMachine(limits: targetIngressLimits(perStreamLimit: 2, frameLimit: 4, byteLimit: 4))
+        let contributor = try openReadyTarget(&machine, streamID: "contributor")
+        _ = try openReadyTarget(&machine, streamID: "peer")
+        XCTAssertNotNil(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "contributor",
+            payload: Data([0x41, 0x42])
+        )).singleTargetWrite)
+        XCTAssertNotNil(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "peer",
+            payload: Data([0x43, 0x44])
+        )).singleTargetWrite)
 
-        let payload = Data(repeating: 0x41, count: 32 * 1_024)
-        for stream in opened {
-            XCTAssertNotNil(machine.receiveRelay(try binary(
-                type: .data,
-                streamID: stream.streamID,
-                payload: payload
-            )).singleTargetWrite)
-        }
-
-        let overflow = try XCTUnwrap(opened.first)
         XCTAssertEqual(
             machine.receiveRelay(try binary(
                 type: .data,
-                streamID: overflow.streamID,
-                payload: payload
+                streamID: "contributor",
+                payload: Data([0x45])
             )),
-            [.cancelTarget(streamID: overflow.streamID, token: overflow.token)]
+            [.cancelTarget(streamID: "contributor", token: contributor.token)]
         )
         try assertOutbound(
             &machine,
             type: .close,
-            streamID: overflow.streamID,
+            streamID: "contributor",
             payload: Data("agent_unavailable".utf8)
         )
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 255)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1)
         XCTAssertEqual(machine.snapshot.connectionState, .connected)
         XCTAssertEqual(machine.snapshot.errorClass, .none)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 2)
+    }
+
+    func testTargetIngressReservationSurvivesUntilFinalWriteCompletion() throws {
+        var machine = connectedMachine(limits: targetIngressLimits(perStreamLimit: 2, frameLimit: 2, byteLimit: 4))
+        let target = try openReadyTarget(&machine, streamID: "stream")
+        let first = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x41, 0x42])
+        )).singleTargetWrite)
+        XCTAssertTrue(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "stream",
+            payload: Data([0x43, 0x44])
+        )).isEmpty)
+
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 2)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingBytes["stream"], 4)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 2)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 4)
+
+        let final = try XCTUnwrap(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: target.token,
+            writeID: first.writeID,
+            succeeded: true
+        ).singleTargetWrite)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingBytes["stream"], 2)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 2)
+
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: target.token,
+            writeID: first.writeID,
+            succeeded: true
+        ).isEmpty, "duplicate completion must not refund the active final write")
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "stream",
+            token: target.token,
+            writeID: final.writeID,
+            succeeded: true
+        ).isEmpty)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["stream"], 0)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingBytes["stream"], 0)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 0)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 0)
     }
 
     func testTargetIngressBudgetIsReusedAfterSuccessfulWriteCompletion() throws {
@@ -367,7 +412,7 @@ final class AgentSessionStateMachineTests: XCTestCase {
         )).singleTargetWrite)
         XCTAssertEqual(machine.snapshot.activeStreamCount, 2)
         XCTAssertEqual(machine.snapshot.errorClass, .none)
-        XCTAssertEqual(second.configuration.inboundQueueCapacity, 8)
+        XCTAssertEqual(second.configuration.inboundQueueCapacity, 32)
     }
 
     func testTargetIngressBudgetIsReusedAfterRelayCloseCancellation() throws {
@@ -400,7 +445,9 @@ final class AgentSessionStateMachineTests: XCTestCase {
             payload: Data([0x43, 0x44])
         )).singleTargetWrite)
         XCTAssertEqual(machine.snapshot.activeStreamCount, 1)
-        XCTAssertEqual(second.configuration.inboundQueueCapacity, 8)
+        XCTAssertEqual(second.configuration.inboundQueueCapacity, 32)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 2)
     }
 
     func testTargetIngressBudgetIsReusedAfterFailedWriteAndTargetTerminalFlow() throws {
@@ -467,8 +514,12 @@ final class AgentSessionStateMachineTests: XCTestCase {
             streamID: "replacement",
             payload: Data([0x45, 0x46])
         )).singleTargetWrite)
-        XCTAssertEqual(afterWriteFailure.configuration.inboundQueueCapacity, 8)
-        XCTAssertEqual(afterTargetFailure.configuration.inboundQueueCapacity, 8)
+        XCTAssertEqual(afterWriteFailure.configuration.inboundQueueCapacity, 32)
+        XCTAssertEqual(afterTargetFailure.configuration.inboundQueueCapacity, 32)
+        XCTAssertEqual(writeFailureMachine.capacitySnapshot.targetSessionOutstandingFrames, 1)
+        XCTAssertEqual(writeFailureMachine.capacitySnapshot.targetSessionOutstandingBytes, 2)
+        XCTAssertEqual(targetFailureMachine.capacitySnapshot.targetSessionOutstandingFrames, 1)
+        XCTAssertEqual(targetFailureMachine.capacitySnapshot.targetSessionOutstandingBytes, 2)
     }
 
     func testGracefulTargetFailureReleasesPendingIngressAndIgnoresLateWriteCompletion() throws {
@@ -563,39 +614,37 @@ final class AgentSessionStateMachineTests: XCTestCase {
         var machine = connectedMachine()
         let opened = try openReadyTarget(&machine, streamID: "stream")
 
-        for value in 0 ..< 2 {
+        for value in 0 ..< 32 {
             XCTAssertTrue(machine.targetReceived(streamID: "stream", token: opened.token, data: Data([UInt8(value)])).isEmpty)
         }
-        let overflow = machine.targetReceived(streamID: "stream", token: opened.token, data: Data([2]))
+        let overflow = machine.targetReceived(streamID: "stream", token: opened.token, data: Data([32]))
 
         XCTAssertEqual(overflow, [.cancelTarget(streamID: "stream", token: opened.token)])
         try assertOutbound(&machine, type: .close, streamID: "stream", payload: Data("agent_unavailable".utf8))
         XCTAssertNil(machine.nextOutbound())
-        XCTAssertEqual(machine.snapshot.bytesDownloaded, 2)
+        XCTAssertEqual(machine.snapshot.bytesDownloaded, 32)
         XCTAssertEqual(machine.snapshot.errorClass, .none)
     }
 
     func testTotalOutboundOverflowFailsContributingStreamAndLeavesOthersActive() throws {
-        var machine = connectedMachine()
+        var machine = connectedMachine(limits: outboundLimits(frameLimit: 2))
         var opened: [(String, UInt64)] = []
-        for index in 0 ..< 129 {
+        for index in 0 ..< 3 {
             let streamID = "stream-\(index)"
             let target = try openReadyTarget(&machine, streamID: streamID)
             opened.append((streamID, target.token))
         }
 
-        for (streamID, token) in opened.prefix(128) {
-            for value in 0 ..< 2 {
-                XCTAssertTrue(machine.targetReceived(streamID: streamID, token: token, data: Data([UInt8(value)])).isEmpty)
-            }
+        for (streamID, token) in opened.prefix(2) {
+            XCTAssertTrue(machine.targetReceived(streamID: streamID, token: token, data: Data([0x41])).isEmpty)
         }
         let last = try XCTUnwrap(opened.last)
         let overflow = machine.targetReceived(streamID: last.0, token: last.1, data: Data([0xFF]))
 
         XCTAssertEqual(overflow, [.cancelTarget(streamID: last.0, token: last.1)])
         try assertOutbound(&machine, type: .close, streamID: last.0, payload: Data("agent_unavailable".utf8))
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 128)
-        XCTAssertEqual(machine.snapshot.bytesDownloaded, 256)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 2)
+        XCTAssertEqual(machine.snapshot.bytesDownloaded, 2)
     }
 
     func testRequiredControlSaturationTerminatesWholeSession() throws {
@@ -937,7 +986,11 @@ final class AgentSessionStateMachineTests: XCTestCase {
         let second = try openTarget(&machine, streamID: "second", ip: "1.1.1.1", port: 443)
         machine.targetWasCreated(streamID: "first", token: first.token)
         machine.targetWasCreated(streamID: "second", token: second.token)
+        XCTAssertTrue(machine.receiveRelay(try binary(type: .data, streamID: "first", payload: Data([0x41]))).isEmpty)
+        XCTAssertTrue(machine.receiveRelay(try binary(type: .data, streamID: "second", payload: Data([0x42]))).isEmpty)
         XCTAssertTrue(machine.receiveRelay(try binary(type: .ping)).isEmpty)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 2)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 2)
 
         let effects = machine.stop()
 
@@ -948,6 +1001,8 @@ final class AgentSessionStateMachineTests: XCTestCase {
         ]))
         XCTAssertEqual(machine.snapshot.connectionState, .stopping)
         XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 0)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 0)
         XCTAssertNil(machine.nextOutbound())
         XCTAssertTrue(machine.stop().isEmpty)
         XCTAssertTrue(machine.receiveRelay(try binary(type: .ping)).isEmpty)
@@ -967,16 +1022,37 @@ final class AgentSessionStateMachineTests: XCTestCase {
         return machine
     }
 
-    private func targetIngressLimits(frameLimit: Int = 1, byteLimit: Int = 1) -> AgentRuntimeLimits {
+    private func targetIngressLimits(
+        perStreamLimit: Int = 32,
+        frameLimit: Int = 1,
+        byteLimit: Int = 1
+    ) -> AgentRuntimeLimits {
         AgentRuntimeLimits(
             maximumStreams: 4,
             tombstones: 8,
             outboundControls: 8,
             outboundData: 4,
             outboundDataPerStream: 2,
-            targetInbound: 8,
+            outboundDataBytes: 1_024,
+            targetInbound: perStreamLimit,
             targetInboundSessionFrames: frameLimit,
             targetInboundSessionBytes: byteLimit,
+            targetReadChunkBytes: 16 * 1_024,
+            maximumInboundDataBytes: 32 * 1_024
+        )
+    }
+
+    private func outboundLimits(frameLimit: Int) -> AgentRuntimeLimits {
+        AgentRuntimeLimits(
+            maximumStreams: 4,
+            tombstones: 8,
+            outboundControls: 8,
+            outboundData: frameLimit,
+            outboundDataPerStream: frameLimit,
+            outboundDataBytes: 1_024,
+            targetInbound: 32,
+            targetInboundSessionFrames: 8,
+            targetInboundSessionBytes: 1_024,
             targetReadChunkBytes: 16 * 1_024,
             maximumInboundDataBytes: 32 * 1_024
         )

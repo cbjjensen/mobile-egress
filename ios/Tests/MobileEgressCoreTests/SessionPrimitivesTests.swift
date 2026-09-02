@@ -14,7 +14,12 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxSignalsRequiredControlSaturation() {
-        let mailbox = OutboundMailbox(controlCapacity: 1, dataCapacity: 1, perStreamDataCapacity: 1)
+        let mailbox = OutboundMailbox(
+            controlCapacity: 1,
+            dataCapacity: 1,
+            perStreamDataCapacity: 1,
+            dataByteCapacity: 1
+        )
         var saturated = false
 
         XCTAssertTrue(mailbox.offerRequiredControl(Data([1]), streamID: nil, onSaturated: { saturated = true }))
@@ -23,24 +28,89 @@ final class SessionPrimitivesTests: XCTestCase {
         XCTAssertTrue(saturated)
     }
 
-    func testOutboundMailboxEnforcesTotalAndPerStreamDataBounds() {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
-        (0 ..< 129).forEach { mailbox.allowData("stream-\($0)") }
+    func testOutboundMailboxAcceptsThirtyTwoFramesPerStreamAndRejectsThirtyThird() {
+        let mailbox = productionMailbox()
+        mailbox.allowData("stream")
 
-        (0 ..< 128).forEach { stream in
-            (0 ..< 2).forEach { frame in
-                XCTAssertTrue(mailbox.offerData(Data([UInt8(frame)]), streamID: "stream-\(stream)"))
-            }
-            XCTAssertFalse(mailbox.offerData(Data([0xFF]), streamID: "stream-\(stream)"))
+        for value in 0 ..< 32 {
+            XCTAssertTrue(mailbox.offerData(Data([UInt8(value)]), streamID: "stream"))
         }
 
-        XCTAssertFalse(mailbox.offerData(Data([0xAA]), streamID: "stream-128"))
-        XCTAssertNotNil(mailbox.poll())
-        XCTAssertTrue(mailbox.offerData(Data([0xAA]), streamID: "stream-128"))
+        XCTAssertFalse(mailbox.offerData(Data([0xFF]), streamID: "stream"))
+    }
+
+    func testOutboundReservationSurvivesPollUntilEmission() throws {
+        let frameMailbox = OutboundMailbox(
+            controlCapacity: 2,
+            dataCapacity: 2,
+            perStreamDataCapacity: 2,
+            dataByteCapacity: 10
+        )
+        frameMailbox.allowData("alpha")
+        frameMailbox.allowData("beta")
+        XCTAssertTrue(frameMailbox.offerData(Data([0x01]), streamID: "alpha"))
+
+        let frameInFlight = try XCTUnwrap(frameMailbox.poll())
+        XCTAssertEqual(frameMailbox.bookkeepingSnapshot.outstandingDataFrames, 1)
+        XCTAssertEqual(frameMailbox.bookkeepingSnapshot.outstandingDataBytes, 1)
+        XCTAssertTrue(frameMailbox.offerData(Data([0x02]), streamID: "beta"))
+        XCTAssertFalse(frameMailbox.offerData(Data(), streamID: "beta"), "frame budget must include in-flight data")
+
+        let byteMailbox = OutboundMailbox(
+            controlCapacity: 2,
+            dataCapacity: 3,
+            perStreamDataCapacity: 2,
+            dataByteCapacity: 4
+        )
+        byteMailbox.allowData("alpha")
+        byteMailbox.allowData("beta")
+        XCTAssertTrue(byteMailbox.offerData(Data([0x01, 0x02]), streamID: "alpha"))
+        let byteInFlight = try XCTUnwrap(byteMailbox.poll())
+        XCTAssertTrue(byteMailbox.offerData(Data([0x03, 0x04]), streamID: "beta"))
+        XCTAssertFalse(byteMailbox.offerData(Data([0x05]), streamID: "alpha"), "byte budget must include in-flight data")
+
+        XCTAssertEqual(frameMailbox.emit(frameInFlight, sender: { _ in true }), .emitted)
+        XCTAssertEqual(frameMailbox.bookkeepingSnapshot.outstandingDataFrames, 1)
+        XCTAssertEqual(frameMailbox.bookkeepingSnapshot.outstandingDataBytes, 1)
+        XCTAssertTrue(frameMailbox.offerData(Data([0x03]), streamID: "alpha"))
+        XCTAssertEqual(byteMailbox.emit(byteInFlight, sender: { _ in true }), .emitted)
+        XCTAssertEqual(byteMailbox.bookkeepingSnapshot.outstandingDataFrames, 1)
+        XCTAssertEqual(byteMailbox.bookkeepingSnapshot.outstandingDataBytes, 2)
+        XCTAssertTrue(byteMailbox.offerData(Data([0x05, 0x06]), streamID: "alpha"))
+    }
+
+    func testOutboundCancellationAndCloseRefundFramesAndBytesExactlyOnce() throws {
+        let mailbox = OutboundMailbox(
+            controlCapacity: 2,
+            dataCapacity: 3,
+            perStreamDataCapacity: 3,
+            dataByteCapacity: 6
+        )
+        mailbox.allowData("stream")
+        XCTAssertTrue(mailbox.offerData(Data([0x01, 0x02]), streamID: "stream"))
+        XCTAssertTrue(mailbox.offerData(Data([0x03, 0x04, 0x05]), streamID: "stream"))
+        let canceledInFlight = try XCTUnwrap(mailbox.poll())
+
+        XCTAssertTrue(mailbox.cancelStream("stream"))
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 0)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, 0)
+        XCTAssertEqual(mailbox.emit(canceledInFlight, sender: { _ in XCTFail("canceled frame emitted"); return true }), .canceled)
+        XCTAssertEqual(mailbox.emit(canceledInFlight, sender: { _ in XCTFail("canceled frame emitted twice"); return true }), .canceled)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 0)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, 0)
+
+        mailbox.allowData("stream")
+        XCTAssertTrue(mailbox.offerData(Data(repeating: 0x06, count: 6), streamID: "stream"))
+        let closedInFlight = try XCTUnwrap(mailbox.poll())
+        mailbox.close()
+        XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
+        XCTAssertEqual(mailbox.emit(closedInFlight, sender: { _ in XCTFail("closed frame emitted"); return true }), .canceled)
+        XCTAssertEqual(mailbox.emit(closedInFlight, sender: { _ in XCTFail("closed frame emitted twice"); return true }), .canceled)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
     }
 
     func testOutboundMailboxPrioritizesEligibleControlsAndRoundRobinsData() throws {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         mailbox.allowData("alpha")
         mailbox.allowData("beta")
         XCTAssertTrue(mailbox.offerData(Data("a1".utf8), streamID: "alpha"))
@@ -60,7 +130,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxGivesAllTwoHundredFiftySixReadyStreamsOneTurnBeforeASecondTurn() throws {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         for index in 0 ..< 256 {
             let streamID = "stream-\(index)"
             mailbox.allowData(streamID)
@@ -83,7 +153,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxDelaysGracefulControlUntilQueuedDataDrains() throws {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         mailbox.allowData("stream")
         XCTAssertTrue(mailbox.offerData(Data("one".utf8), streamID: "stream"))
         XCTAssertTrue(mailbox.offerData(Data("two".utf8), streamID: "stream"))
@@ -106,7 +176,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxForcedCloseDiscardsQueuedAndCancelsPolledData() throws {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         mailbox.allowData("stream")
         XCTAssertTrue(mailbox.offerData(Data("in-flight".utf8), streamID: "stream"))
         XCTAssertTrue(mailbox.offerData(Data("queued".utf8), streamID: "stream"))
@@ -122,7 +192,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxCancellationTokenSurvivesStreamIDReuseWithoutCancelingNewData() throws {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         mailbox.allowData("stream")
         XCTAssertTrue(mailbox.offerData(Data("old".utf8), streamID: "stream"))
         let oldFrame = try XCTUnwrap(mailbox.poll())
@@ -141,7 +211,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxCancellationReleasesDroppedAndInFlightBookkeeping() throws {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         mailbox.allowData("stream")
         XCTAssertTrue(mailbox.offerData(Data("queued-1".utf8), streamID: "stream"))
         XCTAssertTrue(mailbox.offerData(Data("queued-2".utf8), streamID: "stream"))
@@ -155,7 +225,8 @@ final class SessionPrimitivesTests: XCTestCase {
                 streamCancellationRecords: 1,
                 dataCancellationRecords: 0,
                 outstandingStreamFrames: 1,
-                outstandingDataFrames: 0
+                outstandingDataFrames: 0,
+                outstandingDataBytes: 0
             )
         )
         XCTAssertNil(mailbox.poll())
@@ -165,7 +236,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxRetainsOnlyNewestOneThousandTwentyFourCancellationEntries() {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
 
         (0 ... 1_024).forEach { mailbox.cancelStream("stream-\($0)") }
 
@@ -191,7 +262,7 @@ final class SessionPrimitivesTests: XCTestCase {
     }
 
     func testOutboundMailboxDuplicateCancellationRefreshesAllHistoryRecency() {
-        let mailbox = OutboundMailbox(controlCapacity: 512, dataCapacity: 256, perStreamDataCapacity: 2)
+        let mailbox = productionMailbox()
         (0 ..< 1_024).forEach { mailbox.cancelStream("stream-\($0)") }
 
         mailbox.cancelStream("stream-0")
@@ -328,5 +399,14 @@ final class SessionPrimitivesTests: XCTestCase {
         XCTAssertTrue(closeGate.tryClose())
         XCTAssertFalse(closeGate.tryClose())
         XCTAssertTrue(closeGate.isClosed)
+    }
+
+    private func productionMailbox() -> OutboundMailbox {
+        OutboundMailbox(
+            controlCapacity: 512,
+            dataCapacity: 8_192,
+            perStreamDataCapacity: 32,
+            dataByteCapacity: 64 * 1_024 * 1_024
+        )
     }
 }

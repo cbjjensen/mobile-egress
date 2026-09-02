@@ -97,10 +97,16 @@ public final class StreamAdmission: @unchecked Sendable {
 private final class OutboundCancellation: @unchecked Sendable {
     var canceled: Bool
     var outstanding = 0
+    var outstandingBytes = 0
+    var dataCapacityReleased = false
 
     init(canceled: Bool) {
         self.canceled = canceled
     }
+}
+
+private final class OutboundCompletion: @unchecked Sendable {
+    var released = false
 }
 
 public struct OutboundFrame: @unchecked Sendable {
@@ -109,19 +115,22 @@ public struct OutboundFrame: @unchecked Sendable {
     let streamID: String?
     fileprivate let streamCancellation: OutboundCancellation?
     fileprivate let dataCancellation: OutboundCancellation?
+    fileprivate let completion: OutboundCompletion
 
     fileprivate init(
         id: UInt64,
         bytes: Data,
         streamID: String?,
         streamCancellation: OutboundCancellation?,
-        dataCancellation: OutboundCancellation?
+        dataCancellation: OutboundCancellation?,
+        completion: OutboundCompletion
     ) {
         self.id = id
         self.bytes = bytes
         self.streamID = streamID
         self.streamCancellation = streamCancellation
         self.dataCancellation = dataCancellation
+        self.completion = completion
     }
 }
 
@@ -142,12 +151,14 @@ struct OutboundMailboxBookkeepingSnapshot: Equatable, Sendable {
     let dataCancellationRecords: Int
     let outstandingStreamFrames: Int
     let outstandingDataFrames: Int
+    let outstandingDataBytes: Int
 
     static let empty = OutboundMailboxBookkeepingSnapshot(
         streamCancellationRecords: 0,
         dataCancellationRecords: 0,
         outstandingStreamFrames: 0,
-        outstandingDataFrames: 0
+        outstandingDataFrames: 0,
+        outstandingDataBytes: 0
     )
 }
 
@@ -161,6 +172,7 @@ public final class OutboundMailbox: @unchecked Sendable {
     private let controlCapacity: Int
     private let dataCapacity: Int
     private let perStreamDataCapacity: Int
+    private let dataByteCapacity: Int
     private let controls: BoundedDeque<ControlFrame>
     private var dataByStream: [String: BoundedDeque<OutboundFrame>] = [:]
     private let readyStreams: BoundedDeque<String>
@@ -169,7 +181,8 @@ public final class OutboundMailbox: @unchecked Sendable {
     private let canceledStreams: BoundedOrderedSet
     private var streamCancellations: [String: OutboundCancellation] = [:]
     private var dataCancellations: [String: OutboundCancellation] = [:]
-    private var dataCount = 0
+    private var outstandingDataFrames = 0
+    private var outstandingDataBytes = 0
     private var nextFrameID: UInt64 = 1
     private var closed = false
 
@@ -177,15 +190,18 @@ public final class OutboundMailbox: @unchecked Sendable {
         controlCapacity: Int,
         dataCapacity: Int,
         perStreamDataCapacity: Int,
+        dataByteCapacity: Int,
         cancellationHistoryCapacity: Int = 1_024
     ) {
         precondition(controlCapacity > 0)
         precondition(dataCapacity > 0)
         precondition((1 ... dataCapacity).contains(perStreamDataCapacity))
+        precondition(dataByteCapacity > 0)
         precondition(cancellationHistoryCapacity > 0)
         self.controlCapacity = controlCapacity
         self.dataCapacity = dataCapacity
         self.perStreamDataCapacity = perStreamDataCapacity
+        self.dataByteCapacity = dataByteCapacity
         controls = BoundedDeque(capacity: controlCapacity)
         readyStreams = BoundedDeque(capacity: dataCapacity)
         blockedDataStreams = BoundedOrderedSet(limit: cancellationHistoryCapacity)
@@ -209,7 +225,8 @@ public final class OutboundMailbox: @unchecked Sendable {
                 streamCancellationRecords: streamCancellations.count,
                 dataCancellationRecords: dataCancellations.count,
                 outstandingStreamFrames: streamCancellations.values.reduce(0) { $0 + $1.outstanding },
-                outstandingDataFrames: dataCancellations.values.reduce(0) { $0 + $1.outstanding }
+                outstandingDataFrames: outstandingDataFrames,
+                outstandingDataBytes: outstandingDataBytes
             )
         }
     }
@@ -217,7 +234,10 @@ public final class OutboundMailbox: @unchecked Sendable {
     public func allowData(_ streamID: String) {
         lock.withLock {
             streamCancellations.removeValue(forKey: streamID)?.canceled = true
-            dataCancellations.removeValue(forKey: streamID)?.canceled = true
+            if let cancellation = dataCancellations.removeValue(forKey: streamID) {
+                cancellation.canceled = true
+                refundDataCapacity(cancellation)
+            }
             blockedDataStreams.remove(streamID)
             canceledDataStreams.remove(streamID)
             canceledStreams.remove(streamID)
@@ -226,7 +246,12 @@ public final class OutboundMailbox: @unchecked Sendable {
 
     public func offerData(_ frame: Data, streamID: String) -> Bool {
         lock.withLock {
-            guard !closed, !blockedDataStreams.contains(streamID), dataCount < dataCapacity else { return false }
+            guard !closed,
+                  !blockedDataStreams.contains(streamID),
+                  outstandingDataFrames < dataCapacity,
+                  frame.count <= dataByteCapacity - outstandingDataBytes,
+                  (dataCancellations[streamID]?.outstanding ?? 0) < perStreamDataCapacity
+            else { return false }
             let frames: BoundedDeque<OutboundFrame>
             let insertedStream: Bool
             if let existing = dataByStream[streamID] {
@@ -238,7 +263,6 @@ public final class OutboundMailbox: @unchecked Sendable {
                 dataByStream[streamID] = frames
                 insertedStream = true
             }
-            guard frames.count < perStreamDataCapacity else { return false }
             let outboundFrame = makeFrame(bytes: frame, streamID: streamID, isData: true)
             guard frames.append(outboundFrame) else {
                 release(outboundFrame)
@@ -248,7 +272,6 @@ public final class OutboundMailbox: @unchecked Sendable {
                 }
                 return false
             }
-            dataCount += 1
             return true
         }
     }
@@ -291,6 +314,7 @@ public final class OutboundMailbox: @unchecked Sendable {
             blockDataStream(streamID)
             cancelDataStream(streamID)
             dataCancellations[streamID]?.canceled = true
+            refundDataCapacity(dataCancellations[streamID])
             discardData(streamID)
         }
     }
@@ -303,6 +327,7 @@ public final class OutboundMailbox: @unchecked Sendable {
             cancelDataStream(streamID)
             streamCancellations[streamID]?.canceled = true
             dataCancellations[streamID]?.canceled = true
+            refundDataCapacity(dataCancellations[streamID])
             discardData(streamID)
             canceledStreams.insert(streamID)
             controls.removeAll { control in
@@ -354,10 +379,14 @@ public final class OutboundMailbox: @unchecked Sendable {
             canceledDataStreams.removeAll()
             canceledStreams.removeAll()
             streamCancellations.values.forEach { $0.canceled = true }
-            dataCancellations.values.forEach { $0.canceled = true }
+            dataCancellations.values.forEach {
+                $0.canceled = true
+                refundDataCapacity($0)
+            }
             streamCancellations.removeAll(keepingCapacity: false)
             dataCancellations.removeAll(keepingCapacity: false)
-            dataCount = 0
+            precondition(outstandingDataFrames == 0)
+            precondition(outstandingDataBytes == 0)
         }
     }
 
@@ -378,7 +407,6 @@ public final class OutboundMailbox: @unchecked Sendable {
               let frames = dataByStream[streamID],
               let frame = frames.popFirst()
         else { return nil }
-        dataCount -= 1
         if frames.isEmpty {
             dataByStream.removeValue(forKey: streamID)
         } else {
@@ -389,7 +417,6 @@ public final class OutboundMailbox: @unchecked Sendable {
 
     private func discardData(_ streamID: String) {
         if let discarded = dataByStream.removeValue(forKey: streamID) {
-            dataCount -= discarded.count
             while let frame = discarded.popFirst() {
                 release(frame)
             }
@@ -404,44 +431,82 @@ public final class OutboundMailbox: @unchecked Sendable {
             cancellation(in: &streamCancellations, streamID: $0, canceled: canceledStreams.contains($0))
         }
         let dataCancellation = isData ? streamID.map {
-            cancellation(in: &dataCancellations, streamID: $0, canceled: canceledDataStreams.contains($0))
+            cancellation(
+                in: &dataCancellations,
+                streamID: $0,
+                canceled: canceledDataStreams.contains($0),
+                byteCount: bytes.count
+            )
         } : nil
+        if isData {
+            outstandingDataFrames += 1
+            outstandingDataBytes += bytes.count
+        }
         return OutboundFrame(
             id: id,
             bytes: bytes,
             streamID: streamID,
             streamCancellation: streamCancellation,
-            dataCancellation: dataCancellation
+            dataCancellation: dataCancellation,
+            completion: OutboundCompletion()
         )
     }
 
     private func cancellation(
         in cancellations: inout [String: OutboundCancellation],
         streamID: String,
-        canceled: Bool
+        canceled: Bool,
+        byteCount: Int = 0
     ) -> OutboundCancellation {
         let cancellation = cancellations[streamID] ?? OutboundCancellation(canceled: canceled)
         cancellations[streamID] = cancellation
         cancellation.outstanding += 1
+        cancellation.outstandingBytes += byteCount
         return cancellation
     }
 
     private func release(_ frame: OutboundFrame) {
+        guard !frame.completion.released else { return }
+        frame.completion.released = true
         guard let streamID = frame.streamID else { return }
         release(in: &streamCancellations, streamID: streamID, cancellation: frame.streamCancellation)
-        release(in: &dataCancellations, streamID: streamID, cancellation: frame.dataCancellation)
+        if let cancellation = frame.dataCancellation, !cancellation.dataCapacityReleased {
+            precondition(outstandingDataFrames > 0)
+            precondition(outstandingDataBytes >= frame.bytes.count)
+            outstandingDataFrames -= 1
+            outstandingDataBytes -= frame.bytes.count
+        }
+        release(
+            in: &dataCancellations,
+            streamID: streamID,
+            cancellation: frame.dataCancellation,
+            byteCount: frame.dataCancellation == nil ? 0 : frame.bytes.count
+        )
     }
 
     private func release(
         in cancellations: inout [String: OutboundCancellation],
         streamID: String,
-        cancellation: OutboundCancellation?
+        cancellation: OutboundCancellation?,
+        byteCount: Int = 0
     ) {
         guard let cancellation else { return }
+        precondition(cancellation.outstanding > 0)
+        precondition(cancellation.outstandingBytes >= byteCount)
         cancellation.outstanding -= 1
+        cancellation.outstandingBytes -= byteCount
         if cancellation.outstanding == 0, cancellations[streamID] === cancellation {
             cancellations.removeValue(forKey: streamID)
         }
+    }
+
+    private func refundDataCapacity(_ cancellation: OutboundCancellation?) {
+        guard let cancellation, !cancellation.dataCapacityReleased else { return }
+        precondition(outstandingDataFrames >= cancellation.outstanding)
+        precondition(outstandingDataBytes >= cancellation.outstandingBytes)
+        outstandingDataFrames -= cancellation.outstanding
+        outstandingDataBytes -= cancellation.outstandingBytes
+        cancellation.dataCapacityReleased = true
     }
 
     private func blockDataStream(_ streamID: String) {
