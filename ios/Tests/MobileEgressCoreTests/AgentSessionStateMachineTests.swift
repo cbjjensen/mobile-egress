@@ -554,7 +554,7 @@ final class AgentSessionStateMachineTests: XCTestCase {
 
         let oversized = Data(repeating: 0x42, count: 32 * 1_024 + 1)
         XCTAssertEqual(
-            machine.receiveRelay(try binary(type: .data, streamID: "stream", payload: oversized)),
+            machine.receiveRelay(rawBinary(type: .data, streamID: "stream", payload: oversized)),
             [
                 .closeRelay(code: 1008, reason: "protocol_error"),
                 .cancelTarget(streamID: "stream", token: opened.token),
@@ -715,6 +715,21 @@ final class AgentSessionStateMachineTests: XCTestCase {
         payload: Data = Data()
     ) throws -> RelayWebSocketMessage {
         .init(opcode: .binary, payload: try WireProtocol.encode(type: type, streamID: streamID, payload: payload), isComplete: true)
+    }
+
+    private func rawBinary(
+        type: WireMessageType,
+        streamID: String,
+        payload: Data
+    ) -> RelayWebSocketMessage {
+        let encodedPayload = payload.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let envelope = Data(
+            "{\"version\":1,\"type\":\"\(type.rawValue)\",\"streamId\":\"\(streamID)\",\"payload\":\"\(encodedPayload)\"}".utf8
+        )
+        return .init(opcode: .binary, payload: envelope, isComplete: true)
     }
 
     private func openMessage(streamID: String, ip: String, port: Int) throws -> RelayWebSocketMessage {

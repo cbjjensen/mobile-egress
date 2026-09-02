@@ -16,7 +16,64 @@ final class WireProtocolTests: XCTestCase {
     func testWireProtocolRejectsRoleIncompatibleTypesAndOversizedPayloads() throws {
         let opened = try WireProtocol.encode(type: .opened, streamID: "stream-1")
         XCTAssertThrowsError(try WireProtocol.parseAgentInbound(opened))
-        XCTAssertThrowsError(try WireProtocol.encode(type: .data, streamID: "stream-1", payload: Data(repeating: 0, count: WireProtocol.maximumPayloadBytes + 1)))
+        XCTAssertThrowsError(try WireProtocol.encode(type: .open, streamID: "stream-1", payload: Data(repeating: 0, count: WireProtocol.maximumPayloadBytes + 1)))
+    }
+
+    func testDataEncodingAcceptsExactlyThirtyTwoKiBAndRejectsOneByteMore() throws {
+        let acceptedPayload = Data(repeating: 0x41, count: 32 * 1_024)
+        let encoded = try WireProtocol.encode(type: .data, streamID: "stream-1", payload: acceptedPayload)
+
+        XCTAssertEqual(
+            try WireProtocol.parseAgentInbound(encoded).decodedPayload(),
+            acceptedPayload
+        )
+        XCTAssertThrowsError(try WireProtocol.encode(
+            type: .data,
+            streamID: "stream-1",
+            payload: Data(repeating: 0x42, count: 32 * 1_024 + 1)
+        )) { error in
+            XCTAssertEqual(error as? CoreValidationError, .invalidJSON)
+        }
+    }
+
+    func testDataParsingAcceptsExactlyThirtyTwoKiBAndRejectsOneByteMore() throws {
+        let acceptedPayload = Data(repeating: 0x41, count: 32 * 1_024)
+        let accepted = try WireProtocol.parseAgentInbound(rawEnvelope(
+            type: .data,
+            streamID: "stream-1",
+            payload: acceptedPayload
+        ))
+
+        XCTAssertEqual(try accepted.decodedPayload(), acceptedPayload)
+        XCTAssertThrowsError(try WireProtocol.parseAgentInbound(rawEnvelope(
+            type: .data,
+            streamID: "stream-1",
+            payload: Data(repeating: 0x42, count: 32 * 1_024 + 1)
+        ))) { error in
+            XCTAssertEqual(error as? CoreValidationError, .invalidBase64URL)
+        }
+    }
+
+    func testNonDataFramesRetainGenericOneMiBPayloadLimit() throws {
+        let acceptedPayload = Data(repeating: 0x41, count: 1_024 * 1_024)
+        let encoded = try WireProtocol.encode(
+            type: .open,
+            streamID: "stream-1",
+            payload: acceptedPayload
+        )
+
+        XCTAssertEqual(try WireProtocol.parseAgentInbound(encoded).decodedPayload(), acceptedPayload)
+        let oversizedPayload = Data(repeating: 0x42, count: 1_024 * 1_024 + 1)
+        XCTAssertThrowsError(try WireProtocol.encode(
+            type: .open,
+            streamID: "stream-1",
+            payload: oversizedPayload
+        ))
+        XCTAssertThrowsError(try WireProtocol.parseAgentInbound(rawEnvelope(
+            type: .open,
+            streamID: "stream-1",
+            payload: oversizedPayload
+        )))
     }
 
     func testWireProtocolAcceptsOnlyFiniteErrorCodes() throws {
@@ -50,5 +107,15 @@ final class WireProtocolTests: XCTestCase {
         let raw = Data("{\"version\":1,\"type\":\"data\",\"type\":\"data\",\"streamId\":\"stream-1\",\"payload\":\"\"}".utf8)
 
         XCTAssertThrowsError(try WireProtocol.parseAgentInbound(raw))
+    }
+
+    private func rawEnvelope(type: WireMessageType, streamID: String, payload: Data) -> Data {
+        let encodedPayload = payload.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return Data(
+            "{\"version\":1,\"type\":\"\(type.rawValue)\",\"streamId\":\"\(streamID)\",\"payload\":\"\(encodedPayload)\"}".utf8
+        )
     }
 }

@@ -25,6 +25,7 @@ public struct WireEnvelope: Equatable {
 public enum WireProtocol {
     public static let maximumWebSocketMessageBytes = 2 * 1024 * 1024
     public static let maximumPayloadBytes = 1024 * 1024
+    private static let maximumDataPayloadBytes = 32 * 1024
 
     private static let agentInboundTypes: Set<WireMessageType> = [.open, .data, .close, .ping, .pong]
     private static let agentOutboundTypes: Set<WireMessageType> = [.opened, .rejected, .data, .close, .pong]
@@ -35,7 +36,7 @@ public enum WireProtocol {
     ]
 
     public static func encode(type: WireMessageType, streamID: String = "", payload: Data = Data()) throws -> Data {
-        guard payload.count <= maximumPayloadBytes else { throw CoreValidationError.invalidJSON }
+        guard payload.count <= payloadLimit(for: type) else { throw CoreValidationError.invalidJSON }
         let envelope = WireEnvelopeWire(
             version: 1,
             type: type,
@@ -76,16 +77,16 @@ public enum WireProtocol {
         return Data(value.utf8)
     }
 
-    static func decodePayload(_ value: String) throws -> Data {
+    static func decodePayload(_ value: String, maximumBytes: Int = maximumPayloadBytes) throws -> Data {
         guard value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }),
               value.utf8.count % 4 != 1,
-              (value.utf8.count * 3) / 4 <= maximumPayloadBytes
+              (value.utf8.count * 3) / 4 <= maximumBytes
         else {
             throw CoreValidationError.invalidBase64URL
         }
         let standard = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         let padding = String(repeating: "=", count: (4 - standard.utf8.count % 4) % 4)
-        guard let payload = Data(base64Encoded: standard + padding), payload.count <= maximumPayloadBytes else {
+        guard let payload = Data(base64Encoded: standard + padding), payload.count <= maximumBytes else {
             throw CoreValidationError.invalidBase64URL
         }
         return payload
@@ -97,7 +98,11 @@ public enum WireProtocol {
         guard (isKeepAlive && streamID.isEmpty) || (!isKeepAlive && isValidStreamID(streamID)) else {
             throw CoreValidationError.invalidJSON
         }
-        _ = try decodePayload(payload)
+        _ = try decodePayload(payload, maximumBytes: payloadLimit(for: type))
+    }
+
+    private static func payloadLimit(for type: WireMessageType) -> Int {
+        type == .data ? maximumDataPayloadBytes : maximumPayloadBytes
     }
 
     private static func isValidStreamID(_ value: String) -> Bool {
