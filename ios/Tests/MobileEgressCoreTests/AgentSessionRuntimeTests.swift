@@ -136,6 +136,42 @@ final class AgentSessionRuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.errorClass, .relayUnavailable)
     }
 
+    func testRuntimeCountsCanceledRelaySendAgainstReusedStreamUntilCompletion() async throws {
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let originalTarget = RecordingTargetConnection()
+        let replacementTarget = RecordingTargetConnection()
+        let runtime = AgentSessionRuntime(
+            relay: relay,
+            targetFactory: SequencedTargetConnectionFactory(targets: [originalTarget, replacementTarget])
+        )
+        await runtime.start()
+        await relay.emit(.connected)
+
+        let open = try WireProtocol.encode(
+            type: .open,
+            streamID: "stream",
+            payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8)
+        )
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await originalTarget.emit(.ready)
+        await relay.completeNextSend(.success(()))
+
+        await originalTarget.emit(.data(Data([0x41])))
+        await originalTarget.emit(.failed)
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await replacementTarget.emit(.ready)
+
+        for byte in 0 ..< 32 {
+            await replacementTarget.emit(.data(Data([UInt8(byte)])))
+        }
+
+        let saturated = await runtime.snapshot()
+        XCTAssertEqual(saturated.activeStreamCount, 0)
+        XCTAssertEqual(replacementTarget.cancelCount, 1)
+
+        await relay.completeNextSend(.success(()))
+    }
+
     func testRuntimeStopDuringTargetWriteCancelsOnceAndIgnoresLateCompletion() async throws {
         let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
         let target = RecordingTargetConnection(automaticallyCompletesSends: false)

@@ -147,7 +147,7 @@ final class SessionPrimitivesTests: XCTestCase {
         XCTAssertTrue(mailbox.offerData(Data([0x03, 0x04]), streamID: "stream"))
     }
 
-    func testOutboundCancellationAndCloseRefundFramesAndBytesExactlyOnce() throws {
+    func testCancelStreamRefundsQueuedDataButRetainsPolledReservationUntilEmission() throws {
         let mailbox = OutboundMailbox(
             controlCapacity: 2,
             dataCapacity: 3,
@@ -160,16 +160,27 @@ final class SessionPrimitivesTests: XCTestCase {
         let canceledInFlight = try XCTUnwrap(mailbox.poll())
 
         XCTAssertTrue(mailbox.cancelStream("stream"))
-        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 0)
-        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, 0)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 1)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, 2)
         XCTAssertEqual(mailbox.emit(canceledInFlight, sender: { _ in XCTFail("canceled frame emitted"); return true }), .canceled)
         XCTAssertEqual(mailbox.emit(canceledInFlight, sender: { _ in XCTFail("canceled frame emitted twice"); return true }), .canceled)
-        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 0)
-        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, 0)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
+    }
+
+    func testOutboundCloseRefundsPolledDataExactlyOnce() throws {
+        let mailbox = OutboundMailbox(
+            controlCapacity: 2,
+            dataCapacity: 3,
+            perStreamDataCapacity: 3,
+            dataByteCapacity: 6
+        )
 
         mailbox.allowData("stream")
         XCTAssertTrue(mailbox.offerData(Data(repeating: 0x06, count: 6), streamID: "stream"))
         let closedInFlight = try XCTUnwrap(mailbox.poll())
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 1)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, 6)
+
         mailbox.close()
         XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
         XCTAssertEqual(mailbox.emit(closedInFlight, sender: { _ in XCTFail("closed frame emitted"); return true }), .canceled)
@@ -251,12 +262,43 @@ final class SessionPrimitivesTests: XCTestCase {
         let inFlight = try XCTUnwrap(mailbox.poll())
 
         mailbox.blockAndDiscardData(streamID: "stream")
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 1)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataBytes, Data("in-flight".utf8).count)
         XCTAssertEqual(mailbox.emit(inFlight, sender: { _ in XCTFail("Canceled data must not reach the sender"); return true }), .canceled)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
         XCTAssertTrue(mailbox.offerRequiredControl(Data("forced-close".utf8), streamID: "stream", onSaturated: {}))
 
         let terminal = try XCTUnwrap(mailbox.poll())
         XCTAssertEqual(terminal.bytes, Data("forced-close".utf8))
         XCTAssertNil(mailbox.poll())
+    }
+
+    func testOutboundMailboxCountsCanceledInFlightFrameAgainstReusedStreamCapacity() throws {
+        let mailbox = OutboundMailbox(
+            controlCapacity: 1,
+            dataCapacity: 64,
+            perStreamDataCapacity: 32,
+            dataByteCapacity: 64
+        )
+        mailbox.allowData("stream")
+        XCTAssertTrue(mailbox.offerData(Data([0x01]), streamID: "stream"))
+        let oldInFlight = try XCTUnwrap(mailbox.poll())
+
+        XCTAssertTrue(mailbox.cancelStream("stream"))
+        mailbox.allowData("stream")
+        for byte in 0 ..< 31 {
+            XCTAssertTrue(mailbox.offerData(Data([UInt8(byte)]), streamID: "stream"))
+        }
+
+        XCTAssertFalse(mailbox.offerData(Data([0xFE]), streamID: "stream"))
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 32)
+
+        XCTAssertEqual(
+            mailbox.emit(oldInFlight, sender: { _ in XCTFail("Canceled old generation must not emit"); return true }),
+            .canceled
+        )
+        XCTAssertTrue(mailbox.offerData(Data([0xFF]), streamID: "stream"))
+        XCTAssertEqual(mailbox.bookkeepingSnapshot.outstandingDataFrames, 32)
     }
 
     func testOutboundMailboxCancellationTokenSurvivesStreamIDReuseWithoutCancelingNewData() throws {
