@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"mobile-egress/internal/capacity"
 )
 
 func TestCapacityWireEnvelopeAcceptsDataAtThirtyTwoKiB(t *testing.T) {
@@ -66,7 +67,7 @@ func TestCapacityWireEnvelopePreservesLargerNonDataPayloadLimit(t *testing.T) {
 	}
 }
 
-func TestProductionSessionDriverUsesMTLSAndReceivesRemoteThirtyThirdStreamLimit(t *testing.T) {
+func TestProductionSessionDriverUsesMTLSAndReceivesRemoteTwoHundredFiftySeventhStreamLimit(t *testing.T) {
 	t.Parallel()
 
 	fixture := newHarnessSessionFixture(t)
@@ -77,8 +78,8 @@ func TestProductionSessionDriverUsesMTLSAndReceivesRemoteThirtyThirdStreamLimit(
 	}
 	defer session.Close()
 
-	streams := make([]CapacityStream, 0, 32)
-	for index := 0; index < 32; index++ {
+	streams := make([]CapacityStream, 0, capacity.ClientMaxConcurrentStreams)
+	for index := 0; index < capacity.ClientMaxConcurrentStreams; index++ {
 		stream, openErr := session.OpenStream(context.Background(), "echo.example.com", 443)
 		if openErr != nil {
 			t.Fatalf("OpenStream(%d) = %v", index+1, openErr)
@@ -86,7 +87,7 @@ func TestProductionSessionDriverUsesMTLSAndReceivesRemoteThirtyThirdStreamLimit(
 		streams = append(streams, stream)
 	}
 	if _, openErr := session.OpenStream(context.Background(), "echo.example.com", 443); !rejectedWith(openErr, "client_stream_limit") {
-		t.Fatalf("OpenStream(33) = %v, want remote client_stream_limit", openErr)
+		t.Fatalf("OpenStream(%d) = %v, want remote client_stream_limit", capacity.ClientMaxConcurrentStreams+1, openErr)
 	}
 	if got := fixture.peerCertificates.Load(); got == 0 {
 		t.Fatal("session fixture never received a verified mTLS peer certificate")
@@ -314,7 +315,7 @@ func newHarnessSessionFixture(t *testing.T) *harnessSessionFixture {
 				}
 				switch envelope.Type {
 				case "open":
-					if active >= 32 {
+					if active >= capacity.ClientMaxConcurrentStreams {
 						envelope.Type = "rejected"
 						envelope.Payload = base64.RawURLEncoding.EncodeToString([]byte("client_stream_limit"))
 					} else {

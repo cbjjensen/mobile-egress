@@ -121,6 +121,51 @@ func TestRunTopologyCleansUpAllHeldStreamsAfterProbe(t *testing.T) {
 	}
 }
 
+func TestRunTopologyAttemptsBothIdentityRevocationsWhenOneFails(t *testing.T) {
+	t.Parallel()
+
+	control := newFakeControl()
+	control.failRevokeSerial = "02"
+	dialer := newCapacityFakeDialer(control)
+	var output bytes.Buffer
+	result, runErr := Run(context.Background(), RunConfig{
+		OwnerLoader: fakeOwnerLoader{}, Control: control, Dialer: dialer, Verifier: &fakeVerifier{},
+		Secrets: testRunSecrets(), HoldDuration: time.Millisecond, PhaseTimeout: time.Second,
+		CleanupTimeout: time.Second, Emitter: NewJSONEmitter(&output),
+	})
+	if runErr == nil || runErr.Phase != PhaseCleanup || runErr.Category != FailureCleanup {
+		t.Fatalf("Run() = %#v, want cleanup failure after one identity revocation fails", runErr)
+	}
+	if result.Closed != 257 {
+		t.Fatalf("closed streams = %d, want all 256 held streams plus replacement", result.Closed)
+	}
+	if len(control.revokeCalls) != 2 || control.revokeCalls["01"] != 1 || control.revokeCalls["02"] != 1 {
+		t.Fatalf("revocations = %#v, want both identities attempted exactly once", control.revokeCalls)
+	}
+	if active := dialer.activeCount(); active != 0 {
+		t.Fatalf("active fake streams after failed revocation cleanup = %d, want 0", active)
+	}
+	var final Event
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	for {
+		var event Event
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		final = event
+	}
+	if final.Phase != PhaseCleanup || final.Failure != FailureCleanup {
+		t.Fatalf("final event = %#v, want cleanup/failure_cleanup", final)
+	}
+	for _, secret := range []string{"SECRET-REVOKE-ERROR", "0123456789abcdefghijklmnopqrstuv", "echo.example.com", "owner-key", "client-cert"} {
+		if strings.Contains(output.String(), secret) || strings.Contains(runErr.Error(), secret) {
+			t.Fatalf("cleanup failure disclosed protected material %q", secret)
+		}
+	}
+}
+
 func TestRunnerTreatsEveryFreshIdentityCapacityFailureAsPreflightAndRevokesKnownIdentities(t *testing.T) {
 	t.Parallel()
 

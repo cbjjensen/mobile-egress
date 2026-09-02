@@ -122,10 +122,13 @@
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentTargetBridge.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/StreamAdmission.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt"
           ],
           "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentTargetBridgeTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/StreamAdmissionTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt"

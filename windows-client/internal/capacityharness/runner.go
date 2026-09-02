@@ -486,12 +486,6 @@ func (resources *runResources) claimAllStreamsForShutdown() error {
 	return nil
 }
 
-func (resources *runResources) revokeNow(identity *revocableCredential, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	return identity.revoke(ctx, resources.control, resources.owner)
-}
-
 func (resources *runResources) cleanup(timeout time.Duration) error {
 	resources.cleanupOnce.Do(func() {
 		shutdownBudget := timeout / 2
