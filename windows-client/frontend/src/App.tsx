@@ -515,7 +515,7 @@ export default function App() {
           <div><code>{node.proxy}</code>{proxyActions.guidance && <small>{proxyActions.guidance}</small>}</div>
           <div className="actions">
             <button className="primary" onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy || proxyActions.primaryDisabled}>{proxyActions.primaryLabel}</button>
-            <button onClick={() => void copyNodeSOCKS(node.instanceId)} disabled={!!busy}>Copy SOCKS5 URL</button>
+            <button onClick={() => void copyNodeSOCKS(node.instanceId)} disabled={!!busy || proxyActions.secondaryDisabled}>Copy SOCKS5 URL</button>
             <button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button>
             <button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button>
           </div>

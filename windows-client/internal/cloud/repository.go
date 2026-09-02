@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/securestore"
 )
 
@@ -32,7 +33,7 @@ type ManagedNodeView struct {
 	ServiceVersion string `json:"serviceVersion"`
 	Health         string `json:"health"`
 	Proxy          string `json:"proxy"`
-	HTTPProxyReady bool   `json:"httpProxyReady"`
+	ProxyReady     bool   `json:"proxyReady"`
 }
 
 type controllerState struct {
@@ -195,7 +196,7 @@ func (repository *Repository) NodeViews(ctx context.Context) ([]ManagedNodeView,
 	for _, node := range nodes {
 		views = append(views, ManagedNodeView{
 			InstanceID: node.InstanceID, ClientSerial: node.ClientSerial, ServiceVersion: node.ServiceVersion,
-			Health: node.Health, Proxy: "127.0.0.1:1081:***:***", HTTPProxyReady: supportsHTTPProxy(node.ServiceVersion),
+			Health: node.Health, Proxy: proxyendpoint.HTTPConnectAddress + ":***:***", ProxyReady: supportsManagedNodeProxy(node.ServiceVersion),
 		})
 	}
 	return views, nil
@@ -208,10 +209,10 @@ func (repository *Repository) ProxyLine(ctx context.Context, instanceID string) 
 	}
 	for _, node := range nodes {
 		if node.InstanceID == instanceID {
-			if !supportsHTTPProxy(node.ServiceVersion) {
-				return "", errors.New("managed EC2 Client must be updated before HTTP proxying")
+			if !supportsManagedNodeProxy(node.ServiceVersion) {
+				return "", errors.New("managed EC2 Client must be updated before proxy copying")
 			}
-			return fmt.Sprintf("127.0.0.1:1081:%s:%s", node.SOCKSUsername, node.SOCKSPassword), nil
+			return fmt.Sprintf("%s:%s:%s", proxyendpoint.HTTPConnectAddress, node.SOCKSUsername, node.SOCKSPassword), nil
 		}
 	}
 	return "", errors.New("managed EC2 node was not found")
@@ -224,32 +225,32 @@ func (repository *Repository) SOCKSProxyURL(ctx context.Context, instanceID stri
 	}
 	for _, node := range nodes {
 		if node.InstanceID == instanceID {
-			return fmt.Sprintf("socks5://%s:%s@127.0.0.1:%d", node.SOCKSUsername, node.SOCKSPassword, node.SOCKSPort), nil
+			if !supportsManagedNodeProxy(node.ServiceVersion) {
+				return "", errors.New("managed EC2 Client must be updated before proxy copying")
+			}
+			return fmt.Sprintf("socks5://%s:%s@%s", node.SOCKSUsername, node.SOCKSPassword, proxyendpoint.SOCKSAddress), nil
 		}
 	}
 	return "", errors.New("managed EC2 node was not found")
 }
 
-func supportsHTTPProxy(version string) bool {
+func supportsManagedNodeProxy(version string) bool {
 	parts := strings.Split(version, ".")
 	if len(parts) != 3 {
 		return false
 	}
 	values := make([]uint64, len(parts))
 	for index, part := range parts {
+		if len(part) > 1 && part[0] == '0' {
+			return false
+		}
 		value, err := strconv.ParseUint(part, 10, 32)
 		if err != nil {
 			return false
 		}
 		values[index] = value
 	}
-	if values[0] != 1 {
-		return values[0] > 1
-	}
-	if values[1] != 0 {
-		return values[1] > 0
-	}
-	return values[2] >= 24
+	return values[0] > 1 || values[0] == 1 && (values[1] > 1 || values[1] == 1 && values[2] >= 1)
 }
 
 func (repository *Repository) loadOrCreate(ctx context.Context) (controllerState, error) {
@@ -322,7 +323,7 @@ func (repository *Repository) save(ctx context.Context, state controllerState) e
 
 func validateManagedNode(node ManagedNode) error {
 	if !validInstanceID(node.InstanceID) || node.ClientSerial == "" || node.ConfigurationPublicKey == "" || node.ConfigurationGeneration == 0 || node.ServiceVersion == "" ||
-		node.SOCKSUsername == "" || node.SOCKSPassword == "" || node.SOCKSPort != 1080 || node.RelayURL == "" ||
+		node.SOCKSUsername == "" || node.SOCKSPassword == "" || node.SOCKSPort != proxyendpoint.SOCKSPort || node.RelayURL == "" ||
 		node.CertificatePEM == "" || node.CACertificatePEM == "" {
 		return errors.New("managed EC2 node metadata is incomplete")
 	}

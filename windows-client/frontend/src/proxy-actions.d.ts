@@ -8,7 +8,7 @@ export type ProxyClipboard = {
 }
 
 export type ProxyNode = {
-  httpProxyReady: boolean
+  proxyReady: boolean
 }
 
 export function copyProxyLine(backend: ProxyBackend, clipboard: ProxyClipboard, instanceId: string): Promise<void>
@@ -16,5 +16,6 @@ export function copySOCKS5URL(backend: ProxyBackend, clipboard: ProxyClipboard, 
 export function nodeProxyActions(node: ProxyNode): {
   primaryLabel: string
   primaryDisabled: boolean
+  secondaryDisabled: boolean
   guidance: string
 }

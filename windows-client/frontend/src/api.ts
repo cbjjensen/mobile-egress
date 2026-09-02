@@ -53,7 +53,7 @@ export type ManagedNode = {
   serviceVersion: string
   health: string
   proxy: string
-  httpProxyReady: boolean
+  proxyReady: boolean
 }
 export type SSMProfileResult = { changed: boolean; roleName: string }
 export type SSMInstanceStatus = {

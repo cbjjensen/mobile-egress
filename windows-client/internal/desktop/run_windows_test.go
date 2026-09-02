@@ -292,17 +292,17 @@ func TestManagedNodeBindingsExposeHTTPLineAndSOCKSFallback(t *testing.T) {
 	repository := cloud.NewRepository(securestore.NewMemoryStore())
 	node := cloud.ManagedNode{
 		InstanceID: "i-0123456789abcdef0", ClientSerial: "A1", ConfigurationPublicKey: "public", ConfigurationGeneration: 1,
-		ServiceVersion: "1.0.24", Health: "installed", SOCKSUsername: "node-user", SOCKSPassword: "node-password", SOCKSPort: 1080,
+		ServiceVersion: "1.1.1", Health: "installed", SOCKSUsername: "node-user", SOCKSPassword: "node-password", SOCKSPort: 1080,
 		RelayURL: "https://bridge.tail123.ts.net:8443", CertificatePEM: "certificate", CACertificatePEM: "ca",
 	}
 	if err := repository.SaveNode(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	app := &DesktopApp{cloudRepository: repository}
-	if line, err := app.NodeProxyLine(node.InstanceID); err != nil || line != "127.0.0.1:1081:node-user:node-password" {
+	if line, err := app.NodeProxyLine(node.InstanceID); err != nil || line != "127.0.0.2:1081:node-user:node-password" {
 		t.Fatalf("NodeProxyLine() = %q/%v", line, err)
 	}
-	if socksURL, err := app.NodeSOCKSProxyURL(node.InstanceID); err != nil || socksURL != "socks5://node-user:node-password@127.0.0.1:1080" {
+	if socksURL, err := app.NodeSOCKSProxyURL(node.InstanceID); err != nil || socksURL != "socks5://node-user:node-password@127.0.0.2:1080" {
 		t.Fatalf("NodeSOCKSProxyURL() = %q/%v", socksURL, err)
 	}
 }

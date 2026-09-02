@@ -31,49 +31,73 @@ func TestEncryptedRepositoryPersistsAccessKeysAndManagedNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	views, err := repository.NodeViews(context.Background())
-	if err != nil || len(views) != 1 || views[0].InstanceID != node.InstanceID || views[0].Proxy != "127.0.0.1:1081:***:***" || !views[0].HTTPProxyReady {
+	if err != nil || len(views) != 1 || views[0].InstanceID != node.InstanceID || views[0].Proxy != "127.0.0.2:1081:***:***" {
 		t.Fatalf("NodeViews() = %#v/%v", views, err)
 	}
+	encodedView, err := json.Marshal(views[0])
+	if err != nil || string(encodedView) != `{"instanceId":"i-0123456789abcdef0","clientSerial":"A1","serviceVersion":"1.2.3","health":"healthy","proxy":"127.0.0.2:1081:***:***","proxyReady":true}` {
+		t.Fatalf("managed node JSON = %s/%v", encodedView, err)
+	}
 	proxy, err := repository.ProxyLine(context.Background(), node.InstanceID)
-	if err != nil || proxy != "127.0.0.1:1081:user:password" {
+	if err != nil || proxy != "127.0.0.2:1081:user:password" {
 		t.Fatalf("ProxyLine() = %q/%v", proxy, err)
 	}
 	socksURL, err := repository.SOCKSProxyURL(context.Background(), node.InstanceID)
-	if err != nil || socksURL != "socks5://user:password@127.0.0.1:1080" {
+	if err != nil || socksURL != "socks5://user:password@127.0.0.2:1080" {
 		t.Fatalf("SOCKSProxyURL() = %q/%v", socksURL, err)
 	}
 }
 
-func TestHTTPProxyLineRequiresAClientVersionWithPlainHTTPForwarding(t *testing.T) {
+func TestManagedNodeProxyCopiesRequireClientVersionOneOneOne(t *testing.T) {
 	t.Parallel()
 
 	repository := NewRepository(securestore.NewMemoryStore())
 	node := testManagedNode("i-0123456789abcdef0")
-	node.ServiceVersion = "1.0.22"
-	if err := repository.SaveNode(context.Background(), node); err != nil {
-		t.Fatal(err)
+	for _, test := range []struct {
+		version string
+		ready   bool
+	}{
+		{version: "1.1.0", ready: false},
+		{version: "1.0.24", ready: false},
+		{version: "malformed", ready: false},
+		{version: "1.1", ready: false},
+		{version: "01.1.1", ready: false},
+		{version: "1.1.1.1", ready: false},
+		{version: "1.1.1-rc1", ready: false},
+		{version: "1.1.1", ready: true},
+		{version: "1.9.0", ready: true},
+		{version: "2.0.0", ready: true},
+	} {
+		node.ServiceVersion = test.version
+		if err := repository.SaveNode(context.Background(), node); err != nil {
+			t.Fatal(err)
+		}
+		views, err := repository.NodeViews(context.Background())
+		if err != nil || len(views) != 1 {
+			t.Fatalf("NodeViews() for %s = %#v/%v", test.version, views, err)
+		}
+		encodedView, err := json.Marshal(views[0])
+		var payload struct {
+			ProxyReady *bool `json:"proxyReady"`
+		}
+		if err == nil {
+			err = json.Unmarshal(encodedView, &payload)
+		}
+		if err != nil || payload.ProxyReady == nil || *payload.ProxyReady != test.ready {
+			t.Fatalf("NodeViews() for %s = %s/%v, want proxyReady=%t", test.version, encodedView, err, test.ready)
+		}
+		if _, err := repository.ProxyLine(context.Background(), node.InstanceID); (err == nil) != test.ready {
+			t.Fatalf("ProxyLine() for %s error = %v, want ready=%t", test.version, err, test.ready)
+		}
+		if _, err := repository.SOCKSProxyURL(context.Background(), node.InstanceID); (err == nil) != test.ready {
+			t.Fatalf("SOCKSProxyURL() for %s error = %v, want ready=%t", test.version, err, test.ready)
+		}
 	}
-	views, err := repository.NodeViews(context.Background())
-	if err != nil || len(views) != 1 || views[0].HTTPProxyReady {
-		t.Fatalf("legacy NodeViews() = %#v/%v, want HTTP proxy unavailable", views, err)
+	if _, err := repository.ProxyLine(context.Background(), "i-missing"); err == nil {
+		t.Fatal("ProxyLine() accepted a missing managed node")
 	}
-	if _, err := repository.ProxyLine(context.Background(), node.InstanceID); err == nil {
-		t.Fatal("ProxyLine() exposed a full HTTP endpoint for a CONNECT-only Client")
-	}
-	if socksURL, err := repository.SOCKSProxyURL(context.Background(), node.InstanceID); err != nil || socksURL != "socks5://user:password@127.0.0.1:1080" {
-		t.Fatalf("legacy SOCKSProxyURL() = %q/%v", socksURL, err)
-	}
-
-	node.ServiceVersion = "1.0.24"
-	if err := repository.SaveNode(context.Background(), node); err != nil {
-		t.Fatal(err)
-	}
-	views, err = repository.NodeViews(context.Background())
-	if err != nil || len(views) != 1 || !views[0].HTTPProxyReady {
-		t.Fatalf("1.0.24 NodeViews() = %#v/%v, want HTTP proxy ready", views, err)
-	}
-	if line, err := repository.ProxyLine(context.Background(), node.InstanceID); err != nil || line != "127.0.0.1:1081:user:password" {
-		t.Fatalf("1.0.24 ProxyLine() = %q/%v", line, err)
+	if _, err := repository.SOCKSProxyURL(context.Background(), "i-missing"); err == nil {
+		t.Fatal("SOCKSProxyURL() accepted a missing managed node")
 	}
 }
 
