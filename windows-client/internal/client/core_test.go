@@ -553,7 +553,7 @@ func TestCoreStartsStopsAndExposesOnlyRedactedStatusForStoredClient(t *testing.T
 	if !status.Paired || !status.Running || status.Relay != "connected" || !status.AgentAvailable || status.Port != port {
 		t.Fatalf("Status() = %#v", status)
 	}
-	if status.Proxy != "socks5://***:***@127.0.0.1:"+strconv.Itoa(int(port)) {
+	if status.Proxy != "socks5://***:***@127.0.0.2:"+strconv.Itoa(int(port)) {
 		t.Fatalf("redacted proxy = %q", status.Proxy)
 	}
 	proxyLine, err := core.ProxyLine()

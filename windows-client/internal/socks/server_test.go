@@ -61,7 +61,7 @@ func (opener *fakeOpener) latestRemote(t *testing.T) net.Conn {
 	return nil
 }
 
-func TestServerBindsOnlyIPv4Loopback(t *testing.T) {
+func TestServerBindsOnlyApplicationProxyLoopbackAddress(t *testing.T) {
 	t.Parallel()
 
 	server := NewServer(Config{Username: "user", Password: "password", Opener: &fakeOpener{healthy: true}})
@@ -71,8 +71,30 @@ func TestServerBindsOnlyIPv4Loopback(t *testing.T) {
 	defer server.Stop()
 
 	address := server.Addr()
-	if address == nil || address.IP.String() != "127.0.0.1" {
-		t.Fatalf("listener address = %v, want 127.0.0.1", address)
+	if address == nil || address.IP.String() != "127.0.0.2" {
+		t.Fatalf("listener address = %v, want 127.0.0.2", address)
+	}
+	if _, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(address.Port)), 100*time.Millisecond); err == nil {
+		t.Fatal("SOCKS listener was reachable through 127.0.0.1")
+	}
+}
+
+func TestServerCanBindApplicationProxyAddressWhenSamePortIsOccupiedOn127001(t *testing.T) {
+	t.Parallel()
+
+	occupied, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = occupied.Close() })
+
+	server := NewServer(Config{Username: "user", Password: "password", Opener: &fakeOpener{healthy: true}})
+	if err := server.Start(uint16(occupied.Addr().(*net.TCPAddr).Port)); err != nil {
+		t.Fatalf("Start() with 127.0.0.1 occupied = %v", err)
+	}
+	t.Cleanup(func() { _ = server.Stop() })
+	if address := server.Addr(); address == nil || address.IP.String() != "127.0.0.2" || address.Port != occupied.Addr().(*net.TCPAddr).Port {
+		t.Fatalf("listener address = %v, want 127.0.0.2:%d", address, occupied.Addr().(*net.TCPAddr).Port)
 	}
 }
 

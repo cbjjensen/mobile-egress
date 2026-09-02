@@ -407,10 +407,10 @@ func TestProxyEndpointRedactsSecretsAndStatusHasNoDestinationModel(t *testing.T)
 	t.Parallel()
 
 	endpoint := ProxyEndpoint{Credentials: Credentials{Username: "local-user", Password: "local-password"}, Port: 1080}
-	if got := endpoint.Reveal(); got != "socks5://local-user:local-password@127.0.0.1:1080" {
+	if got := endpoint.Reveal(); got != "socks5://local-user:local-password@127.0.0.2:1080" {
 		t.Fatalf("Reveal() = %q", got)
 	}
-	if got := fmt.Sprint(endpoint); got != "socks5://***:***@127.0.0.1:1080" {
+	if got := fmt.Sprint(endpoint); got != "socks5://***:***@127.0.0.2:1080" {
 		t.Fatalf("String() = %q, want redacted proxy line", got)
 	}
 

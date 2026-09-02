@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"mobile-egress/pairing"
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 	"mobile-egress/windows-client/internal/socks"
@@ -66,7 +67,7 @@ func NewCore(ctx context.Context, store securestore.Store, gateway Gateway) (*Co
 	if err != nil {
 		return nil, err
 	}
-	core := &Core{repository: repository, gateway: gateway, credentials: credentials, port: 1080}
+	core := &Core{repository: repository, gateway: gateway, credentials: credentials, port: proxyendpoint.SOCKSPort}
 	owner, _, err := repository.LoadOwnerIdentity(ctx)
 	if err == nil {
 		core.owner = &owner

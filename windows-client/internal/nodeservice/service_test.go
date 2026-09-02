@@ -26,7 +26,7 @@ func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		status := service.Status()
-		if status.Running && status.Address == "127.0.0.1:1080" && status.HTTPAddress == "127.0.0.1:1081" && status.Connected {
+		if status.Running && status.Address == "127.0.0.2:1080" && status.HTTPAddress == "127.0.0.2:1081" && status.Connected {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -35,18 +35,25 @@ func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	connection, err := net.DialTimeout("tcp4", "127.0.0.1:1080", time.Second)
+	connection, err := net.DialTimeout("tcp4", "127.0.0.2:1080", time.Second)
 	if err != nil {
 		cancel()
-		t.Fatalf("loopback SOCKS listener is unavailable: %v", err)
+		t.Fatalf("application SOCKS listener is unavailable: %v", err)
 	}
 	_ = connection.Close()
-	connection, err = net.DialTimeout("tcp4", "127.0.0.1:1081", time.Second)
+	connection, err = net.DialTimeout("tcp4", "127.0.0.2:1081", time.Second)
 	if err != nil {
 		cancel()
-		t.Fatalf("loopback HTTP CONNECT listener is unavailable: %v", err)
+		t.Fatalf("application HTTP CONNECT listener is unavailable: %v", err)
 	}
 	_ = connection.Close()
+	for _, address := range []string{"127.0.0.1:1080", "127.0.0.1:1081"} {
+		if connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond); err == nil {
+			_ = connection.Close()
+			cancel()
+			t.Fatalf("service listener was reachable through %s", address)
+		}
+	}
 
 	cancel()
 	select {
@@ -60,16 +67,16 @@ func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 	if !tunnel.closed {
 		t.Fatal("Service.Run() did not close the relay tunnel")
 	}
-	if _, err := net.DialTimeout("tcp4", "127.0.0.1:1080", 100*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp4", "127.0.0.2:1080", 100*time.Millisecond); err == nil {
 		t.Fatal("SOCKS listener remained open after service stop")
 	}
-	if _, err := net.DialTimeout("tcp4", "127.0.0.1:1081", 100*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp4", "127.0.0.2:1081", 100*time.Millisecond); err == nil {
 		t.Fatal("HTTP CONNECT listener remained open after service stop")
 	}
 }
 
 func TestServiceRollsBackSOCKSWhenHTTPConnectPortIsUnavailable(t *testing.T) {
-	occupied, err := net.Listen("tcp4", "127.0.0.1:1081")
+	occupied, err := net.Listen("tcp4", "127.0.0.2:1081")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +92,7 @@ func TestServiceRollsBackSOCKSWhenHTTPConnectPortIsUnavailable(t *testing.T) {
 	if status := service.Status(); status.Running || status.Address != "" || status.HTTPAddress != "" {
 		t.Fatalf("status after partial startup = %#v, want stopped", status)
 	}
-	if _, err := net.DialTimeout("tcp4", "127.0.0.1:1080", 100*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp4", "127.0.0.2:1080", 100*time.Millisecond); err == nil {
 		t.Fatal("SOCKS listener remained open after HTTP CONNECT startup failed")
 	}
 }

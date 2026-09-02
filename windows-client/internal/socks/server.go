@@ -9,11 +9,11 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
@@ -75,7 +75,7 @@ func (server *Server) Start(port uint16) error {
 	if server.config.Opener == nil || server.config.Username == "" || server.config.Password == "" {
 		return errors.New("SOCKS proxy configuration is incomplete")
 	}
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(port)})
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: proxyendpoint.IP(), Port: int(port)})
 	if err != nil {
 		return err
 	}
@@ -443,5 +443,5 @@ func (writer countingWriter) Write(value []byte) (int, error) {
 }
 
 func loopbackAddress(port uint16) string {
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
+	return proxyendpoint.Address(port)
 }

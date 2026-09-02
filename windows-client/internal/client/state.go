@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"mobile-egress/pairing"
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
@@ -71,7 +72,7 @@ func (repository *Repository) LoadOrCreateCredentials(ctx context.Context) (Cred
 	generation, err := repository.loadGeneration(ctx)
 	if errors.Is(err, securestore.ErrNotFound) {
 		generation.Credentials, err = generateCredentials()
-		generation.Settings.Port = 1080
+		generation.Settings.Port = proxyendpoint.SOCKSPort
 		if err == nil {
 			err = repository.commitGeneration(ctx, generation)
 		}
@@ -159,7 +160,7 @@ func (repository *Repository) saveIdentity(ctx context.Context, role string, ide
 	}
 	port := generation.Settings.Port
 	if port == 0 {
-		port = 1080
+		port = proxyendpoint.SOCKSPort
 	}
 	generation.Settings.Port = port
 	persisted := persistedIdentityFrom(identity)
@@ -245,7 +246,7 @@ func (repository *Repository) loadOrCreateGeneration(ctx context.Context) (persi
 	if err != nil {
 		return persistedGeneration{}, err
 	}
-	return persistedGeneration{Credentials: credentials, Settings: persistedSettings{Port: 1080}}, nil
+	return persistedGeneration{Credentials: credentials, Settings: persistedSettings{Port: proxyendpoint.SOCKSPort}}, nil
 }
 
 func (repository *Repository) loadGeneration(ctx context.Context) (persistedGeneration, error) {
@@ -396,11 +397,11 @@ type ProxyEndpoint struct {
 
 func (endpoint ProxyEndpoint) Reveal() string {
 	user := url.UserPassword(endpoint.Credentials.Username, endpoint.Credentials.Password)
-	return fmt.Sprintf("socks5://%s@127.0.0.1:%d", user.String(), endpoint.Port)
+	return fmt.Sprintf("socks5://%s@%s", user.String(), proxyendpoint.Address(endpoint.Port))
 }
 
 func (endpoint ProxyEndpoint) String() string {
-	return fmt.Sprintf("socks5://***:***@127.0.0.1:%d", endpoint.Port)
+	return fmt.Sprintf("socks5://***:***@%s", proxyendpoint.Address(endpoint.Port))
 }
 
 type Status struct {

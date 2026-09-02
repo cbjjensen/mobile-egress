@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"mobile-egress/windows-client/internal/httpconnect"
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/socks"
 )
@@ -67,12 +68,12 @@ func (service *Service) Run(ctx context.Context) error {
 	httpProxy := httpconnect.NewServer(httpconnect.Config{
 		Username: runtime.Username, Password: runtime.Password, Opener: opener,
 	})
-	if err := httpProxy.Start(1081); err != nil {
+	if err := httpProxy.Start(proxyendpoint.HTTPConnectPort); err != nil {
 		_ = proxy.Stop()
 		return err
 	}
 	service.setStatus(ServiceStatus{
-		Running: true, Address: "127.0.0.1:1080", HTTPAddress: "127.0.0.1:1081", Serial: runtime.Identity.Serial,
+		Running: true, Address: proxyendpoint.SOCKSAddress, HTTPAddress: proxyendpoint.HTTPConnectAddress, Serial: runtime.Identity.Serial,
 	})
 	defer func() {
 		_ = httpProxy.Stop()
