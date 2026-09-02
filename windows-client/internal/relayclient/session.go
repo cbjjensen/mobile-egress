@@ -53,6 +53,7 @@ type Session struct {
 	writeMu       sync.Mutex
 	mu            sync.Mutex
 	streams       map[string]*relayStream
+	draining      map[string]*relayStream
 	closedStreams map[string]struct{}
 	closedOrder   []string
 	connected     bool
@@ -73,6 +74,7 @@ type inboundBudget struct {
 
 type inboundReservation struct {
 	budget    *inboundBudget
+	stream    *relayStream
 	byteCount int
 	release   sync.Once
 }
@@ -92,12 +94,14 @@ type relayStream struct {
 	beforeWriteChunk func(int)
 	openOnce         sync.Once
 	finishOnce       sync.Once
+	discardOnce      sync.Once
 	sendClose        sync.Once
 	sendMu           sync.Mutex
 	readMu           sync.Mutex
 	inboundMu        sync.Mutex
 	remaining        []byte
 	remainingInbound *inboundReservation
+	inboundFrames    int
 	terminal         atomic.Bool
 	drainInbound     atomic.Bool
 }
@@ -128,6 +132,11 @@ func (reservation *inboundReservation) refund() {
 		return
 	}
 	reservation.release.Do(func() {
+		if reservation.stream != nil {
+			reservation.stream.inboundMu.Lock()
+			reservation.stream.inboundFrames--
+			reservation.stream.inboundMu.Unlock()
+		}
 		reservation.budget.mu.Lock()
 		reservation.budget.frames--
 		reservation.budget.bytes -= reservation.byteCount
@@ -173,6 +182,7 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 	session := &Session{
 		identity: identity, conn: connection, client: httpClient, transport: transport,
 		ctx: sessionContext, cancel: cancel, streams: make(map[string]*relayStream),
+		draining:      make(map[string]*relayStream),
 		closedStreams: make(map[string]struct{}),
 		inboundBudget: newInboundBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane),
 		connected:     true, agent: agentAvailable,
@@ -340,8 +350,9 @@ func (session *Session) readLoop() {
 			if _, err := decodeRelayCode(envelope.Payload); err != nil {
 				return
 			}
-			session.removeStream(stream.id)
-			stream.finishAfterInboundDrain()
+			if session.beginInboundDrain(stream) {
+				stream.finishAfterInboundDrain()
+			}
 		}
 	}
 }
@@ -385,10 +396,35 @@ func (session *Session) removeStream(id string) {
 	session.mu.Unlock()
 }
 
+func (session *Session) beginInboundDrain(stream *relayStream) bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.streams[stream.id] != stream {
+		return false
+	}
+	delete(session.streams, stream.id)
+	if session.draining == nil {
+		session.draining = make(map[string]*relayStream)
+	}
+	session.draining[stream.id] = stream
+	return true
+}
+
+func (session *Session) forgetInboundDrain(stream *relayStream) {
+	session.mu.Lock()
+	if session.draining[stream.id] == stream {
+		delete(session.draining, stream.id)
+	}
+	session.mu.Unlock()
+}
+
 func (session *Session) claimLocalClose(stream *relayStream) bool {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.streams[stream.id] != stream {
+		if session.draining[stream.id] == stream {
+			delete(session.draining, stream.id)
+		}
 		return false
 	}
 	delete(session.streams, stream.id)
@@ -413,8 +449,15 @@ func (session *Session) failAll(err error) {
 	session.mu.Lock()
 	session.connected = false
 	session.agent = false
-	streams := session.streams
+	streams := make([]*relayStream, 0, len(session.streams)+len(session.draining))
+	for _, stream := range session.streams {
+		streams = append(streams, stream)
+	}
+	for _, stream := range session.draining {
+		streams = append(streams, stream)
+	}
 	session.streams = make(map[string]*relayStream)
+	session.draining = make(map[string]*relayStream)
 	session.closedStreams = make(map[string]struct{})
 	session.closedOrder = nil
 	session.mu.Unlock()
@@ -424,27 +467,36 @@ func (session *Session) failAll(err error) {
 }
 
 func (stream *relayStream) enqueueInbound(payload []byte) bool {
+	stream.inboundMu.Lock()
+	if stream.terminal.Load() || stream.inboundFrames >= cap(stream.inbound) {
+		stream.inboundMu.Unlock()
+		return false
+	}
 	reservation, ok := stream.session.inboundBudget.tryReserve(len(payload))
 	if !ok {
+		stream.inboundMu.Unlock()
 		return false
 	}
+	reservation.stream = stream
+	stream.inboundFrames++
 	frame := inboundFrame{payload: payload, reservation: reservation}
-	stream.inboundMu.Lock()
-	defer stream.inboundMu.Unlock()
-	if stream.terminal.Load() {
-		reservation.refund()
-		return false
-	}
 	select {
 	case stream.inbound <- frame:
+		stream.inboundMu.Unlock()
 		return true
 	default:
+		stream.inboundFrames--
+		reservation.stream = nil
+		stream.inboundMu.Unlock()
 		reservation.refund()
 		return false
 	}
 }
 
 func (stream *relayStream) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
 	stream.readMu.Lock()
 	defer stream.readMu.Unlock()
 	for len(stream.remaining) == 0 {
@@ -459,6 +511,7 @@ func (stream *relayStream) Read(buffer []byte) (int, error) {
 				stream.remainingInbound = frame.reservation
 				continue
 			default:
+				stream.completeInboundDrain()
 				return 0, io.EOF
 			}
 		}
@@ -481,6 +534,9 @@ func (stream *relayStream) Read(buffer []byte) (int, error) {
 	stream.remaining = stream.remaining[written:]
 	if len(stream.remaining) == 0 {
 		stream.releaseRemainingInbound()
+		if stream.drainInbound.Load() && len(stream.inbound) == 0 {
+			stream.completeInboundDrain()
+		}
 	}
 	return written, nil
 }
@@ -488,6 +544,10 @@ func (stream *relayStream) Read(buffer []byte) (int, error) {
 func (stream *relayStream) releaseRemainingInbound() {
 	stream.remainingInbound.refund()
 	stream.remainingInbound = nil
+}
+
+func (stream *relayStream) completeInboundDrain() {
+	stream.session.forgetInboundDrain(stream)
 }
 
 func (stream *relayStream) Write(value []byte) (int, error) {
@@ -551,35 +611,47 @@ func (stream *relayStream) resolve(err error) {
 }
 
 func (stream *relayStream) finish(err error) {
+	stream.signalTerminal(err, false)
+	stream.discardInbound()
+}
+
+func (stream *relayStream) finishAfterInboundDrain() {
+	stream.signalTerminal(io.EOF, true)
+}
+
+func (stream *relayStream) signalTerminal(err error, drain bool) {
 	stream.resolve(err)
 	stream.finishOnce.Do(func() {
 		stream.inboundMu.Lock()
+		stream.drainInbound.Store(drain)
 		stream.terminal.Store(true)
 		close(stream.done)
+		stream.inboundMu.Unlock()
+	})
+}
+
+func (stream *relayStream) discardInbound() {
+	stream.discardOnce.Do(func() {
+		stream.inboundMu.Lock()
+		stream.drainInbound.Store(false)
+		var discarded []*inboundReservation
 		for {
 			select {
 			case frame := <-stream.inbound:
-				frame.reservation.refund()
+				discarded = append(discarded, frame.reservation)
 			default:
 				stream.inboundMu.Unlock()
+				for _, reservation := range discarded {
+					reservation.refund()
+				}
 				stream.readMu.Lock()
 				stream.remaining = nil
 				stream.releaseRemainingInbound()
 				stream.readMu.Unlock()
+				stream.session.forgetInboundDrain(stream)
 				return
 			}
 		}
-	})
-}
-
-func (stream *relayStream) finishAfterInboundDrain() {
-	stream.drainInbound.Store(true)
-	stream.resolve(io.EOF)
-	stream.finishOnce.Do(func() {
-		stream.inboundMu.Lock()
-		stream.terminal.Store(true)
-		close(stream.done)
-		stream.inboundMu.Unlock()
 	})
 }
 

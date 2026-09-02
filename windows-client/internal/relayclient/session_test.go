@@ -13,12 +13,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -289,6 +291,33 @@ func TestInboundPartialReadRetainsReservationUntilFinalByte(t *testing.T) {
 		t.Fatalf("second Read() = (%d, %v, %q), want (2, nil, cd)", count, err, second)
 	}
 	assertInboundUsage(t, budget, 0, 0)
+}
+
+func TestInboundPerStreamLimitIncludesPartiallyReadFrame(t *testing.T) {
+	budget := newInboundBudget(64, 128)
+	stream := newInMemoryRelayStream(budget)
+	if !stream.enqueueInbound([]byte("abcd")) {
+		t.Fatal("initial inbound frame was rejected")
+	}
+	if count, err := stream.Read(make([]byte, 1)); count != 1 || err != nil {
+		t.Fatalf("partial Read() = (%d, %v), want (1, nil)", count, err)
+	}
+	for index := 0; index < 31; index++ {
+		if !stream.enqueueInbound([]byte("x")) {
+			t.Fatalf("frame %d of 32 outstanding frames was rejected", index+2)
+		}
+	}
+	if stream.enqueueInbound([]byte("overflow")) {
+		t.Fatal("frame 33 was admitted while a partially read frame remained reserved")
+	}
+	assertInboundUsage(t, budget, 32, 35)
+
+	if count, err := stream.Read(make([]byte, 3)); count != 3 || err != nil {
+		t.Fatalf("final partial-frame Read() = (%d, %v), want (3, nil)", count, err)
+	}
+	if !stream.enqueueInbound([]byte("replacement")) {
+		t.Fatal("fully consumed frame did not release its per-stream reservation")
+	}
 }
 
 func TestInboundSessionBudgetIsSharedAcrossStreams(t *testing.T) {
@@ -574,14 +603,185 @@ func TestInboundSessionCloseRefundsExactlyOnce(t *testing.T) {
 	assertInboundUsage(t, session.inboundBudget, 0, 0)
 }
 
+func TestInboundRemoteCloseThenLocalCloseDiscardsWithoutReply(t *testing.T) {
+	session, stream, outbound := newRemoteDrainingStream(t, []byte("retained"))
+	partial := make([]byte, 1)
+	if count, err := stream.Read(partial); count != 1 || err != nil {
+		t.Fatalf("partial Read() = (%d, %v), want (1, nil)", count, err)
+	}
+	assertInboundUsage(t, session.inboundBudget, 1, len("retained"))
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForInboundUsage(t, session.inboundBudget, 0, 0)
+	assertNoPostRemoteCloseFrame(t, outbound)
+}
+
+func TestInboundRemoteCloseThenSessionCloseDiscardsUnreadData(t *testing.T) {
+	session, _, outbound := newRemoteDrainingStream(t, []byte("retained"))
+	assertInboundUsage(t, session.inboundBudget, 1, len("retained"))
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForInboundUsage(t, session.inboundBudget, 0, 0)
+	assertNoPostRemoteCloseFrame(t, outbound)
+}
+
+func TestInboundRemoteCloseCleanupRaceRefundsExactlyOnce(t *testing.T) {
+	session, stream, outbound := newRemoteDrainingStream(t, []byte("retained"))
+	partial := make([]byte, 1)
+	if count, err := stream.Read(partial); count != 1 || err != nil {
+		t.Fatalf("partial Read() = (%d, %v), want (1, nil)", count, err)
+	}
+	assertInboundUsage(t, session.inboundBudget, 1, len("retained"))
+
+	start := make(chan struct{})
+	var cleanup sync.WaitGroup
+	cleanup.Add(2)
+	go func() {
+		defer cleanup.Done()
+		<-start
+		_ = stream.Close()
+	}()
+	go func() {
+		defer cleanup.Done()
+		<-start
+		_ = session.Close()
+	}()
+	close(start)
+	cleanup.Wait()
+	assertInboundUsage(t, session.inboundBudget, 0, 0)
+	assertNoPostRemoteCloseFrame(t, outbound)
+}
+
+func TestInboundZeroLengthReadReturnsImmediatelyWithoutConsuming(t *testing.T) {
+	t.Run("open", func(t *testing.T) {
+		budget := newInboundBudget(4, 16)
+		stream := newInMemoryRelayStream(budget)
+		result := make(chan error, 1)
+		go func() {
+			count, err := stream.Read([]byte{})
+			if count != 0 {
+				result <- fmt.Errorf("Read([]byte{}) count = %d, want 0", count)
+				return
+			}
+			result <- err
+		}()
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("Read([]byte{}) error = %v, want nil", err)
+			}
+		case <-time.After(100 * time.Millisecond):
+			stream.finish(io.EOF)
+			t.Fatal("Read([]byte{}) blocked on an open stream")
+		}
+	})
+
+	t.Run("local terminal", func(t *testing.T) {
+		stream := newInMemoryRelayStream(newInboundBudget(4, 16))
+		stream.finish(io.EOF)
+		if count, err := stream.Read([]byte{}); count != 0 || err != nil {
+			t.Fatalf("terminal Read([]byte{}) = (%d, %v), want (0, nil)", count, err)
+		}
+	})
+
+	t.Run("remote draining", func(t *testing.T) {
+		budget := newInboundBudget(4, 16)
+		stream := newInMemoryRelayStream(budget)
+		stream.session.streams[stream.id] = stream
+		if !stream.enqueueInbound([]byte("data")) {
+			t.Fatal("inbound frame was rejected")
+		}
+		if !stream.session.beginInboundDrain(stream) {
+			t.Fatal("stream did not enter remote-draining state")
+		}
+		stream.finishAfterInboundDrain()
+		if count, err := stream.Read([]byte{}); count != 0 || err != nil {
+			t.Fatalf("draining Read([]byte{}) = (%d, %v), want (0, nil)", count, err)
+		}
+		if queued := len(stream.inbound); queued != 1 {
+			t.Fatalf("queued frames after Read([]byte{}) = %d, want 1", queued)
+		}
+		assertInboundUsage(t, budget, 1, 4)
+		payload := make([]byte, 4)
+		if _, err := io.ReadFull(stream, payload); err != nil {
+			t.Fatal(err)
+		}
+		if string(payload) != "data" {
+			t.Fatalf("payload after Read([]byte{}) = %q, want data", payload)
+		}
+	})
+}
+
 func newInMemoryRelayStream(budget *inboundBudget) *relayStream {
 	session := &Session{
 		ctx: context.Background(), streams: make(map[string]*relayStream),
-		closedStreams: make(map[string]struct{}), inboundBudget: budget,
+		draining: make(map[string]*relayStream), closedStreams: make(map[string]struct{}),
+		inboundBudget: budget,
 	}
 	return &relayStream{
 		session: session, id: "in-memory", inbound: make(chan inboundFrame, 32),
 		done: make(chan struct{}), openResult: make(chan error, 1),
+	}
+}
+
+func newRemoteDrainingStream(t *testing.T, payload []byte) (*Session, *relayStream, <-chan wireEnvelope) {
+	t.Helper()
+	outbound := make(chan wireEnvelope, 1)
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		open := readTestWireEnvelope(t, connection)
+		writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: open.StreamID})
+		writeWireEnvelope(t, connection, wireEnvelope{
+			Version: 1, Type: "data", StreamID: open.StreamID,
+			Payload: base64.RawURLEncoding.EncodeToString(payload),
+		})
+		writeWireEnvelope(t, connection, wireEnvelope{
+			Version: 1, Type: "close", StreamID: open.StreamID,
+			Payload: base64.RawURLEncoding.EncodeToString([]byte("target_closed")),
+		})
+		_ = connection.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, raw, err := connection.ReadMessage()
+		if err == nil {
+			var envelope wireEnvelope
+			if json.Unmarshal(raw, &envelope) == nil {
+				outbound <- envelope
+			}
+		}
+		close(outbound)
+	})
+	t.Cleanup(fixture.Close)
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	opened, err := session.OpenStream(context.Background(), "remote-close.example", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := opened.(*relayStream)
+	select {
+	case <-stream.done:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not process relay-originated close")
+	}
+	waitForInboundUsage(t, session.inboundBudget, 1, len(payload))
+	if active := session.Status().ActiveStreams; active != 0 {
+		t.Fatalf("active streams after remote close = %d, want 0", active)
+	}
+	return session, stream, outbound
+}
+
+func assertNoPostRemoteCloseFrame(t *testing.T, outbound <-chan wireEnvelope) {
+	t.Helper()
+	select {
+	case envelope, ok := <-outbound:
+		if ok {
+			t.Fatalf("client sent frame after relay-originated close: %#v", envelope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay fixture did not finish checking for a client close frame")
 	}
 }
 
