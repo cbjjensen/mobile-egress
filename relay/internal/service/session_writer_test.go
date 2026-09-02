@@ -556,6 +556,28 @@ func TestMassTeardownDoesNotCreateGoroutinePerNotification(t *testing.T) {
 	}
 }
 
+func TestExpiringAgentIgnoresLateInboundLivenessRefresh(t *testing.T) {
+	service := newWriterTestService()
+	agent := newDormantSession(service, "agent", enrollment.RoleAgent)
+	registerTestSessions(service, agent)
+	defer closeTestSessions(agent)
+
+	stale := time.Now().Add(-agentSessionLivenessTimeout)
+	service.mu.Lock()
+	agent.lastInbound = stale
+	agent.livenessExpiring = true
+	service.mu.Unlock()
+
+	agent.noteInbound(time.Now())
+
+	service.mu.RLock()
+	lastInbound := agent.lastInbound
+	service.mu.RUnlock()
+	if !lastInbound.Equal(stale) {
+		t.Fatalf("late inbound refreshed an expiring Agent from %s to %s", stale, lastInbound)
+	}
+}
+
 func dataEnvelope(streamID, payload string) protocol.Envelope {
 	return protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: streamID, Payload: payload}
 }

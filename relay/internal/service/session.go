@@ -60,11 +60,12 @@ type session struct {
 	role    enrollment.Role
 	conn    sessionConnection
 
-	outbound    *outboundMailbox
-	writeMu     sync.Mutex
-	closeOnce   sync.Once
-	registered  bool
-	lastInbound time.Time
+	outbound         *outboundMailbox
+	writeMu          sync.Mutex
+	closeOnce        sync.Once
+	registered       bool
+	lastInbound      time.Time
+	livenessExpiring bool
 }
 
 type sessionConnection interface {
@@ -270,7 +271,7 @@ func (activeSession *session) readLoop() {
 
 func (activeSession *session) noteInbound(now time.Time) {
 	activeSession.service.mu.Lock()
-	if activeSession.registered {
+	if activeSession.registered && !activeSession.livenessExpiring {
 		activeSession.lastInbound = now
 	}
 	activeSession.service.mu.Unlock()
@@ -774,7 +775,8 @@ func (service *Service) expireStreams(now time.Time) {
 		}
 	}
 	for _, activeSession := range service.sessions {
-		if activeSession.role == enrollment.RoleAgent && !now.Before(activeSession.lastInbound.Add(agentSessionLivenessTimeout)) {
+		if activeSession.role == enrollment.RoleAgent && !activeSession.livenessExpiring && !now.Before(activeSession.lastInbound.Add(agentSessionLivenessTimeout)) {
+			activeSession.livenessExpiring = true
 			expiredSessions = append(expiredSessions, activeSession)
 		}
 	}
