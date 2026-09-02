@@ -38,6 +38,7 @@ internal class AgentTargetBridge(
     maxStreams: Int = AgentCapacity.MAX_STREAMS,
     retainedStreamCapacity: Int = AgentCapacity.RETAINED_STREAM_CAPACITY,
     private val beforeMailboxCommit: () -> Unit = {},
+    private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
 ) : TargetReactorListener {
     private val lifecycleLock = Any()
     private val admission = StreamAdmission(maxStreams)
@@ -135,7 +136,9 @@ internal class AgentTargetBridge(
                 }
             }
         }
-        sessionFailure?.let(onSessionFailure)
+        sessionFailure?.let { errorClass ->
+            if (errorClass == ErrorClass.Backpressure) failSessionBackpressure() else onSessionFailure(errorClass)
+        }
     }
 
     fun reject(streamId: String, code: String, errorClass: ErrorClass = ErrorClass.None) {
@@ -143,7 +146,7 @@ internal class AgentTargetBridge(
             if (closed.get()) return
             queueRejected(streamId, code, errorClass)
         }
-        if (!queued) onSessionFailure(ErrorClass.Backpressure)
+        if (!queued) failSessionBackpressure()
     }
 
     private fun queueRejected(
@@ -157,7 +160,9 @@ internal class AgentTargetBridge(
         return outbound.offerRequiredControl(
             WireProtocol.encode("rejected", streamId, WireProtocol.finiteErrorCode(code)),
             streamId = streamId,
-        ) {}
+        ) {}.also { accepted ->
+            if (!accepted) backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
+        }
     }
 
     fun routeData(streamId: String, payload: ByteArray) {
@@ -187,13 +192,15 @@ internal class AgentTargetBridge(
             }
         }
         backpressureQueued?.let { queued ->
-            status.onError(ErrorClass.Backpressure)
-            if (!queued) onSessionFailure(ErrorClass.Backpressure)
+            if (!queued) {
+                backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
+                failSessionBackpressure()
+            }
         }
         when (result) {
             ReactorSubmitResult.Accepted -> Unit
             ReactorSubmitResult.StreamSaturated -> Unit
-            ReactorSubmitResult.SessionSaturated -> onSessionFailure(ErrorClass.Backpressure)
+            ReactorSubmitResult.SessionSaturated -> failSessionBackpressure()
             ReactorSubmitResult.StreamLimit -> throw ProtocolException("Data for a closed stream")
             // The reactor drops its reservation before delivering the correlated terminal callback.
             // A stream found above is therefore valid even when that callback has not acquired its
@@ -226,7 +233,7 @@ internal class AgentTargetBridge(
         if (!shouldCancel) return
         when (reactor?.cancel(stream.id, stream.correlationToken)) {
             ReactorSubmitResult.Accepted -> Unit
-            ReactorSubmitResult.SessionSaturated -> onSessionFailure(ErrorClass.Backpressure)
+            ReactorSubmitResult.SessionSaturated -> failSessionBackpressure()
             ReactorSubmitResult.StreamLimit,
             ReactorSubmitResult.StreamSaturated,
             ReactorSubmitResult.MissingOrClosed,
@@ -271,7 +278,10 @@ internal class AgentTargetBridge(
                 streamId = streamId,
             ) {}
         }
-        if (!queued) onSessionFailure(ErrorClass.Backpressure)
+        if (!queued) {
+            backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
+            failSessionBackpressure()
+        }
     }
 
     override fun onData(streamId: String, correlationToken: Long, payload: ByteArray): Boolean {
@@ -310,6 +320,11 @@ internal class AgentTargetBridge(
             return
         }
         val action = reason.protocolAction()
+        val terminalErrorClass = if (reason == TargetTerminalReason.Backpressure) {
+            ErrorClass.None
+        } else {
+            action.errorClass
+        }
         val code = action.code
         if (code == null) {
             if (reason == TargetTerminalReason.Canceled || reason == TargetTerminalReason.Shutdown) {
@@ -318,9 +333,9 @@ internal class AgentTargetBridge(
             return
         }
         when {
-            action.rejectUnopenedStream -> rejectUnopenedStream(stream, code, action.errorClass)
+            action.rejectUnopenedStream -> rejectUnopenedStream(stream, code, terminalErrorClass)
             action.drainOutboundData -> closeAfterRelayData(stream, code)
-            else -> failStream(stream, code, action.errorClass)
+            else -> failStream(stream, code, terminalErrorClass)
         }
     }
 
@@ -361,7 +376,10 @@ internal class AgentTargetBridge(
                 if (accepted) stream.state = StreamState.GracefulPending
             }
         }
-        if (!reserved) onSessionFailure(ErrorClass.Backpressure)
+        if (!reserved) {
+            backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
+            failSessionBackpressure()
+        }
     }
 
     private fun beginGracefulCloseEmission(stream: TargetStream): Boolean =
@@ -385,7 +403,7 @@ internal class AgentTargetBridge(
         if (!shouldRelease) return
         when (reactor?.release(stream.id, stream.correlationToken)) {
             ReactorSubmitResult.Accepted -> Unit
-            ReactorSubmitResult.SessionSaturated -> onSessionFailure(ErrorClass.Backpressure)
+            ReactorSubmitResult.SessionSaturated -> failSessionBackpressure()
             ReactorSubmitResult.StreamLimit,
             ReactorSubmitResult.StreamSaturated,
             ReactorSubmitResult.MissingOrClosed,
@@ -428,7 +446,10 @@ internal class AgentTargetBridge(
                 streamId = stream.id,
             ) {}
         }
-        if (!queued) onSessionFailure(ErrorClass.Backpressure)
+        if (!queued) {
+            backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
+            failSessionBackpressure()
+        }
         finalizeStream(stream, errorClass)
     }
 
@@ -449,7 +470,10 @@ internal class AgentTargetBridge(
                 streamId = stream.id,
             ) {}
         }
-        if (!queued) onSessionFailure(ErrorClass.Backpressure)
+        if (!queued) {
+            backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
+            failSessionBackpressure()
+        }
         finalizeStream(stream, errorClass)
     }
 
@@ -464,6 +488,11 @@ internal class AgentTargetBridge(
             status.onActiveStreams(admission.size)
             if (errorClass != ErrorClass.None) status.onError(errorClass)
         }
+    }
+
+    private fun failSessionBackpressure() {
+        status.onError(ErrorClass.Backpressure)
+        onSessionFailure(ErrorClass.Backpressure)
     }
 
     private fun current(streamId: String, correlationToken: Long): TargetStream? =

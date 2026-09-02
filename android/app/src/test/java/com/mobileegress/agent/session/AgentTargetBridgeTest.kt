@@ -43,6 +43,7 @@ class AgentTargetBridgeTest {
         val reactorOverflow = Fixture(openResult = ReactorSubmitResult.SessionSaturated)
         reactorOverflow.bridge.open("reactor-full", targetAddress())
         assertEquals(listOf(ErrorClass.Backpressure), reactorOverflow.failures)
+        assertEquals(listOf(ErrorClass.Backpressure), reactorOverflow.status.errors)
 
         val mailboxOverflow = Fixture(outbound = OutboundMailbox(controlCapacity = 1))
         mailboxOverflow.bridge.open("one", targetAddress())
@@ -53,6 +54,24 @@ class AgentTargetBridgeTest {
         mailboxOverflow.listener.onOpened("two", two)
 
         assertEquals(listOf(ErrorClass.Backpressure), mailboxOverflow.failures)
+        assertEquals(listOf(ErrorClass.Backpressure), mailboxOverflow.status.errors)
+    }
+
+    @Test
+    fun `required control saturation reports its safe source before becoming session fatal`() {
+        val reports = Collections.synchronizedList(mutableListOf<BackpressureSource>())
+        val fixture = Fixture(
+            outbound = OutboundMailbox(controlCapacity = 1),
+            backpressureReporter = reports::add,
+        )
+        fixture.bridge.open("one", targetAddress())
+        fixture.bridge.open("two", targetAddress())
+        fixture.listener.onOpened("one", fixture.reactor.opened.getValue("one"))
+        fixture.listener.onOpened("two", fixture.reactor.opened.getValue("two"))
+
+        assertEquals(listOf(BackpressureSource.RequiredControlSaturation), reports)
+        assertEquals(listOf(ErrorClass.Backpressure), fixture.failures)
+        assertEquals(listOf(ErrorClass.Backpressure), fixture.status.errors)
     }
 
     @Test
@@ -70,6 +89,22 @@ class AgentTargetBridgeTest {
             ),
             fixture.emittedFrames().map(ByteArray::decodeToString),
         )
+        assertEquals(emptyList<ErrorClass>(), fixture.failures)
+        assertEquals(emptyList<ErrorClass>(), fixture.status.errors)
+    }
+
+    @Test
+    fun `stream local target backpressure never becomes session status error at submission or terminal`() {
+        val fixture = Fixture(maxStreams = 1)
+        fixture.bridge.open("saturated", targetAddress())
+        val token = fixture.reactor.opened.getValue("saturated")
+        fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
+
+        fixture.bridge.routeData("saturated", byteArrayOf(1))
+        fixture.listener.onTerminal("saturated", token, TargetTerminalReason.Backpressure)
+        fixture.listener.onReleased("saturated", token)
+
+        assertEquals(emptyList<ErrorClass>(), fixture.status.errors)
         assertEquals(emptyList<ErrorClass>(), fixture.failures)
     }
 
@@ -1086,6 +1121,7 @@ class AgentTargetBridgeTest {
         openResult: ReactorSubmitResult = ReactorSubmitResult.Accepted,
         maxStreams: Int = 256,
         beforeMailboxCommit: () -> Unit = {},
+        backpressureReporter: BackpressureReporter = NoOpBackpressureReporter,
     ) {
         lateinit var listener: TargetReactorListener
         val reactor = FakeReactor(openResult)
@@ -1101,6 +1137,7 @@ class AgentTargetBridgeTest {
             status = status,
             maxStreams = maxStreams,
             beforeMailboxCommit = beforeMailboxCommit,
+            backpressureReporter = backpressureReporter,
         )
         val mailbox = outbound
 

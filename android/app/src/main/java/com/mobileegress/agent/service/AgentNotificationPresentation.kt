@@ -11,3 +11,18 @@ fun agentNotificationSummary(status: AgentRuntimeStatus): String = when (val rot
     is RotationState.Verifying -> "Cellular returned · Checking public IP"
     else -> "Cellular ${status.cellular.name.lowercase()} · Relay ${status.relay.name.lowercase()} · ${status.activeStreams} streams"
 }
+
+internal class AgentNotificationPresentationCoalescer {
+    private var lastSummary: String? = null
+
+    fun shouldNotify(status: AgentRuntimeStatus): Boolean {
+        val summary = agentNotificationSummary(status)
+        if (summary == lastSummary) return false
+        lastSummary = summary
+        return true
+    }
+
+    fun markPresented(status: AgentRuntimeStatus) {
+        lastSummary = agentNotificationSummary(status)
+    }
+}

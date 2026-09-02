@@ -49,6 +49,7 @@ class AgentForegroundService : LifecycleService() {
     private val foregroundController = ForegroundController()
     private val pathController = CellularRequiredController()
     private val rotationController = CellularIpRotationController()
+    private val notificationPresentation = AgentNotificationPresentationCoalescer()
     private val publicIpProbe = IpifyPublicIpProbe()
     private val runtimeLock = Any()
     private lateinit var connectivityManager: ConnectivityManager
@@ -74,7 +75,10 @@ class AgentForegroundService : LifecycleService() {
         foregroundController.reduce(ForegroundEvent.ServiceCreated)
         lifecycleScope.launch {
             AgentStatusBus.status.collectLatest { status ->
-                if (foregroundController.state != ForegroundState.Stopped) {
+                if (
+                    foregroundController.state != ForegroundState.Stopped &&
+                    notificationPresentation.shouldNotify(status)
+                ) {
                     getSystemService(NotificationManager::class.java).notify(
                         NOTIFICATION_ID,
                         notification(status),
@@ -125,10 +129,12 @@ class AgentForegroundService : LifecycleService() {
     }
 
     private fun enterForeground() {
+        val status = AgentStatusBus.status.value.copy(running = true)
+        notificationPresentation.markPresented(status)
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            notification(AgentStatusBus.status.value.copy(running = true)),
+            notification(status),
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
         )
     }

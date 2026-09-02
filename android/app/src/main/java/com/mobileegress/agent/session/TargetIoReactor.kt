@@ -60,18 +60,23 @@ internal class TargetIoReactor(
     private val maxStreams: Int = MAX_STREAMS,
     private val commandCapacity: Int = COMMAND_CAPACITY,
     private val perStreamWriteCapacity: Int = PER_STREAM_WRITE_CAPACITY,
+    private val sessionWriteCapacity: Int = SESSION_WRITE_CAPACITY,
+    private val sessionWriteByteCapacity: Long = SESSION_WRITE_BYTE_CAPACITY,
     private val readChunkBytes: Int = READ_CHUNK_BYTES,
     connectTimeoutMillis: Long = CONNECT_TIMEOUT_MILLIS,
     idleTimeoutMillis: Long = IDLE_TIMEOUT_MILLIS,
     backend: TargetSelectorBackend? = null,
     private val backendFactory: () -> TargetSelectorBackend = { NioTargetSelectorBackend() },
     private val nanoTime: () -> Long = System::nanoTime,
+    private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
 ) : TargetReactorPort {
     private val lock = Any()
     private val lifecycleLock = Any()
     private val commands = ArrayDeque<ReactorCommand>()
     private val reservations = HashMap<String, Reservation>()
     private val outstandingWrites = HashMap<String, WriteCount>()
+    private var outstandingWriteFrames = 0
+    private var outstandingWriteBytes = 0L
     private val saturatedStreams = HashMap<String, Long>()
     private val terminalSignals = HashMap<String, Long>()
     private val releaseRequests = HashMap<String, Long>()
@@ -92,6 +97,8 @@ internal class TargetIoReactor(
         require(maxStreams > 0)
         require(commandCapacity > 0)
         require(perStreamWriteCapacity > 0)
+        require(sessionWriteCapacity > 0)
+        require(sessionWriteByteCapacity > 0)
         require(readChunkBytes in 1..READ_CHUNK_BYTES)
         require(connectTimeoutMillis > 0)
         require(idleTimeoutMillis > 0)
@@ -137,12 +144,16 @@ internal class TargetIoReactor(
         correlationToken: Long,
         address: InetSocketAddress,
     ): ReactorSubmitResult {
+        var saturationSource: BackpressureSource? = null
         val result = synchronized(lock) {
             if (shutdownRequested.get() || streamId in reservations) {
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
             if (reservations.size >= maxStreams) return@synchronized ReactorSubmitResult.StreamLimit
-            if (commands.size >= commandCapacity) return@synchronized ReactorSubmitResult.SessionSaturated
+            if (commands.size >= commandCapacity) {
+                saturationSource = BackpressureSource.RequiredControlSaturation
+                return@synchronized ReactorSubmitResult.SessionSaturated
+            }
             val generation = nextGeneration++
             reservations[streamId] = Reservation(generation, correlationToken)
             commands.addLast(
@@ -156,6 +167,7 @@ internal class TargetIoReactor(
             )
             ReactorSubmitResult.Accepted
         }
+        saturationSource?.let(backpressureReporter::report)
         if (result == ReactorSubmitResult.Accepted) wakeup()
         return result
     }
@@ -173,6 +185,7 @@ internal class TargetIoReactor(
         correlationToken: Long,
         payload: ByteArray,
     ): ReactorSubmitResult {
+        var saturationSource: BackpressureSource? = null
         val result = synchronized(lock) {
             val reservation = reservations[streamId]
                 ?: return@synchronized ReactorSubmitResult.MissingOrClosed
@@ -187,23 +200,39 @@ internal class TargetIoReactor(
             if (saturatedStreams[streamId] == generation) {
                 return@synchronized ReactorSubmitResult.StreamSaturated
             }
-            val writeCount = outstandingWrites.getOrPut(streamId) { WriteCount(generation, 0) }
+            val writeCount = outstandingWrites.getOrPut(streamId) { WriteCount(generation) }
             if (writeCount.generation != generation) {
-                outstandingWrites[streamId] = WriteCount(generation, 0)
+                outstandingWrites[streamId] = WriteCount(generation)
             }
             val currentCount = outstandingWrites.getValue(streamId)
-            if (currentCount.count >= perStreamWriteCapacity) {
+            if (currentCount.frames >= perStreamWriteCapacity) {
                 saturatedStreams[streamId] = generation
+                saturationSource = BackpressureSource.TargetPerStreamLimit
+                return@synchronized ReactorSubmitResult.StreamSaturated
+            }
+            if (outstandingWriteFrames >= sessionWriteCapacity) {
+                saturatedStreams[streamId] = generation
+                saturationSource = BackpressureSource.TargetSessionFrameLimit
+                return@synchronized ReactorSubmitResult.StreamSaturated
+            }
+            if (payload.size.toLong() > sessionWriteByteCapacity - outstandingWriteBytes) {
+                saturatedStreams[streamId] = generation
+                saturationSource = BackpressureSource.TargetSessionByteLimit
                 return@synchronized ReactorSubmitResult.StreamSaturated
             }
             if (commands.size >= commandCapacity) {
                 saturatedStreams[streamId] = generation
+                saturationSource = BackpressureSource.TargetCommandQueue
                 return@synchronized ReactorSubmitResult.StreamSaturated
             }
-            currentCount.count += 1
+            currentCount.frames += 1
+            currentCount.bytes += payload.size.toLong()
+            outstandingWriteFrames += 1
+            outstandingWriteBytes += payload.size.toLong()
             commands.addLast(ReactorCommand.Write(streamId, generation, payload.copyOf()))
             ReactorSubmitResult.Accepted
         }
+        saturationSource?.let(backpressureReporter::report)
         if (result == ReactorSubmitResult.Accepted || result == ReactorSubmitResult.StreamSaturated) {
             wakeup()
         }
@@ -219,6 +248,7 @@ internal class TargetIoReactor(
     }
 
     override fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult {
+        var saturationSource: BackpressureSource? = null
         val result = synchronized(lock) {
             val reservation = reservations[streamId]
                 ?: return@synchronized ReactorSubmitResult.MissingOrClosed
@@ -227,10 +257,14 @@ internal class TargetIoReactor(
             }
             val generation = reservation.generation
             if (shutdownRequested.get()) return@synchronized ReactorSubmitResult.MissingOrClosed
-            if (commands.size >= commandCapacity) return@synchronized ReactorSubmitResult.SessionSaturated
+            if (commands.size >= commandCapacity) {
+                saturationSource = BackpressureSource.RequiredControlSaturation
+                return@synchronized ReactorSubmitResult.SessionSaturated
+            }
             commands.addLast(ReactorCommand.Cancel(streamId, generation))
             ReactorSubmitResult.Accepted
         }
+        saturationSource?.let(backpressureReporter::report)
         if (result == ReactorSubmitResult.Accepted) wakeup()
         return result
     }
@@ -244,6 +278,7 @@ internal class TargetIoReactor(
     }
 
     override fun release(streamId: String, correlationToken: Long): ReactorSubmitResult {
+        var saturationSource: BackpressureSource? = null
         val result = synchronized(lock) {
             val reservation = reservations[streamId]
                 ?: return@synchronized ReactorSubmitResult.MissingOrClosed
@@ -255,11 +290,15 @@ internal class TargetIoReactor(
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
             if (releaseRequests[streamId] == generation) return@synchronized ReactorSubmitResult.Accepted
-            if (commands.size >= commandCapacity) return@synchronized ReactorSubmitResult.SessionSaturated
+            if (commands.size >= commandCapacity) {
+                saturationSource = BackpressureSource.RequiredControlSaturation
+                return@synchronized ReactorSubmitResult.SessionSaturated
+            }
             releaseRequests[streamId] = generation
             commands.addLast(ReactorCommand.Release(streamId, generation))
             ReactorSubmitResult.Accepted
         }
+        saturationSource?.let(backpressureReporter::report)
         if (result == ReactorSubmitResult.Accepted) wakeup()
         return result
     }
@@ -407,7 +446,7 @@ internal class TargetIoReactor(
     private fun handleWrite(command: ReactorCommand.Write) {
         val stream = active[command.streamId]
         if (stream == null || stream.generation != command.generation) {
-            completeWrite(command.streamId, command.generation)
+            completeWrite(command.streamId, command.generation, command.payload.size)
             return
         }
         stream.writes.addLast(ByteBuffer.wrap(command.payload))
@@ -502,6 +541,7 @@ internal class TargetIoReactor(
                 val payload = ByteArray(read)
                 buffer.get(payload)
                 if (!listener.onData(stream.id, stream.correlationToken, payload)) {
+                    backpressureReporter.report(BackpressureSource.TargetOutboundMailbox)
                     terminateStream(stream, TargetTerminalReason.Backpressure)
                 }
             }
@@ -518,7 +558,7 @@ internal class TargetIoReactor(
         }
         if (!chunk.hasRemaining()) {
             stream.writes.removeFirst()
-            completeWrite(stream.id, stream.generation)
+            completeWrite(stream.id, stream.generation, chunk.capacity())
             if (stream.releaseAfterWrites && stream.writes.isEmpty()) {
                 closeWithoutTerminal(stream)
             }
@@ -626,7 +666,7 @@ internal class TargetIoReactor(
         val reservation = reservations[streamId]
         if (reservation?.generation != generation) return@synchronized null
         reservations.remove(streamId)
-        outstandingWrites.remove(streamId)
+        refundOutstandingWrites(streamId, generation)
         saturatedStreams.remove(streamId)
         terminalSignals.remove(streamId)
         releaseRequests.remove(streamId)
@@ -644,11 +684,28 @@ internal class TargetIoReactor(
     private fun terminalWasSignaled(streamId: String, generation: Long): Boolean =
         synchronized(lock) { terminalSignals[streamId] == generation }
 
-    private fun completeWrite(streamId: String, generation: Long) = synchronized(lock) {
+    private fun completeWrite(streamId: String, generation: Long, byteCount: Int) = synchronized(lock) {
         val count = outstandingWrites[streamId]
         if (count?.generation != generation) return@synchronized
-        count.count -= 1
-        if (count.count == 0) outstandingWrites.remove(streamId)
+        if (count.frames <= 0 || count.bytes < byteCount) return@synchronized
+        count.frames -= 1
+        count.bytes -= byteCount.toLong()
+        outstandingWriteFrames -= 1
+        outstandingWriteBytes -= byteCount.toLong()
+        check(outstandingWriteFrames >= 0 && outstandingWriteBytes >= 0)
+        if (count.frames == 0) {
+            check(count.bytes == 0L)
+            outstandingWrites.remove(streamId)
+        }
+    }
+
+    private fun refundOutstandingWrites(streamId: String, generation: Long) {
+        val count = outstandingWrites[streamId]
+        if (count?.generation != generation) return
+        outstandingWrites.remove(streamId)
+        outstandingWriteFrames -= count.frames
+        outstandingWriteBytes -= count.bytes
+        check(outstandingWriteFrames >= 0 && outstandingWriteBytes >= 0)
     }
 
     private fun deadlineAfter(now: Long, duration: Long): Long =
@@ -683,7 +740,11 @@ internal class TargetIoReactor(
         ) : ReactorCommand
     }
 
-    private data class WriteCount(val generation: Long, var count: Int)
+    private data class WriteCount(
+        val generation: Long,
+        var frames: Int = 0,
+        var bytes: Long = 0L,
+    )
 
     private data class Reservation(
         val generation: Long,
@@ -708,6 +769,8 @@ internal class TargetIoReactor(
         const val MAX_STREAMS = AgentCapacity.MAX_STREAMS
         const val COMMAND_CAPACITY = AgentCapacity.REACTOR_COMMAND_CAPACITY
         const val PER_STREAM_WRITE_CAPACITY = AgentCapacity.TARGET_INBOUND_PER_STREAM_CAPACITY
+        const val SESSION_WRITE_CAPACITY = AgentCapacity.TARGET_INBOUND_SESSION_FRAME_CAPACITY
+        const val SESSION_WRITE_BYTE_CAPACITY = AgentCapacity.TARGET_INBOUND_SESSION_BYTE_CAPACITY.toLong()
         const val READ_CHUNK_BYTES = AgentCapacity.PREFERRED_TARGET_READ_BYTES
         const val CONNECT_TIMEOUT_MILLIS = 30_000L
         const val IDLE_TIMEOUT_MILLIS = 5 * 60_000L
