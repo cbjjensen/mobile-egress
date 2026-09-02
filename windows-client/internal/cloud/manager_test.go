@@ -13,12 +13,13 @@ func TestFilterSupportedInstancesRequiresRunningWindowsServer2019AMD64(t *testin
 
 	instances := []Instance{
 		{ID: "i-good", State: "running", Platform: "windows", Architecture: "x86_64", ImageDescription: "Microsoft Windows Server 2019 Base"},
+		{ID: "i-private-ami", State: "running", Platform: "windows", Architecture: "x86_64"},
 		{ID: "i-stopped", State: "stopped", Platform: "windows", Architecture: "x86_64", ImageDescription: "Microsoft Windows Server 2019 Base"},
 		{ID: "i-linux", State: "running", Platform: "linux", Architecture: "x86_64", ImageDescription: "Amazon Linux"},
 		{ID: "i-2022", State: "running", Platform: "windows", Architecture: "x86_64", ImageDescription: "Microsoft Windows Server 2022 Base"},
 		{ID: "i-arm", State: "running", Platform: "windows", Architecture: "arm64", ImageDescription: "Microsoft Windows Server 2019 Base"},
 	}
-	if got := FilterSupportedInstances(instances); !reflect.DeepEqual(got, []Instance{instances[0]}) {
+	if got := FilterSupportedInstances(instances); !reflect.DeepEqual(got, []Instance{instances[0], instances[1]}) {
 		t.Fatalf("FilterSupportedInstances() = %#v", got)
 	}
 }

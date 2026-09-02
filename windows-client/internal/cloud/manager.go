@@ -90,8 +90,9 @@ func NewManager(provider IAMProvider) *Manager {
 func FilterSupportedInstances(instances []Instance) []Instance {
 	result := make([]Instance, 0, len(instances))
 	for _, instance := range instances {
+		imageDescription := strings.ToLower(strings.TrimSpace(instance.ImageDescription))
 		if strings.EqualFold(instance.State, "running") && strings.EqualFold(instance.Platform, "windows") &&
-			strings.EqualFold(instance.Architecture, "x86_64") && strings.Contains(strings.ToLower(instance.ImageDescription), "windows server 2019") {
+			strings.EqualFold(instance.Architecture, "x86_64") && (imageDescription == "" || strings.Contains(imageDescription, "windows server 2019")) {
 			result = append(result, instance)
 		}
 	}
