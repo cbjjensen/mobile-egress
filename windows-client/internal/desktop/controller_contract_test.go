@@ -9,6 +9,7 @@ import (
 
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/client"
+	"mobile-egress/windows-client/internal/cloud"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
@@ -135,6 +136,45 @@ func TestDesktopAppPreservesEveryExistingWailsBinding(t *testing.T) {
 		if !slices.Contains(methods, binding) {
 			t.Errorf("DesktopApp binding %s is missing; methods = %#v", binding, methods)
 		}
+	}
+}
+
+func TestMacOSDesktopManagedNodeProxyBindingsUseLoopbackTwo(t *testing.T) {
+	t.Parallel()
+
+	store := securestore.NewMemoryStore()
+	node := cloud.ManagedNode{
+		InstanceID: "i-0123456789abcdef0", ClientSerial: "A1", ConfigurationPublicKey: "public", ConfigurationGeneration: 1,
+		ServiceVersion: "1.1.1", Health: "installed", SOCKSUsername: "node-user", SOCKSPassword: "node-password", SOCKSPort: 1080,
+		RelayURL: "https://bridge.tail123.ts.net:8443", CertificatePEM: "certificate", CACertificatePEM: "ca",
+	}
+	if err := cloud.NewRepository(store).SaveNode(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	app, err := newDesktopApp(context.Background(), desktopControllerConfig{
+		Platform: platformMacOS,
+		Store:    store,
+		Gateway:  contractGateway{},
+		RelayServiceState: func() relayServiceState {
+			return relayServiceEnabled
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	views, err := app.ManagedNodes()
+	if err != nil || len(views) != 1 {
+		t.Fatalf("ManagedNodes() = %#v/%v", views, err)
+	}
+	if views[0].Proxy != "127.0.0.2:1081:***:***" || !views[0].ProxyReady {
+		t.Fatalf("macOS managed-node view = %#v, want ready 127.0.0.2 HTTP proxy display", views[0])
+	}
+	if line, err := app.NodeProxyLine(node.InstanceID); err != nil || line != "127.0.0.2:1081:node-user:node-password" {
+		t.Fatalf("macOS NodeProxyLine() = %q/%v", line, err)
+	}
+	if socksURL, err := app.NodeSOCKSProxyURL(node.InstanceID); err != nil || socksURL != "socks5://node-user:node-password@127.0.0.2:1080" {
+		t.Fatalf("macOS NodeSOCKSProxyURL() = %q/%v", socksURL, err)
 	}
 }
 
