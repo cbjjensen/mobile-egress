@@ -11,16 +11,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mobile-egress/internal/capacity"
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
 const (
-	holderIdentities     = 8
-	holderStreams        = 32
-	aggregateStreams     = holderIdentities * holderStreams
+	holderIdentities     = 1
+	holderStreams        = capacity.ClientMaxConcurrentStreams
+	aggregateStreams     = capacity.AgentMaxConcurrentStreams
 	probeIdentities      = 1
-	sentinelIdentity     = holderIdentities + probeIdentities
-	totalFreshIdentities = sentinelIdentity + 1
+	totalFreshIdentities = holderIdentities + probeIdentities
 	echoPayloadBytes     = 16 << 10
 	maxHoldDuration      = 30 * time.Minute
 	maxPhaseTimeout      = 2 * time.Minute
@@ -159,11 +159,6 @@ func Run(ctx context.Context, config RunConfig) (result Result, runErr *RunError
 		clients = append(clients, tracked)
 	}
 
-	sentinel := clients[sentinelIdentity]
-	if revokeErr := resources.revokeNow(sentinel, config.CleanupTimeout); revokeErr != nil {
-		return result, &RunError{Phase: PhaseProvision, Category: FailurePreflight, cause: revokeErr}
-	}
-	sentinel.credential.Zero()
 	recheckCtx, cancelRecheck := context.WithTimeout(ctx, config.PhaseTimeout)
 	recheckedHealth, recheckErr := config.Control.Health(recheckCtx, owner)
 	cancelRecheck()
@@ -198,19 +193,6 @@ func Run(ctx context.Context, config RunConfig) (result Result, runErr *RunError
 				return result, openErr
 			}
 			resources.trackStream(held)
-		}
-		if runErr = emitAndCheck(ctx, config.Emitter, result.event(PhaseLimit, FailureNone)); runErr != nil {
-			return result, runErr
-		}
-		result.Attempted++
-		limitCtx, cancelLimit := context.WithTimeout(ctx, config.PhaseTimeout)
-		unexpected, limitErr := sessions[holderIndex].OpenStream(limitCtx, config.Secrets.TargetHost, config.Secrets.TargetPort)
-		cancelLimit()
-		if unexpected != nil {
-			_ = unexpected.Close()
-		}
-		if !rejectedWith(limitErr, "client_stream_limit") {
-			return result, failureFor(ctx, PhaseLimit, FailureClientLimit, limitErr)
 		}
 	}
 

@@ -1,6 +1,8 @@
 # Authenticated 256-stream acceptance
 
-This runbook is for the non-release `capacityharness` build only. It proves the fixed topology of eight legitimate Client identities with 32 streams each, the per-Client and Agent-wide rejection boundaries, a 15-minute hold, and immediate slot reuse. It is not a throughput benchmark and it must never be used against a production relay.
+This runbook defines a future authorized run of the non-release `capacityharness` build only: one legitimate Client identity opens, verifies, and holds all 256 streams, then a second legitimate identity makes its only stream attempt as aggregate stream 257. The definition also requires a 15-minute hold and immediate slot reuse. It is not a throughput benchmark and it must never be used against a production relay.
+
+**Status: `PENDING` / definition only.** Executing the authenticated harness, opening real 256-connection topology, collecting load/soak/memory results, or performing physical-device acceptance was prohibited for the 2026-09-02 capacity implementation. The 256-stream/32-frame expansion currently has deterministic unit/component and ordinary compile/build evidence only. Do not execute any command in this runbook as part of that change; retain these instructions for a separately authorized acceptance event.
 
 Use a dedicated, resettable relay with one paired Agent and no connected Clients or active streams. The runner provisions temporary Client identities through the production Owner API and revokes every identity during bounded cleanup. An interrupted run can therefore leave acceptance-only state that an operator must discard with the dedicated relay.
 
@@ -17,7 +19,7 @@ The commands accept secrets only as a strict JSON document on standard input. Bu
 
 The target certificate must be currently valid for `hostname`, trusted by the platform WebPKI roots, usable for TLS server authentication, and accompanied by its full intermediate chain. Protect the certificate private key with the host's normal administrator-only controls. The harness rejects final certificate or key file entries that are symbolic links, oversized input, non-TLS-1.3 peers, and certificates that do not validate for the requested name.
 
-The harness's only command output is bounded JSON containing `phase`, `attempted`, `open`, `verified`, `closed`, and a fixed failure category. It never includes the token, identities, relay URL, target hostname, certificate data, destinations, or payloads. Preserve only the final aggregate harness result plus the sanitized resource observations defined below in the physical-acceptance record.
+The harness's only command output is bounded JSON containing `phase`, `attempted`, `open`, `verified`, `closed`, and a fixed failure category. A successful topology finishes with totals `258 / 257 / 257 / 257`: 256 initial successes, one rejected aggregate probe, and one successful replacement. Output never includes the token, identities, relay URL, target hostname, certificate data, destinations, or payloads. Preserve only the final aggregate harness result plus the sanitized resource observations defined below in the physical-acceptance record.
 
 ## Start the temporary echo target
 
@@ -66,7 +68,9 @@ The macOS Owner is accessible only inside a correctly signed temporary app with 
 
 ## Required result and cleanup
 
-A passing run must establish and verify 256 streams, reject stream 33 for each holder with `client_stream_limit`, reject the ninth identity's aggregate stream 257 with `agent_stream_limit`, hold every verified stream for 15 minutes, intentionally close one stream, and verify one replacement. Every temporary identity must be revoked exactly once and all sessions and streams must close within the cleanup budget.
+A passing run must use exactly two freshly provisioned authenticated Client identities. The first identity establishes and verifies all 256 held streams. The second identity makes only the aggregate stream-257 attempt, which must reject with `agent_stream_limit`. After the 15-minute hold, the runner intentionally closes one holder stream and the holder opens and verifies one replacement. The final attempted/open/verified/closed totals must be `258/257/257/257`; both temporary identities must be revoked exactly once; and every session and successfully opened stream must close within the cleanup budget.
+
+The capacity contract allows 32 retained data frames per stream and independently caps each directional lane at 8,192 frames and 64 MiB. Per-stream, aggregate-frame, or aggregate-byte data saturation must close only the contributing stream. Required-control saturation or writer failure must close the affected session. The authenticated run observes only finite external outcomes; deterministic tests provide the exact reservation/refund boundary evidence.
 
 Treat cancellation, timeout, cleanup failure, any unexpected stream closure, corruption, restart, queue overflow, continuously growing memory, or leaked socket as a failed gate. A failure category is diagnostic only; rerunning is allowed only after resetting the dedicated relay and confirming zero connected Clients and zero active streams.
 

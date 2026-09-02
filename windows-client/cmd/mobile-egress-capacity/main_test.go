@@ -186,7 +186,7 @@ func TestRunCLIReadsStrictSecretsOnlyFromStdinAndAcceptsOnlyBoundedOperationalFl
 			if config.Secrets.TargetHost != "echo.example.com" || config.Secrets.TargetPort != 443 || !bytes.Equal(config.Secrets.Token, tokenMaterial) {
 				t.Fatal("run secrets were not passed from strict stdin")
 			}
-			result := capacityharness.Result{Attempted: 266, Open: 257, Verified: 257, Closed: 257}
+			result := capacityharness.Result{Attempted: 258, Open: 257, Verified: 257, Closed: 257}
 			_ = config.Emitter.Emit(capacityharness.Event{
 				Phase: capacityharness.PhaseComplete, Attempted: result.Attempted, Open: result.Open,
 				Verified: result.Verified, Closed: result.Closed, Failure: capacityharness.FailureNone,

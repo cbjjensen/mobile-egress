@@ -3,10 +3,13 @@
 package capacityharness
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,105 +17,114 @@ import (
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
-func TestRunnerUsesTenFreshOwnerProvisionedIdentitiesAndExactEightByThirtyTwoTopology(t *testing.T) {
+func TestRunTopologyUsesOne256StreamHolderAndSecondIdentityProbe(t *testing.T) {
 	t.Parallel()
 
 	control := newFakeControl()
 	dialer := newCapacityFakeDialer(control)
 	verifier := &fakeVerifier{}
+	var output bytes.Buffer
 	result, runErr := Run(context.Background(), RunConfig{
 		OwnerLoader: fakeOwnerLoader{}, Control: control, Dialer: dialer, Verifier: verifier,
+		Secrets: testRunSecrets(), HoldDuration: time.Millisecond, PhaseTimeout: time.Second,
+		CleanupTimeout: time.Second, Emitter: NewJSONEmitter(&output),
+	})
+	if runErr != nil {
+		t.Fatalf("Run() = %v", runErr)
+	}
+	if control.provisionCalls != 2 {
+		t.Fatalf("provision calls = %d, want exactly 2 authenticated identities", control.provisionCalls)
+	}
+	if control.healthCalls != 2 {
+		t.Fatalf("dedicated-relay health checks = %d, want 2", control.healthCalls)
+	}
+	if dialer.dialCalls != 2 || len(dialer.sessions) != 2 {
+		t.Fatalf("session dials/sessions = %d/%d, want exactly 2/2", dialer.dialCalls, len(dialer.sessions))
+	}
+	if verifier.calls != 257 {
+		t.Fatalf("verified echoes = %d, want 257 (256 held plus replacement)", verifier.calls)
+	}
+	if result.Attempted != 258 || result.Open != 257 || result.Verified != 257 || result.Closed != 257 {
+		t.Fatalf("result = %#v, want attempted/open/verified/closed 258/257/257/257", result)
+	}
+	holder := dialer.sessions[0]
+	if holder.openCalls != 257 {
+		t.Fatalf("holder open calls = %d, want 257 (256 held plus replacement)", holder.openCalls)
+	}
+	if len(holder.streams) != 257 {
+		t.Fatalf("holder verified streams = %d, want 257 including replacement", len(holder.streams))
+	}
+	if len(holder.rejectionCodes) != 0 {
+		t.Fatalf("holder rejections = %#v, want none", holder.rejectionCodes)
+	}
+	probe := dialer.sessions[1]
+	if probe.openCalls != 1 || len(probe.streams) != 0 || len(probe.rejectionCodes) != 1 || probe.rejectionCodes[0] != "agent_stream_limit" {
+		t.Fatalf("probe calls/opened streams/rejections = %d/%d/%#v, want only aggregate stream 257 rejected with agent_stream_limit", probe.openCalls, len(probe.streams), probe.rejectionCodes)
+	}
+	var final Event
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	for {
+		var event Event
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		final = event
+	}
+	if final.Phase != PhaseComplete || final.Attempted != 258 || final.Open != 257 || final.Verified != 257 || final.Closed != 257 || final.Failure != FailureNone {
+		t.Fatalf("final event = %#v, want secret-free complete totals 258/257/257/257", final)
+	}
+	for _, secret := range []string{"0123456789abcdefghijklmnopqrstuv", "echo.example.com", "owner-key", "client-cert"} {
+		if strings.Contains(output.String(), secret) {
+			t.Fatalf("runner output disclosed protected material %q", secret)
+		}
+	}
+}
+
+func TestRunTopologyCleansUpAllHeldStreamsAfterProbe(t *testing.T) {
+	t.Parallel()
+
+	control := newFakeControl()
+	dialer := newCapacityFakeDialer(control)
+	result, runErr := Run(context.Background(), RunConfig{
+		OwnerLoader: fakeOwnerLoader{}, Control: control, Dialer: dialer, Verifier: &fakeVerifier{},
 		Secrets: testRunSecrets(), HoldDuration: time.Millisecond, PhaseTimeout: time.Second,
 		CleanupTimeout: time.Second, Emitter: discardEmitter{},
 	})
 	if runErr != nil {
 		t.Fatalf("Run() = %v", runErr)
 	}
-	if control.provisionCalls != 10 {
-		t.Fatalf("provision calls = %d, want 10", control.provisionCalls)
+	if result.Closed != 257 {
+		t.Fatalf("closed streams = %d, want all 256 held streams plus replacement", result.Closed)
 	}
-	if control.healthCalls != 2 {
-		t.Fatalf("dedicated-relay health checks = %d, want 2", control.healthCalls)
-	}
-	if dialer.dialCalls != 9 {
-		t.Fatalf("session dials = %d, want 9", dialer.dialCalls)
-	}
-	if !dialer.sentinelWasRevokedBeforeDial {
-		t.Fatal("first session dial happened before the tenth sentinel identity was revoked")
-	}
-	if verifier.calls != 257 {
-		t.Fatalf("verified echoes = %d, want 257 (256 held plus replacement)", verifier.calls)
-	}
-	if result.Attempted != 266 || result.Open != 257 || result.Verified != 257 || result.Closed != 257 {
-		t.Fatalf("result = %#v, want attempted/open/verified/closed 266/257/257/257", result)
-	}
-	if len(dialer.sessions) != 9 {
-		t.Fatalf("sessions = %d, want 9", len(dialer.sessions))
-	}
-	for index, session := range dialer.sessions[:8] {
-		wantAttempts := 33
-		if index == 0 {
-			wantAttempts = 34
-		}
-		if session.openCalls != wantAttempts {
-			t.Fatalf("holder %d open calls = %d, want %d", index+1, session.openCalls, wantAttempts)
-		}
+	for sessionIndex, session := range dialer.sessions {
 		if session.closeCalls != 1 {
-			t.Fatalf("holder %d close calls = %d, want 1", index+1, session.closeCalls)
+			t.Fatalf("session %d close calls = %d, want exactly 1", sessionIndex+1, session.closeCalls)
 		}
 		for streamIndex, stream := range session.streams {
 			if stream.closeCalls != 1 {
-				t.Fatalf("holder %d stream %d close calls = %d, want exactly 1", index+1, streamIndex+1, stream.closeCalls)
+				t.Fatalf("session %d stream %d close calls = %d, want exactly 1", sessionIndex+1, streamIndex+1, stream.closeCalls)
 			}
 		}
-	}
-	if probe := dialer.sessions[8]; probe.openCalls != 1 || probe.closeCalls != 1 {
-		t.Fatalf("probe calls = open %d/close %d, want 1/1", probe.openCalls, probe.closeCalls)
-	}
-	for serial, count := range control.revokeCalls {
-		if count != 1 {
-			t.Fatalf("identity %s revoked %d times, want exactly once", serial, count)
-		}
-	}
-	if len(control.revokeCalls) != 10 || control.revokeCalls["0A"] != 1 {
-		t.Fatalf("revocations = %#v, want all ten including sentinel exactly once", control.revokeCalls)
-	}
-	if active := dialer.activeCount(); active != 0 {
-		t.Fatalf("active fake streams after cleanup = %d, want 0", active)
-	}
-}
-
-func TestRunnerAttemptsFailedSentinelRevocationExactlyOnceAndDoesNotOpenSessions(t *testing.T) {
-	t.Parallel()
-
-	control := newFakeControl()
-	control.failRevokeSerial = "0A"
-	dialer := newCapacityFakeDialer(control)
-	_, runErr := Run(context.Background(), RunConfig{
-		OwnerLoader: fakeOwnerLoader{}, Control: control, Dialer: dialer, Verifier: &fakeVerifier{},
-		Secrets: testRunSecrets(), HoldDuration: time.Millisecond, PhaseTimeout: time.Second,
-		CleanupTimeout: time.Second, Emitter: discardEmitter{},
-	})
-	if runErr == nil || runErr.Phase != PhaseProvision || runErr.Category != FailurePreflight {
-		t.Fatalf("Run() = %#v, want sentinel preflight failure", runErr)
-	}
-	if dialer.dialCalls != 0 {
-		t.Fatalf("session dials = %d, want zero", dialer.dialCalls)
-	}
-	if len(control.revokeCalls) != 10 {
-		t.Fatalf("revocation identities = %d, want 10", len(control.revokeCalls))
 	}
 	for serial, count := range control.revokeCalls {
 		if count != 1 {
 			t.Fatalf("identity %s revocation attempts = %d, want exactly 1", serial, count)
 		}
 	}
+	if len(control.revokeCalls) != 2 {
+		t.Fatalf("revocations = %#v, want both authenticated identities exactly once", control.revokeCalls)
+	}
+	if active := dialer.activeCount(); active != 0 {
+		t.Fatalf("active fake streams after cleanup = %d, want 0", active)
+	}
 }
 
 func TestRunnerTreatsEveryFreshIdentityCapacityFailureAsPreflightAndRevokesKnownIdentities(t *testing.T) {
 	t.Parallel()
 
-	for failAt := 1; failAt <= 10; failAt++ {
+	for failAt := 1; failAt <= 2; failAt++ {
 		failAt := failAt
 		t.Run(fmt.Sprintf("provision-%d", failAt), func(t *testing.T) {
 			control := newFakeControl()
@@ -212,10 +224,10 @@ func TestRunnerCancellationWhileExternalPhaseOperationsAreInFlight(t *testing.T)
 			emitter := Emitter(discardEmitter{})
 			switch phase {
 			case PhaseProvision:
-				control.blockProvisionAt = 3
+				control.blockProvisionAt = 2
 				control.provisionEntered = entered
 			case PhaseOpen:
-				dialer.blockDialAt = 3
+				dialer.blockDialAt = 2
 				dialer.dialEntered = entered
 			case PhaseVerify:
 				verifier.blockAt = 3
@@ -257,9 +269,9 @@ func TestRunnerCancellationWhileExternalPhaseOperationsAreInFlight(t *testing.T)
 			case <-time.After(2 * time.Second):
 				t.Fatalf("Run did not retire the canceled %s operation", phase)
 			}
-			wantRevocations := 10
+			wantRevocations := 2
 			if phase == PhaseProvision {
-				wantRevocations = 2
+				wantRevocations = 1
 			}
 			if got := len(control.revokeCalls); got != wantRevocations {
 				t.Fatalf("%s revocations = %d, want %d", phase, got, wantRevocations)
@@ -283,7 +295,7 @@ func TestRunnerBoundsCleanupAndStillAttemptsEveryCloseAndRevoke(t *testing.T) {
 		control := newFakeControl()
 		dialer := newCapacityFakeDialer(control)
 		closeControl := &fakeSessionCloseControl{
-			gate: make(chan struct{}), started: make(chan struct{}, 9), finished: make(chan struct{}, 9),
+			gate: make(chan struct{}), started: make(chan struct{}, 10), finished: make(chan struct{}, 10),
 		}
 		dialer.sessionCloseControl = closeControl
 		var releaseOnce sync.Once
@@ -301,15 +313,15 @@ func TestRunnerBoundsCleanupAndStillAttemptsEveryCloseAndRevoke(t *testing.T) {
 		if runErr == nil || runErr.Phase != PhaseCleanup || runErr.Category != FailureCleanup {
 			t.Fatalf("attempt %d Run() = %#v, want fixed cleanup failure", attempt+1, runErr)
 		}
-		for index := 0; index < 9; index++ {
+		for index := 0; index < len(dialer.sessions); index++ {
 			select {
 			case <-closeControl.started:
 			case <-time.After(time.Second):
 				t.Fatalf("attempt %d started only %d session closes", attempt+1, index)
 			}
 		}
-		if len(control.revokeCalls) != 10 {
-			t.Fatalf("cleanup attempted %d identity revocations, want 10", len(control.revokeCalls))
+		if len(control.revokeCalls) != control.provisionCalls {
+			t.Fatalf("cleanup attempted %d identity revocations for %d provisioned identities", len(control.revokeCalls), control.provisionCalls)
 		}
 		if control.revokesWithCanceledContext != 0 {
 			t.Fatalf("cleanup began %d revocations with an already-canceled context", control.revokesWithCanceledContext)
@@ -319,11 +331,11 @@ func TestRunnerBoundsCleanupAndStillAttemptsEveryCloseAndRevoke(t *testing.T) {
 				t.Fatalf("session %d close calls = %d, want exactly 1", index, calls)
 			}
 		}
-		for index := 0; index < 9; index++ {
+		for index := 0; index < len(dialer.sessions); index++ {
 			select {
 			case <-closeControl.finished:
 			case <-time.After(20 * time.Millisecond):
-				t.Fatalf("attempt %d returned with %d session close workers still live", attempt+1, 9-index)
+				t.Fatalf("attempt %d returned with %d session close workers still live", attempt+1, len(dialer.sessions)-index)
 			}
 		}
 		release()
@@ -338,7 +350,7 @@ func TestRunnerFailsWhenAnUnrelatedHeldStreamDiesDuringReplacement(t *testing.T)
 	emitter := &actionEmitter{phase: PhaseReplacement}
 	emitter.action = func() {
 		dialer.mu.Lock()
-		unrelated := dialer.sessions[1].streams[0]
+		unrelated := dialer.sessions[0].streams[1]
 		dialer.mu.Unlock()
 		_ = unrelated.Close()
 		// Give the already-registered watcher a deterministic chance to publish
@@ -665,15 +677,14 @@ func (control *fakeControl) Revoke(ctx context.Context, _ relayclient.Identity, 
 }
 
 type capacityFakeDialer struct {
-	mu                           sync.Mutex
-	control                      *fakeControl
-	dialCalls                    int
-	active                       int
-	sessions                     []*capacityFakeSession
-	sentinelWasRevokedBeforeDial bool
-	sessionCloseControl          *fakeSessionCloseControl
-	blockDialAt                  int
-	dialEntered                  chan<- struct{}
+	mu                  sync.Mutex
+	control             *fakeControl
+	dialCalls           int
+	active              int
+	sessions            []*capacityFakeSession
+	sessionCloseControl *fakeSessionCloseControl
+	blockDialAt         int
+	dialEntered         chan<- struct{}
 }
 
 type fakeSessionCloseControl struct {
@@ -690,11 +701,6 @@ func (dialer *capacityFakeDialer) Dial(ctx context.Context, _ *ClientCredential)
 	dialer.mu.Lock()
 	dialer.dialCalls++
 	call := dialer.dialCalls
-	if call == 1 {
-		dialer.control.mu.Lock()
-		dialer.sentinelWasRevokedBeforeDial = dialer.control.revokeCalls["0A"] == 1
-		dialer.control.mu.Unlock()
-	}
 	blocked := call == dialer.blockDialAt
 	entered := dialer.dialEntered
 	dialer.mu.Unlock()
@@ -717,14 +723,15 @@ func (dialer *capacityFakeDialer) activeCount() int {
 }
 
 type capacityFakeSession struct {
-	mu           sync.Mutex
-	dialer       *capacityFakeDialer
-	active       int
-	openCalls    int
-	closeCalls   int
-	closeControl *fakeSessionCloseControl
-	closed       bool
-	streams      []*capacityFakeStream
+	mu             sync.Mutex
+	dialer         *capacityFakeDialer
+	active         int
+	openCalls      int
+	closeCalls     int
+	closeControl   *fakeSessionCloseControl
+	closed         bool
+	streams        []*capacityFakeStream
+	rejectionCodes []string
 }
 
 func (session *capacityFakeSession) OpenStream(context.Context, string, uint16) (CapacityStream, error) {
@@ -732,11 +739,13 @@ func (session *capacityFakeSession) OpenStream(context.Context, string, uint16) 
 	defer session.mu.Unlock()
 	session.openCalls++
 	if session.active >= holderStreams {
+		session.rejectionCodes = append(session.rejectionCodes, "client_stream_limit")
 		return nil, RelayRejection{Code: "client_stream_limit"}
 	}
 	session.dialer.mu.Lock()
 	defer session.dialer.mu.Unlock()
 	if session.dialer.active >= aggregateStreams {
+		session.rejectionCodes = append(session.rejectionCodes, "agent_stream_limit")
 		return nil, RelayRejection{Code: "agent_stream_limit"}
 	}
 	stream := &capacityFakeStream{session: session, done: make(chan struct{})}

@@ -45,8 +45,8 @@ These steps apply only after the signed/notarized Mac PKG completes the pending 
 ## Capacity and safety boundaries
 
 - At most ten managed EC2 Clients per controller.
-- At most 32 active streams per Client identity and 256 active streams through the one active Agent; admission is first-come within both limits.
-- Bounded, fair per-stream and aggregate queues. Data saturation closes only the affected stream; required-control saturation or writer failure closes the affected session. Senders prefer 16 KiB data frames while accepting valid frames up to 32 KiB.
+- At most 256 active streams per Client identity and 256 active streams through the one active Agent. One Client may consume every Agent slot; up to ten authenticated Client identities compete first-come for the same aggregate limit.
+- Senders prefer 16 KiB data frames while accepting valid frames up to 32 KiB. Every retained data lane allows 32 frames per stream and is capped at 8,192 frames and 64 MiB. Client-to-Agent and Agent-to-Client data use separate 64 MiB directional budgets. Data saturation closes only the contributing stream; required-control saturation or writer failure closes the affected session.
 - Mobile Egress mTLS authenticates Owner, Client, and Agent identities. Tailscale supplies ingress, not application identity.
 - EC2 Client private keys and configuration private keys are generated on-node and never returned through SSM.
 - SSM receives only signed-install commands, public CSR/bootstrap output, and sealed configuration ciphertext. Proxy credentials and raw certificate/configuration values are not placed in SSM input, output, or logs.
@@ -54,6 +54,8 @@ These steps apply only after the signed/notarized Mac PKG completes the pending 
 - A Mac logout, Tailscale loss, or Agent cellular loss fails proxy traffic closed; the product never changes a Mac default route and the Agent never falls back to Wi-Fi.
 - The first later Mac-bearing release is clean-install-only for a new Mac bridge: Windows private state is not migrated. Same-Mac signed PKG update/repair preserves identities/state. Intel/universal support, a Mac headless Client, ZFNF Mac App Store distribution, and automatic updates are out of scope.
 - This is for light, personal, interruption-tolerant traffic. Tailscale Funnel availability and bandwidth limits apply.
+
+The 256-stream/32-frame expansion is covered by deterministic unit/component tests and ordinary build checks. It has not been load-, soak-, memory-, authenticated-harness-, or physical-device-validated; the corresponding acceptance runs remain pending and were prohibited for this change.
 
 ## Documentation
 

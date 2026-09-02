@@ -121,27 +121,27 @@
         "android": {
           "status": "implemented",
           "sourceEvidence": [
-            "android/app/src/main/java/com/mobileegress/agent/session/StreamAdmission.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/session/StreamAdmissionTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorIntegrationTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt"
           ]
         },
         "ios": {
           "status": "implemented",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift",
+            "ios/Sources/MobileEgressCore/Session/SessionPrimitives.swift",
             "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift"
           ],
           "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/RelayRuntimeConfigurationTests.swift",
             "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
-            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift",
-            "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift"
+            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift"
           ]
         }
       }
