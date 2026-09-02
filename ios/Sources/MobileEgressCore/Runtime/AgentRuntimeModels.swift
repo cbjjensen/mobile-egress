@@ -184,6 +184,8 @@ struct AgentRuntimeLimits: Equatable, Sendable {
     let outboundData: Int
     let outboundDataPerStream: Int
     let targetInbound: Int
+    let targetInboundSessionFrames: Int
+    let targetInboundSessionBytes: Int
     let targetReadChunkBytes: Int
     let maximumInboundDataBytes: Int
 
@@ -193,7 +195,9 @@ struct AgentRuntimeLimits: Equatable, Sendable {
         outboundControls: 512,
         outboundData: 256,
         outboundDataPerStream: 2,
-        targetInbound: 2,
+        targetInbound: 8,
+        targetInboundSessionFrames: 512,
+        targetInboundSessionBytes: 8 * 1_024 * 1_024,
         targetReadChunkBytes: 16 * 1_024,
         maximumInboundDataBytes: 32 * 1_024
     )

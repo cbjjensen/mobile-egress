@@ -12,7 +12,9 @@ final class RelayRuntimeConfigurationTests: XCTestCase {
                 outboundControls: 512,
                 outboundData: 256,
                 outboundDataPerStream: 2,
-                targetInbound: 2,
+                targetInbound: 8,
+                targetInboundSessionFrames: 512,
+                targetInboundSessionBytes: 8 * 1_024 * 1_024,
                 targetReadChunkBytes: 16 * 1_024,
                 maximumInboundDataBytes: 32 * 1_024
             )
@@ -72,7 +74,7 @@ final class RelayRuntimeConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.prohibitedInterfaceTypes, [.wifi, .wiredEthernet])
         XCTAssertFalse(configuration.allowsProxyFallback)
         XCTAssertEqual(configuration.readChunkBytes, 16 * 1024)
-        XCTAssertEqual(configuration.inboundQueueCapacity, 2)
+        XCTAssertEqual(configuration.inboundQueueCapacity, 8)
         XCTAssertEqual(configuration.connectTimeout, 30)
 
         XCTAssertThrowsError(try TargetConnectionConfiguration(ipLiteral: "example.com", port: 443))

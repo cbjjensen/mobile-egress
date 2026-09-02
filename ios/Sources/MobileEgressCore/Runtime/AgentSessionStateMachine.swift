@@ -23,6 +23,7 @@ struct AgentSessionStateMachine {
         var phase: StreamPhase
         var hasTarget: Bool
         let inboundQueue: BoundedDeque<Data>
+        var queuedInboundBytes = 0
         var writeInFlight: TargetWrite?
         var writeFailed = false
         var gracefulCloseQueued = false
@@ -58,6 +59,8 @@ struct AgentSessionStateMachine {
     private var errorClass: AgentRuntimeErrorClass = .none
     private var bytesUploaded: UInt64 = 0
     private var bytesDownloaded: UInt64 = 0
+    private var targetInboundOutstandingFrames = 0
+    private var targetInboundOutstandingBytes = 0
     private var nextStreamToken: UInt64 = 1
     private var nextWriteID: UInt64 = 1
     private var terminal = false
@@ -133,6 +136,7 @@ struct AgentSessionStateMachine {
 
     mutating func targetCreationFailed(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
         guard let stream = streams[streamID], stream.token == token, stream.phase == .creating else { return [] }
+        releaseTargetIngress(stream)
         streams.removeValue(forKey: streamID)
         admission.release(streamID)
         tombstones.insert(streamID)
@@ -189,9 +193,11 @@ struct AgentSessionStateMachine {
         guard var stream = streams[streamID], stream.token == token,
               let write = stream.writeInFlight, write.id == writeID
         else { return [] }
+        releaseTargetIngress(frameCount: 1, byteCount: write.data.count)
         if !succeeded {
             stream.writeInFlight = nil
             if stream.phase == .gracefulPending {
+                releaseQueuedTargetIngress(&stream)
                 stream.inboundQueue.removeAll()
                 stream.writeFailed = true
                 let shouldCancelTarget = stream.hasTarget
@@ -326,19 +332,32 @@ struct AgentSessionStateMachine {
         if stream.phase == .gracefulPending, stream.writeFailed || stream.gracefulCloseQueued {
             return []
         }
-        if stream.canWrite, stream.writeInFlight == nil {
-            return beginTargetWrite(streamID: envelope.streamID, token: stream.token, data: payload)
-        }
-        guard stream.targetOutstandingFrameCount < limits.targetInbound,
-              stream.inboundQueue.append(payload)
-        else {
+        guard reserveTargetIngress(for: stream, payload: payload) else {
             return failStream(
                 streamID: envelope.streamID,
                 token: stream.token,
                 code: "agent_unavailable",
-                error: .backpressure
+                error: .backpressure,
+                updatesPersistentErrorClass: false
             )
         }
+        if stream.canWrite, stream.writeInFlight == nil {
+            return beginTargetWrite(streamID: envelope.streamID, token: stream.token, data: payload)
+        }
+        guard var queuedStream = streams[envelope.streamID], queuedStream.token == stream.token,
+              queuedStream.inboundQueue.append(payload)
+        else {
+            releaseTargetIngress(frameCount: 1, byteCount: payload.count)
+            return failStream(
+                streamID: envelope.streamID,
+                token: stream.token,
+                code: "agent_unavailable",
+                error: .backpressure,
+                updatesPersistentErrorClass: false
+            )
+        }
+        queuedStream.queuedInboundBytes += payload.count
+        streams[envelope.streamID] = queuedStream
         return []
     }
 
@@ -373,10 +392,12 @@ struct AgentSessionStateMachine {
     }
 
     private mutating func startNextTargetWrite(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
-        guard let stream = streams[streamID], stream.token == token,
+        guard var stream = streams[streamID], stream.token == token,
               stream.canWrite, stream.writeInFlight == nil,
               let data = stream.inboundQueue.popFirst()
         else { return [] }
+        stream.queuedInboundBytes -= data.count
+        streams[streamID] = stream
         return beginTargetWrite(streamID: streamID, token: token, data: data)
     }
 
@@ -405,7 +426,8 @@ struct AgentSessionStateMachine {
         streamID: String,
         token: UInt64,
         code: String,
-        error: AgentRuntimeErrorClass
+        error: AgentRuntimeErrorClass,
+        updatesPersistentErrorClass: Bool = true
     ) -> [AgentRuntimeEffect] {
         guard let stream = streams[streamID], stream.token == token,
               stream.phase == .creating || stream.phase == .connecting || stream.phase == .open
@@ -419,7 +441,9 @@ struct AgentSessionStateMachine {
         guard outbound.offerRequiredControl(frame, streamID: streamID, onSaturated: {}) else {
             return terminate(error: .backpressure, relay: .cancel)
         }
-        errorClass = error
+        if updatesPersistentErrorClass {
+            errorClass = error
+        }
         return releaseStream(streamID: streamID, token: token, remember: true)
     }
 
@@ -429,6 +453,7 @@ struct AgentSessionStateMachine {
         remember: Bool
     ) -> [AgentRuntimeEffect] {
         guard let stream = streams[streamID], stream.token == token else { return [] }
+        releaseTargetIngress(stream)
         streams.removeValue(forKey: streamID)
         admission.release(streamID)
         if remember { tombstones.insert(streamID) }
@@ -486,6 +511,9 @@ struct AgentSessionStateMachine {
             guard let stream = streams[streamID], stream.hasTarget else { continue }
             effects.append(.cancelTarget(streamID: streamID, token: stream.token))
         }
+        for stream in streams.values {
+            releaseTargetIngress(stream)
+        }
         streams.removeAll(keepingCapacity: false)
         _ = admission.clear()
         tombstones.removeAll()
@@ -496,6 +524,42 @@ struct AgentSessionStateMachine {
     private func adding(_ value: UInt64, _ increment: Int) -> UInt64 {
         let (sum, overflow) = value.addingReportingOverflow(UInt64(increment))
         return overflow ? UInt64.max : sum
+    }
+
+    private mutating func reserveTargetIngress(for stream: Stream, payload: Data) -> Bool {
+        guard stream.targetOutstandingFrameCount < limits.targetInbound,
+              targetInboundOutstandingFrames < limits.targetInboundSessionFrames,
+              payload.count <= limits.targetInboundSessionBytes - targetInboundOutstandingBytes
+        else { return false }
+        targetInboundOutstandingFrames += 1
+        targetInboundOutstandingBytes += payload.count
+        return true
+    }
+
+    private mutating func releaseTargetIngress(_ stream: Stream) {
+        releaseTargetIngress(
+            frameCount: stream.targetOutstandingFrameCount,
+            byteCount: stream.queuedInboundBytes + (stream.writeInFlight?.data.count ?? 0)
+        )
+    }
+
+    private mutating func releaseQueuedTargetIngress(_ stream: inout Stream) {
+        releaseTargetIngress(
+            frameCount: stream.inboundQueue.count,
+            byteCount: stream.queuedInboundBytes
+        )
+        stream.queuedInboundBytes = 0
+    }
+
+    private mutating func releaseTargetIngress(frameCount: Int, byteCount: Int) {
+        guard frameCount > 0 else {
+            precondition(byteCount == 0)
+            return
+        }
+        precondition(targetInboundOutstandingFrames >= frameCount)
+        precondition(targetInboundOutstandingBytes >= byteCount)
+        targetInboundOutstandingFrames -= frameCount
+        targetInboundOutstandingBytes -= byteCount
     }
 }
 
