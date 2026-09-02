@@ -27,6 +27,14 @@ const red5TrustedPKGUtilOutput = `Package "Tailscale-1.100.1-macos.pkg":
     1. Developer ID Installer: Fixture only (W5364U7YZB)
 `
 
+const red5TailscaleTrustedPKGUtilOutput = `Package "Tailscale-1.100.1-macos.pkg":
+   Status: signed by a developer certificate issued by Apple for distribution
+   Notarization: trusted by the Apple notary service
+   Signed with a trusted timestamp on: 2026-05-29 19:15:36 +0000
+   Certificate Chain:
+    1. Developer ID Installer: Tailscale Inc. (W5364U7YZB)
+`
+
 const red5CurrentTrustedPKGUtilOutput = `Package "Tailscale-1.100.1-macos.pkg":
    Status: signed by a developer certificate issued by Apple for distribution
    Notarization: trusted by the Apple notary service
@@ -566,6 +574,42 @@ func TestParsePKGSignatureOutputRequiresOneExactTrustedStatusShape(t *testing.T)
 				t.Fatal("malformed pkgutil status accepted")
 			}
 		})
+	}
+}
+
+func TestVerifyMacPackageSystemTrustAcceptsTrustedTailscaleSigner(t *testing.T) {
+	runner := &red5PackageTrustRunner{
+		outputs: map[string][]byte{
+			packageTrustPKGUtilPath: []byte(red5TailscaleTrustedPKGUtilOutput),
+			packageTrustSPCTLPath:   nil,
+		},
+		errors: map[string]error{},
+	}
+	guard := &red5PackageTrustGuard{path: "/private/stage/Tailscale-1.100.1-macos.pkg", current: "admitted"}
+
+	if err := verifyMacPackageSystemTrust(context.Background(), guard, runner); err != nil {
+		t.Fatalf("verifyMacPackageSystemTrust() = %v", err)
+	}
+	if len(runner.invocations) != 2 {
+		t.Fatalf("commands = %d, want pkgutil and spctl", len(runner.invocations))
+	}
+}
+
+func TestVerifyMacPackageSystemTrustRejectsOtherTrustedDeveloper(t *testing.T) {
+	runner := &red5PackageTrustRunner{
+		outputs: map[string][]byte{
+			packageTrustPKGUtilPath: []byte(red5TrustedPKGUtilOutput),
+			packageTrustSPCTLPath:   nil,
+		},
+		errors: map[string]error{},
+	}
+	guard := &red5PackageTrustGuard{path: "/private/stage/Tailscale-1.100.1-macos.pkg", current: "admitted"}
+
+	if err := verifyMacPackageSystemTrust(context.Background(), guard, runner); !errors.Is(err, errMacPackageTrust) {
+		t.Fatalf("verifyMacPackageSystemTrust() = %v, want fixed trust error", err)
+	}
+	if len(runner.invocations) != 1 {
+		t.Fatalf("commands = %d, want only pkgutil", len(runner.invocations))
 	}
 }
 

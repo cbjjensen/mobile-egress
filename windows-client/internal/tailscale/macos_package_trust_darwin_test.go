@@ -5,35 +5,14 @@ package tailscale
 import (
 	"context"
 	"os/exec"
-	"reflect"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestDarwinStagedMacPKGVerifierSelectionIsFixed(t *testing.T) {
+func TestDarwinStagedMacPKGVerifierUsesSystemTrust(t *testing.T) {
 	var verifier func(context.Context, *stagedMacPKG) error = verifyStagedMacPKGOnDarwin
 	if verifier == nil {
 		t.Fatal("fixed Darwin staged-package verifier is nil")
-	}
-	dependencies := darwinStagedMacPKGTrustDependencies()
-	if _, ok := dependencies.runner.(packageTrustDarwinCommandRunner); !ok {
-		t.Fatalf("Darwin verifier runner = %T, want packageTrustDarwinCommandRunner", dependencies.runner)
-	}
-	for name, selected := range map[string]struct {
-		value any
-		want  string
-	}{
-		"root loader":        {value: dependencies.loadRoots, want: ".loadEmbeddedAppleRoots"},
-		"native evaluator":   {value: dependencies.newEvaluator, want: ".newDarwinPackageChainTrustEvaluator"},
-		"current-time clock": {value: dependencies.now, want: "time.Now"},
-		"staged verifier":    {value: dependencies.verify, want: ".verifyStagedMacPKG"},
-	} {
-		function := runtime.FuncForPC(reflect.ValueOf(selected.value).Pointer())
-		if function == nil || !strings.HasSuffix(function.Name(), selected.want) {
-			t.Fatalf("%s selection = %v, want suffix %q", name, function, selected.want)
-		}
 	}
 }
 

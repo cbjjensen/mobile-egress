@@ -10,7 +10,7 @@ import (
 )
 
 func verifyStagedMacPKGOnDarwin(ctx context.Context, stage *stagedMacPKG) error {
-	return verifyStagedMacPKGWithDependencies(ctx, stage, darwinStagedMacPKGTrustDependencies())
+	return verifyMacPackageSystemTrust(ctx, stage, packageTrustDarwinCommandRunner{})
 }
 
 func darwinStagedMacPKGTrustDependencies() stagedMacPKGTrustDependencies {

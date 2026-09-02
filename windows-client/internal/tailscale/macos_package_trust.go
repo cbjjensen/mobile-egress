@@ -22,6 +22,7 @@ import (
 
 const (
 	macPackageTeamID          = "W5364U7YZB"
+	macPackageSignerLine      = "1. Developer ID Installer: Tailscale Inc. (W5364U7YZB)"
 	maximumPackageTrustOutput = 4 << 20
 	maximumAppleRootManifest  = 32 << 10
 	appleRootManifestSHA256   = "67007dcfd51c9a09a9fb1e3c5a477f726db19c88ed67d587ef6ab28561e9a0b2"
@@ -459,6 +460,52 @@ func parsePKGSignatureOutput(value []byte) (pkgutilAssessment, error) {
 		return pkgutilAssessment{}, errMacPackageTrust
 	}
 	return pkgutilAssessment{Trusted: true}, nil
+}
+
+// verifyMacPackageSystemTrust delegates package-chain and notarization
+// validation to the macOS trust services, then requires the fixed Tailscale
+// Developer ID identity reported by pkgutil before opening Installer.
+func verifyMacPackageSystemTrust(
+	ctx context.Context,
+	guard stagedPathGuard,
+	runner packageTrustCommandRunner,
+) error {
+	if ctx == nil || guard == nil || runner == nil || ctx.Err() != nil {
+		return errMacPackageTrust
+	}
+	pkgutilOutput, err := runPackageTrustPathPhase(ctx, guard, runner, packageTrustCommandInvocation{
+		Path:        packageTrustPKGUtilPath,
+		Arguments:   []string{"--check-signature", guard.Path()},
+		Environment: newPackageTrustEnvironment(),
+		OutputLimit: maximumPackageTrustOutput,
+	})
+	if err != nil {
+		return errMacPackageTrust
+	}
+	assessment, err := parsePKGSignatureOutput(pkgutilOutput)
+	if err != nil || !assessment.Trusted || !hasTailscalePackageSigner(pkgutilOutput) {
+		return errMacPackageTrust
+	}
+	if _, err := runPackageTrustPathPhase(ctx, guard, runner, packageTrustCommandInvocation{
+		Path:        packageTrustSPCTLPath,
+		Arguments:   []string{"--assess", "--type", "install", guard.Path()},
+		Environment: newPackageTrustEnvironment(),
+		OutputLimit: maximumPackageTrustOutput,
+	}); err != nil {
+		return errMacPackageTrust
+	}
+	return nil
+}
+
+func hasTailscalePackageSigner(value []byte) bool {
+	lines := strings.Split(strings.ReplaceAll(string(value), "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		if strings.TrimSpace(line) != "Certificate Chain:" {
+			continue
+		}
+		return index+1 < len(lines) && strings.TrimSpace(lines[index+1]) == macPackageSignerLine
+	}
+	return false
 }
 
 func hasPKGUtilHeaderFamily(line, family string) bool {
