@@ -6,7 +6,7 @@ Production Desktop distribution requires Apple Developer Program membership, app
 
 ## Known hosts
 
-Desktop releases use the ignored/untracked PowerShell data file `.local/mac-build-server/release-desktop.psd1`. It has exactly eleven keys: `SshTarget`, `SshKeyPath`, `RepositoryPath`, `TeamID`, `ApplicationIdentity`, `InstallerIdentity`, `NotaryKeychainProfile`, `NotaryApiKeyPath`, `NotaryApiKeyID`, `NotaryApiIssuerID`, and `ProvisioningProfilePath`. `NotaryKeychainProfile` remains a compatibility label, while notarization uses the App Store Connect API key fields so the SSH release does not depend on unlocking the login Keychain. `ssh` and `scp` use the configured key and the standard OpenSSH `known_hosts`.
+Desktop releases use the ignored/untracked PowerShell data file `.local/mac-build-server/release-desktop.psd1`. It has exactly twelve keys: `SshTarget`, `SshKeyPath`, `RepositoryPath`, `TeamID`, `ApplicationIdentity`, `InstallerIdentity`, `NotaryKeychainProfile`, `NotaryApiKeyPath`, `NotaryApiKeyID`, `NotaryApiIssuerID`, `MacKeychainPassword`, and `ProvisioningProfilePath`. `NotaryKeychainProfile` remains a compatibility label, while notarization uses the App Store Connect API key fields. The release action uses `MacKeychainPassword` over SSH stdin only to unlock Developer ID signing keys for `codesign`. `ssh` and `scp` use the configured key and the standard OpenSSH `known_hosts`.
 
 The following values are retained for the separate iOS development path:
 

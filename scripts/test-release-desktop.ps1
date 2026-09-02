@@ -57,6 +57,7 @@ try {
     NotaryApiKeyPath = '/Users/builder/secrets/AuthKey_ABCDEFGHIJ.p8'
     NotaryApiKeyID = 'ABCDEFGHIJ'
     NotaryApiIssuerID = '11111111-2222-3333-4444-555555555555'
+    MacKeychainPassword = 'fixture-password'
     ProvisioningProfilePath = '/Users/builder/signing/controller.provisionprofile'
 }
 "@, [System.Text.UTF8Encoding]::new($false))
@@ -83,6 +84,7 @@ try {
         NotaryApiKeyPath = '/Users/builder/secrets/AuthKey_ABCDEFGHIJ.p8'
         NotaryApiKeyID = 'ABCDEFGHIJ'
         NotaryApiIssuerID = '11111111-2222-3333-4444-555555555555'
+        MacKeychainPassword = 'fixture-password'
         ProvisioningProfilePath = '/Users/builder/signing/controller.provisionprofile'
     }
 
@@ -120,6 +122,7 @@ try {
                 Assert-Condition ($Context.NotaryApiKeyPath -eq $config.NotaryApiKeyPath) 'The Desktop flow must pass the notary API key path to the Mac release script.'
                 Assert-Condition ($Context.NotaryApiKeyID -eq $config.NotaryApiKeyID) 'The Desktop flow must pass the notary API key ID to the Mac release script.'
                 Assert-Condition ($Context.NotaryApiIssuerID -eq $config.NotaryApiIssuerID) 'The Desktop flow must pass the notary API issuer ID to the Mac release script.'
+                Assert-Condition ($Context.MacKeychainPassword -eq $config.MacKeychainPassword) 'The Desktop flow must keep the Mac Keychain password in context for stdin-only SSH unlock.'
             }
             if ($Action -eq 'remote-hash') {
                 return $expectedPkgHash
@@ -249,6 +252,9 @@ try {
     $macScriptSource = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\release-macos.sh')
     Assert-Condition ($desktopScriptSource -match 'NotaryApiKeyPath') 'The Desktop release config must support a notary API key path.'
     Assert-Condition ($desktopScriptSource -match 'notary-api-key') 'The Desktop orchestrator must pass notary API-key arguments to the Mac script.'
+    Assert-Condition ($desktopScriptSource -match 'StandardInputText') 'The Desktop SSH helper must support stdin for secret Keychain unlock input.'
+    Assert-Condition ($desktopScriptSource -match 'security unlock-keychain') 'The Desktop Mac release action must unlock the login Keychain before codesigning.'
+    Assert-Condition ($desktopScriptSource -notmatch 'fixture-password') 'The Desktop release script must not embed Keychain passwords in source or remote commands.'
     Assert-Condition ($macScriptSource -match '--notary-api-key') 'The Mac release script must accept a notary API key path.'
     Assert-Condition ($macScriptSource -match 'notarytool submit[^\r\n]+--key[^\r\n]+--key-id[^\r\n]+--issuer') 'The Mac release script must notarize with App Store Connect API-key credentials.'
 } finally {

@@ -17,6 +17,8 @@ function Invoke-MobileEgressDesktopNativeCommand {
         [Parameter(Mandatory)]
         [string]$FilePath,
         [string[]]$Arguments = @(),
+        [AllowNull()]
+        [string]$StandardInputText = $null,
         [Parameter(Mandatory)]
         [string]$Description
     )
@@ -29,7 +31,11 @@ function Invoke-MobileEgressDesktopNativeCommand {
     $originalErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $output = @(& $FilePath @Arguments 2>&1)
+        if ($null -eq $StandardInputText) {
+            $output = @(& $FilePath @Arguments 2>&1)
+        } else {
+            $output = @($StandardInputText | & $FilePath @Arguments 2>&1)
+        }
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $originalErrorActionPreference
@@ -96,6 +102,7 @@ function Get-MobileEgressDesktopConfig {
         'NotaryApiKeyPath',
         'NotaryApiKeyID',
         'NotaryApiIssuerID',
+        'MacKeychainPassword',
         'ProvisioningProfilePath'
     )
     foreach ($name in $required) {
@@ -116,7 +123,7 @@ function Get-MobileEgressDesktopConfig {
     if ([string]$data.TeamID -notmatch '^[A-Z0-9]{10}$') {
         throw 'Desktop release TeamID must contain ten uppercase letters or digits.'
     }
-    foreach ($name in @('ApplicationIdentity', 'InstallerIdentity', 'NotaryKeychainProfile', 'NotaryApiKeyPath', 'NotaryApiKeyID', 'NotaryApiIssuerID', 'ProvisioningProfilePath')) {
+    foreach ($name in @('ApplicationIdentity', 'InstallerIdentity', 'NotaryKeychainProfile', 'NotaryApiKeyPath', 'NotaryApiKeyID', 'NotaryApiIssuerID', 'MacKeychainPassword', 'ProvisioningProfilePath')) {
         $value = [string]$data[$name]
         if ($value.IndexOf([char]0) -ge 0 -or $value.Contains("`r") -or $value.Contains("`n")) {
             throw "Desktop release configuration value must be single-line text: $name"
@@ -172,6 +179,7 @@ function Get-MobileEgressDesktopConfig {
         NotaryApiKeyPath = [string]$data.NotaryApiKeyPath
         NotaryApiKeyID = [string]$data.NotaryApiKeyID
         NotaryApiIssuerID = [string]$data.NotaryApiIssuerID
+        MacKeychainPassword = [string]$data.MacKeychainPassword
         ProvisioningProfilePath = [string]$data.ProvisioningProfilePath
     }
 }
@@ -180,6 +188,7 @@ function Invoke-MobileEgressDesktopSsh {
     param(
         [Parameter(Mandatory)][pscustomobject]$Context,
         [Parameter(Mandatory)][string]$Command,
+        [AllowNull()][string]$StandardInputText = $null,
         [Parameter(Mandatory)][string]$Description
     )
 
@@ -191,7 +200,7 @@ function Invoke-MobileEgressDesktopSsh {
         '-o', 'ConnectTimeout=10',
         $Context.SshTarget,
         $Command
-    ) -Description $Description
+    ) -StandardInputText $StandardInputText -Description $Description
 }
 
 function Invoke-MobileEgressDesktopScp {
@@ -257,8 +266,8 @@ function Invoke-MobileEgressMacDesktopAction {
             $notaryApiKey = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyPath
             $notaryApiKeyID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyID
             $notaryApiIssuerID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiIssuerID
-            $command = "set -eu; cd -- $repo; /bin/sh $scriptPath --release-version $version --node-manifest $manifest --source-commit $commit --profile $profile --team-id $team --application-identity $application --installer-identity $installer --notary-keychain-profile $notary --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
-            $output = Invoke-MobileEgressDesktopSsh -Context $Context -Command $command -Description 'Building signed notarized macOS release'
+            $command = "set -eu; IFS= read -r MOBILE_EGRESS_KEYCHAIN_PASSWORD; /usr/bin/security unlock-keychain -p `"`$MOBILE_EGRESS_KEYCHAIN_PASSWORD`" `"`$HOME/Library/Keychains/login.keychain-db`"; unset MOBILE_EGRESS_KEYCHAIN_PASSWORD; cd -- $repo; /bin/sh $scriptPath --release-version $version --node-manifest $manifest --source-commit $commit --profile $profile --team-id $team --application-identity $application --installer-identity $installer --notary-keychain-profile $notary --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
+            $output = Invoke-MobileEgressDesktopSsh -Context $Context -Command $command -StandardInputText $Context.MacKeychainPassword -Description 'Building signed notarized macOS release'
             if (-not [string]::IsNullOrWhiteSpace($output)) {
                 Write-Host $output
             }
@@ -414,6 +423,7 @@ function Invoke-MobileEgressDesktopBuild {
         NotaryApiKeyPath = $Config.NotaryApiKeyPath
         NotaryApiKeyID = $Config.NotaryApiKeyID
         NotaryApiIssuerID = $Config.NotaryApiIssuerID
+        MacKeychainPassword = $Config.MacKeychainPassword
         ProvisioningProfilePath = $Config.ProvisioningProfilePath
         ManifestPath = Join-Path $RepositoryRoot 'windows-client\build\bin\release-manifest.json'
         ManifestSha256 = ''
