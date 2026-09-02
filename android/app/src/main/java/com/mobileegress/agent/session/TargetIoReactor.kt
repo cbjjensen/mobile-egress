@@ -116,33 +116,51 @@ internal class TargetIoReactor(
         require(idleTimeoutMillis > 0)
     }
 
-    override fun start(): Boolean = synchronized(lifecycleLock) {
-        if (shutdownRequested.get()) return@synchronized false
-        if (started.get()) return@synchronized activeBackend != null
-        val selectedBackend = try {
-            suppliedBackend ?: backendFactory()
-        } catch (_: Exception) {
-            shutdownRequested.set(true)
-            stopped.countDown()
-            return@synchronized false
-        }
-        val thread = Thread(::runLoop, REACTOR_THREAD_NAME).also { it.isDaemon = true }
-        activeBackend = selectedBackend
-        reactorThread = thread
-        started.set(true)
-        try {
-            thread.start()
-            true
-        } catch (_: Exception) {
-            shutdownRequested.set(true)
-            activeBackend = null
-            try {
-                selectedBackend.close()
+    override fun start(): Boolean {
+        var startupFailed = false
+        var failedBackend: TargetSelectorBackend? = null
+        val result = synchronized(lifecycleLock) {
+            if (shutdownRequested.get()) return@synchronized false
+            if (started.get()) return@synchronized activeBackend != null
+            val selectedBackend = try {
+                suppliedBackend ?: backendFactory()
             } catch (_: Exception) {
-                // A failed thread start still owns and closes its backend.
+                shutdownRequested.set(true)
+                startupFailed = true
+                return@synchronized false
             }
-            stopped.countDown()
-            false
+            val thread = Thread(::runLoop, REACTOR_THREAD_NAME).also { it.isDaemon = true }
+            activeBackend = selectedBackend
+            reactorThread = thread
+            started.set(true)
+            try {
+                thread.start()
+                true
+            } catch (_: Exception) {
+                shutdownRequested.set(true)
+                activeBackend = null
+                reactorThread = null
+                failedBackend = selectedBackend
+                startupFailed = true
+                false
+            }
+        }
+        if (startupFailed) completeStartupFailure(failedBackend)
+        return result
+    }
+
+    private fun completeStartupFailure(backend: TargetSelectorBackend?) {
+        shutdownRequested.set(true)
+        try {
+            closeEverything(TargetTerminalReason.Shutdown)
+        } finally {
+            try {
+                backend?.close()
+            } catch (_: Exception) {
+                // A failed startup still owns and closes its selected backend.
+            } finally {
+                stopped.countDown()
+            }
         }
     }
 

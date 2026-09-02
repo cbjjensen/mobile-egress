@@ -950,6 +950,30 @@ class TargetIoReactorTest {
     }
 
     @Test
+    fun `backend factory failure refunds commands and target reservations exactly once`() {
+        val listener = RecordingListener(terminalCount = 1)
+        val reactor = TargetIoReactor(
+            binder = TargetSocketBinder {},
+            listener = listener,
+            maxStreams = 1,
+            dataCommandCapacity = 1,
+            totalCommandCapacity = 2,
+            backendFactory = { throw IllegalStateException("selector creation failed") },
+        )
+        assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream", targetAddress()))
+        assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream", byteArrayOf(1, 2)))
+        assertEquals(TargetIoReactorSnapshot(2, 1, 1, 2), reactor.snapshot())
+
+        assertFalse(reactor.start())
+
+        assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        assertEquals(listOf(TargetTerminalReason.Shutdown), listener.terminalReasons["stream"])
+        assertEquals(listOf("stream"), listener.released)
+        assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), reactor.snapshot())
+        assertFalse(listener.fatal.get())
+    }
+
+    @Test
     fun `non reactor shutdown barrier waits for channels backend and thread to stop`() {
         val connection = FakeConnection("stream", connectedImmediately = true)
         val backend = FakeSelectorBackend(connection)
@@ -1131,6 +1155,7 @@ class TargetIoReactorTest {
         val received = ConcurrentHashMap<String, ByteArray>()
         val receivedChunks = Collections.synchronizedList(mutableListOf<ByteArray>())
         val terminalReasons = ConcurrentHashMap<String, MutableList<TargetTerminalReason>>()
+        val released = Collections.synchronizedList(mutableListOf<String>())
         val fatal = AtomicBoolean(false)
         val fatalCalls = AtomicInteger()
 
@@ -1157,7 +1182,9 @@ class TargetIoReactorTest {
             terminals.countDown()
         }
 
-        override fun onReleased(streamId: String, correlationToken: Long) = Unit
+        override fun onReleased(streamId: String, correlationToken: Long) {
+            released += streamId
+        }
 
         override fun onFatalFailure() {
             fatal.set(true)
