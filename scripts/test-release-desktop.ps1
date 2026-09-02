@@ -37,6 +37,32 @@ Assert-Condition ($legacyMessage -eq 'Windows desktop releases are coupled with 
 $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-desktop-release-test-" + [guid]::NewGuid().ToString('N'))
 try {
     $null = New-Item -ItemType Directory -Path $fixtureRoot
+    & git -C $fixtureRoot init --quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to initialize the Desktop release configuration fixture repository.' }
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRoot '.gitignore'), ".local/`n", [System.Text.UTF8Encoding]::new($false))
+    $fixtureMacDirectory = Join-Path $fixtureRoot '.local\mac-build-server'
+    $null = New-Item -ItemType Directory -Path $fixtureMacDirectory -Force
+    $fixtureKeyPath = Join-Path $fixtureMacDirectory 'id_ed25519'
+    [System.IO.File]::WriteAllText($fixtureKeyPath, 'fixture-key', [System.Text.UTF8Encoding]::new($false))
+    $fixtureConfigPath = Join-Path $fixtureMacDirectory 'release-desktop.psd1'
+    [System.IO.File]::WriteAllText($fixtureConfigPath, @"
+@{
+    SshTarget = 'builder@example.local'
+    SshKeyPath = '.local/mac-build-server/id_ed25519'
+    RepositoryPath = '/Users/builder/workspace/mobile-egress'
+    TeamID = 'ABCDEFGHIJ'
+    ApplicationIdentity = 'Developer ID Application: Example (ABCDEFGHIJ)'
+    InstallerIdentity = 'Developer ID Installer: Example (ABCDEFGHIJ)'
+    NotaryKeychainProfile = 'mobile-egress-notary'
+    NotaryApiKeyPath = '/Users/builder/secrets/AuthKey_ABCDEFGHIJ.p8'
+    NotaryApiKeyID = 'ABCDEFGHIJ'
+    NotaryApiIssuerID = '11111111-2222-3333-4444-555555555555'
+    ProvisioningProfilePath = '/Users/builder/signing/controller.provisionprofile'
+}
+"@, [System.Text.UTF8Encoding]::new($false))
+    $fixtureReleaseConfig = Get-MobileEgressDesktopConfig -RepositoryRoot $fixtureRoot
+    Assert-Condition ($fixtureReleaseConfig.SshKeyPath -eq [System.IO.Path]::GetFullPath($fixtureKeyPath)) 'The Desktop configuration must validate one ignored relative SSH-key path without splitting its file name.'
+
     $manifestPath = Join-Path $fixtureRoot 'windows-client\build\bin\release-manifest.json'
     $events = [System.Collections.Generic.List[string]]::new()
     $manifestContent = '{"version":2,"client":{"version":"1.1.0"}}'

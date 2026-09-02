@@ -148,7 +148,12 @@ function Get-MobileEgressDesktopConfig {
         throw "Desktop release SSH key is missing: $keyPath"
     }
 
-    foreach ($relativePath in @('.local/mac-build-server/release-desktop.psd1', '.local/mac-build-server/' + [System.IO.Path]::GetFileName($keyPath))) {
+    $keyFileName = [System.IO.Path]::GetFileName($keyPath)
+    $ignoredLocalPaths = @(
+        '.local/mac-build-server/release-desktop.psd1',
+        ('.local/mac-build-server/' + $keyFileName)
+    )
+    foreach ($relativePath in $ignoredLocalPaths) {
         $null = Invoke-MobileEgressDesktopNativeCommand -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'check-ignore', '-q', '--', $relativePath) -Description "Git ignore check for $relativePath"
         $tracked = Invoke-MobileEgressDesktopNativeCommand -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'ls-files', '--', $relativePath) -Description "Git tracked-file check for $relativePath"
         if (-not [string]::IsNullOrWhiteSpace($tracked)) {
