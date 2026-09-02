@@ -106,6 +106,7 @@ private final class OutboundCancellation: @unchecked Sendable {
 }
 
 private final class OutboundCompletion: @unchecked Sendable {
+    var emission: OutboundEmission?
     var released = false
 }
 
@@ -347,6 +348,9 @@ public final class OutboundMailbox: @unchecked Sendable {
 
     public func emit(_ frame: OutboundFrame, sender: (Data) -> Bool) -> OutboundEmission {
         lock.withLock {
+            if let emission = frame.completion.emission {
+                return emission
+            }
             let canceled = frame.streamCancellation?.canceled == true || frame.dataCancellation?.canceled == true
             let result: OutboundEmission
             if canceled {
@@ -356,6 +360,7 @@ public final class OutboundMailbox: @unchecked Sendable {
             } else {
                 result = .failed
             }
+            frame.completion.emission = result
             release(frame)
             return result
         }

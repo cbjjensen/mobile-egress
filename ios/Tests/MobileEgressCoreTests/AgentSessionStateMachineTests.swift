@@ -985,10 +985,18 @@ final class AgentSessionStateMachineTests: XCTestCase {
         let first = try openTarget(&machine, streamID: "first", ip: "8.8.8.8", port: 443)
         let second = try openTarget(&machine, streamID: "second", ip: "1.1.1.1", port: 443)
         machine.targetWasCreated(streamID: "first", token: first.token)
+        XCTAssertTrue(machine.targetConnected(streamID: "first", token: first.token).isEmpty)
+        try assertOutbound(&machine, type: .opened, streamID: "first", payload: Data())
         machine.targetWasCreated(streamID: "second", token: second.token)
-        XCTAssertTrue(machine.receiveRelay(try binary(type: .data, streamID: "first", payload: Data([0x41]))).isEmpty)
+        let inFlight = try XCTUnwrap(machine.receiveRelay(try binary(
+            type: .data,
+            streamID: "first",
+            payload: Data([0x41])
+        )).singleTargetWrite)
         XCTAssertTrue(machine.receiveRelay(try binary(type: .data, streamID: "second", payload: Data([0x42]))).isEmpty)
         XCTAssertTrue(machine.receiveRelay(try binary(type: .ping)).isEmpty)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["first"], 1)
+        XCTAssertEqual(machine.capacitySnapshot.targetOutstandingFrames["second"], 1)
         XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 2)
         XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 2)
 
@@ -1001,6 +1009,18 @@ final class AgentSessionStateMachineTests: XCTestCase {
         ]))
         XCTAssertEqual(machine.snapshot.connectionState, .stopping)
         XCTAssertEqual(machine.snapshot.activeStreamCount, 0)
+        XCTAssertTrue(machine.capacitySnapshot.targetOutstandingFrames.isEmpty)
+        XCTAssertTrue(machine.capacitySnapshot.targetOutstandingBytes.isEmpty)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 0)
+        XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 0)
+        XCTAssertTrue(machine.targetWriteCompleted(
+            streamID: "first",
+            token: first.token,
+            writeID: inFlight.writeID,
+            succeeded: true
+        ).isEmpty)
+        XCTAssertTrue(machine.capacitySnapshot.targetOutstandingFrames.isEmpty)
+        XCTAssertTrue(machine.capacitySnapshot.targetOutstandingBytes.isEmpty)
         XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingFrames, 0)
         XCTAssertEqual(machine.capacitySnapshot.targetSessionOutstandingBytes, 0)
         XCTAssertNil(machine.nextOutbound())

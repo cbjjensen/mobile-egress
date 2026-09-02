@@ -79,6 +79,74 @@ final class SessionPrimitivesTests: XCTestCase {
         XCTAssertTrue(byteMailbox.offerData(Data([0x05, 0x06]), streamID: "alpha"))
     }
 
+    func testOutboundEmissionInvokesSenderOnceAcrossFrameCopies() throws {
+        let mailbox = OutboundMailbox(
+            controlCapacity: 1,
+            dataCapacity: 1,
+            perStreamDataCapacity: 1,
+            dataByteCapacity: 2
+        )
+        mailbox.allowData("stream")
+        XCTAssertTrue(mailbox.offerData(Data([0x01, 0x02]), streamID: "stream"))
+        let original = try XCTUnwrap(mailbox.poll())
+        let copy = original
+        var senderCalls = 0
+
+        XCTAssertEqual(mailbox.emit(original, sender: { _ in
+            senderCalls += 1
+            return true
+        }), .emitted)
+        XCTAssertEqual(mailbox.emit(copy, sender: { _ in
+            senderCalls += 1
+            return false
+        }), .emitted, "repeat emission must return the first terminal result")
+
+        XCTAssertEqual(senderCalls, 1)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
+    }
+
+    func testOutboundPerStreamReservationSurvivesPollUntilCompletion() throws {
+        let mailbox = OutboundMailbox(
+            controlCapacity: 1,
+            dataCapacity: 2,
+            perStreamDataCapacity: 1,
+            dataByteCapacity: 2
+        )
+        mailbox.allowData("stream")
+        XCTAssertTrue(mailbox.offerData(Data([0x01]), streamID: "stream"))
+        let inFlight = try XCTUnwrap(mailbox.poll())
+
+        XCTAssertFalse(mailbox.offerData(Data([0x02]), streamID: "stream"))
+        XCTAssertEqual(mailbox.emit(inFlight, sender: { _ in true }), .emitted)
+        XCTAssertTrue(mailbox.offerData(Data([0x02]), streamID: "stream"))
+    }
+
+    func testOutboundFailedEmissionIsStableAndReleasesCapacity() throws {
+        let mailbox = OutboundMailbox(
+            controlCapacity: 1,
+            dataCapacity: 1,
+            perStreamDataCapacity: 1,
+            dataByteCapacity: 2
+        )
+        mailbox.allowData("stream")
+        XCTAssertTrue(mailbox.offerData(Data([0x01, 0x02]), streamID: "stream"))
+        let original = try XCTUnwrap(mailbox.poll())
+        let copy = original
+        var senderCalls = 0
+
+        XCTAssertEqual(mailbox.emit(original, sender: { _ in
+            senderCalls += 1
+            return false
+        }), .failed)
+        XCTAssertEqual(mailbox.bookkeepingSnapshot, .empty)
+        XCTAssertEqual(mailbox.emit(copy, sender: { _ in
+            senderCalls += 1
+            return true
+        }), .failed, "repeat emission must return the first terminal failure")
+        XCTAssertEqual(senderCalls, 1)
+        XCTAssertTrue(mailbox.offerData(Data([0x03, 0x04]), streamID: "stream"))
+    }
+
     func testOutboundCancellationAndCloseRefundFramesAndBytesExactlyOnce() throws {
         let mailbox = OutboundMailbox(
             controlCapacity: 2,
