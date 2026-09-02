@@ -195,25 +195,39 @@ func TestServerRejectsConnectWhenRelayAgentIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestServerCapsActiveStreamsAtThirtyTwoAndStopClosesEveryConnection(t *testing.T) {
+func TestServerUsesRelaySessionLimitForEarlyAdmission(t *testing.T) {
+	server := &Server{listener: &net.TCPListener{}}
+	for index := 0; index < 256; index++ {
+		if !server.reserveStream() {
+			t.Fatalf("reservation %d rejected, want 256 admitted", index+1)
+		}
+	}
+	if server.reserveStream() {
+		t.Fatal("reservation 257 admitted, want rejection")
+	}
+	for index := 0; index < 256; index++ {
+		server.releaseStream()
+	}
+	if active := server.Status().ActiveStreams; active != 0 {
+		t.Fatalf("active streams after release = %d, want 0", active)
+	}
+}
+
+func TestServerStopClosesEveryConnection(t *testing.T) {
 	t.Parallel()
 
 	opener := &fakeOpener{healthy: true}
 	server := startTestServer(t, opener)
-	connections := make([]net.Conn, 0, 33)
-	for index := 0; index < 32; index++ {
+	connections := make([]net.Conn, 0, 2)
+	for index := 0; index < 2; index++ {
 		connection := authenticatedConnection(t, server)
 		writeAll(t, connection, connectDomainRequest(1, "stream.example", 443))
 		readEqual(t, connection, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
 		connections = append(connections, connection)
 	}
-	fifth := authenticatedConnection(t, server)
-	writeAll(t, fifth, connectDomainRequest(1, "over-limit.example", 443))
-	readEqual(t, fifth, []byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
-	_ = fifth.Close()
 
-	if status := server.Status(); status.ActiveStreams != 32 {
-		t.Fatalf("active streams = %d, want 32", status.ActiveStreams)
+	if status := server.Status(); status.ActiveStreams != 2 {
+		t.Fatalf("active streams = %d, want 2", status.ActiveStreams)
 	}
 	if err := server.Stop(); err != nil {
 		t.Fatal(err)
@@ -295,7 +309,7 @@ func TestConcurrentStopAndAcceptNeverLeavesAuthenticationSocket(t *testing.T) {
 	}
 }
 
-func TestAbandonedPreOpenConnectionsReleaseAllThirtyTwoSlots(t *testing.T) {
+func TestAbandonedPreOpenConnectionsReleaseReservedSlots(t *testing.T) {
 	gate := make(chan struct{})
 	opener := &fakeOpener{healthy: true, openGate: gate}
 	server := NewServer(Config{Username: "user", Password: "password", Opener: opener, OpenTimeout: 30 * time.Second})
@@ -304,8 +318,9 @@ func TestAbandonedPreOpenConnectionsReleaseAllThirtyTwoSlots(t *testing.T) {
 	}
 	defer server.Stop()
 
-	clients := make([]net.Conn, 0, 32)
-	for index := 0; index < 32; index++ {
+	const reservations = 8
+	clients := make([]net.Conn, 0, reservations)
+	for index := 0; index < reservations; index++ {
 		connection := authenticatedConnection(t, server)
 		writeAll(t, connection, connectDomainRequest(1, "abandoned.example", 443))
 		clients = append(clients, connection)
@@ -315,7 +330,7 @@ func TestAbandonedPreOpenConnectionsReleaseAllThirtyTwoSlots(t *testing.T) {
 		opener.mu.Lock()
 		calls := opener.openCalls
 		opener.mu.Unlock()
-		if calls == 32 {
+		if calls == reservations {
 			break
 		}
 		time.Sleep(time.Millisecond)

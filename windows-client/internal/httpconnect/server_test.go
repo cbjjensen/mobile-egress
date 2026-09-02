@@ -286,6 +286,57 @@ func TestPlainHTTPReusesRelayStreamForSameDestination(t *testing.T) {
 	}
 }
 
+func TestPlainHTTPRetainsTwoIdleRelayStreamsAndEvictsTheThird(t *testing.T) {
+	t.Parallel()
+
+	closed := make(chan struct{}, 3)
+	opener := &fakeOpener{healthy: true}
+	opener.onOpen = func(connection net.Conn) {
+		go func() {
+			defer func() { closed <- struct{}{} }()
+			request, err := http.ReadRequest(bufio.NewReader(connection))
+			if err != nil {
+				return
+			}
+			_ = request.Body.Close()
+			_, _ = io.WriteString(connection, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+			_, _ = io.Copy(io.Discard, connection)
+		}()
+	}
+	server := startTestServer(t, opener, 30*time.Second)
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   server.Addr().String(),
+		User:   url.UserPassword("user", "password"),
+	}
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport}
+
+	for _, host := range []string{"one.example", "two.example", "three.example"} {
+		response, err := client.Get("http://" + host + "/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil || string(body) != "ok" {
+			t.Fatalf("response from %s = %q/%v, want ok/nil", host, body, readErr)
+		}
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("third idle destination did not evict one relay stream")
+	}
+	select {
+	case <-closed:
+		t.Fatal("idle pool evicted more than one of three relay streams")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestServerReturnsProtocolSpecificFailures(t *testing.T) {
 	t.Parallel()
 

@@ -35,7 +35,7 @@ type relayEnvelope struct {
 	Payload  string `json:"payload"`
 }
 
-func TestRealSessionSharesThirtyTwoSlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *testing.T) {
+func TestRealSessionShares256SlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *testing.T) {
 	fixture := newListenerRelayFixture(t, false)
 	defer fixture.Close()
 	session, err := relayclient.DialSession(context.Background(), fixture.identity)
@@ -54,37 +54,22 @@ func TestRealSessionSharesThirtyTwoSlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *tes
 	}
 	defer httpServer.Stop()
 
-	socksClients := make([]net.Conn, 0, 16)
-	for index := 0; index < 16; index++ {
-		client := listenerSOCKSClient(t, socksServer.Addr().String())
-		listenerWriteAll(t, client, listenerSOCKSConnect("socks.example", 443))
-		listenerReadEqual(t, client, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
-		socksClients = append(socksClients, client)
+	socksClient := listenerSOCKSClient(t, socksServer.Addr().String())
+	listenerWriteAll(t, socksClient, listenerSOCKSConnect("socks.example", 443))
+	listenerReadEqual(t, socksClient, []byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
+	defer socksClient.Close()
+
+	connectClient, err := net.DialTimeout("tcp4", httpServer.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	defer func() {
-		for _, client := range socksClients {
-			_ = client.Close()
-		}
-	}()
-	connectClients := make([]net.Conn, 0, 14)
-	for index := 0; index < 14; index++ {
-		client, dialErr := net.DialTimeout("tcp4", httpServer.Addr().String(), time.Second)
-		if dialErr != nil {
-			t.Fatal(dialErr)
-		}
-		_, _ = io.WriteString(client, "CONNECT connect.example:443 HTTP/1.1\r\nHost: connect.example:443\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n")
-		response, readErr := http.ReadResponse(bufio.NewReader(client), &http.Request{Method: http.MethodConnect})
-		if readErr != nil || response.StatusCode != http.StatusOK {
-			t.Fatalf("CONNECT response = %#v / %v", response, readErr)
-		}
-		_ = response.Body.Close()
-		connectClients = append(connectClients, client)
+	defer connectClient.Close()
+	_, _ = io.WriteString(connectClient, "CONNECT connect.example:443 HTTP/1.1\r\nHost: connect.example:443\r\nProxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n\r\n")
+	response, err := http.ReadResponse(bufio.NewReader(connectClient), &http.Request{Method: http.MethodConnect})
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT response = %#v / %v", response, err)
 	}
-	defer func() {
-		for _, client := range connectClients {
-			_ = client.Close()
-		}
-	}()
+	_ = response.Body.Close()
 	proxyURL, err := url.Parse("http://user:password@" + httpServer.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -99,17 +84,30 @@ func TestRealSessionSharesThirtyTwoSlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *tes
 		}
 		_ = response.Body.Close()
 	}
-	listenerWaitActive(t, session, 32)
+	directStreams := make([]io.ReadWriteCloser, 0, relayclient.MaxConcurrentStreams-4)
+	for index := 0; index < relayclient.MaxConcurrentStreams-4; index++ {
+		stream, openErr := session.OpenStream(context.Background(), "logical.example", 443)
+		if openErr != nil {
+			t.Fatalf("logical stream %d open error = %v", index+1, openErr)
+		}
+		directStreams = append(directStreams, stream)
+	}
+	defer func() {
+		for _, stream := range directStreams {
+			_ = stream.Close()
+		}
+	}()
+	listenerWaitActive(t, session, 256)
 	if _, openErr := session.OpenStream(context.Background(), "over-capacity.example", 443); !errors.Is(openErr, relayclient.ErrStreamLimit) {
-		t.Fatalf("stream 33 error = %v, want ErrStreamLimit", openErr)
+		t.Fatalf("stream 257 error = %v, want ErrStreamLimit", openErr)
 	}
 
 	if err := httpServer.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	listenerWaitActive(t, session, 16)
-	_ = socksClients[0].Close()
-	listenerWaitActive(t, session, 15)
+	listenerWaitActive(t, session, 253)
+	_ = socksClient.Close()
+	listenerWaitActive(t, session, 252)
 	replacement, openErr := session.OpenStream(context.Background(), "replacement.example", 443)
 	if openErr != nil {
 		t.Fatalf("replacement stream error = %v", openErr)

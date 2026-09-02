@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"mobile-egress/internal/capacity"
 )
 
 var (
@@ -23,8 +25,8 @@ var (
 )
 
 const (
-	MaxConcurrentStreams      = 32
-	maxClosedStreamTombstones = 128
+	MaxConcurrentStreams      = capacity.ClientMaxConcurrentStreams
+	maxClosedStreamTombstones = capacity.StreamTombstones
 	maxOutboundDataChunkSize  = 16 << 10
 )
 
@@ -56,14 +58,34 @@ type Session struct {
 	connected     bool
 	agent         bool
 	closeOnce     sync.Once
+	inboundBudget *inboundBudget
 	bytesUp       atomic.Int64
 	bytesDown     atomic.Int64
+}
+
+type inboundBudget struct {
+	mu         sync.Mutex
+	frameLimit int
+	byteLimit  int
+	frames     int
+	bytes      int
+}
+
+type inboundReservation struct {
+	budget    *inboundBudget
+	byteCount int
+	release   sync.Once
+}
+
+type inboundFrame struct {
+	payload     []byte
+	reservation *inboundReservation
 }
 
 type relayStream struct {
 	session    *Session
 	id         string
-	inbound    chan []byte
+	inbound    chan inboundFrame
 	done       chan struct{}
 	openResult chan error
 	// beforeWriteChunk is set only by deterministic concurrency tests.
@@ -73,9 +95,44 @@ type relayStream struct {
 	sendClose        sync.Once
 	sendMu           sync.Mutex
 	readMu           sync.Mutex
+	inboundMu        sync.Mutex
 	remaining        []byte
+	remainingInbound *inboundReservation
 	terminal         atomic.Bool
 	drainInbound     atomic.Bool
+}
+
+func newInboundBudget(frameLimit, byteLimit int) *inboundBudget {
+	return &inboundBudget{frameLimit: frameLimit, byteLimit: byteLimit}
+}
+
+func (budget *inboundBudget) tryReserve(byteCount int) (*inboundReservation, bool) {
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if budget.frames >= budget.frameLimit || byteCount > budget.byteLimit-budget.bytes {
+		return nil, false
+	}
+	budget.frames++
+	budget.bytes += byteCount
+	return &inboundReservation{budget: budget, byteCount: byteCount}, true
+}
+
+func (budget *inboundBudget) outstanding() (int, int) {
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	return budget.frames, budget.bytes
+}
+
+func (reservation *inboundReservation) refund() {
+	if reservation == nil {
+		return
+	}
+	reservation.release.Do(func() {
+		reservation.budget.mu.Lock()
+		reservation.budget.frames--
+		reservation.budget.bytes -= reservation.byteCount
+		reservation.budget.mu.Unlock()
+	})
 }
 
 func DialSession(ctx context.Context, identity Identity) (*Session, error) {
@@ -117,6 +174,7 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 		identity: identity, conn: connection, client: httpClient, transport: transport,
 		ctx: sessionContext, cancel: cancel, streams: make(map[string]*relayStream),
 		closedStreams: make(map[string]struct{}),
+		inboundBudget: newInboundBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane),
 		connected:     true, agent: agentAvailable,
 	}
 	go session.readLoop()
@@ -159,7 +217,7 @@ func (session *Session) OpenStream(ctx context.Context, host string, port uint16
 		return nil, err
 	}
 	stream := &relayStream{
-		session: session, id: streamID, inbound: make(chan []byte, 4),
+		session: session, id: streamID, inbound: make(chan inboundFrame, capacity.DataFramesPerStream),
 		done: make(chan struct{}), openResult: make(chan error, 1),
 	}
 	session.streams[streamID] = stream
@@ -260,11 +318,9 @@ func (session *Session) readLoop() {
 			if err != nil {
 				return
 			}
-			select {
-			case stream.inbound <- payload:
+			if stream.enqueueInbound(payload) {
 				session.bytesDown.Add(int64(len(payload)))
-			case <-stream.done:
-			default:
+			} else {
 				// A single consumer must never stall the WebSocket reader and
 				// therefore every other relay stream. The bounded stream is
 				// closed with the finite v1 client_closed reason.
@@ -367,28 +423,53 @@ func (session *Session) failAll(err error) {
 	}
 }
 
+func (stream *relayStream) enqueueInbound(payload []byte) bool {
+	reservation, ok := stream.session.inboundBudget.tryReserve(len(payload))
+	if !ok {
+		return false
+	}
+	frame := inboundFrame{payload: payload, reservation: reservation}
+	stream.inboundMu.Lock()
+	defer stream.inboundMu.Unlock()
+	if stream.terminal.Load() {
+		reservation.refund()
+		return false
+	}
+	select {
+	case stream.inbound <- frame:
+		return true
+	default:
+		reservation.refund()
+		return false
+	}
+}
+
 func (stream *relayStream) Read(buffer []byte) (int, error) {
 	stream.readMu.Lock()
 	defer stream.readMu.Unlock()
 	for len(stream.remaining) == 0 {
+		stream.releaseRemainingInbound()
 		if stream.terminal.Load() && !stream.drainInbound.Load() {
 			return 0, io.EOF
 		}
 		if stream.drainInbound.Load() {
 			select {
-			case value := <-stream.inbound:
-				stream.remaining = value
+			case frame := <-stream.inbound:
+				stream.remaining = frame.payload
+				stream.remainingInbound = frame.reservation
 				continue
 			default:
 				return 0, io.EOF
 			}
 		}
 		select {
-		case value := <-stream.inbound:
+		case frame := <-stream.inbound:
 			if stream.terminal.Load() && !stream.drainInbound.Load() {
+				frame.reservation.refund()
 				return 0, io.EOF
 			}
-			stream.remaining = value
+			stream.remaining = frame.payload
+			stream.remainingInbound = frame.reservation
 		case <-stream.done:
 			if stream.drainInbound.Load() {
 				continue
@@ -398,7 +479,15 @@ func (stream *relayStream) Read(buffer []byte) (int, error) {
 	}
 	written := copy(buffer, stream.remaining)
 	stream.remaining = stream.remaining[written:]
+	if len(stream.remaining) == 0 {
+		stream.releaseRemainingInbound()
+	}
 	return written, nil
+}
+
+func (stream *relayStream) releaseRemainingInbound() {
+	stream.remainingInbound.refund()
+	stream.remainingInbound = nil
 }
 
 func (stream *relayStream) Write(value []byte) (int, error) {
@@ -464,14 +553,34 @@ func (stream *relayStream) resolve(err error) {
 func (stream *relayStream) finish(err error) {
 	stream.resolve(err)
 	stream.finishOnce.Do(func() {
+		stream.inboundMu.Lock()
 		stream.terminal.Store(true)
 		close(stream.done)
+		for {
+			select {
+			case frame := <-stream.inbound:
+				frame.reservation.refund()
+			default:
+				stream.inboundMu.Unlock()
+				stream.readMu.Lock()
+				stream.remaining = nil
+				stream.releaseRemainingInbound()
+				stream.readMu.Unlock()
+				return
+			}
+		}
 	})
 }
 
 func (stream *relayStream) finishAfterInboundDrain() {
 	stream.drainInbound.Store(true)
-	stream.finish(io.EOF)
+	stream.resolve(io.EOF)
+	stream.finishOnce.Do(func() {
+		stream.inboundMu.Lock()
+		stream.terminal.Store(true)
+		close(stream.done)
+		stream.inboundMu.Unlock()
+	})
 }
 
 func newStreamID() (string, error) {
