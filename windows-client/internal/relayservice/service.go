@@ -161,6 +161,7 @@ func (service *Service) PrepareSetup(ctx context.Context) SetupGate {
 		release()
 		return SetupGate{Observation: unavailable(status, FailureNative)}
 	}
+	registeredDuringSetup := false
 	if status == NativeNotRegistered || status == NativeNotFound {
 		registerClass := service.native.Register(ctx)
 		if ctx.Err() != nil {
@@ -179,6 +180,30 @@ func (service *Service) PrepareSetup(ctx context.Context) SetupGate {
 		if class != NativeErrorNone {
 			release()
 			return SetupGate{Observation: unavailable(status, FailureNative)}
+		}
+		registeredDuringSetup = true
+	}
+	if status == NativeEnabled && !registeredDuringSetup {
+		observation := service.observeStatus(ctx, status)
+		if observation.State == StateUnavailable && observation.Failure == FailureTransport {
+			refreshClass := service.native.Refresh(ctx)
+			if ctx.Err() != nil {
+				release()
+				return SetupGate{Observation: unavailable(NativeUnknown, FailureCancelled)}
+			}
+			if refreshClass != NativeErrorNone && refreshClass != NativeErrorAlreadyRegistered {
+				release()
+				return SetupGate{Observation: unavailable(NativeEnabled, FailureNative)}
+			}
+			status, class = service.native.Status(ctx)
+			if ctx.Err() != nil {
+				release()
+				return SetupGate{Observation: unavailable(NativeUnknown, FailureCancelled)}
+			}
+			if class != NativeErrorNone {
+				release()
+				return SetupGate{Observation: unavailable(status, FailureNative)}
+			}
 		}
 	}
 

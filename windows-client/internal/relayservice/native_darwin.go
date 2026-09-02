@@ -35,6 +35,17 @@ func (darwinNative) Register(ctx context.Context) NativeErrorClass {
 	return class
 }
 
+func (darwinNative) Refresh(ctx context.Context) NativeErrorClass {
+	if ctx != nil && ctx.Err() != nil {
+		return NativeErrorUnavailable
+	}
+	class := boundedNativeError(int(C.mobile_egress_relay_service_refresh()))
+	if ctx != nil && ctx.Err() != nil {
+		return NativeErrorUnavailable
+	}
+	return class
+}
+
 func (darwinNative) OpenLoginItems(ctx context.Context) NativeErrorClass {
 	if ctx != nil && ctx.Err() != nil {
 		return NativeErrorUnavailable

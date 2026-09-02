@@ -114,6 +114,31 @@ func TestPrepareSetupOpensLoginItemsAndDoesNotProbeOrProceedWhileApprovalIsPendi
 	}
 }
 
+func TestPrepareSetupRefreshesAnEnabledServiceWhoseAdminSocketIsMissing(t *testing.T) {
+	t.Parallel()
+
+	native := &fakeNative{statuses: []NativeStatus{NativeEnabled, NativeEnabled}}
+	admin := &fakeAdmin{
+		errs: []error{relayadmin.ErrTransport, nil},
+		results: []relayadmin.StatusResult{
+			{},
+			{ProtocolVersion: relayadmin.Version, HelperVersion: "1.1.0"},
+		},
+	}
+	service := mustService(t, native, admin)
+
+	gate := service.PrepareSetup(context.Background())
+	if gate.Decision != SetupProceed || gate.Observation.State != StateEnabled {
+		t.Fatalf("PrepareSetup() = %#v, want enabled proceed after refresh", gate)
+	}
+	if got := native.calls(); got != "status,refresh,status" {
+		t.Fatalf("native calls = %q, want status,refresh,status", got)
+	}
+	if admin.calls != 2 {
+		t.Fatalf("admin status calls = %d, want 2", admin.calls)
+	}
+}
+
 func TestRotateAndRepairRequireCompatibleInitializedHelper(t *testing.T) {
 	t.Parallel()
 
@@ -204,6 +229,7 @@ type fakeNative struct {
 	statuses      []NativeStatus
 	statusErrors  []NativeErrorClass
 	registerError NativeErrorClass
+	refreshError  NativeErrorClass
 	openError     NativeErrorClass
 	log           []string
 	blockStatus   chan struct{}
@@ -239,6 +265,13 @@ func (native *fakeNative) Register(context.Context) NativeErrorClass {
 	defer native.mu.Unlock()
 	native.log = append(native.log, "register")
 	return native.registerError
+}
+
+func (native *fakeNative) Refresh(context.Context) NativeErrorClass {
+	native.mu.Lock()
+	defer native.mu.Unlock()
+	native.log = append(native.log, "refresh")
+	return native.refreshError
 }
 
 func (native *fakeNative) OpenLoginItems(context.Context) NativeErrorClass {

@@ -88,6 +88,7 @@ type RepairGate struct {
 type Native interface {
 	Status(context.Context) (NativeStatus, NativeErrorClass)
 	Register(context.Context) NativeErrorClass
+	Refresh(context.Context) NativeErrorClass
 	OpenLoginItems(context.Context) NativeErrorClass
 }
 

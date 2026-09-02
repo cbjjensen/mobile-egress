@@ -57,6 +57,36 @@ int mobile_egress_relay_service_register(void) {
     return 3;
 }
 
+int mobile_egress_relay_service_refresh(void) {
+    if (@available(macOS 13.0, *)) {
+        @autoreleasepool {
+            SMAppService *service = [SMAppService daemonServiceWithPlistName:MobileEgressRelayPlist];
+            if (service.status != SMAppServiceStatusNotRegistered) {
+                NSError *unregisterError = nil;
+                if (![service unregisterAndReturnError:&unregisterError] && service.status != SMAppServiceStatusNotRegistered) {
+                    (void)unregisterError;
+                    return 4;
+                }
+            }
+            NSError *registerError = nil;
+            if ([service registerAndReturnError:&registerError]) {
+                return 0;
+            }
+            (void)registerError;
+            switch (service.status) {
+                case SMAppServiceStatusEnabled:
+                case SMAppServiceStatusRequiresApproval:
+                    return 1;
+                case SMAppServiceStatusNotRegistered:
+                    return 2;
+                default:
+                    return 4;
+            }
+        }
+    }
+    return 3;
+}
+
 int mobile_egress_relay_service_open_login_items(void) {
     if (@available(macOS 13.0, *)) {
         dispatch_async(dispatch_get_main_queue(), ^{
