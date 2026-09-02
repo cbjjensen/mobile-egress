@@ -2,13 +2,13 @@
 
 This is the operator runbook for producing the signed artifacts that friends download and proving them on real Windows and macOS controllers, an Android or iOS cellular Agent device, and Windows Server 2019 EC2 nodes. Normal friends do not perform these steps; they follow the root README after an accepted release is published. Android APK packaging and cellular-IP rotation are covered here. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
 
-The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A normal public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version; Android remains independently selectable. The immutable v1.1.0 prerelease is a narrow Windows-and-Android exception. The approved v1.1.1 proxy hotfix is Windows-only, falls back to the published v1.1.0 Android APK in its managed notes, and marks macOS unavailable while Apple Developer Program enrollment remains pending. The prepared v1.1.2 candidate is Android-only: it delivers bounded mobile target ingress for browser bursts while Windows/macOS remain v1.1.1; iOS version metadata is updated separately for its TestFlight path.
+The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version when Apple signing/notarization is ready. Windows and Android may also ship together as a non-Apple release scope while macOS/iOS are handled separately; those notes mark macOS outside the release scope and the published tag remains immutable. The approved v1.1.1 proxy hotfix is Windows-only, falls back to the published v1.1.0 Android APK in its managed notes, and marks macOS unavailable while Apple Developer Program enrollment remains pending. The prepared v1.1.2 candidate is Android-only: it delivers bounded mobile target ingress for browser bursts while Windows/macOS remain v1.1.1; iOS version metadata is updated separately for its TestFlight path.
 
 ## Routine release commands
 
 Commit the intended code on clean `main` and choose the smallest compatible scope.
 
-> Running the Desktop command **without** `-Publish` still signs both platforms and freezes a local annotated tag. The approved v1.1.1 Windows-only command likewise signs Windows artifacts and freezes a local tag. `-Publish` separately authorizes pushing source/tag state and changing GitHub. Do not run either candidate command as a read-only check.
+> Running the Desktop command **without** `-Publish` still signs both platforms and freezes a local annotated tag. A `Windows,Android` command or the approved v1.1.1 Windows-only command likewise signs artifacts and freezes a local tag. `-Publish` separately authorizes pushing source/tag state and changing GitHub. Do not run any candidate command as a read-only check.
 
 For a controller, relay, or EC2 Client change, use the coupled Desktop path:
 
@@ -17,7 +17,7 @@ For a controller, relay, or EC2 Client change, use the coupled Desktop path:
 & .\scripts\release-desktop.ps1 -ReleaseVersion '<version>' -Publish
 ```
 
-Legacy `release-windows.ps1` continues to fail closed with migration guidance. The guarded orchestrator supports an explicitly selected `Windows` component only for the approved v1.1.0 and v1.1.1 exceptions; macOS-only selection remains unsupported.
+Legacy `release-windows.ps1` continues to fail closed with migration guidance. The guarded orchestrator supports `Windows,Android` as the normal non-Apple release lane. The bare `Windows` component remains limited to the approved v1.1.1 exception; macOS-only selection remains unsupported.
 
 For an Android-only change, first set Android `versionName` to the release version and increase `versionCode`, then use the Android path. Go, the Windows frontend, and Authenticode packaging are not run:
 
@@ -40,11 +40,11 @@ Use the full path when a protocol/shared compatibility change requires Desktop p
 & .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Desktop,Android -Publish
 ```
 
-For the explicitly approved v1.1.0 Windows-and-Android interim prerelease while macOS signing is unavailable:
+For a Windows-and-Android prerelease while Apple platforms are released separately:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android -Publish
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Windows,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Windows,Android -Publish
 ```
 
 That release contains no macOS artifact. Published assets are immutable; the signed/notarized Mac controller must use a later version.
@@ -58,7 +58,7 @@ For the explicitly approved v1.1.1 Windows proxy hotfix while macOS signing is u
 
 That release contains only the Windows ZIP and EC2 Client. Its notes link the published v1.1.0 Android APK and mark macOS unavailable; do not select, rebuild, or version-bump Android.
 
-All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag. The uncoupled selector is restricted to exactly `Windows,Android` for v1.1.0 and exactly `Windows` for v1.1.1; every other Windows-affecting release uses Desktop, and Android may otherwise be selected separately. In particular, v1.1.2 with `Android` alone is an executable accepted scope. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
+All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag. The `Windows,Android` scope ships Windows and Android without resolving Mac prerequisites; the bare `Windows` selector is restricted to exactly the v1.1.1 hotfix. Android may otherwise be selected separately. In particular, v1.1.2 with `Android` alone is an executable accepted scope. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
 
 Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them when a component release entry point is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
 
@@ -333,9 +333,9 @@ A Desktop-scoped prerelease has exactly:
 - `mobile-egress-client.exe`; and
 - `mobile-egress-macos-<version>-arm64.pkg`.
 
-The v1.1.1 Windows-scoped prerelease has exactly `mobile-egress-windows-1.1.1.zip` and `mobile-egress-client.exe`. The immutable v1.1.0 Windows-and-Android exception additionally has `zfnf-mobile-egress-android-1.1.0.apk`. Neither includes a macOS PKG. The Mac verification JSON is local/private evidence and is never uploaded.
+The normal Windows-and-Android prerelease has exactly `mobile-egress-windows-<version>.zip`, `mobile-egress-client.exe`, and `zfnf-mobile-egress-android-<version>.apk`. The v1.1.1 Windows-scoped prerelease has exactly `mobile-egress-windows-1.1.1.zip` and `mobile-egress-client.exe`. Neither includes a macOS PKG. The Mac verification JSON is local/private evidence and is never uploaded.
 
-Managed release notes always render four Downloads entries in order: Windows controller, EC2 Client, macOS controller PKG, Android Agent APK. The v1.1.1 notes link both current Windows artifacts, mark macOS unavailable pending Apple Developer Program enrollment, and link the published v1.1.0 Android APK. A normal Desktop release keeps its first three assets on the same tag; Android may point to a different eligible release.
+Managed release notes always render four Downloads entries in order: Windows controller, EC2 Client, macOS controller PKG, Android Agent APK. A Windows-and-Android release links its current Windows and Android artifacts and marks macOS outside the release scope. The v1.1.1 notes link both current Windows artifacts, mark macOS unavailable pending Apple Developer Program enrollment, and link the published v1.1.0 Android APK. A Desktop release keeps its first three assets on the same tag; Android may point to a different eligible release.
 
 Existing uploaded assets must form the expected verified set; published tags/assets are immutable and never replaced or clobbered. If a GitHub outcome is unknown, inspect/reconcile the exact draft/assets before retrying. Use GitHub Releases to download the candidate on the acceptance Windows PC, Mac, and phone. Test those downloaded artifacts, not build-directory copies.
 

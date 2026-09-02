@@ -64,18 +64,12 @@ $futureWindowsExceptionRejected = $false
 try {
     Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Windows')
 } catch {
-    $futureWindowsExceptionRejected = $_.Exception.Message -match 'v1.1.3'
+    $futureWindowsExceptionRejected = $_.Exception.Message -match 'paired with Android'
 }
-Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain rejected outside the explicit v1.1.0, v1.1.1, and v1.1.3 exceptions.'
+Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must require Android outside the explicit v1.1.1 hotfix.'
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Android')
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.3' -Components @('Windows', 'Android')
-$postLivenessWindowsExceptionRejected = $false
-try {
-    Assert-MobileEgressApprovedReleaseScope -Version '1.1.4' -Components @('Windows', 'Android')
-} catch {
-    $postLivenessWindowsExceptionRejected = $_.Exception.Message -match 'v1.1.3'
-}
-Assert-Condition $postLivenessWindowsExceptionRejected 'The v1.1.3 Windows-and-Android exception must not authorize later uncoupled Windows releases.'
+Assert-MobileEgressApprovedReleaseScope -Version '1.1.4' -Components @('Windows', 'Android')
 $desktopWindowsConflictRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('Desktop', 'Windows')
@@ -157,6 +151,14 @@ Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'client' })
 Assert-Condition ([string]::IsNullOrWhiteSpace(($interimDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Url)) 'The interim release must not manufacture a macOS download.'
 Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The interim release must explain why macOS is deferred.'
 Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.1.0') 'The interim release must link its Android APK from the current tag.'
+
+$futureWindowsAndroidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.1.4' -Components @('Windows', 'Android'))
+$futureWindowsAndroidLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.4' -Version '1.1.4' -ReleasedArtifacts $futureWindowsAndroidDefinitions -PublishedReleases @())
+Assert-Condition (($futureWindowsAndroidLinks | Where-Object { $_.Key -eq 'windows' }).Tag -eq 'v1.1.4') 'A Windows and Android release must link its Windows bundle from the current tag.'
+Assert-Condition (($futureWindowsAndroidLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.1.4') 'A Windows and Android release must link its EC2 Client from the current tag.'
+Assert-Condition ([string]::IsNullOrWhiteSpace(($futureWindowsAndroidLinks | Where-Object { $_.Key -eq 'macos' }).Url)) 'A Windows and Android release must not manufacture a macOS download.'
+Assert-Condition (($futureWindowsAndroidLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'not included') 'A Windows and Android release must explain that macOS is outside the release scope.'
+Assert-Condition (($futureWindowsAndroidLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.1.4') 'A Windows and Android release must link its Android APK from the current tag.'
 
 $hotfixDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.1' -Version '1.1.1' -ReleasedArtifacts $hotfixDefinitions -PublishedReleases @(
     [pscustomobject]@{

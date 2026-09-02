@@ -9,13 +9,14 @@ description: Use when preparing, publishing, or verifying a Mobile Egress Deskto
 
 Choose the smallest compatible guarded entry point. Do not reconstruct signing, tagging, upload, or verification manually:
 
-- `scripts\release-desktop.ps1 -ReleaseVersion ...` for normal controller, setup, relay, or EC2 Client changes. Desktop is indivisible: the Windows bundle, Windows EC2 Client, and macOS PKG share one version/tag, except for the two explicit Windows-scoped releases below.
+- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled controller, setup, relay, or EC2 Client changes that are ready to ship for Windows and macOS together. Desktop is indivisible: the Windows bundle, Windows EC2 Client, and macOS PKG share one version/tag.
 - `scripts\release-android.ps1 -ReleaseVersion ...` for Android-only changes.
 - `scripts\release-all.ps1 -Components Desktop,Android` for protocol/shared compatibility or coordinated Desktop/Android changes.
-- `scripts\release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android` only for the explicitly approved v1.1.0 interim release that defers macOS to a later immutable version.
+- `scripts\release-all.ps1 -Components Windows,Android` for normal non-Apple releases when Windows and Android should ship while macOS/iOS are handled separately.
+- `scripts\release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android` only when reproducing the immutable v1.1.0 interim release scope.
 - `scripts\release-all.ps1 -ReleaseVersion 1.1.1 -Components Windows` only for the explicitly approved v1.1.1 Windows proxy hotfix. Android remains on the published v1.1.0 APK and macOS remains unavailable.
 
-Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The `Windows` selector is supported only through the deterministic orchestrator; macOS-only selection remains unsupported.
+Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1 hotfix. macOS-only selection remains unsupported.
 
 **REQUIRED SUB-SKILLS:** Use `mobile-egress-windows-signing` and `mobile-egress-android-signing` for identity recovery or signer failures. Never regenerate an established key to unblock a release.
 
@@ -24,7 +25,7 @@ Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication 
 Require:
 
 - explicit user approval before any run that selects Desktop, because even without `-Publish` it contacts the Mac, signs Windows artifacts, Developer ID-signs and notarizes the Mac PKG, and freezes a local tag;
-- explicit user approval before the v1.1.1 Windows-only run, because even without `-Publish` it signs Windows artifacts and freezes a local tag;
+- explicit user approval before a `Windows,Android` or approved v1.1.1 Windows-only run, because even without `-Publish` it signs artifacts and freezes a local tag;
 - separate explicit user approval before `-Publish`, because publication pushes source/tag state and changes GitHub;
 - the intended code committed on clean `main`;
 - Android `versionName` matching the release and an increased `versionCode` only when Android is selected;
@@ -57,11 +58,11 @@ Coordinated build/verification and approved publication:
 & .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Desktop,Android -Publish
 ```
 
-Explicitly approved interim Windows/Android build and publication with macOS deferred:
+Normal Windows/Android build and publication with Apple platforms released separately:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android -Publish
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Windows,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Windows,Android -Publish
 ```
 
 Explicitly approved v1.1.1 Windows proxy-hotfix build and publication with Android unchanged and macOS unavailable:
@@ -71,7 +72,7 @@ Explicitly approved v1.1.1 Windows proxy-hotfix build and publication with Andro
 & .\scripts\release-all.ps1 -ReleaseVersion '1.1.1' -Components Windows -Publish
 ```
 
-The Windows-scoped release notes must mark macOS unavailable pending Apple Developer Program enrollment. The v1.1.1 notes link its current Windows artifacts and fall back to the published v1.1.0 Android APK; do not select, rebuild, or version-bump Android for this hotfix. Never add a Mac asset to either Windows-scoped tag; use a later version for the first signed/notarized Mac release.
+The Windows/Android-scoped release notes must mark macOS outside the release scope. The v1.1.1 notes link its current Windows artifacts and fall back to the published v1.1.0 Android APK; do not select, rebuild, or version-bump Android for this hotfix. Never add a Mac asset to a Windows-scoped tag; use a later version for macOS/Desktop once Apple signing/notarization is ready.
 
 The non-publishing path freezes a local tag only after artifact verification and writes an ignored local record binding the source commit, component scope, asset names, and SHA-256 digests. The publish path requires that exact record, pushes the verified source/tag, creates an empty draft, uploads each asset sequentially, waits for GitHub's `uploaded` state and matching SHA-256 digest, and only then exposes the prerelease.
 

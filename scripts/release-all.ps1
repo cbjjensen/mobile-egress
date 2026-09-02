@@ -488,8 +488,8 @@ function Assert-MobileEgressApprovedReleaseScope {
         }
         return
     }
-    if ($resolved -contains 'Windows') {
-        throw 'The uncoupled Windows selector is only approved for v1.1.0, v1.1.1, or v1.1.3: select exactly Windows and Android for v1.1.0 or v1.1.3, exactly Windows for v1.1.1, or use Desktop for later releases.'
+    if ($scope -ceq 'Windows') {
+        throw 'The uncoupled Windows selector must be paired with Android for normal non-Apple releases, or use Desktop to release Windows and macOS together.'
     }
 }
 
@@ -675,7 +675,11 @@ function Resolve-MobileEgressReleaseDownloadLinks {
             Name = if ($null -ne $fallback) { $fallback.Name } else { '' }
             Url = if ($null -ne $fallback) { New-MobileEgressReleaseDownloadUrl -Tag $fallback.Tag -Name $fallback.Name } else { '' }
             UnavailableReason = if ($null -eq $fallback -and $item.Key -eq 'macos' -and $currentWindowsReleased) {
-                'Deferred to a later release pending Apple Developer Program enrollment'
+                if ($Version -in @('1.1.0', '1.1.1', '1.1.3')) {
+                    'Deferred to a later release pending Apple Developer Program enrollment'
+                } else {
+                    'Not included in this release scope; use a later Desktop release for macOS'
+                }
             } else {
                 ''
             }
