@@ -12,6 +12,7 @@ import com.mobileegress.agent.security.PinnedTls
 import com.mobileegress.agent.status.AgentStatusBus
 import com.mobileegress.agent.status.ErrorClass
 import com.mobileegress.agent.status.RelayHealth
+import java.security.PrivateKey
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -41,16 +42,33 @@ internal fun agentSessionUrl(relayOrigin: String) =
 internal fun relayFailureDiagnostic(error: Throwable, responseCode: Int?): String =
     "${error.javaClass.simpleName} http=${responseCode ?: "none"}"
 
-class AgentSession(
+class AgentSession internal constructor(
     private val network: Network,
     private val identity: AgentIdentity,
     deviceKeyStore: DeviceKeyStore,
     parentScope: CoroutineScope,
     private val listener: AgentSessionListener,
+    private val outbound: OutboundMailbox = OutboundMailbox(),
+    private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
+    private val privateKeyProvider: (String) -> PrivateKey? = deviceKeyStore::privateKey,
+    private val clientFactory: (Network, AgentIdentity, PrivateKey) -> OkHttpClient = {
+            sessionNetwork,
+            sessionIdentity,
+            privateKey,
+        ->
+        val ca = PairingBundleParser.parseCaCertificate(sessionIdentity.caCertificatePem)
+        val trustManager = PinnedTls.trustManager(ca)
+        val keyManager = PinnedTls.deviceKeyManager(sessionIdentity, privateKey)
+        PinnedTls.clientBuilder(sessionNetwork, trustManager, keyManager)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(20, TimeUnit.SECONDS)
+            .build()
+    },
 ) {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.IO)
-    private val outbound = OutboundMailbox()
     private val closed = AtomicBoolean(false)
     private val client: OkHttpClient
     private val targetBridge: AgentTargetBridge
@@ -58,18 +76,10 @@ class AgentSession(
 
     init {
         require(identity.role == "agent")
-        val ca = PairingBundleParser.parseCaCertificate(identity.caCertificatePem)
-        val privateKey = requireNotNull(deviceKeyStore.privateKey(identity.keyAlias)) {
+        val privateKey = requireNotNull(privateKeyProvider(identity.keyAlias)) {
             "AndroidKeyStore Agent key is unavailable"
         }
-        val trustManager = PinnedTls.trustManager(ca)
-        val keyManager = PinnedTls.deviceKeyManager(identity, privateKey)
-        client = PinnedTls.clientBuilder(network, trustManager, keyManager)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .pingInterval(20, TimeUnit.SECONDS)
-            .build()
+        client = clientFactory(network, identity, privateKey)
         targetBridge = AgentTargetBridge(
             outbound = outbound,
             reactorFactory = { reactorListener ->
@@ -221,6 +231,7 @@ class AgentSession(
             WireProtocol.encode(type, streamId, payload),
             streamId = streamId.takeIf { it.isNotEmpty() },
         ) {
+            backpressureReporter.report(BackpressureSource.RequiredControlSaturation)
             terminate(ErrorClass.Backpressure, sendWebSocketClose = false)
         }
     }
