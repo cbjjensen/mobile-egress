@@ -786,6 +786,19 @@ func TestAdminSocketCloseClosesListenerBeforePathInspection(t *testing.T) {
 	}
 }
 
+func TestLaunchManagedAdminSocketCloseDoesNotUnlinkLaunchdPath(t *testing.T) {
+	harness := newSocketTestHarness()
+	listener := &socketTestListener{platform: harness.platform, unlinkOnClose: false}
+	owner := &AdminSocket{listener: listener, launchManaged: true, socketPath: socketTestPath}
+	if err := owner.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if listener.closeCalls != 1 || len(harness.platform.unlinkCalls) != 0 ||
+		socketTestOperationIndex(harness.platform.operations(), "lstat:"+socketTestPath) >= 0 {
+		t.Fatalf("launchd-managed close operations = %v", harness.platform.operations())
+	}
+}
+
 func TestAdminSocketCloseRemovesOnlyCapturedIdentity(t *testing.T) {
 	harness := newSocketTestHarness()
 	provisional, _, final := configureSocketTestPublication(harness, 610)

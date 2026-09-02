@@ -21,5 +21,19 @@
 	<true/>
 	<key>ProcessType</key>
 	<string>Background</string>
+	<key>Sockets</key>
+	<dict>
+		<key>RelayAdmin</key>
+		<dict>
+			<key>SockPathName</key>
+			<string>/var/run/com.cbjjensen.mobile-egress.relay.sock</string>
+			<key>SockPathOwner</key>
+			<integer>0</integer>
+			<key>SockPathGroup</key>
+			<integer>80</integer>
+			<key>SockPathMode</key>
+			<integer>432</integer>
+		</dict>
+	</dict>
 </dict>
 </plist>

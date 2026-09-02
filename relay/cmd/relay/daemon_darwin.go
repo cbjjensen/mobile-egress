@@ -25,8 +25,8 @@ func darwinDaemonDependencies() daemonDependencies {
 		setUmask:      unix.Umask,
 		lookupGroup:   user.LookupGroup,
 		notifyContext: signal.NotifyContext,
-		openSocket: func(ctx context.Context, gid uint32) (daemonSocket, error) {
-			return adminservice.OpenDarwinAdminSocket(ctx, gid)
+		openSocket: func(ctx context.Context, _ uint32) (daemonSocket, error) {
+			return adminservice.OpenDarwinLaunchdAdminSocket(ctx)
 		},
 		newPathGuard: adminservice.NewDarwinStatePathGuard,
 		newRuntime: func(config adminservice.RuntimeConfig) (daemonRuntime, error) {

@@ -61,6 +61,7 @@ type AdminSocket struct {
 	platform       adminSocketPlatform
 	socketPath     string
 	socketIdentity pathIdentity
+	launchManaged  bool
 	closeOnce      sync.Once
 	closeErr       error
 }
@@ -79,8 +80,12 @@ func (socket *AdminSocket) Close() error {
 	socket.closeOnce.Do(func() {
 		var cleanupErr error
 		if socket.listener != nil {
-			identity := socket.socketIdentity
-			cleanupErr = cleanupBoundAdminSocket(context.Background(), socket.listener, socket.platform, socket.socketPath, &identity)
+			if socket.launchManaged {
+				cleanupErr = socket.listener.Close()
+			} else {
+				identity := socket.socketIdentity
+				cleanupErr = cleanupBoundAdminSocket(context.Background(), socket.listener, socket.platform, socket.socketPath, &identity)
+			}
 		}
 		var unlockErr error
 		var descriptorErr error

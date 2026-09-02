@@ -45,7 +45,7 @@ func TestLaunchDaemonPlistSemanticContract(t *testing.T) {
 		}
 		entries[key.text] = value
 	}
-	wantKeys := []string{"BundleProgram", "GroupName", "KeepAlive", "Label", "ProcessType", "ProgramArguments", "RunAtLoad", "UserName"}
+	wantKeys := []string{"BundleProgram", "GroupName", "KeepAlive", "Label", "ProcessType", "ProgramArguments", "RunAtLoad", "Sockets", "UserName"}
 	gotKeys := make([]string, 0, len(entries))
 	for key := range entries {
 		gotKeys = append(gotKeys, key)
@@ -61,6 +61,7 @@ func TestLaunchDaemonPlistSemanticContract(t *testing.T) {
 	assertPlistString(t, entries["ProcessType"], "Background")
 	assertPlistBoolean(t, entries["RunAtLoad"], true)
 	assertPlistBoolean(t, entries["KeepAlive"], true)
+	assertRelayAdminLaunchSocket(t, entries["Sockets"])
 	arguments := entries["ProgramArguments"]
 	if arguments.name != "array" || len(arguments.attributes) != 0 || strings.TrimSpace(arguments.text) != "" || len(arguments.children) != 2 {
 		t.Fatalf("ProgramArguments = %#v", arguments)
@@ -84,6 +85,32 @@ func TestLaunchDaemonPlistSemanticContract(t *testing.T) {
 			t.Fatalf("unsafe launchd argument %q", argument)
 		}
 	}
+}
+
+func assertRelayAdminLaunchSocket(t *testing.T, node *plistXMLNode) {
+	t.Helper()
+	if node == nil || node.name != "dict" || len(node.attributes) != 0 || len(node.children) != 2 {
+		t.Fatalf("Sockets = %#v", node)
+	}
+	if node.children[0].name != "key" || node.children[0].text != "RelayAdmin" {
+		t.Fatalf("Sockets key = %#v", node.children[0])
+	}
+	entry := node.children[1]
+	if entry.name != "dict" || len(entry.attributes) != 0 || len(entry.children) != 8 {
+		t.Fatalf("RelayAdmin socket = %#v", entry)
+	}
+	values := make(map[string]*plistXMLNode)
+	for index := 0; index < len(entry.children); index += 2 {
+		key := entry.children[index]
+		if key.name != "key" || len(key.attributes) != 0 || len(key.children) != 0 || key.text == "" {
+			t.Fatalf("RelayAdmin socket key = %#v", key)
+		}
+		values[key.text] = entry.children[index+1]
+	}
+	assertPlistString(t, values["SockPathName"], "/var/run/com.cbjjensen.mobile-egress.relay.sock")
+	assertPlistInteger(t, values["SockPathOwner"], "0")
+	assertPlistInteger(t, values["SockPathGroup"], "80")
+	assertPlistInteger(t, values["SockPathMode"], "432")
 }
 
 type plistXMLNode struct {
@@ -180,6 +207,13 @@ func assertPlistBoolean(t *testing.T, node *plistXMLNode, want bool) {
 	}
 	if node == nil || node.name != wantName || len(node.attributes) != 0 || len(node.children) != 0 || strings.TrimSpace(node.text) != "" {
 		t.Fatalf("plist boolean = %#v, want %t", node, want)
+	}
+}
+
+func assertPlistInteger(t *testing.T, node *plistXMLNode, want string) {
+	t.Helper()
+	if node == nil || node.name != "integer" || len(node.attributes) != 0 || len(node.children) != 0 || node.text != want {
+		t.Fatalf("plist integer = %#v, want %q", node, want)
 	}
 }
 
