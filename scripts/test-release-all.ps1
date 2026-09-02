@@ -439,8 +439,8 @@ $trackedAndroidBuildFile = Get-Content -Raw -LiteralPath (Join-Path $repositoryR
 Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent $trackedAndroidBuildFile `
     -ExpectedVersion '1.1.4' `
-    -MaximumPriorVersionCode 16
-Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*18\s*$') 'The tracked Android v1.1.4 release must use versionCode 18.'
+    -MaximumPriorVersionCode 18
+Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*19\s*$') 'The tracked Android v1.1.4 release must use versionCode 19.'
 
 $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-release-zip-test-" + [guid]::NewGuid().ToString('N'))
 try {
