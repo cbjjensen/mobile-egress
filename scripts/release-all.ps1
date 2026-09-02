@@ -199,7 +199,9 @@ function Sync-MobileEgressDraftAssets {
         [Parameter(Mandatory)]
         [scriptblock]$GetAssets,
         [Parameter(Mandatory)]
-        [scriptblock]$UploadAsset,
+        [scriptblock]$StartUploadAsset,
+        [Parameter(Mandatory)]
+        [scriptblock]$WaitUploadAsset,
         [int]$PollIntervalMilliseconds = 2000,
         [int]$TimeoutSeconds = 600
     )
@@ -211,21 +213,42 @@ function Sync-MobileEgressDraftAssets {
         throw "GitHub draft contains unexpected assets: $($unexpected.name -join ', '). The draft remains unpublished."
     }
 
+    $missingArtifacts = [System.Collections.Generic.List[object]]::new()
     foreach ($artifact in $Artifacts) {
-        $currentAssets = @(& $GetAssets)
-        $current = @($currentAssets | Where-Object { $_.name -ceq $artifact.Name })
+        $current = @($initialAssets | Where-Object { $_.name -ceq $artifact.Name })
         if ($current.Count -gt 1) {
             throw "GitHub draft contains duplicate asset $($artifact.Name)."
         }
         if ($current.Count -eq 0) {
-            Write-Host "Uploading $($artifact.Name)..."
-            & $UploadAsset $artifact
+            $missingArtifacts.Add($artifact)
+            continue
         }
-        Wait-MobileEgressDraftAsset `
-            -Artifact $artifact `
-            -GetAssets $GetAssets `
-            -PollIntervalMilliseconds $PollIntervalMilliseconds `
-            -TimeoutSeconds $TimeoutSeconds
+        if ($current[0].state -ne 'uploaded' -or $current[0].digest -cne $artifact.Digest) {
+            throw "GitHub draft asset $($artifact.Name) has a different digest; it will not be overwritten."
+        }
+    }
+
+    $uploads = [System.Collections.Generic.List[object]]::new()
+    foreach ($artifact in $missingArtifacts) {
+        Write-Host "Uploading $($artifact.Name)..."
+        $operation = & $StartUploadAsset $artifact
+        $uploads.Add([pscustomobject]@{
+            Artifact = $artifact
+            Operation = $operation
+        })
+    }
+    foreach ($upload in $uploads) {
+        & $WaitUploadAsset $upload
+    }
+
+    foreach ($artifact in $Artifacts) {
+        if ($missingArtifacts.Count -ne 0) {
+            Wait-MobileEgressDraftAsset `
+                -Artifact $artifact `
+                -GetAssets $GetAssets `
+                -PollIntervalMilliseconds $PollIntervalMilliseconds `
+                -TimeoutSeconds $TimeoutSeconds
+        }
         Write-Host "Verified GitHub digest for $($artifact.Name)."
     }
 
@@ -1152,8 +1175,10 @@ function Invoke-MobileEgressRelease {
         return @($current.assets)
     }
     if (-not $release.isDraft) {
-        Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -UploadAsset {
+        Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -StartUploadAsset {
             throw 'Published release assets are immutable and cannot be uploaded or replaced.'
+        } -WaitUploadAsset {
+            param($Upload)
         }
         $publishedReleases = @(Get-MobileEgressGitHubReleases)
         Sync-MobileEgressReleaseDownloadNotes `
@@ -1170,12 +1195,25 @@ function Invoke-MobileEgressRelease {
         return
     }
 
-    Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -UploadAsset {
+    Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -StartUploadAsset {
         param($Artifact)
-        $null = Invoke-MobileEgressNativeCommand -FilePath 'gh' -Arguments @(
-            'release', 'upload', $tag, $Artifact.Path,
-            '--repo', 'cbjjensen/mobile-egress'
-        ) -Description "Uploading $($Artifact.Name)"
+        return Start-ThreadJob -ArgumentList @($tag, $Artifact.Path, $Artifact.Name) -ScriptBlock {
+            param($UploadTag, $UploadPath, $ArtifactName)
+
+            $output = @(& gh release upload $UploadTag $UploadPath --repo cbjjensen/mobile-egress 2>&1)
+            return [pscustomobject]@{
+                ArtifactName = $ArtifactName
+                ExitCode = $LASTEXITCODE
+                Output = ($output | Out-String).Trim()
+            }
+        }
+    } -WaitUploadAsset {
+        param($Upload)
+
+        $result = Receive-Job -Job $Upload.Operation -Wait -AutoRemoveJob
+        if ($result.ExitCode -ne 0) {
+            throw "Uploading $($Upload.Artifact.Name) failed.`n$($result.Output)"
+        }
     }
     $release = Get-MobileEgressGitHubRelease -Tag $tag
     $publishedReleases = @(Get-MobileEgressGitHubReleases)
@@ -1199,8 +1237,10 @@ function Invoke-MobileEgressRelease {
     if ($published.isDraft -or -not $published.isPrerelease) {
         throw 'GitHub release publication verification failed.'
     }
-    Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -UploadAsset {
+    Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets $getAssets -StartUploadAsset {
         throw 'Published release assets are immutable and cannot be uploaded or replaced.'
+    } -WaitUploadAsset {
+        param($Upload)
     }
     Write-Host "Published verified prerelease: $($published.url)"
 }

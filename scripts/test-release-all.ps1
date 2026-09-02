@@ -374,21 +374,28 @@ $remoteAssets = [System.Collections.Generic.List[object]]::new()
 $uploadEvents = [System.Collections.Generic.List[string]]::new()
 Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets {
     return @($remoteAssets)
-} -UploadAsset {
+} -StartUploadAsset {
     param($Artifact)
-    $uploadEvents.Add($Artifact.Name)
-    $remoteAssets.Add([pscustomobject]@{ name = $Artifact.Name; state = 'uploaded'; digest = $Artifact.Digest })
+    $uploadEvents.Add("start:$($Artifact.Name)")
+    return [pscustomobject]@{ Artifact = $Artifact }
+} -WaitUploadAsset {
+    param($Upload)
+    $uploadEvents.Add("finish:$($Upload.Artifact.Name)")
+    $remoteAssets.Add([pscustomobject]@{ name = $Upload.Artifact.Name; state = 'uploaded'; digest = $Upload.Artifact.Digest })
 } -PollIntervalMilliseconds 0 -TimeoutSeconds 1
-Assert-Condition (($uploadEvents -join ',') -eq 'windows.zip,client.exe,agent.apk') 'Draft assets must upload sequentially in the supplied order.'
+Assert-Condition (($uploadEvents -join ',') -eq 'start:windows.zip,start:client.exe,start:agent.apk,finish:windows.zip,finish:client.exe,finish:agent.apk') 'Draft assets must start every missing upload before waiting for any upload to finish.'
 
 $mismatchUploads = [System.Collections.Generic.List[string]]::new()
 $mismatchRejected = $false
 try {
     Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets {
         return @([pscustomobject]@{ name = 'windows.zip'; state = 'uploaded'; digest = 'sha256:' + ('f' * 64) })
-    } -UploadAsset {
+    } -StartUploadAsset {
         param($Artifact)
         $mismatchUploads.Add($Artifact.Name)
+        return [pscustomobject]@{ Artifact = $Artifact }
+    } -WaitUploadAsset {
+        param($Upload)
     } -PollIntervalMilliseconds 0 -TimeoutSeconds 1
 } catch {
     $mismatchRejected = $_.Exception.Message -match 'different digest'

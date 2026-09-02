@@ -74,7 +74,7 @@ Explicitly approved v1.1.1 Windows proxy-hotfix build and publication with Andro
 
 The Windows/Android-scoped release notes must mark macOS outside the release scope. The v1.1.1 notes link its current Windows artifacts and fall back to the published v1.1.0 Android APK; do not select, rebuild, or version-bump Android for this hotfix. Never add a Mac asset to a Windows-scoped tag; use a later version for macOS/Desktop once Apple signing/notarization is ready.
 
-The non-publishing path freezes a local tag only after artifact verification and writes an ignored local record binding the source commit, component scope, asset names, and SHA-256 digests. The publish path requires that exact record, pushes the verified source/tag, creates an empty draft, uploads each asset sequentially, waits for GitHub's `uploaded` state and matching SHA-256 digest, and only then exposes the prerelease.
+The non-publishing path freezes a local tag only after artifact verification and writes an ignored local record binding the source commit, component scope, asset names, and SHA-256 digests. The publish path requires that exact record, pushes the verified source/tag, creates an empty draft, starts missing asset uploads in parallel, waits for GitHub's `uploaded` state and matching SHA-256 digest for every asset, and only then exposes the prerelease.
 
 If an operation is interrupted, inspect the exact local, Mac, or GitHub output before retrying. Resume only when the source commit, artifacts, and hashes agree.
 
