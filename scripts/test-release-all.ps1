@@ -19,13 +19,32 @@ $allComponents = @(Resolve-MobileEgressReleaseComponents -Components @())
 Assert-Condition (($allComponents -join ',') -eq 'Desktop,Android') 'An unspecified component set must release both desktop platforms plus Android.'
 $canonicalComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Desktop', 'Android'))
 Assert-Condition (($canonicalComponents -join ',') -eq 'Desktop,Android') 'Release components must be deduplicated into deterministic order.'
-$windowsOnlyRejected = $false
+$windowsComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Windows'))
+Assert-Condition (($windowsComponents -join ',') -eq 'Windows') 'An explicitly selected Windows release must remain independent from the unavailable macOS package.'
+$interimComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Windows', 'Android'))
+Assert-Condition (($interimComponents -join ',') -eq 'Windows,Android') 'An interim Windows and Android release must be deduplicated into deterministic order.'
+Assert-MobileEgressApprovedReleaseScope -Version '1.1.0' -Components $interimComponents
+$narrowInterimScopeRejected = $false
 try {
-    $null = Resolve-MobileEgressReleaseComponents -Components @('Windows')
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.0' -Components @('Android')
 } catch {
-    $windowsOnlyRejected = $_.Exception.Message -match 'Desktop'
+    $narrowInterimScopeRejected = $_.Exception.Message -match 'exactly Windows and Android'
 }
-Assert-Condition $windowsOnlyRejected 'A Windows-only desktop release must be rejected.'
+Assert-Condition $narrowInterimScopeRejected 'The frozen v1.1.0 release must not resume or publish with a narrowed component set.'
+$futureWindowsExceptionRejected = $false
+try {
+    Assert-MobileEgressApprovedReleaseScope -Version '1.1.1' -Components @('Windows', 'Android')
+} catch {
+    $futureWindowsExceptionRejected = $_.Exception.Message -match 'only approved for v1.1.0'
+}
+Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector must remain a one-version exception instead of silently changing future Desktop policy.'
+$desktopWindowsConflictRejected = $false
+try {
+    $null = Resolve-MobileEgressReleaseComponents -Components @('Desktop', 'Windows')
+} catch {
+    $desktopWindowsConflictRejected = $_.Exception.Message -match 'cannot be selected together'
+}
+Assert-Condition $desktopWindowsConflictRejected 'Desktop and Windows must not be selected together because Desktop already contains Windows.'
 $macosOnlyRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('macOS')
@@ -42,13 +61,19 @@ try {
 Assert-Condition $invalidComponentRejected 'Unknown release components must stop before build or publication.'
 $fullGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Desktop', 'Android'))
 Assert-Condition (($fullGateComponents -join ',') -eq 'Windows,Android') 'The coupled Desktop scope must map to the existing Windows gate while Android retains its independent gate.'
+$interimGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Windows', 'Android'))
+Assert-Condition (($interimGateComponents -join ',') -eq 'Windows,Android') 'The interim release must run the Windows and Android gates without resolving macOS prerequisites.'
 $androidGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Android'))
 Assert-Condition (($androidGateComponents -join ',') -eq 'Android') 'An Android-only release must not resolve Windows or macOS build prerequisites.'
 
 $desktopDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop'))
 Assert-Condition (($desktopDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg') 'A Desktop release must publish the Windows bundle, EC2 Client, and macOS PKG together.'
+$windowsDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows'))
+Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe') 'An interim Windows release must publish only the signed Windows bundle and EC2 Client.'
 $androidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Android'))
 Assert-Condition (($androidDefinitions.Name -join ',') -eq 'zfnf-mobile-egress-android-1.2.3.apk') 'An Android release must publish only the versioned ZFNF APK.'
+$interimDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
+Assert-Condition (($interimDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,zfnf-mobile-egress-android-1.2.3.apk') 'The interim release must contain exactly Windows, EC2 Client, and Android artifacts.'
 $allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop', 'Android'))
 Assert-Condition (($allDefinitions.Name -join ',') -eq 'mobile-egress-windows-1.2.3.zip,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg,zfnf-mobile-egress-android-1.2.3.apk') 'The full release must contain the coupled Desktop assets followed by Android.'
 
@@ -86,9 +111,18 @@ Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'client' })
 Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Tag -eq 'v1.2.3') 'A scoped Android release must link the same published Desktop release for macOS.'
 Assert-Condition (($androidDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.2.4') 'A scoped Android release must link its new APK from the current tag.'
 
+$interimDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.0' -Version '1.1.0' -ReleasedArtifacts $interimDefinitions -PublishedReleases @())
+Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Tag -eq 'v1.1.0') 'The interim release must link its Windows bundle from the current tag.'
+Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.1.0') 'The interim release must link its EC2 Client from the current tag.'
+Assert-Condition ([string]::IsNullOrWhiteSpace(($interimDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Url)) 'The interim release must not manufacture a macOS download.'
+Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The interim release must explain why macOS is deferred.'
+Assert-Condition (($interimDownloadLinks | Where-Object { $_.Key -eq 'android' }).Tag -eq 'v1.1.0') 'The interim release must link its Android APK from the current tag.'
+
 $downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $desktopDownloadLinks
 Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'
 Assert-Condition ($downloadSection -match '\[zfnf-mobile-egress-android-1\.2\.2\.apk\]\(https://github\.com/cbjjensen/mobile-egress/releases/download/v1\.2\.2/zfnf-mobile-egress-android-1\.2\.2\.apk\)') 'The download section must render fallback assets as direct GitHub download links.'
+$interimDownloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $interimDownloadLinks
+Assert-Condition ($interimDownloadSection -match 'macOS controller PKG.*Deferred to a later release pending Apple Developer Program enrollment') 'The interim release notes must state the macOS deferral explicitly.'
 
 $updatedBody = Update-MobileEgressReleaseBodyDownloadSection -Body "Generated notes`n`n<!-- mobile-egress-downloads:start -->`nold`n<!-- mobile-egress-downloads:end -->`n" -DownloadSection $downloadSection
 Assert-Condition (($updatedBody | Select-String -Pattern '<!-- mobile-egress-downloads:start -->' -AllMatches).Matches.Count -eq 1) 'Updating release notes must replace the managed Downloads section instead of appending duplicates.'
@@ -211,6 +245,58 @@ $artifacts = @(
     [pscustomobject]@{ Name = 'client.exe'; Path = 'C:\fixture\client.exe'; Digest = 'sha256:' + ('2' * 64) },
     [pscustomobject]@{ Name = 'agent.apk'; Path = 'C:\fixture\agent.apk'; Digest = 'sha256:' + ('3' * 64) }
 )
+$freezeFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-freeze-test-" + [guid]::NewGuid().ToString('N'))
+try {
+    $freezePath = Join-Path $freezeFixture 'v1.1.0.freeze.json'
+    Assert-MobileEgressReleaseFreezeRecord `
+        -Path $freezePath `
+        -Tag 'v1.1.0' `
+        -SourceCommit ('a' * 40) `
+        -Components @('Windows', 'Android') `
+        -Artifacts $artifacts `
+        -CreateIfMissing
+    Assert-Condition (Test-Path -LiteralPath $freezePath -PathType Leaf) 'A verified untagged build must persist its exact source, scope, names, and digests before the tag is frozen.'
+    Assert-MobileEgressReleaseFreezeRecord `
+        -Path $freezePath `
+        -Tag 'v1.1.0' `
+        -SourceCommit ('a' * 40) `
+        -Components @('Windows', 'Android') `
+        -Artifacts $artifacts
+
+    $narrowFreezeRejected = $false
+    try {
+        Assert-MobileEgressReleaseFreezeRecord `
+            -Path $freezePath `
+            -Tag 'v1.1.0' `
+            -SourceCommit ('a' * 40) `
+            -Components @('Android') `
+            -Artifacts @($artifacts[2])
+    } catch {
+        $narrowFreezeRejected = $_.Exception.Message -match 'does not match'
+    }
+    Assert-Condition $narrowFreezeRejected 'A tagged release must not resume against a narrower component or artifact set.'
+
+    $changedDigestArtifacts = @($artifacts | ForEach-Object {
+        [pscustomobject]@{ Name = $_.Name; Path = $_.Path; Digest = $_.Digest }
+    })
+    $changedDigestArtifacts[0].Digest = 'sha256:' + ('f' * 64)
+    $changedFreezeRejected = $false
+    try {
+        Assert-MobileEgressReleaseFreezeRecord `
+            -Path $freezePath `
+            -Tag 'v1.1.0' `
+            -SourceCommit ('a' * 40) `
+            -Components @('Windows', 'Android') `
+            -Artifacts $changedDigestArtifacts
+    } catch {
+        $changedFreezeRejected = $_.Exception.Message -match 'does not match'
+    }
+    Assert-Condition $changedFreezeRejected 'A tagged release must not resume after any frozen artifact digest changes.'
+} finally {
+    if (Test-Path -LiteralPath $freezeFixture) {
+        Remove-Item -LiteralPath $freezeFixture -Recurse -Force
+    }
+}
 $remoteAssets = [System.Collections.Generic.List[object]]::new()
 $uploadEvents = [System.Collections.Generic.List[string]]::new()
 Sync-MobileEgressDraftAssets -Artifacts $artifacts -GetAssets {

@@ -166,7 +166,7 @@ xcodebuild test -workspace . -scheme MobileEgressCore -destination "platform=mac
 The public entry point is:
 
 ```powershell
-& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>'
 ```
 
 Without `-Publish`, this command still builds/signs both platforms and freezes a local annotated tag. Add `-Publish` only to push source/tag state and change GitHub.

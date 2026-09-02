@@ -12,8 +12,9 @@ Choose the smallest compatible guarded entry point. Do not reconstruct signing, 
 - `scripts\release-desktop.ps1 -ReleaseVersion ...` for controller, setup, relay, or EC2 Client changes. Desktop is indivisible: the Windows bundle, Windows EC2 Client, and macOS PKG share one version/tag.
 - `scripts\release-android.ps1 -ReleaseVersion ...` for Android-only changes.
 - `scripts\release-all.ps1 -Components Desktop,Android` for protocol/shared compatibility or coordinated Desktop/Android changes.
+- `scripts\release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android` only for the explicitly approved v1.1.0 interim release that defers macOS to a later immutable version.
 
-Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. Windows-only and macOS-only component selectors are unsupported.
+Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The `Windows` selector is supported only through the deterministic orchestrator; macOS-only selection remains unsupported.
 
 **REQUIRED SUB-SKILLS:** Use `mobile-egress-windows-signing` and `mobile-egress-android-signing` for identity recovery or signer failures. Never regenerate an established key to unblock a release.
 
@@ -36,25 +37,34 @@ The orchestrator resolves and validates only the selected component toolchains, 
 Coupled Desktop build/verification and approved publication:
 
 ```powershell
-& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
-& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0' -Publish
+& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>'
+& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>' -Publish
 ```
 
 Android-only build/verification and approved publication:
 
 ```powershell
-& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0'
-& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0' -Publish
+& .\scripts\release-android.ps1 -ReleaseVersion '<version>'
+& .\scripts\release-android.ps1 -ReleaseVersion '<version>' -Publish
 ```
 
 Coordinated build/verification and approved publication:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Desktop,Android
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Desktop,Android -Publish
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Desktop,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Desktop,Android -Publish
 ```
 
-The non-publishing path freezes a local tag only after artifact verification. The publish path pushes the verified source/tag, creates an empty draft, uploads each asset sequentially, waits for GitHub's `uploaded` state and matching SHA-256 digest, and only then exposes the prerelease.
+Explicitly approved interim Windows/Android build and publication with macOS deferred:
+
+```powershell
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android -Publish
+```
+
+The interim release notes must mark macOS unavailable pending Apple Developer Program enrollment. Never add a Mac asset to the published tag; use a later version for the first signed/notarized Mac release.
+
+The non-publishing path freezes a local tag only after artifact verification and writes an ignored local record binding the source commit, component scope, asset names, and SHA-256 digests. The publish path requires that exact record, pushes the verified source/tag, creates an empty draft, uploads each asset sequentially, waits for GitHub's `uploaded` state and matching SHA-256 digest, and only then exposes the prerelease.
 
 If an operation is interrupted, inspect the exact local, Mac, or GitHub output before retrying. Resume only when the source commit, artifacts, and hashes agree.
 
@@ -72,4 +82,4 @@ If an operation is interrupted, inspect the exact local, Mac, or GitHub output b
 
 ## After publication
 
-Report the prerelease URL and public hashes for the Windows ZIP, EC2 Client, macOS PKG, and selected Android APK. Retain the Mac verification JSON as private/local evidence, never a GitHub asset. Complete the preserved Windows/Android regression plus the available-Mac acceptance in `docs\deployment.md` before stable promotion; the script intentionally does not declare a release stable.
+Report the prerelease URL and public hashes for every selected artifact. Retain the Mac verification JSON as private/local evidence whenever Desktop is selected, never as a GitHub asset. Complete the acceptance applicable to the published component scope before stable promotion; the script intentionally does not declare a release stable.

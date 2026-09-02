@@ -13,7 +13,7 @@ Save a copy of this template with the private release evidence. Do not record QR
 | Windows ZIP filename / SHA-256 | |
 | Client filename / SHA-256 | |
 | Authenticode subject / thumbprint | |
-| Mac PKG filename / SHA-256 | `mobile-egress-macos-1.1.0-arm64.pkg` / |
+| Mac PKG filename / SHA-256 (if Desktop) | `mobile-egress-macos-<version>-arm64.pkg` / |
 | Developer ID Application / Installer public identity | |
 | Notarization / staple | `NOT RUN` |
 | Node-manifest SHA-256 | |
@@ -75,7 +75,9 @@ Use `PASS`, `FAIL`, or `NOT RUN` for executed required checks. Keep the two Andr
 | No EC2/public-IP/inbound-rule mutation | `NOT RUN` | |
 | Relay/node ProgramData ACL review | `NOT RUN` | |
 
-### macOS v1.1.0 controller
+### Future macOS controller
+
+This section is not applicable to the Mac-free v1.1.0 interim release. Complete it only for a later release whose component scope includes Desktop.
 
 Clean-install-only means the first Mac bridge begins with empty Mac controller/relay state and imports no Windows private state. Test same-Mac upgrade with the private signed/notarized `1.0.999` fixture built from the final source; do not create a tag or GitHub asset for the fixture.
 

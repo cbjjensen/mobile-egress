@@ -87,7 +87,7 @@ Credential-free macOS staging uses the pinned Go 1.26.7, Node 24.20.0, and Wails
 The expected public Desktop command is:
 
 ```powershell
-& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
+& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>'
 ```
 
 Even without `-Publish`, that command performs Windows signing, remote Mac build/sign/notarization, and freezes a local annotated tag. `-Publish` is the separate boundary for pushing source/tag state and changing GitHub.

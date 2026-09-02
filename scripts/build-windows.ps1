@@ -16,6 +16,7 @@ $serviceBinRoot = Join-Path $windowsRoot 'build\service-bin'
 $packageRoot = Join-Path $windowsRoot "build\release\mobile-egress-windows-$ReleaseVersion"
 $zipPath = "$packageRoot.zip"
 $timestampServer = 'http://timestamp.digicert.com'
+$wailsProjectPath = Join-Path $windowsRoot 'wails.json'
 
 function Get-CertificateSha256 {
     param([System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
@@ -157,6 +158,11 @@ if ($MyInvocation.InvocationName -eq '.') {
     return
 }
 
+$wailsProject = Get-Content -Raw -LiteralPath $wailsProjectPath | ConvertFrom-Json
+if ([string]$wailsProject.info.productVersion -cne $ReleaseVersion) {
+    throw "windows-client\wails.json ProductVersion must equal $ReleaseVersion before release."
+}
+
 if ((Test-Path -LiteralPath $packageRoot) -or (Test-Path -LiteralPath $zipPath)) {
     throw "Release output already exists for $ReleaseVersion. Use a new release version or remove the old output explicitly."
 }
@@ -194,7 +200,7 @@ try {
 
     Push-Location $windowsRoot
     try {
-        $controllerLdflags = "-X mobile-egress/windows-client/internal/desktop.embeddedReleaseManifestBase64=$manifestBase64"
+        $controllerLdflags = "-X mobile-egress/windows-client/internal/desktop.embeddedReleaseManifestBase64=$manifestBase64 -X mobile-egress/windows-client/internal/desktop.controllerVersion=$ReleaseVersion"
         go run github.com/wailsapp/wails/v2/cmd/wails@v2.14.0 build -clean -ldflags $controllerLdflags
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
@@ -202,6 +208,10 @@ try {
     }
 
     $controllerExecutable = Join-Path $binRoot 'mobile-egress-windows.exe'
+    $controllerVersionInfo = (Get-Item -LiteralPath $controllerExecutable).VersionInfo
+    if ($controllerVersionInfo.FileVersionRaw -ne [version]"$ReleaseVersion.0") {
+        throw "The Windows controller metadata does not match release $ReleaseVersion."
+    }
     Set-WindowsReleaseSignature -Path $controllerExecutable -Identity $identity
 
     $stagedExecutables = @(

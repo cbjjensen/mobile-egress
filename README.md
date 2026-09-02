@@ -12,7 +12,7 @@ Ordinary HTTP, HTTPS through CONNECT, and SOCKS are browser/application opt-ins 
 
 ## Downloads
 
-Use only accepted artifacts exposed through the managed **Downloads** links on the official [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). Release notes are designed to list the Windows controller bundle, Windows EC2 Client, macOS controller PKG, and Android Agent APK, in that order. The first three are one indivisible **Desktop** release from the same tag; Android is independently selectable and may link another eligible release. The planned first Mac artifact is `mobile-egress-macos-1.1.0-arm64.pkg`; its verification JSON is mandatory private publisher evidence, not a GitHub asset. The signed Desktop candidate, Mac publication/acceptance, and iOS TestFlight build are still pending in the [current status](docs/status.md), so filenames and instructions here do not assert that those artifacts are available yet.
+Use only accepted artifacts exposed through the managed **Downloads** links on the official [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). Release notes list the Windows controller bundle, Windows EC2 Client, macOS controller PKG, and Android Agent APK, in that order. A normal **Desktop** release keeps the first three on one tag; Android is independently selectable. The explicitly approved interim v1.1.0 prerelease contains Windows, the EC2 Client, and Android only, with macOS marked unavailable pending Apple Developer Program enrollment. Its assets are immutable, so the first signed/notarized Mac PKG will use a later version. Mac publication/acceptance and the iOS TestFlight build remain pending in the [current status](docs/status.md).
 
 ## Friend quick start
 
@@ -52,7 +52,7 @@ These steps apply only after the signed/notarized Mac PKG completes the pending 
 - SSM receives only signed-install commands, public CSR/bootstrap output, and sealed configuration ciphertext. Proxy credentials and raw certificate/configuration values are not placed in SSM input, output, or logs.
 - The app never creates or terminates EC2 instances, changes public IPs, or opens security-group ingress.
 - A Mac logout, Tailscale loss, or Agent cellular loss fails proxy traffic closed; the product never changes a Mac default route and the Agent never falls back to Wi-Fi.
-- `v1.1.0` is clean-install-only for a new Mac bridge: Windows private state is not migrated. Same-Mac signed PKG update/repair preserves identities/state. Intel/universal support, a Mac headless Client, ZFNF Mac App Store distribution, and automatic updates are out of scope.
+- The first later Mac-bearing release is clean-install-only for a new Mac bridge: Windows private state is not migrated. Same-Mac signed PKG update/repair preserves identities/state. Intel/universal support, a Mac headless Client, ZFNF Mac App Store distribution, and automatic updates are out of scope.
 - This is for light, personal, interruption-tolerant traffic. Tailscale Funnel availability and bandwidth limits apply.
 
 ## Documentation
@@ -71,4 +71,4 @@ These steps apply only after the signed/notarized Mac PKG completes the pending 
 - [Android Agent](android/README.md)
 - [iOS Agent](ios/README.md)
 
-Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. The coupled Desktop entry point is `& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'`; `release-android.ps1` remains Android-only, and `release-all.ps1 -Components Desktop,Android` coordinates both. Running Desktop without `-Publish` still signs both platforms and freezes a local annotated tag; `-Publish` separately authorizes pushing source/tag state and changing GitHub. Follow the [deployment runbook](docs/deployment.md) before invoking a release.
+Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. The normal coupled Desktop entry point is `& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>'`; `release-android.ps1` remains Android-only, and `release-all.ps1 -Components Desktop,Android` coordinates a complete release. The approved interim command is `release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android`; it intentionally excludes macOS and cannot later add assets to that published tag. `-Publish` separately authorizes pushing source/tag state and changing GitHub. Follow the [deployment runbook](docs/deployment.md) before invoking a release.

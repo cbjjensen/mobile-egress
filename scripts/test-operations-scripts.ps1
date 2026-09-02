@@ -76,6 +76,7 @@ try {
 $preflightScript = Get-Content -Raw $preflight
 $releaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'release-android.ps1')
 $windowsReleaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'build-windows.ps1')
+$windowsProject = Get-Content -Raw (Join-Path $repositoryRoot 'windows-client\wails.json') | ConvertFrom-Json
 Assert-Condition ($preflightScript -match "operations-common\.ps1'\)") 'Preflight must load the shared operations resolver.'
 Assert-Condition ($releaseScript -match "operations-common\.ps1'\)") 'Android release must load the shared operations resolver.'
 Assert-Condition ($preflightScript -match 'Get-MobileEgressAndroidSdkRoot -RepositoryRoot') 'Preflight must use the shared Android SDK-root resolver.'
@@ -99,6 +100,9 @@ Assert-Condition ($windowsReleaseScript -match 'TimeStamperCertificate') 'Window
 Assert-Condition ($windowsReleaseScript -match 'CertificateSha256') 'Windows release packaging must verify the exact SHA-256 certificate identity.'
 Assert-Condition ($windowsReleaseScript -match 'release-manifest\.json') 'Windows release packaging must produce the headless Client manifest.'
 Assert-Condition ($windowsReleaseScript -match 'embeddedReleaseManifestBase64') 'The signed controller must embed its node-release trust manifest.'
+Assert-Condition ($windowsProject.info.productVersion -eq '1.1.0') 'The tracked Wails product metadata must match the Windows v1.1.0 release.'
+Assert-Condition ($windowsReleaseScript -match 'desktop\.controllerVersion=\$ReleaseVersion') 'The signed controller must link its canonical release version instead of retaining the development value.'
+Assert-Condition ($windowsReleaseScript -match 'ProductVersion.*ReleaseVersion') 'Windows packaging must reject Wails product metadata that differs from the requested release.'
 Assert-Condition ($windowsReleaseScript -match 'signerThumbprint') 'The node-release manifest must pin the exact Authenticode signer.'
 Assert-Condition ($windowsReleaseScript -match 'version\s*=\s*2') 'The embedded node-release manifest must use version 2.'
 Assert-Condition ($windowsReleaseScript -match 'signerCertificateSha256') 'Manifest v2 must pin the tracked publisher certificate SHA-256.'

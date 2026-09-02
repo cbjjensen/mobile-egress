@@ -440,17 +440,19 @@ function Resolve-MobileEgressReleaseComponents {
         return @('Desktop', 'Android')
     }
 
-    $platformOnly = @($Components | Where-Object { $_ -in @('Windows', 'macOS') } | Select-Object -Unique)
-    if ($platformOnly.Count -ne 0) {
-        throw 'Windows and macOS desktop releases cannot be selected separately. Select Desktop to release both platforms together.'
+    if ($Components -contains 'macOS') {
+        throw 'macOS cannot be released separately. Select Desktop to release Windows and macOS together.'
     }
-    $unsupported = @($Components | Where-Object { $_ -notin @('Desktop', 'Android') } | Select-Object -Unique)
+    $unsupported = @($Components | Where-Object { $_ -notin @('Desktop', 'Windows', 'Android') } | Select-Object -Unique)
     if ($unsupported.Count -ne 0) {
-        throw "Unsupported release component: $($unsupported -join ', '). Supported components are Desktop and Android."
+        throw "Unsupported release component: $($unsupported -join ', '). Supported components are Desktop, Windows, and Android."
+    }
+    if (($Components -contains 'Desktop') -and ($Components -contains 'Windows')) {
+        throw 'Desktop and Windows cannot be selected together because Desktop already contains Windows.'
     }
 
     $resolved = [System.Collections.Generic.List[string]]::new()
-    foreach ($component in @('Desktop', 'Android')) {
+    foreach ($component in @('Desktop', 'Windows', 'Android')) {
         if ($Components -contains $component) {
             $resolved.Add($component)
         }
@@ -458,12 +460,33 @@ function Resolve-MobileEgressReleaseComponents {
     return @($resolved)
 }
 
+function Assert-MobileEgressApprovedReleaseScope {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [string[]]$Components
+    )
+
+    $resolved = @(Resolve-MobileEgressReleaseComponents -Components $Components)
+    $scope = $resolved -join ','
+    if ($Version -eq '1.1.0') {
+        if ($scope -cne 'Windows,Android') {
+            throw 'The immutable v1.1.0 interim release must contain exactly Windows and Android.'
+        }
+        return
+    }
+    if ($resolved -contains 'Windows') {
+        throw 'The uncoupled Windows selector is only approved for v1.1.0 with Android; use Desktop for later releases.'
+    }
+}
+
 function Get-MobileEgressReleaseGateComponents {
     param([Parameter(Mandatory)][string[]]$Components)
 
     $resolved = @(Resolve-MobileEgressReleaseComponents -Components $Components)
     $gateComponents = [System.Collections.Generic.List[string]]::new()
-    if ($resolved -contains 'Desktop') { $gateComponents.Add('Windows') }
+    if (($resolved -contains 'Desktop') -or ($resolved -contains 'Windows')) { $gateComponents.Add('Windows') }
     if ($resolved -contains 'Android') { $gateComponents.Add('Android') }
     return @($gateComponents)
 }
@@ -488,7 +511,7 @@ function Get-MobileEgressReleaseArtifactDefinitions {
     )
 
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
-    if ($resolvedComponents -contains 'Desktop') {
+    if (($resolvedComponents -contains 'Desktop') -or ($resolvedComponents -contains 'Windows')) {
         [pscustomobject]@{
             Name = "mobile-egress-windows-$Version.zip"
             Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip"
@@ -497,6 +520,8 @@ function Get-MobileEgressReleaseArtifactDefinitions {
             Name = 'mobile-egress-client.exe'
             Path = Join-Path $RepositoryRoot 'windows-client\build\bin\mobile-egress-client.exe'
         }
+    }
+    if ($resolvedComponents -contains 'Desktop') {
         [pscustomobject]@{
             Name = "mobile-egress-macos-$Version-arm64.pkg"
             Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-macos-$Version-arm64.pkg"
@@ -583,6 +608,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
     )
 
     $releasedNames = @($ReleasedArtifacts | ForEach-Object { $_.Name })
+    $currentWindowsReleased = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key 'windows' -Name $_ }).Count -gt 0
     foreach ($item in @(Get-MobileEgressReleaseDownloadItemDefinitions -Version $Version)) {
         $currentMatch = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $_ } | Select-Object -First 1)
         if ($currentMatch.Count -ne 0) {
@@ -592,6 +618,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
                 Tag = $CurrentTag
                 Name = $currentMatch[0]
                 Url = New-MobileEgressReleaseDownloadUrl -Tag $CurrentTag -Name $currentMatch[0]
+                UnavailableReason = ''
             }
             continue
         }
@@ -618,6 +645,11 @@ function Resolve-MobileEgressReleaseDownloadLinks {
             Tag = if ($null -ne $fallback) { $fallback.Tag } else { '' }
             Name = if ($null -ne $fallback) { $fallback.Name } else { '' }
             Url = if ($null -ne $fallback) { New-MobileEgressReleaseDownloadUrl -Tag $fallback.Tag -Name $fallback.Name } else { '' }
+            UnavailableReason = if ($null -eq $fallback -and $item.Key -eq 'macos' -and $currentWindowsReleased) {
+                'Deferred to a later release pending Apple Developer Program enrollment'
+            } else {
+                ''
+            }
         }
     }
 }
@@ -633,7 +665,8 @@ function Format-MobileEgressReleaseDownloadSection {
     $lines.Add('')
     foreach ($link in $DownloadLinks) {
         if ([string]::IsNullOrWhiteSpace($link.Url)) {
-            $lines.Add("- $($link.Label): Not available yet")
+            $reason = if ([string]::IsNullOrWhiteSpace([string]$link.UnavailableReason)) { 'Not available yet' } else { [string]$link.UnavailableReason }
+            $lines.Add("- $($link.Label): $reason")
         } else {
             $lines.Add("- $($link.Label): [$($link.Name)]($($link.Url))")
         }
@@ -713,6 +746,74 @@ function Get-MobileEgressReleaseArtifacts {
     return @($artifacts)
 }
 
+function Assert-MobileEgressReleaseFreezeRecord {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$Tag,
+        [Parameter(Mandatory)]
+        [string]$SourceCommit,
+        [Parameter(Mandatory)]
+        [string[]]$Components,
+        [Parameter(Mandatory)]
+        [object[]]$Artifacts,
+        [switch]$CreateIfMissing
+    )
+
+    $expectedArtifacts = @($Artifacts | ForEach-Object {
+        [ordered]@{
+            name = [string]$_.Name
+            digest = [string]$_.Digest
+        }
+    })
+    $expected = [ordered]@{
+        schemaVersion = 1
+        tag = $Tag
+        sourceCommit = $SourceCommit
+        components = @($Components)
+        artifacts = $expectedArtifacts
+    }
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        if (-not $CreateIfMissing) {
+            throw "The tagged release freeze record is missing: $Path"
+        }
+        $directory = Split-Path -Parent $Path
+        $null = New-Item -ItemType Directory -Force -Path $directory
+        $json = $expected | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    try {
+        $actual = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+    } catch {
+        throw "The release freeze record is malformed: $Path"
+    }
+    $actualComponents = @($actual.components | ForEach-Object { [string]$_ })
+    $actualArtifacts = @($actual.artifacts)
+    $matches = `
+        $actual.schemaVersion -eq 1 -and `
+        [string]$actual.tag -ceq $Tag -and `
+        [string]$actual.sourceCommit -ceq $SourceCommit -and `
+        ($actualComponents -join ',') -ceq (@($Components) -join ',') -and `
+        $actualArtifacts.Count -eq $expectedArtifacts.Count
+    if ($matches) {
+        for ($index = 0; $index -lt $expectedArtifacts.Count; $index++) {
+            if (
+                [string]$actualArtifacts[$index].name -cne [string]$expectedArtifacts[$index].name -or
+                [string]$actualArtifacts[$index].digest -cne [string]$expectedArtifacts[$index].digest
+            ) {
+                $matches = $false
+                break
+            }
+        }
+    }
+    if (-not $matches) {
+        throw 'The current release evidence does not match the frozen source, component scope, artifact names, and digests.'
+    }
+}
+
 function Assert-MobileEgressReleaseArtifacts {
     param(
         [Parameter(Mandatory)]
@@ -725,9 +826,11 @@ function Assert-MobileEgressReleaseArtifacts {
     )
 
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
-    if ($resolvedComponents -contains 'Desktop') {
+    $includesDesktop = $resolvedComponents -contains 'Desktop'
+    $includesWindows = $includesDesktop -or ($resolvedComponents -contains 'Windows')
+    if ($includesWindows) {
         if ($SourceCommit -notmatch '^[0-9a-f]{40}$') {
-            throw 'SourceCommit is required to validate Desktop release artifacts.'
+            throw 'SourceCommit is required to validate Windows release artifacts.'
         }
         $record = Get-Content -Raw -LiteralPath (Join-Path $RepositoryRoot 'windows-signing\release-signing-certificate.txt')
         $thumbprintMatch = [regex]::Match($record, '(?im)^SHA-1 thumbprint:\s*([0-9A-F]{40})\s*$')
@@ -754,6 +857,11 @@ function Assert-MobileEgressReleaseArtifacts {
             }
         }
 
+        $controllerVersionInfo = (Get-Item -LiteralPath (Join-Path $binRoot 'mobile-egress-windows.exe')).VersionInfo
+        if ($controllerVersionInfo.FileVersionRaw -ne [version]"$Version.0") {
+            throw 'The signed Windows controller metadata does not match the requested release.'
+        }
+
         $manifestPath = Join-Path $binRoot 'release-manifest.json'
         $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
         $clientPath = Join-Path $binRoot 'mobile-egress-client.exe'
@@ -773,6 +881,9 @@ function Assert-MobileEgressReleaseArtifacts {
             -ZipPath (Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip") `
             -ExpectedSources $zipSources
 
+    }
+
+    if ($includesDesktop) {
         Invoke-MobileEgressRequiredPowerShellScript `
             -Path (Join-Path $PSScriptRoot 'release-desktop.ps1') `
             -Arguments @('-ReleaseVersion', $Version, '-SourceCommit', $SourceCommit, '-ValidateArtifacts') `
@@ -823,7 +934,9 @@ function Invoke-MobileEgressRelease {
     Import-MobileEgressReleaseEnvironment
     $tag = "v$Version"
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
+    Assert-MobileEgressApprovedReleaseScope -Version $Version -Components $resolvedComponents
     $includesDesktop = $resolvedComponents -contains 'Desktop'
+    $includesWindows = $includesDesktop -or ($resolvedComponents -contains 'Windows')
     $includesAndroid = $resolvedComponents -contains 'Android'
 
     $status = Invoke-MobileEgressNativeCommand -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'status', '--porcelain') -Description 'Git worktree check'
@@ -892,7 +1005,8 @@ function Invoke-MobileEgressRelease {
     $windowsSigningScript = Join-Path $PSScriptRoot 'setup-windows-signing.ps1'
     $androidReleaseScript = Join-Path $PSScriptRoot 'release-android.ps1'
     $desktopReleaseScript = Join-Path $PSScriptRoot 'release-desktop.ps1'
-    if ($includesDesktop) {
+    $windowsBuildScript = Join-Path $PSScriptRoot 'build-windows.ps1'
+    if ($includesWindows) {
         Invoke-MobileEgressRequiredPowerShellScript -Path $windowsSigningScript -Arguments @('-ValidateOnly') -Description 'Windows publisher validation'
     }
     if ($includesAndroid) {
@@ -914,6 +1028,15 @@ function Invoke-MobileEgressRelease {
                 -Path $desktopReleaseScript `
                 -Arguments @('-ReleaseVersion', $Version, '-SourceCommit', $head, '-BuildArtifacts') `
                 -Description 'Coupled Windows and macOS Desktop release'
+        } elseif ($includesWindows) {
+            $windowsZip = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip"
+            if (Test-Path -LiteralPath $windowsZip) {
+                throw "Unsigned release state is ambiguous because $windowsZip already exists. Do not overwrite it automatically."
+            }
+            Invoke-MobileEgressRequiredPowerShellScript `
+                -Path $windowsBuildScript `
+                -Arguments @('-ReleaseVersion', $Version) `
+                -Description 'Signed Windows release'
         }
 
         if ($includesAndroid) {
@@ -940,6 +1063,14 @@ function Invoke-MobileEgressRelease {
 
     Assert-MobileEgressReleaseArtifacts -RepositoryRoot $RepositoryRoot -Version $Version -Components $resolvedComponents -SourceCommit $head
     $artifacts = Get-MobileEgressReleaseArtifacts -RepositoryRoot $RepositoryRoot -Version $Version -Components $resolvedComponents
+    $freezeRecordPath = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-$Version.freeze.json"
+    Assert-MobileEgressReleaseFreezeRecord `
+        -Path $freezeRecordPath `
+        -Tag $tag `
+        -SourceCommit $head `
+        -Components $resolvedComponents `
+        -Artifacts $artifacts `
+        -CreateIfMissing:(-not $resumeArtifacts)
     foreach ($artifact in $artifacts) {
         Write-Host "$($artifact.Digest)  $($artifact.Name)"
     }

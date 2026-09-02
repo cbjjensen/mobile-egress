@@ -2,7 +2,7 @@
 
 This is the operator runbook for producing the signed artifacts that friends download and proving them on real Windows and macOS controllers, an Android or iOS cellular Agent device, and Windows Server 2019 EC2 nodes. Normal friends do not perform these steps; they follow the root README after an accepted release is published. Android APK packaging and cellular-IP rotation are covered here. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
 
-The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version; Android remains independently selectable.
+The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A normal public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version; Android remains independently selectable. The approved interim v1.1.0 prerelease is a narrow exception containing Windows, the EC2 Client, and Android while macOS awaits Apple Developer Program enrollment.
 
 ## Routine release commands
 
@@ -13,27 +13,36 @@ Commit the intended code on clean `main` and choose the smallest compatible scop
 For a controller, relay, or EC2 Client change, use the coupled Desktop path:
 
 ```powershell
-& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0'
-& .\scripts\release-desktop.ps1 -ReleaseVersion '1.1.0' -Publish
+& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>'
+& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>' -Publish
 ```
 
-Legacy `release-windows.ps1` fails closed with migration guidance. Windows-only and macOS-only release selectors are not supported.
+Legacy `release-windows.ps1` continues to fail closed with migration guidance. The guarded orchestrator supports an explicitly selected `Windows` component for an approved interim release; macOS-only selection remains unsupported.
 
 For an Android-only change, first set Android `versionName` to the release version and increase `versionCode`, then use the Android path. Go, the Windows frontend, and Authenticode packaging are not run:
 
 ```powershell
-& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0'
-& .\scripts\release-android.ps1 -ReleaseVersion '1.1.0' -Publish
+& .\scripts\release-android.ps1 -ReleaseVersion '<version>'
+& .\scripts\release-android.ps1 -ReleaseVersion '<version>' -Publish
 ```
 
 Use the full path when a protocol/shared compatibility change requires Desktop plus Android:
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Desktop,Android
-& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Desktop,Android -Publish
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Desktop,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '<version>' -Components Desktop,Android -Publish
 ```
 
-All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag; Android may be selected separately. The orchestrator runs only the matching gates, validates established signing identities, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
+For the explicitly approved v1.1.0 Windows-and-Android interim prerelease while macOS signing is unavailable:
+
+```powershell
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '1.1.0' -Components Windows,Android -Publish
+```
+
+That release contains no macOS artifact. Published assets are immutable; the signed/notarized Mac controller must use a later version.
+
+All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag; the narrow Windows selector is restricted to the exact v1.1.0 Windows-and-Android exception, and Android may otherwise be selected separately. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
 
 Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them when a component release entry point is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
 
@@ -41,15 +50,15 @@ Parts 1–5 below document prerequisites, invariants, and low-level recovery evi
 
 Use the Windows publisher computer with the repository checked out on the exact commit to release. GitHub CLI authentication to `cbjjensen/mobile-egress` is required for publication. Each selected component also requires its established signing identity and only its own toolchain:
 
-- **Desktop:** Go and Node.js versions accepted by `scripts\preflight.ps1`, WebView2, and the established local Mobile Egress Authenticode publisher identity with an accessible private key. It also requires ignored/untracked `.local\mac-build-server\release-desktop.psd1`, its configured key, preapproved standard OpenSSH host trust, and the authorized Mac prerequisites below. The release entry point exposes no host, key, credential, verifier, or cleanup override; see [Mac build server over SSH](ios-build-server.md).
+- **Windows or Desktop:** Go and Node.js versions accepted by `scripts\preflight.ps1`, WebView2, and the established local Mobile Egress Authenticode publisher identity with an accessible private key. Desktop additionally requires ignored/untracked `.local\mac-build-server\release-desktop.psd1`, its configured key, preapproved standard OpenSSH host trust, and the authorized Mac prerequisites below. The release entry point exposes no host, key, credential, verifier, or cleanup override; see [Mac build server over SSH](ios-build-server.md).
 - **Android:** JDK 17 or later, Android SDK Platform 35, Android Build-Tools 35, and the established Android release keystore/properties described in Part 4.
 
 Open PowerShell at the repository root and keep the same session for Parts 1–5. Run only the preflight matching the intended component scope:
 
 ```powershell
-# Desktop-only
+# Windows-only or Desktop
 & .\scripts\preflight.ps1 -Components Go, Node, WebView2
-if ($LASTEXITCODE -ne 0) { throw 'Desktop release workstation prerequisites are incomplete.' }
+if ($LASTEXITCODE -ne 0) { throw 'Windows release workstation prerequisites are incomplete.' }
 
 # Android-only; set these first when they are not already configured for this user
 $env:JAVA_HOME = '<absolute path to JDK 17 or later>'
@@ -143,7 +152,7 @@ The signed access-group continuity test is documented in [signed macOS Keychain 
 
 Use one semantic version everywhere. This release uses `1.1.0`.
 
-The first coupled Mac Desktop release uses product/package version `1.1.0` and tag `v1.1.0`.
+The first coupled Mac Desktop release will use a version later than `1.1.0`, after Apple Developer Program enrollment and production signing/notary setup are complete.
 
 ```powershell
 $releaseVersion = '1.1.0'
@@ -304,9 +313,9 @@ A Desktop-scoped prerelease has exactly:
 - `mobile-egress-client.exe`; and
 - `mobile-egress-macos-<version>-arm64.pkg`.
 
-When Android is selected, it additionally has `zfnf-mobile-egress-android-<version>.apk`. The Mac verification JSON is local/private evidence and is never uploaded.
+An interim Windows-scoped prerelease has exactly the Windows ZIP and EC2 Client; when Android is also selected, it additionally has `zfnf-mobile-egress-android-<version>.apk`. It never includes a macOS PKG. The Mac verification JSON is local/private evidence and is never uploaded.
 
-Managed release notes always render four Downloads links in order: Windows controller, EC2 Client, macOS controller PKG, Android Agent APK. The first three are one same-tag Desktop group. Android may point to a different eligible release; Windows and macOS fallback tags are never mixed.
+Managed release notes always render four Downloads entries in order: Windows controller, EC2 Client, macOS controller PKG, Android Agent APK. A Windows-scoped release with no eligible Mac artifact marks macOS as deferred pending Apple Developer Program enrollment. A normal Desktop release keeps its first three assets on the same tag; Android may point to a different eligible release.
 
 Existing uploaded assets must form the expected verified set; published tags/assets are immutable and never replaced or clobbered. If a GitHub outcome is unknown, inspect/reconcile the exact draft/assets before retrying. Use GitHub Releases to download the candidate on the acceptance Windows PC, Mac, and phone. Test those downloaded artifacts, not build-directory copies.
 
@@ -481,9 +490,9 @@ Inspect ACL entries without printing state contents. Run the relay command on th
 
 Each applicable directory must have inheritance disabled and grant access only to SYSTEM and local Administrators. The relay directory is expected only on the controller; the Client directory is expected only on an EC2 node.
 
-### macOS v1.1.0 controller acceptance
+### Future macOS controller acceptance
 
-The coupled `v1.1.0` Desktop candidate also requires the separate Mac suite on the available macOS 26.2 Apple-Silicon Mac with one real Windows Server 2019 EC2 Client. This does not replace or reduce the Windows/two-node regression above. Every Mac row in the [acceptance template](templates/physical-acceptance-record.md#macos-v110-controller) starts `NOT RUN` and blocks stable promotion until passed.
+A future coupled Mac Desktop candidate requires the separate Mac suite on the available macOS 26.2 Apple-Silicon Mac with one real Windows Server 2019 EC2 Client. This does not replace or reduce the Windows/two-node regression above. Every Mac row in the [acceptance template](templates/physical-acceptance-record.md#future-macos-controller) starts `NOT RUN` and blocks promotion of that later Mac-bearing release until passed.
 
 Use the quarantined PKG downloaded from GitHub, not a local build. Verify its filename/hash, Developer ID Installer signature, notarization/staple, arm64 controller and relay, macOS 13.0 deployment target, hardened runtime, identifiers, and app layout. Install normally with Apple Installer; do not bypass Gatekeeper.
 
@@ -495,7 +504,7 @@ Pair Android, install one real Windows Server 2019 EC2 Client, and prove HTTP, H
 
 ## Part 7: Promote or reject the release
 
-For `v1.1.0`, promotion requires the exact immutable Desktop prerelease, the preserved Windows/Android regression record, the available-Mac controller record, and matching production signing/notary/SSH/GitHub evidence. If every required item passes, attach the completed sanitized records to private release evidence and promote the exact tested prerelease without replacing its assets:
+For the interim `v1.1.0` Windows-and-Android prerelease, promotion requires its exact immutable artifacts and the preserved Windows/Android regression record. A later Mac-bearing release separately requires the available-Mac controller record and matching production signing/notary/SSH/GitHub evidence. If every gate applicable to a release passes, attach the completed sanitized records to private release evidence and promote the exact tested prerelease without replacing its assets:
 
 ```powershell
 gh release edit $releaseTag --repo 'cbjjensen/mobile-egress' --prerelease=false --latest
