@@ -5,7 +5,6 @@ package tailscale
 import (
 	"context"
 	"errors"
-	"os"
 	"os/exec"
 	"reflect"
 	"sync"
@@ -25,7 +24,7 @@ func TestDarwinInstallerLauncherUsesFixedIdentityAndIndependentWaiter(t *testing
 	factory := func(path string, arguments ...string) *exec.Cmd {
 		commandPath = path
 		commandArguments = append([]string(nil), arguments...)
-		command = exec.Command(os.Args[0], "-test.run=TestDarwinInstallerOpenHelper")
+		command = exec.Command("/usr/bin/true")
 		return command
 	}
 
@@ -131,7 +130,7 @@ func TestDarwinInstallerLauncherClassifiesNoDispatchAndPostStartUncertainty(t *t
 		session, err := launchDarwinInstallerWithDependencies(
 			context.Background(), guard, validAppleInstallerTestInspector(), &installerIdentityTestRunner{},
 			func(string, ...string) *exec.Cmd {
-				return exec.Command(os.Args[0], "-test.run=TestDarwinInstallerOpenHelper")
+				return exec.Command("/usr/bin/true")
 			},
 		)
 		if session == nil || err == nil {
@@ -144,8 +143,6 @@ func TestDarwinInstallerLauncherClassifiesNoDispatchAndPostStartUncertainty(t *t
 		}
 	})
 }
-
-func TestDarwinInstallerOpenHelper(t *testing.T) {}
 
 type installerPathTestInspector struct {
 	children map[string][]string
