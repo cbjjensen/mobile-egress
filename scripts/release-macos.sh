@@ -127,7 +127,6 @@ BUILD_VERSION=${RELEASE_VERSION%%-*}
 /usr/sbin/pkgutil --check-signature "$PKG" > "$WORK/pkg-signature.txt"
 /usr/bin/grep -F "$INSTALLER_IDENTITY" "$WORK/pkg-signature.txt" >/dev/null || fail 'PKG signer identity mismatch'
 /usr/bin/grep -F "($TEAM_ID)" "$WORK/pkg-signature.txt" >/dev/null || fail 'PKG signer Team ID mismatch'
-/usr/sbin/spctl -a -t install -vv "$PKG"
 
 /usr/bin/xcrun notarytool submit "$PKG" --key "$NOTARY_API_KEY" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID" --wait --output-format json > "$WORK/notary.json"
 [ "$(/usr/bin/plutil -extract status raw -o - "$WORK/notary.json")" = 'Accepted' ] || fail 'Apple notarization was not accepted'

@@ -258,6 +258,10 @@ try {
     Assert-Condition ($desktopScriptSource -notmatch 'fixture-password') 'The Desktop release script must not embed Keychain passwords in source or remote commands.'
     Assert-Condition ($macScriptSource -match '--notary-api-key') 'The Mac release script must accept a notary API key path.'
     Assert-Condition ($macScriptSource -match 'notarytool submit[^\r\n]+--key[^\r\n]+--key-id[^\r\n]+--issuer') 'The Mac release script must notarize with App Store Connect API-key credentials.'
+    $notarySubmitIndex = $macScriptSource.IndexOf('/usr/bin/xcrun notarytool submit')
+    Assert-Condition ($notarySubmitIndex -ge 0) 'The Mac release script must submit the PKG for notarization.'
+    $beforeNotarySubmit = $macScriptSource.Substring(0, $notarySubmitIndex)
+    Assert-Condition ($beforeNotarySubmit -notmatch '/usr/sbin/spctl -a -t install') 'The Mac release script must not require Gatekeeper install acceptance before notarization.'
 } finally {
     if (Test-Path -LiteralPath $fixtureRoot -PathType Container) {
         $resolvedFixture = [System.IO.Path]::GetFullPath($fixtureRoot)
