@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"strings"
 
 	"mobile-egress/pairing"
@@ -142,7 +143,7 @@ func (manager *Manager) Setup(ctx context.Context) (BridgeStatus, error) {
 	clear(requestDER)
 	clear(requestPEM)
 	if err != nil {
-		return BridgeStatus{}, errors.New("elevated local relay setup failed or was cancelled")
+		return BridgeStatus{}, fmt.Errorf("elevated local relay setup failed: %w", err)
 	}
 	if err := validateOwnerBootstrap(privateKey.Public(), result); err != nil {
 		return BridgeStatus{}, err

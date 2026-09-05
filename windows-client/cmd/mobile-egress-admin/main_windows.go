@@ -192,20 +192,24 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: required input is missing")
 		return 2
 	}
+	failureStage := "unknown"
 	defer func() {
 		if status != 0 {
-			_ = writeResult(*resultFile, map[string]string{"error": "setup_failed"})
+			_ = writeResult(*resultFile, map[string]string{"error": failureStage})
 		}
 	}()
+	failureStage = "funnel-endpoint"
 	origin, err := pairing.RelayOrigin(*publicURL)
 	if err != nil || origin.Hostname() != *publicName || !strings.HasSuffix(strings.ToLower(*publicName), ".ts.net") {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: invalid Funnel endpoint")
 		return 2
 	}
+	failureStage = "relay-signature"
 	if err := verifyMobileEgressSignature(*relayExecutable); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: relay signature verification failed")
 		return 1
 	}
+	failureStage = "relay-install"
 	if err := os.MkdirAll(filepath.Dir(installedRelayPath), 0o755); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: create install directory failed")
 		return 1
@@ -214,10 +218,12 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: install relay executable failed")
 		return 1
 	}
+	failureStage = "relay-state"
 	if err := recoverIncompleteRelayState(relayStatePath); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: recover incomplete relay state failed")
 		return 1
 	}
+	failureStage = "relay-bootstrap"
 	command := exec.Command(installedRelayPath,
 		"bootstrap-owner", "--state-dir", relayStatePath, "--public-name", *publicName,
 		"--public-url", origin.String(), "--owner-csr-file", *ownerCSRFile,
@@ -234,14 +240,17 @@ func runSetupRelay(arguments []string, stderr io.Writer) (status int) {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: relay returned invalid public bootstrap output")
 		return 1
 	}
+	failureStage = "relay-state-permissions"
 	if err := protectRelayState(); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: protect relay state failed")
 		return 1
 	}
+	failureStage = "relay-service"
 	if err := installRelayService(); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: install relay service failed")
 		return 1
 	}
+	failureStage = "result-write"
 	if err := writeResult(*resultFile, result); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-admin setup-relay: write public result failed")
 		return 1

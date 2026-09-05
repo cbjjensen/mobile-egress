@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,16 +56,7 @@ func (helper UACHelper) Setup(ctx context.Context, request SetupRequest) (OwnerB
 	defer deadline.Stop()
 	for {
 		if raw, err := os.ReadFile(resultPath); err == nil {
-			if len(raw) == 0 || len(raw) > 512<<10 {
-				return OwnerBootstrapResult{}, errors.New("elevated relay setup returned invalid public output")
-			}
-			decoder := json.NewDecoder(bytes.NewReader(raw))
-			decoder.DisallowUnknownFields()
-			var result OwnerBootstrapResult
-			if decoder.Decode(&result) != nil || result.Role != "owner" || result.Serial == "" || strings.Contains(string(raw), "PRIVATE KEY") {
-				return OwnerBootstrapResult{}, errors.New("elevated relay setup returned invalid public output")
-			}
-			return result, nil
+			return decodeSetupResult(raw)
 		}
 		select {
 		case <-ctx.Done():
@@ -74,6 +66,34 @@ func (helper UACHelper) Setup(ctx context.Context, request SetupRequest) (OwnerB
 		case <-ticker.C:
 		}
 	}
+}
+
+func decodeSetupResult(raw []byte) (OwnerBootstrapResult, error) {
+	invalid := errors.New("elevated relay setup returned invalid public output")
+	if len(raw) == 0 || len(raw) > 512<<10 || strings.Contains(string(raw), "PRIVATE KEY") {
+		return OwnerBootstrapResult{}, invalid
+	}
+	var result struct {
+		OwnerBootstrapResult
+		Error string `json:"error"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil {
+		return OwnerBootstrapResult{}, invalid
+	}
+	if result.Error != "" {
+		switch result.Error {
+		case "funnel-endpoint", "relay-signature", "relay-install", "relay-state", "relay-bootstrap", "relay-state-permissions", "relay-service", "result-write":
+			return OwnerBootstrapResult{}, fmt.Errorf("elevated relay setup failed at %s", result.Error)
+		default:
+			return OwnerBootstrapResult{}, invalid
+		}
+	}
+	if result.Role != "owner" || result.Serial == "" {
+		return OwnerBootstrapResult{}, invalid
+	}
+	return result.OwnerBootstrapResult, nil
 }
 
 func (helper UACHelper) Rotate(ctx context.Context, request RotateRequest) (EndpointRotationResult, error) {

@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +31,35 @@ func TestRunSetupRelayAllowsExistingRelayStateForOwnerRecovery(t *testing.T) {
 
 	if setupRelayRejectsExistingState {
 		t.Fatal("setup-relay still rejects existing relay state before relay bootstrap can recover Owner setup")
+	}
+}
+
+func TestRunSetupRelayReportsFailureStage(t *testing.T) {
+	t.Parallel()
+
+	resultPath := filepath.Join(t.TempDir(), "result.json")
+	status := runSetupRelay([]string{
+		"--relay-exe", "relay.exe",
+		"--public-name", "relay.example.com",
+		"--public-url", "https://relay.example.com:8443",
+		"--owner-csr-file", "owner.csr",
+		"--result-file", resultPath,
+	}, &bytes.Buffer{})
+	if status != 2 {
+		t.Fatalf("runSetupRelay() status = %d, want 2", status)
+	}
+	raw, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Error != "funnel-endpoint" {
+		t.Fatalf("runSetupRelay() error stage = %q, want %q", result.Error, "funnel-endpoint")
 	}
 }
 

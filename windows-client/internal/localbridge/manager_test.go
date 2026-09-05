@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -47,6 +48,23 @@ func TestSetupGeneratesOwnerLocallyAndUsesDirectCSRBootstrap(t *testing.T) {
 		t.Fatalf("Owner sink calls = save %d/update %d, want initial SaveOwnerIdentity only", sink.saveCalls, sink.updateCalls)
 	}
 	assertIdentityCertificateMatchesPrivateKey(t, sink.identity)
+}
+
+func TestSetupPreservesElevatedHelperFailure(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("elevated relay service installation or startup failed")
+	manager := NewManager(
+		&fakeTailscaleBridge{status: tailscale.Status{
+			Online: true, FunnelReady: true, FQDN: "bridge.tail123.ts.net", PublicURL: "https://bridge.tail123.ts.net:8443",
+		}},
+		&fakeElevatedHelper{t: t, setupErr: failure},
+		&fakeOwnerSink{},
+	)
+	_, err := manager.Setup(context.Background())
+	if !errors.Is(err, failure) {
+		t.Fatalf("Setup() error = %v, want wrapped elevated helper failure", err)
+	}
 }
 
 func TestRotateEndpointRetainsOwnerKeysAndUsesNewFunnelName(t *testing.T) {
@@ -129,6 +147,7 @@ type fakeElevatedHelper struct {
 	request  SetupRequest
 	rotation RotateRequest
 	repairs  int
+	setupErr error
 }
 
 func (helper *fakeElevatedHelper) Repair(context.Context) error {
@@ -138,6 +157,9 @@ func (helper *fakeElevatedHelper) Repair(context.Context) error {
 
 func (helper *fakeElevatedHelper) Setup(_ context.Context, request SetupRequest) (OwnerBootstrapResult, error) {
 	helper.request = request
+	if helper.setupErr != nil {
+		return OwnerBootstrapResult{}, helper.setupErr
+	}
 	block, _ := pem.Decode([]byte(request.OwnerCSRPEM))
 	if block == nil {
 		helper.t.Fatal("invalid Owner CSR")
