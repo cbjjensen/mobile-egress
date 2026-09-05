@@ -393,25 +393,44 @@ type preOpenResult struct {
 }
 
 func watchClientDuringOpen(ctx context.Context, cancel context.CancelFunc, connection net.Conn, reader *bufio.Reader, openingComplete <-chan struct{}, result chan<- preOpenResult) {
-	defer connection.SetReadDeadline(time.Time{})
+	var state preOpenResult
+	// Publish only after the interrupt goroutine has exited and its deadline
+	// has been cleared, so forwarding cannot race with either operation.
+	defer func() { result <- state }()
+	stopInterrupt := make(chan struct{})
+	interruptDone := make(chan struct{})
+	go func() {
+		defer close(interruptDone)
+		select {
+		case <-openingComplete:
+		case <-ctx.Done():
+		case <-stopInterrupt:
+			return
+		}
+		_ = connection.SetReadDeadline(time.Now())
+	}()
+	defer func() {
+		close(stopInterrupt)
+		<-interruptDone
+		_ = connection.SetReadDeadline(time.Time{})
+	}()
 	var buffered bytes.Buffer
 	readBuffer := make([]byte, 8<<10)
 	for {
 		select {
 		case <-openingComplete:
-			result <- preOpenResult{buffer: append([]byte(nil), buffered.Bytes()...)}
+			state = preOpenResult{buffer: append([]byte(nil), buffered.Bytes()...)}
 			return
 		case <-ctx.Done():
-			result <- preOpenResult{err: ctx.Err()}
+			state = preOpenResult{err: ctx.Err()}
 			return
 		default:
 		}
-		_ = connection.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 		read, err := reader.Read(readBuffer)
 		if read > 0 {
 			if buffered.Len()+read > maxPreOpenBytes {
 				cancel()
-				result <- preOpenResult{err: errors.New("pre-open client data limit exceeded")}
+				state = preOpenResult{err: errors.New("pre-open client data limit exceeded")}
 				return
 			}
 			_, _ = buffered.Write(readBuffer[:read])
@@ -422,7 +441,7 @@ func watchClientDuringOpen(ctx context.Context, cancel context.CancelFunc, conne
 				continue
 			}
 			cancel()
-			result <- preOpenResult{err: err}
+			state = preOpenResult{err: err}
 			return
 		}
 	}
