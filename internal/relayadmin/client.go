@@ -32,7 +32,20 @@ func (client *Client) Status(ctx context.Context) (StatusResult, error) {
 }
 
 func (client *Client) Setup(ctx context.Context, request SetupRequest) (OwnerBootstrapResult, error) {
-	response, err := client.do(ctx, OperationSetup, request)
+	if client == nil {
+		return OwnerBootstrapResult{}, ErrTransport
+	}
+	requestID, err := GenerateRequestID(client.Random)
+	if err != nil {
+		return OwnerBootstrapResult{}, ErrTransport
+	}
+	return client.SetupWithRequestID(ctx, requestID, request)
+}
+
+// SetupWithRequestID resumes a durably saved setup after a controller restart.
+// The server's existing replay store binds this ID to the same peer and body.
+func (client *Client) SetupWithRequestID(ctx context.Context, requestID string, request SetupRequest) (OwnerBootstrapResult, error) {
+	response, err := client.doWithRequestID(ctx, requestID, OperationSetup, request)
 	if err != nil {
 		return OwnerBootstrapResult{}, err
 	}
@@ -68,6 +81,17 @@ func (client *Client) Repair(ctx context.Context) (RepairResult, error) {
 }
 
 func (client *Client) do(parent context.Context, operation Operation, params any) (Response, error) {
+	if client == nil {
+		return Response{}, ErrTransport
+	}
+	requestID, err := GenerateRequestID(client.Random)
+	if err != nil {
+		return Response{}, ErrTransport
+	}
+	return client.doWithRequestID(parent, requestID, operation, params)
+}
+
+func (client *Client) doWithRequestID(parent context.Context, requestID string, operation Operation, params any) (Response, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -76,10 +100,6 @@ func (client *Client) do(parent context.Context, operation Operation, params any
 	}
 	operationContext, cancel := context.WithDeadline(parent, boundedDeadline(parent, cappedLimit(client.OperationLimit)))
 	defer cancel()
-	requestID, err := GenerateRequestID(client.Random)
-	if err != nil {
-		return Response{}, ErrTransport
-	}
 	requestBody, err := MarshalRequest(requestID, operation, params)
 	if err != nil {
 		return Response{}, ErrInvalidRequest

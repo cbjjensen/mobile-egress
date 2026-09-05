@@ -24,6 +24,7 @@ export type BridgeStatus = {
   platform: DesktopPlatform
   relayServiceState: RelayServiceState
   tailscaleInstalled: boolean
+  tailscaleError?: string
   tailscaleOnline: boolean
   funnelReady: boolean
   relayReady: boolean

@@ -141,6 +141,7 @@ type BridgeView struct {
 	Platform           string `json:"platform"`
 	RelayServiceState  string `json:"relayServiceState"`
 	TailscaleInstalled bool   `json:"tailscaleInstalled"`
+	TailscaleError     string `json:"tailscaleError,omitempty"`
 	TailscaleOnline    bool   `json:"tailscaleOnline"`
 	FunnelReady        bool   `json:"funnelReady"`
 	RelayReady         bool   `json:"relayReady"`
@@ -257,30 +258,37 @@ func (app *DesktopApp) GetStatus() client.Status { return app.core.Status() }
 
 func (app *DesktopApp) GetBridgeStatus() BridgeView {
 	platform := app.desktopPlatform()
+	view := BridgeView{Platform: string(platform), OwnerReady: app.core.Status().OwnerReady}
+	// Tailscale trust/status checks have their own budget. Relay or Keychain
+	// latency must not consume the deadline before Tailscale even starts.
+	if app.tailscale != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		status, err := app.tailscale.Inspect(ctx)
+		cancel()
+		view.TailscaleInstalled = status.Installed
+		view.TailscaleOnline = status.Online
+		view.FunnelReady = status.FunnelReady
+		view.FQDN = status.FQDN
+		view.PublicURL = status.PublicURL
+		if err != nil && !errors.Is(err, tailscale.ErrNotInstalled) && !errors.Is(err, tailscale.ErrNotOnline) {
+			view.TailscaleError = err.Error()
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	relayState := app.currentRelayServiceState()
 	if platform == platformMacOS && app.relayService != nil {
 		relayState = relayStateFromObservation(app.relayService.Observe(ctx))
 	}
-	view := BridgeView{Platform: string(platform), RelayServiceState: string(relayState), OwnerReady: app.core.Status().OwnerReady}
+	view.RelayServiceState = string(relayState)
 	owner, _, ownerErr := app.ownerRepository.LoadOwnerIdentity(ctx)
 	if ownerErr == nil {
 		if health, healthErr := relayclient.Health(ctx, owner); healthErr == nil {
 			view.RelayReady = health.Readiness
 		}
 	}
-	if app.tailscale != nil {
-		view.TailscaleInstalled = app.tailscale.Installed()
-		if status, err := app.tailscale.Status(ctx); err == nil {
-			view.TailscaleOnline = status.Online
-			view.FunnelReady = status.FunnelReady
-			view.FQDN = status.FQDN
-			view.PublicURL = status.PublicURL
-			if ownerErr == nil && owner.RelayURL != status.PublicURL {
-				view.NeedsRotation = true
-			}
-		}
+	if ownerErr == nil && view.TailscaleOnline && owner.RelayURL != view.PublicURL {
+		view.NeedsRotation = true
 	}
 	view.Ready = bridgeReady(platform, relayState, view)
 	return view
@@ -400,14 +408,20 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 }
 
 func (app *DesktopApp) InstallTailscale() error {
-	if app.tailscale != nil && app.tailscale.Installed() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	checkContext, checkCancel := context.WithTimeout(ctx, 15*time.Second)
+	checkErr := app.tailscale.CheckInstalled(checkContext)
+	checkCancel()
+	if checkErr == nil {
 		return errors.New("Tailscale is already installed. Use Connect Tailscale instead.")
+	}
+	if !errors.Is(checkErr, tailscale.ErrNotInstalled) {
+		return fmt.Errorf("Could not verify the existing Tailscale installation: %w", checkErr)
 	}
 	if app.tailscaleInstall == nil {
 		return errors.New("Unable to install Tailscale in this build.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
 	if _, err := app.tailscaleInstall.Install(ctx); err != nil {
 		return fmt.Errorf("Unable to install the verified Tailscale package: %w", err)
 	}
@@ -415,13 +429,13 @@ func (app *DesktopApp) InstallTailscale() error {
 }
 
 func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
-	if app.tailscale == nil || !app.tailscale.Installed() {
+	if app.tailscale == nil {
 		return BridgeView{}, errors.New("Install Tailscale before connecting it.")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if _, err := app.tailscale.Connect(ctx); err != nil {
-		return BridgeView{}, errors.New("Unable to connect Tailscale. Complete browser sign-in and verify internet access, then try again.")
+		return BridgeView{}, fmt.Errorf("Unable to connect Tailscale: %w", err)
 	}
 	return app.GetBridgeStatus(), nil
 }
@@ -449,13 +463,26 @@ func (app *DesktopApp) setupLocalBridge(ctx context.Context) (BridgeView, error)
 		case relayservice.SetupProceed:
 			// The exact bundled helper is reachable and uninitialized.
 		default:
-			return BridgeView{}, errors.New("The signed relay service is not ready for setup. Approve it in Login Items, then try again.")
+			observation := gate.Observation
+			if observation.State == relayservice.StateEnabled && observation.StrictV1 && observation.ExactHelper && observation.Initialized && !app.core.Status().OwnerReady {
+				resumable, ok := app.bridge.(interface {
+					HasPendingSetup(context.Context) (bool, error)
+				})
+				if ok {
+					pending, err := resumable.HasPendingSetup(ctx)
+					if err != nil {
+						return BridgeView{}, err
+					}
+					if pending {
+						break
+					}
+				}
+				return BridgeView{}, errors.New("The relay is already initialized, but this account has no saved Owner key or pending setup. Return to the original macOS account or restore its Keychain backup. Reinstalling Tailscale or approving Login Items will not recover that key.")
+			}
+			return BridgeView{}, fmt.Errorf("The signed relay service is not ready for setup (state: %s, check: %s). Check Login Items approval and the installed relay version, then retry.", observation.State, observation.Failure)
 		}
 	}
 	if _, err := app.bridge.Setup(ctx); err != nil {
-		if app.desktopPlatform() == platformMacOS {
-			return BridgeView{}, errors.New("Unable to finish the local relay and Funnel setup. Verify Service Management and Tailscale, then try again.")
-		}
 		return BridgeView{}, fmt.Errorf("Unable to finish the local relay and Funnel setup: %w", err)
 	}
 	return app.GetBridgeStatus(), nil
@@ -485,10 +512,7 @@ func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
 		return BridgeView{}, errors.New("Set up the local bridge before repairing it.")
 	}
 	if err := app.bridge.Repair(ctx); err != nil {
-		if app.desktopPlatform() == platformMacOS {
-			return BridgeView{}, errors.New("Unable to repair the signed local relay service through Service Management. Keep the controller open while macOS restarts it, then try again.")
-		}
-		return BridgeView{}, errors.New("Unable to repair the signed local relay service. Approve UAC and try again.")
+		return BridgeView{}, fmt.Errorf("Unable to repair the local relay: %w", err)
 	}
 	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
 		observation := app.relayService.WaitForExactHelper(ctx)

@@ -22,11 +22,13 @@ const (
 )
 
 var (
+	ErrNotOnline    = errors.New("Tailscale is not connected; open Tailscale to sign in or connect")
 	amd64MSIPattern = regexp.MustCompile(`tailscale-setup-([0-9]+\.[0-9]+\.[0-9]+)-amd64\.msi`)
 	sha256Pattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 type Status struct {
+	Installed    bool   `json:"installed"`
 	BackendState string `json:"backendState"`
 	Online       bool   `json:"online"`
 	FunnelReady  bool   `json:"funnelReady"`
@@ -80,14 +82,27 @@ func ParseStatus(raw []byte) (Status, error) {
 		} `json:"Self"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if err := decoder.Decode(&wire); err != nil || wire.Self == nil {
+	if err := decoder.Decode(&wire); err != nil {
+		return Status{}, errors.New("Tailscale returned invalid status")
+	}
+	if wire.BackendState == "NeedsLogin" || wire.BackendState == "Stopped" || wire.BackendState == "Starting" || wire.BackendState == "NoState" {
+		return Status{Installed: true, BackendState: wire.BackendState}, ErrNotOnline
+	}
+	if wire.BackendState == "NeedsMachineAuth" {
+		return Status{Installed: true, BackendState: wire.BackendState}, errors.New("Tailscale device approval is required from your tailnet administrator")
+	}
+	if wire.Self == nil {
 		return Status{}, errors.New("Tailscale returned invalid status")
 	}
 	fqdn := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(wire.Self.DNSName), "."))
-	if wire.BackendState != "Running" || !wire.Self.Online || !validFunnelFQDN(fqdn) {
+	if wire.BackendState != "Running" || !wire.Self.Online {
+		return Status{}, ErrNotOnline
+	}
+	if !validFunnelFQDN(fqdn) {
 		return Status{}, errors.New("Tailscale is not online with a Funnel-capable ts.net name")
 	}
 	return Status{
+		Installed:    true,
 		BackendState: wire.BackendState, Online: true, FQDN: fqdn,
 		PublicURL: "https://" + fqdn + ":" + strconv.Itoa(PublicPort),
 	}, nil

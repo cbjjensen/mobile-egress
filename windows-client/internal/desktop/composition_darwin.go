@@ -34,7 +34,7 @@ func newDarwinDesktopApp() (*DesktopApp, error) {
 		Tailscale:        tailscaleController,
 		TailscaleInstall: tailscale.NewDarwinInstaller(),
 		NewBridge: func(controller *tailscale.Controller, owners localbridge.OwnerSink) *localbridge.Manager {
-			return localbridge.NewManager(controller, relayHelper, owners)
+			return localbridge.NewResumableManager(controller, relayHelper, owners, store)
 		},
 		BrowserOpenURL: runtime.BrowserOpenURL,
 		RelayService:   relayService,

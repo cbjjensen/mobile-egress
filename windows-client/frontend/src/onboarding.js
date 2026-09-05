@@ -3,6 +3,7 @@ export function canInstallNode(bridge, instance, managed, busy) {
 }
 
 export function nextSetupStep(bridge, awsReady, nodes) {
+  if (bridge.tailscaleError && !bridge.tailscaleOnline) return { tab: 'bridge', label: 'Check Tailscale', detail: bridge.tailscaleError }
   if (!bridge.tailscaleOnline && !bridge.ready) return { tab: 'bridge', label: 'Connect Tailscale', detail: 'Install Tailscale and finish its browser sign-in.' }
   if (!bridge.ready) return { tab: 'bridge', label: 'Finish bridge setup', detail: 'Complete or repair the local connection before installing an EC2 Client.' }
   if (!awsReady) return { tab: 'settings', label: 'Connect AWS', detail: 'Connect the account that contains your EC2 instance.' }

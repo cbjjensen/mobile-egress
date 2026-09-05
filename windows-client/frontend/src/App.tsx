@@ -7,11 +7,12 @@ import { productDisplayName } from './branding.js'
 import { bridgePlatformCopy, relayServicePresentation } from './bridge-platform.js'
 import { managedNodeIdentity } from './managed-node.js'
 import { canInstallNode, nextSetupStep } from './onboarding.js'
+import { createRefreshController } from './refresh.js'
 import { copyProxyLine, copySOCKS5URL, nodeProxyActions } from './proxy-actions.js'
 import { formatSSMCheckActivity, requiresSSMRoleConfirmation, runConfirmedSSMRestart, shouldSkipSSMProfileSetup, ssmStatusState, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMCredentialRefresh, waitForSSMOnline } from './ssm-progress.js'
 
 const initialPlatform = navigator.userAgent.includes('Mac') ? 'macos' : 'windows'
-const emptyBridge: BridgeStatus = { platform: initialPlatform, relayServiceState: initialPlatform === 'macos' ? 'not-registered' : 'not-required', tailscaleInstalled: false, tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
+const emptyBridge: BridgeStatus = { platform: initialPlatform, relayServiceState: initialPlatform === 'macos' ? 'not-registered' : 'not-required', tailscaleInstalled: false, tailscaleError: 'Checking Tailscale...', tailscaleOnline: false, funnelReady: false, relayReady: false, ownerReady: false, ready: false, needsRotation: false }
 const requiredPermissionsPolicy = JSON.stringify(awsPermissionsPolicy, null, 2)
 type SSMProgress = {
   phase: 'preparing' | 'waiting' | 'restart-required' | 'rebooting' | 'timeout'
@@ -70,17 +71,28 @@ export default function App() {
     return instances.find(instance => instance.id === instanceId)?.name ?? ''
   }
 
+  const refreshController = useRef(createRefreshController(
+    async () => {
+      // Wait for every read, even if one fails early, before allowing a new poll.
+      const [bridge, nodes, pending] = await Promise.allSettled([api().GetBridgeStatus(), api().ManagedNodes(), api().PendingEC2NodeReservations()])
+      if (bridge.status === 'rejected') throw bridge.reason
+      if (nodes.status === 'rejected') throw nodes.reason
+      if (pending.status === 'rejected') throw pending.reason
+      return [bridge.value, nodes.value, pending.value] as const
+    },
+    ([bridgeStatus, managed, pending]) => { setBridge(bridgeStatus); setNodes(managed ?? []); setPendingNodes(pending ?? []) },
+  ))
   const refresh = useCallback(async () => {
     try {
-      const [bridgeStatus, managed, pending] = await Promise.all([api().GetBridgeStatus(), api().ManagedNodes(), api().PendingEC2NodeReservations()])
-      setBridge(bridgeStatus); setNodes(managed ?? []); setPendingNodes(pending ?? [])
-    } catch { setError('Unable to refresh local bridge status.') }
+      await refreshController.current.run()
+    } catch { setError(previous => previous || 'Unable to refresh local bridge status.') }
   }, [])
 
   useEffect(() => {
+    refreshController.current.resume()
     void refresh()
     const timer = window.setInterval(() => void refresh(), 4000)
-    return () => window.clearInterval(timer)
+    return () => { window.clearInterval(timer); refreshController.current.pause() }
   }, [refresh])
 
   useEffect(() => {
@@ -108,9 +120,10 @@ export default function App() {
 
   async function action(name: string, work: () => Promise<void>) {
     setBusy(name); setError('')
-    try { await work(); await refresh(); return true }
+    refreshController.current.pause()
+    try { await work(); return true }
     catch (reason) { setError(errorMessage(reason)); return false }
-    finally { setBusy('') }
+    finally { refreshController.current.resume(); await refresh(); setBusy('') }
   }
 
   async function installTailscale() {
@@ -389,13 +402,13 @@ export default function App() {
   const nextStep = nextSetupStep(bridge, awsReady, nodes)
 
   return <main className="shell">
-    <header><BrandIdentity eyebrow="Personal cellular bridge" name={productDisplayName} /><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
+    <header><BrandIdentity eyebrow="Personal cellular bridge" name={productDisplayName} /><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleError ? 'Tailscale check needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
     <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Agent</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>EC2 Nodes</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS Login</button></nav>
     {error && <div className="error" role="alert">{error}</div>}
     <article className="card setup-next" aria-label="Setup progress"><p className="step-label">Next step</p><h2>{nextStep.label}</h2><p>{nextStep.detail}</p><button onClick={() => setTab(nextStep.tab)} disabled={!!busy}>Continue</button></article>
 
     {tab === 'bridge' && <section className="stack">
-      <article className="card hero-card"><p className="step-label">Step 1</p><h2>Install and connect Tailscale</h2><p>{bridge.tailscaleInstalled ? bridge.platform === 'macos' ? 'Tailscale is installed. Connect it here; macOS may require browser sign-in and system-extension or VPN approval.' : 'Tailscale is installed. Connect it here; browser approval may be required.' : platformCopy.tailscaleDescription}</p>{bridge.platform === 'macos' && bridge.tailscaleInstalled && !bridge.tailscaleOnline && <p className="note">{platformCopy.systemExtensionGuidance}</p>}<div className="row actions"><span className={`pill ${bridge.tailscaleOnline ? 'on' : ''}`}>{bridge.tailscaleOnline ? 'Online' : bridge.tailscaleInstalled ? 'Installed · not connected' : 'Not installed'}</span>{bridge.tailscaleOnline ? null : bridge.tailscaleInstalled ? <button onClick={() => void connectTailscale()} disabled={!!busy}>{busy === 'tailscale-connect' ? 'Opening Tailscale…' : 'Connect Tailscale'}</button> : <button onClick={() => void installTailscale()} disabled={!!busy}>{busy === 'tailscale-install' ? platformCopy.tailscaleInstallBusyLabel : 'Install Tailscale'}</button>}</div></article>
+      <article className="card hero-card"><p className="step-label">Step 1</p><h2>Install and connect Tailscale</h2>{bridge.tailscaleError && <p className="note" role="status">{bridge.tailscaleError}</p>}<p>{bridge.tailscaleInstalled ? bridge.platform === 'macos' ? 'Tailscale is installed. Connect it here; macOS may require browser sign-in and system-extension or VPN approval.' : 'Tailscale is installed. Connect it here; browser approval may be required.' : platformCopy.tailscaleDescription}</p>{bridge.platform === 'macos' && bridge.tailscaleInstalled && !bridge.tailscaleOnline && <p className="note">{platformCopy.systemExtensionGuidance}</p>}<div className="row actions"><span className={`pill ${bridge.tailscaleOnline ? 'on' : ''}`}>{bridge.tailscaleOnline ? 'Online' : bridge.tailscaleError ? 'Status unavailable' : bridge.tailscaleInstalled ? 'Installed · not connected' : 'Not installed'}</span>{bridge.tailscaleOnline ? null : bridge.tailscaleInstalled ? <button onClick={() => void connectTailscale()} disabled={!!busy}>{busy === 'tailscale-connect' ? 'Opening Tailscale…' : 'Connect Tailscale'}</button> : <button onClick={() => void installTailscale()} disabled={!!busy || !!bridge.tailscaleError}>{busy === 'tailscale-install' ? platformCopy.tailscaleInstallBusyLabel : 'Install Tailscale'}</button>}</div></article>
       <article className="card"><p className="step-label">Step 2</p><h2>{platformCopy.relayHeading}</h2>{bridge.platform === 'macos' ? <p>{platformCopy.relayDescription}</p> : <p>Connect this computer to your phone and EC2 Client. Approve the Tailscale browser prompt and Windows permission prompt when asked. Wait for Bridge ready before continuing.</p>}<p className="note">{bridge.ready ? 'Your bridge is ready. Continue to AWS Login.' : 'Setup is incomplete. A working Tailscale connection alone is not enough.'}</p><details><summary>Connection details</summary>{bridge.publicUrl && <div className="serialline"><span>Public Funnel origin</span><code>{bridge.publicUrl}</code></div>}<div className="row actions"><span className={`pill ${bridge.funnelReady ? 'on' : ''}`}>{bridge.funnelReady ? 'Funnel active' : 'Funnel not ready'}</span><span className={`pill ${bridge.relayReady ? 'on' : ''}`}>{bridge.relayReady ? 'Relay healthy' : 'Relay not ready'}</span>{relayService.label && <span className={`pill ${relayService.ready ? 'on' : ''}`}>{relayService.label}</span>}</div></details>{relayService.guidance && <p className="note">{relayService.guidance}</p>}{bridge.needsRotation ? <><p className="note">Tailscale now reports a different Funnel name. Connect AWS first if nodes are managed, then rotate and scan the migration QR in the Agent.</p><button className="primary" onClick={() => void rotateBridge()} disabled={!!busy}>{busy === 'rotate' ? 'Updating relay and nodes…' : 'Rotate endpoint safely'}</button></> : bridge.ownerReady && (!bridge.relayReady || !bridge.funnelReady || !relayService.ready) ? <button className="primary" onClick={() => void repairBridge()} disabled={!!busy}>{busy === 'relay-repair' ? platformCopy.relayRepairBusyLabel : 'Repair Funnel and local relay'}</button> : <button className="primary" onClick={() => void setupBridge()} disabled={!!busy || bridge.ownerReady || !bridge.tailscaleOnline}>{bridge.ready ? 'Local bridge ready' : busy === 'bridge' ? platformCopy.relaySetupBusyLabel : 'Set up local bridge'}</button>}</article>
       <article className="note"><strong>Availability</strong><p>{platformCopy.availability}</p></article>
     </section>}

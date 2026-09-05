@@ -41,7 +41,7 @@ func TestControllerResolverInstalledUsesFiveSecondFreshGuard(t *testing.T) {
 	}
 }
 
-func TestControllerResolverStatusUsesOneFreshGuardPerCommandForBothVariants(t *testing.T) {
+func TestControllerResolverStatusUsesOneFreshGuardPerOperationForBothVariants(t *testing.T) {
 	t.Parallel()
 
 	for _, variant := range []DarwinVariant{DarwinStandalone, DarwinAppStore} {
@@ -55,11 +55,11 @@ func TestControllerResolverStatusUsesOneFreshGuardPerCommandForBothVariants(t *t
 			if err != nil || !status.Online || !status.FunnelReady {
 				t.Fatalf("Status() = %#v/%v, want online Funnel-ready status", status, err)
 			}
-			if got := tracker.resolutions.Load(); got != 2 {
-				t.Fatalf("resolver calls = %d, want 2", got)
+			if got := tracker.resolutions.Load(); got != 1 {
+				t.Fatalf("resolver calls = %d, want 1", got)
 			}
-			if got := tracker.closes.Load(); got != 2 {
-				t.Fatalf("guard closes = %d, want 2", got)
+			if got := tracker.closes.Load(); got != 1 {
+				t.Fatalf("guard closes = %d, want 1", got)
 			}
 			if got := tracker.live.Load(); got != 0 {
 				t.Fatalf("live guards = %d, want 0", got)
@@ -68,7 +68,7 @@ func TestControllerResolverStatusUsesOneFreshGuardPerCommandForBothVariants(t *t
 	}
 }
 
-func TestControllerResolverEnableUsesFreshGuardForEveryActualCommand(t *testing.T) {
+func TestControllerResolverEnableSharesFreshGuardAcrossOperationCommands(t *testing.T) {
 	t.Parallel()
 
 	tracker := &resolverGuardTracker{}
@@ -91,10 +91,10 @@ func TestControllerResolverEnableUsesFreshGuardForEveryActualCommand(t *testing.
 	if got := runner.argumentSnapshot(); !reflect.DeepEqual(got, wantArguments) {
 		t.Fatalf("CLI arguments = %#v, want %#v", got, wantArguments)
 	}
-	if got := tracker.resolutions.Load(); got != int32(len(wantArguments)) {
+	if got := tracker.resolutions.Load(); got != 1 {
 		t.Fatalf("resolver calls = %d, want %d", got, len(wantArguments))
 	}
-	if got := tracker.closes.Load(); got != int32(len(wantArguments)) || tracker.live.Load() != 0 {
+	if got := tracker.closes.Load(); got != 1 || tracker.live.Load() != 0 {
 		t.Fatalf("guard closes/live = %d/%d, want %d/0", got, tracker.live.Load(), len(wantArguments))
 	}
 	for _, executable := range runner.executableSnapshot() {
@@ -248,7 +248,7 @@ func TestControllerResolverPreservesCleanupFailureFromFinalStatus(t *testing.T) 
 				guard := &resolverTestGuard{
 					bundlePath: fixedTailscaleBundlePath, executablePath: fixedTailscaleExecutablePath,
 				}
-				if resolutions.Add(1) == 5 {
+				if resolutions.Add(1) == 1 {
 					guard.closeErr = errors.New("private close detail")
 				}
 				return resolverTestInstallation(DarwinStandalone, guard), nil

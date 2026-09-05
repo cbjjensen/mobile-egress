@@ -3,6 +3,7 @@ package localbridge
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"mobile-egress/internal/relayadmin"
 )
@@ -35,13 +36,26 @@ func NewRelayAdminHelper(client RelayAdminClient) (ElevatedHelper, error) {
 }
 
 func (helper *relayAdminHelper) Setup(ctx context.Context, request SetupRequest) (OwnerBootstrapResult, error) {
-	result, err := helper.client.Setup(ctx, relayadmin.SetupRequest{
+	params := relayadmin.SetupRequest{
 		PublicName:  request.PublicName,
 		PublicURL:   request.PublicURL,
 		OwnerCSRPEM: request.OwnerCSRPEM,
-	})
+	}
+	var result relayadmin.OwnerBootstrapResult
+	var err error
+	if request.RequestID != "" {
+		client, ok := helper.client.(interface {
+			SetupWithRequestID(context.Context, string, relayadmin.SetupRequest) (relayadmin.OwnerBootstrapResult, error)
+		})
+		if !ok {
+			return OwnerBootstrapResult{}, errors.New("local relay does not support resumable setup")
+		}
+		result, err = client.SetupWithRequestID(ctx, request.RequestID, params)
+	} else {
+		result, err = helper.client.Setup(ctx, params)
+	}
 	if err != nil {
-		return OwnerBootstrapResult{}, errors.New(relayAdminSetupUnavailable)
+		return OwnerBootstrapResult{}, safeRelayAdminError(relayAdminSetupUnavailable, err)
 	}
 	return OwnerBootstrapResult{
 		CertificatePEM:   result.CertificatePEM,
@@ -49,6 +63,14 @@ func (helper *relayAdminHelper) Setup(ctx context.Context, request SetupRequest)
 		Serial:           result.Serial,
 		Role:             result.Role,
 	}, nil
+}
+
+func safeRelayAdminError(stage string, err error) error {
+	var public *relayadmin.PublicError
+	if errors.As(err, &public) || errors.Is(err, relayadmin.ErrTransport) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%s: %w", stage, err)
+	}
+	return errors.New(stage)
 }
 
 func (helper *relayAdminHelper) Rotate(ctx context.Context, request RotateRequest) (EndpointRotationResult, error) {
@@ -67,7 +89,10 @@ func (helper *relayAdminHelper) Rotate(ctx context.Context, request RotateReques
 
 func (helper *relayAdminHelper) Repair(ctx context.Context) error {
 	result, err := helper.client.Repair(ctx)
-	if err != nil || !result.Ready || !result.Restarting {
+	if err != nil {
+		return safeRelayAdminError(relayAdminRepairUnavailable, err)
+	}
+	if !result.Ready || !result.Restarting {
 		return errors.New(relayAdminRepairUnavailable)
 	}
 	return nil

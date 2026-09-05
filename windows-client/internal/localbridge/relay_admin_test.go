@@ -147,7 +147,13 @@ func TestRelayAdminHelperMapsFailuresToOperationSpecificLocalErrors(t *testing.T
 			}
 
 			_, setupErr := helper.Setup(context.Background(), SetupRequest{})
-			if setupErr == nil || setupErr.Error() != relayAdminSetupUnavailable {
+			setupWant, repairWant := relayAdminSetupUnavailable, relayAdminRepairUnavailable
+			var public *relayadmin.PublicError
+			if errors.As(failure, &public) || errors.Is(failure, relayadmin.ErrTransport) {
+				setupWant += ": " + failure.Error()
+				repairWant += ": " + failure.Error()
+			}
+			if setupErr == nil || setupErr.Error() != setupWant {
 				t.Fatalf("Setup error = %v, want %q", setupErr, relayAdminSetupUnavailable)
 			}
 			_, rotateErr := helper.Rotate(context.Background(), RotateRequest{})
@@ -155,7 +161,7 @@ func TestRelayAdminHelperMapsFailuresToOperationSpecificLocalErrors(t *testing.T
 				t.Fatalf("Rotate error = %v, want %q", rotateErr, relayAdminRotateUnavailable)
 			}
 			repairErr := helper.Repair(context.Background())
-			if repairErr == nil || repairErr.Error() != relayAdminRepairUnavailable {
+			if repairErr == nil || repairErr.Error() != repairWant {
 				t.Fatalf("Repair error = %v, want %q", repairErr, relayAdminRepairUnavailable)
 			}
 		})

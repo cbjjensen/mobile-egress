@@ -73,13 +73,13 @@ func TestConnectUsesLoginAndPlatformSetupWithoutConfiguringFunnel(t *testing.T) 
 	}
 	runner := &fakeRunner{
 		outputs: [][]byte{
-			nil,
+			[]byte(`{"BackendState":"NeedsLogin"}`),
 			nil,
 			nil,
 			[]byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`),
 			[]byte(`{}`),
 		},
-		errors: []error{errors.New("offline"), nil, nil, nil, nil},
+		errors: []error{nil, nil, nil, nil, nil},
 	}
 	controller := NewController(executable, runner)
 	status, err := controller.Connect(context.Background())
@@ -168,8 +168,8 @@ func TestEnableStartsInteractiveBrowserLoginWhenStatusIsOffline(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{
-		outputs: [][]byte{nil, nil, nil, nil, []byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`), []byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`)},
-		errors:  []error{errors.New("offline"), nil, nil, nil, nil, nil},
+		outputs: [][]byte{[]byte(`{"BackendState":"NeedsLogin"}`), nil, nil, nil, []byte(`{"BackendState":"Running","Self":{"DNSName":"bridge.tail123.ts.net.","Online":true}}`), []byte(`{"TCP":{"8443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"bridge.tail123.ts.net:8443":true}}`)},
+		errors:  []error{nil, nil, nil, nil, nil, nil},
 	}
 	controller := NewController(`C:\Program Files\Tailscale\tailscale.exe`, runner)
 	if _, err := controller.Enable(context.Background()); err != nil {
@@ -257,6 +257,9 @@ func (runner *approvalStreamingRunner) Run(_ context.Context, _ string, argument
 }
 
 func (runner *approvalStreamingRunner) RunStreaming(ctx context.Context, _ string, observe func([]byte), arguments ...string) ([]byte, error) {
+	if reflect.DeepEqual(arguments, testPlatformUpArguments) {
+		return nil, nil
+	}
 	if !reflect.DeepEqual(arguments, []string{"funnel", "--bg", "--yes", "--tcp=8443", "tcp://127.0.0.1:8443"}) {
 		return nil, errors.New("unexpected streaming command")
 	}

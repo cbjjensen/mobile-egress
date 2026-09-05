@@ -38,7 +38,13 @@ Use an administrator account that will remain the controlling, logged-in account
 
 Open `/Applications/ZFNF Mobile Egress.app`. When Tailscale is absent, **Install Tailscale** verifies the official standalone PKG before opening Apple Installer. Approve its system extension and VPN configuration when requested, then finish browser login. A correctly signed existing standalone or Mac App Store Tailscale app is accepted; guided installation always installs the standalone variant.
 
+An unavailable Tailscale check is shown separately from a disconnected or missing installation. It does not offer reinstallation as a remedy. Each status/connect/setup operation verifies the app once, retains change checks before commands, and uses a Tailscale deadline independent of relay checks. Refreshes run one at a time and cannot overwrite the results or errors of an action. Official login and Funnel approval URLs open while their commands are waiting, after the complete URL has arrived.
+
 Choose **Set up local bridge**. The first call registers the bundled relay through Service Management. If the UI reports **Login Items approval required**, approve ZFNF Mobile Egress under **System Settings → General → Login Items**, return to the controller, and let an ordinary status poll prove the exact enabled helper. Approval-pending setup returns without creating an Owner key. Invoke **Set up local bridge** again after the UI reports **Relay service enabled**. Keep this administrator logged in; logout makes the per-user Tailscale path unavailable and proxy traffic fails closed.
+
+If setup is interrupted, retry **Set up local bridge** from the same macOS account. Before contacting the relay, the controller saves the pending Owner key, exact certificate request, and request ID in Keychain. Retries, including after quitting and reopening the app, reuse the relay's existing durable response rather than create another Owner. A Keychain write failure leaves that pending setup available for retry. Errors identify the failing stage without displaying command output or secrets.
+
+Older versions did not save pending setup. If an older attempt initialized the relay but lost the only Owner key, a retry cannot reconstruct it. Return to the original macOS account or restore its Keychain backup; reinstalling Tailscale and approving Login Items cannot repair a missing key. The controller preserves existing relay state and paired devices.
 
 ## Controller UI
 

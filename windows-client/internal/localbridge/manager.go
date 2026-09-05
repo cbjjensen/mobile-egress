@@ -15,13 +15,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"mobile-egress/pairing"
 	"mobile-egress/windows-client/internal/relayclient"
+	"mobile-egress/windows-client/internal/securestore"
 	"mobile-egress/windows-client/internal/tailscale"
 )
 
 type SetupRequest struct {
+	RequestID   string `json:"-"`
 	PublicName  string `json:"publicName"`
 	PublicURL   string `json:"publicUrl"`
 	OwnerCSRPEM string `json:"ownerCsrPem"`
@@ -66,11 +69,14 @@ func (manager *Manager) Repair(ctx context.Context) error {
 		return errors.New("local bridge repair dependency is required")
 	}
 	status, err := manager.tailscale.Enable(ctx)
-	if err != nil || !status.Online || !status.FunnelReady {
+	if err != nil {
+		return fmt.Errorf("Tailscale Funnel repair failed: %w", err)
+	}
+	if !status.Online || !status.FunnelReady {
 		return errors.New("Tailscale raw TCP Funnel repair failed")
 	}
 	if err := manager.helper.Repair(ctx); err != nil {
-		return errors.New("elevated local relay repair failed or was cancelled")
+		return fmt.Errorf("local relay repair failed: %w", err)
 	}
 	return nil
 }
@@ -106,9 +112,11 @@ type OwnerSink interface {
 }
 
 type Manager struct {
-	tailscale TailscaleBridge
-	helper    ElevatedHelper
-	owners    OwnerSink
+	setupMu      sync.Mutex
+	pendingStore securestore.Store
+	tailscale    TailscaleBridge
+	helper       ElevatedHelper
+	owners       OwnerSink
 }
 
 func NewManager(tailscaleBridge TailscaleBridge, helper ElevatedHelper, owners OwnerSink) *Manager {
@@ -119,29 +127,57 @@ func (manager *Manager) Setup(ctx context.Context) (BridgeStatus, error) {
 	if manager == nil || manager.tailscale == nil || manager.helper == nil || manager.owners == nil {
 		return BridgeStatus{}, errors.New("local bridge setup dependencies are required")
 	}
+	manager.setupMu.Lock()
+	defer manager.setupMu.Unlock()
 	tailscaleStatus, err := manager.tailscale.Enable(ctx)
 	if err != nil {
-		return BridgeStatus{}, errors.New("Tailscale login or Funnel setup failed")
+		return BridgeStatus{}, fmt.Errorf("Tailscale login or Funnel setup failed: %w", err)
 	}
 	if !tailscaleStatus.Online || !tailscaleStatus.FunnelReady || tailscaleStatus.FQDN == "" || tailscaleStatus.PublicURL == "" {
 		return BridgeStatus{}, errors.New("Tailscale did not return an online Funnel endpoint")
 	}
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	pending, err := manager.loadPendingSetup(ctx)
 	if err != nil {
-		return BridgeStatus{}, errors.New("generate local Owner key")
+		return BridgeStatus{}, err
 	}
-	requestDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "Mobile Egress Local Owner"},
-	}, privateKey)
-	if err != nil {
-		return BridgeStatus{}, errors.New("create local Owner certificate request")
+	var privateKey *ecdsa.PrivateKey
+	if pending != nil {
+		privateKey, err = pending.privateKey()
+		if err != nil {
+			return BridgeStatus{}, err
+		}
+		if pending.Request.PublicURL != tailscaleStatus.PublicURL {
+			return BridgeStatus{}, errors.New("Tailscale's address changed during setup. Reconnect the original Tailscale device before resuming setup")
+		}
+	} else {
+		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return BridgeStatus{}, errors.New("generate local Owner key")
+		}
+		requestDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+			Subject: pkix.Name{CommonName: "Mobile Egress Local Owner"},
+		}, privateKey)
+		if err != nil {
+			return BridgeStatus{}, errors.New("create local Owner certificate request")
+		}
+		requestPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: requestDER})
+		keyDER, keyErr := x509.MarshalPKCS8PrivateKey(privateKey)
+		if keyErr != nil {
+			return BridgeStatus{}, errors.New("encode pending Owner key")
+		}
+		pending = &pendingSetup{PrivateKeyDER: keyDER, Request: SetupRequest{
+			PublicName: tailscaleStatus.FQDN, PublicURL: tailscaleStatus.PublicURL, OwnerCSRPEM: string(requestPEM),
+		}}
+		clear(requestDER)
+		clear(requestPEM)
+		if err := manager.savePendingSetup(ctx, pending); err != nil {
+			clear(keyDER)
+			return BridgeStatus{}, err
+		}
 	}
-	requestPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: requestDER})
-	result, err := manager.helper.Setup(ctx, SetupRequest{
-		PublicName: tailscaleStatus.FQDN, PublicURL: tailscaleStatus.PublicURL, OwnerCSRPEM: string(requestPEM),
-	})
-	clear(requestDER)
-	clear(requestPEM)
+	defer clear(pending.PrivateKeyDER)
+	pending.Request.RequestID = pending.RequestID
+	result, err := manager.helper.Setup(ctx, pending.Request)
 	if err != nil {
 		return BridgeStatus{}, fmt.Errorf("elevated local relay setup failed: %w", err)
 	}
@@ -159,7 +195,12 @@ func (manager *Manager) Setup(ctx context.Context) (BridgeStatus, error) {
 		CertificatePEM: result.CertificatePEM, CACertificatePEM: result.CACertificatePEM,
 	}
 	if err := manager.owners.SaveOwnerIdentity(ctx, identity); err != nil {
-		return BridgeStatus{}, errors.New("save encrypted local Owner identity")
+		return BridgeStatus{}, fmt.Errorf("Save local Owner identity failed; unlock secure storage and retry Set up local bridge: %w", err)
+	}
+	if manager.pendingStore != nil {
+		// The completed Owner is authoritative. A leftover pending record is safe
+		// if cleanup fails; it must never undo a successful Owner save.
+		_ = manager.pendingStore.Delete(ctx, pendingSetupKey)
 	}
 	return BridgeStatus{
 		Ready: true, PublicURL: tailscaleStatus.PublicURL, FQDN: tailscaleStatus.FQDN, OwnerSerial: identity.Serial,
