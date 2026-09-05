@@ -35,7 +35,7 @@ func TestDarwinStateMetadataConvertsStatWithoutSignExtension(t *testing.T) {
 func TestDarwinStateOpenFlagsPreventBlockingAndSpecialDeviceEffects(t *testing.T) {
 	t.Parallel()
 
-	const alwaysRequired = unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NONBLOCK | unix.O_NOCTTY | unix.O_NOFOLLOW_ANY
+	const alwaysRequired = unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NONBLOCK | unix.O_NOCTTY | unix.O_NOFOLLOW
 	for _, test := range []struct {
 		name      string
 		object    pathObjectType

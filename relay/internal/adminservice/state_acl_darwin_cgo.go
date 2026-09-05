@@ -145,10 +145,15 @@ static int zfnf_validate_acl_object(acl_t acl, int policy, int *error_number) {
 	return outcome;
 }
 
-// The caller opened fd with O_NOFOLLOW_ANY and verified its complete metadata.
+// The caller rejected a final symlink with O_NOFOLLOW and verified complete metadata.
 static int zfnf_validate_acl_fd(int fd, int policy, int *error_number) {
 	errno = 0;
-	return zfnf_validate_acl_object(acl_get_fd_np(fd, ACL_TYPE_EXTENDED), policy, error_number);
+	acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+	if (acl == NULL && errno == ENOENT) {
+		*error_number = 0;
+		return 0;
+	}
+	return zfnf_validate_acl_object(acl, policy, error_number);
 }
 
 // acl_get_link_np inspects the named object itself rather than following a final symlink.

@@ -12,9 +12,7 @@ static int zfnf_activate_relay_admin_socket(int *out_fd) {
 	int *fds = NULL;
 	size_t count = 0;
 	int result = launch_activate_socket("RelayAdmin", &fds, &count);
-	if (result != 0) {
-		return result;
-	}
+	if (result != 0) return result;
 	if (fds == NULL || count != 1) {
 		for (size_t index = 0; index < count; index++) {
 			close(fds[index]);

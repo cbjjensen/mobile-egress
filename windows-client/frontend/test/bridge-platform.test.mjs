@@ -36,7 +36,7 @@ test('macOS bridge copy explains PKG, system-extension, Service Management, and 
     systemExtensionGuidance: 'If macOS prompts, approve Tailscale’s system extension and VPN configuration in System Settings, then connect again.',
     relayHeading: 'Create this Mac’s relay',
     relayDescription: 'This registers the signed relay with macOS Service Management, binds it to 127.0.0.1:8443, and publishes raw TLS through Funnel. No router or firewall port is opened.',
-    relaySetupBusyLabel: 'Waiting for Service Management approval…',
+    relaySetupBusyLabel: 'Starting macOS background service…',
     relayRepairBusyLabel: 'Repairing background service…',
     availability: 'Your Mac must stay powered on with its controller user logged in, and your Agent device must stay connected. Funnel is intended here for light, interruption-tolerant personal traffic.',
     footer: 'Closing the window keeps the controller available in the menu bar. The relay runs as a macOS background service; EC2 Clients remain Windows services.',

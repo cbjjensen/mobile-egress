@@ -61,7 +61,7 @@ func (darwinStateFilesystem) Open(ctx context.Context, path string, expected pat
 }
 
 func darwinOpenFlags(expected pathMetadata) (int, error) {
-	flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NONBLOCK | unix.O_NOCTTY | unix.O_NOFOLLOW_ANY
+	flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NONBLOCK | unix.O_NOCTTY | unix.O_NOFOLLOW
 	switch expected.Type {
 	case pathTypeDirectory:
 		return flags | unix.O_DIRECTORY, nil
