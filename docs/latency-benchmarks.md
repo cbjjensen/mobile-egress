@@ -73,8 +73,8 @@ interval in the optimized implementation. Go calibrates iteration counts, so
 sample counts differ between revisions.
 
 Baseline production source is commit `68da2e8`. Implementation measurements use
-the `perf/transport-latency` working tree containing asynchronous stream-open DNS
-resolution, in-memory relay counters with periodic SQLite persistence, and
+the production source recorded in `788addb` on `perf/transport-latency`, containing
+asynchronous stream-open DNS resolution, in-memory relay counters with periodic SQLite persistence, and
 immediate proxy reader cancellation. The relay benchmark file was identical
 in both worktrees (SHA-256
 `DE756C5984ACE24FE07E74E2E9CBE17FA724C1C2C90EC911B401944B40232344`).
@@ -160,4 +160,3 @@ $env:Path = 'C:/Users/Chad/AppData/Local/Temp/codex-go-race-gcc-16.2.0/mingw64/b
 The GCC location is a temporary workstation toolchain path; substitute an
 installed compatible C compiler when reproducing elsewhere. Race instrumentation
 was used for correctness checks, not for the reported benchmark measurements.
-
