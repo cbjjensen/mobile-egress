@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	maxPreOpenBytes     = 64 << 10
-	forwardIdleTimeout  = 15 * time.Second
-	maxIdleRelayStreams = 2
+	maxPreOpenBytes            = 64 << 10
+	forwardIdleTimeout         = 60 * time.Second
+	maxIdleRelayStreams        = 16
+	maxIdleRelayStreamsPerHost = 4
 )
 
 type StreamOpener interface {
@@ -86,7 +87,7 @@ func (server *Server) Start(port uint16) error {
 		DisableCompression:  true,
 		IdleConnTimeout:     forwardIdleTimeout,
 		MaxIdleConns:        maxIdleRelayStreams,
-		MaxIdleConnsPerHost: maxIdleRelayStreams,
+		MaxIdleConnsPerHost: maxIdleRelayStreamsPerHost,
 	}
 	httpServer := &http.Server{
 		Handler:        http.HandlerFunc(server.handle),
