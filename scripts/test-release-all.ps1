@@ -15,6 +15,13 @@ $releaseScript = Join-Path $PSScriptRoot 'release-all.ps1'
 Assert-Condition (Test-Path -LiteralPath $releaseScript -PathType Leaf) 'The deterministic release script must exist.'
 . $releaseScript
 
+$nativeEngine = (Get-Process -Id $PID).Path
+$nativeProgress = Invoke-MobileEgressNativeResult -FilePath $nativeEngine -Arguments @('-NoProfile', '-Command', "[Console]::Error.WriteLine('normal-progress'); exit 0")
+Assert-Condition ($nativeProgress.ExitCode -eq 0 -and $nativeProgress.Output -match 'normal-progress') 'Normal native stderr must be captured without turning successful commands into failures.'
+$nativeFailure = Invoke-MobileEgressNativeResult -FilePath $nativeEngine -Arguments @('-NoProfile', '-Command', "[Console]::Error.WriteLine('failed-progress'); exit 7")
+Assert-Condition ($nativeFailure.ExitCode -eq 7) 'Native failure exit codes must remain available to release gates.'
+Assert-Condition ($ErrorActionPreference -eq 'Stop') 'Native execution must restore the caller error preference.'
+
 $allComponents = @(Resolve-MobileEgressReleaseComponents -Components @())
 Assert-Condition (($allComponents -join ',') -eq 'Desktop,Android') 'An unspecified component set must release both desktop platforms plus Android.'
 $canonicalComponents = @(Resolve-MobileEgressReleaseComponents -Components @('Android', 'Desktop', 'Android'))

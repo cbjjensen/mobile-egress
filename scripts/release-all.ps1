@@ -22,10 +22,13 @@ function Invoke-MobileEgressNativeResult {
         $originalNativePreference = $PSNativeCommandUseErrorActionPreference
         $PSNativeCommandUseErrorActionPreference = $false
     }
+    $originalErrorActionPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = 'Continue'
         $output = @(& $FilePath @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
     } finally {
+        $ErrorActionPreference = $originalErrorActionPreference
         if ($hadNativePreference) {
             $PSNativeCommandUseErrorActionPreference = $originalNativePreference
         }
