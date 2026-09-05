@@ -16,6 +16,8 @@ For ordinary HTTP, the Client reuses healthy destination connections instead of 
 
 Each retained data lane allows 32 frames per stream and is capped at 8,192 frames and 64 MiB. The Client-to-Agent and Agent-to-Client directions have separate budgets, and queued or in-flight data stays charged until completion or discard. If a per-stream, aggregate-frame, or aggregate-byte budget fills, only the contributing stream closes; required-control saturation or writer failure closes the affected session. These boundaries are unit/component tested and have passed ordinary build checks, but they are not load-, soak-, memory-, authenticated-harness-, or physical-device-validated. Capacity acceptance remains pending and must not be executed as part of this change.
 
+Relay aggregate stream, byte, and finite error counters are maintained in memory and saved to SQLite once per second when changed. Health responses include current in-memory totals. Failed writes retain the unsaved totals for retry; a clean shutdown joins traffic workers and attempts a final flush with a five-second deadline, returning any failure. An abrupt crash can lose statistics since the last successful write (longer than one second if storage is failing). Identity and revocation writes remain durable.
+
 ## Controller actions
 
 - **Set up local bridge** uses the existing Windows UAC/SCM flow or the macOS Service Management flow. Windows reports relay service state `not-required`. On macOS, a first call can return `approval-required` after opening Login Items; no Owner key is created until an ordinary status poll proves the exact helper is `enabled` and the operator invokes Setup again.

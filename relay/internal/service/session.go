@@ -204,9 +204,13 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 	} else {
 		service.connectedClients++
 	}
+	service.workers.Add(1)
+	service.janitorOnce.Do(func() {
+		service.workers.Add(1)
+		go func() { defer service.workers.Done(); service.runStreamJanitor() }()
+	})
 	service.mu.Unlock()
-
-	service.janitorOnce.Do(func() { go service.runStreamJanitor() })
+	defer service.workers.Done()
 	activeSession.readLoop()
 	activeSession.close("session_closed")
 }
@@ -235,7 +239,8 @@ func newSession(service *Service, serial string, role enrollment.Role, connectio
 		activeSession.noteInbound(time.Now())
 		return connection.WriteControl(websocket.PongMessage, []byte(payload), time.Now().Add(webSocketWriteTimeout))
 	})
-	go activeSession.writeLoop()
+	service.workers.Add(1)
+	go func() { defer service.workers.Done(); activeSession.writeLoop() }()
 	return activeSession
 }
 
@@ -251,11 +256,13 @@ func (activeSession *session) readLoop() {
 			activeSession.service.protocolViolation(activeSession)
 			return
 		}
-		role, revoked, err := activeSession.service.store.identityStatus(context.Background(), activeSession.serial)
-		if err != nil || revoked || role != activeSession.role {
-			activeSession.service.closeIdentitySession(activeSession.serial, "revoked")
+		activeSession.service.mu.RLock()
+		registered := activeSession.service.sessionActiveLocked(activeSession)
+		activeSession.service.mu.RUnlock()
+		if !registered {
 			return
 		}
+
 		envelope, err := protocol.ParseEnvelope(raw)
 		if err != nil {
 			activeSession.service.protocolViolation(activeSession)
@@ -283,6 +290,10 @@ func (activeSession *session) noteInbound(now time.Time) {
 		activeSession.lastInbound = now
 	}
 	activeSession.service.mu.Unlock()
+}
+
+func (service *Service) sessionActiveLocked(activeSession *session) bool {
+	return !service.closed && activeSession.registered && !activeSession.livenessExpiring && service.sessions[activeSession.serial] == activeSession
 }
 
 func (service *Service) routeEnvelope(sender *session, envelope protocol.Envelope) error {
@@ -336,8 +347,7 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 	for {
 		now := time.Now()
 		service.mu.Lock()
-		currentRole, revoked, identityErr := service.store.identityStatus(context.Background(), client.serial)
-		if identityErr != nil || revoked || currentRole != enrollment.RoleClient || !client.registered || service.sessions[client.serial] != client {
+		if !service.sessionActiveLocked(client) {
 			service.mu.Unlock()
 			return
 		}
@@ -385,25 +395,18 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 		}
 		service.streams[envelope.StreamID] = tracked
 		service.activeStreams++
-		errorCode := ""
-		if err := service.store.incrementTotalStreams(context.Background()); err != nil {
+		admission := agent.outbound.enqueue(forward)
+		if admission != outboundAdmitted {
 			service.removeStreamLocked(tracked)
-			errorCode = "agent_unavailable"
-		}
-		admission := outboundClosed
-		if errorCode == "" {
-			admission = agent.outbound.enqueue(forward)
-			if admission != outboundAdmitted {
-				service.removeStreamLocked(tracked)
-				errorCode = "agent_unavailable"
-			}
+		} else {
+			service.metrics.addStream()
 		}
 		service.mu.Unlock()
 		if admission == outboundControlSaturated {
 			agent.close("session_closed")
 		}
-		if errorCode != "" {
-			service.rejectOpen(client, envelope.StreamID, errorCode)
+		if admission != outboundAdmitted {
+			service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
 		}
 		return
 	}
@@ -414,6 +417,10 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 		return errors.New("role-incompatible client frame")
 	}
 	service.mu.Lock()
+	if !service.sessionActiveLocked(client) {
+		service.mu.Unlock()
+		return nil
+	}
 	tracked, exists := service.streams[envelope.StreamID]
 	if !exists {
 		if service.absorbLateStreamFrameLocked(client, enrollment.RoleClient, envelope, time.Now()) {
@@ -458,7 +465,7 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 	}
 	if envelope.Type == protocol.TypeData {
 		if admission == outboundDataSaturated {
-			_ = service.store.incrementError(context.Background(), "agent_unavailable")
+			service.metrics.addError("agent_unavailable")
 			service.dispatchNotifications(notifications)
 			return nil
 		}
@@ -466,7 +473,7 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 			return nil
 		}
 		payload, _ := envelope.DecodePayload()
-		_ = service.store.addBytes(context.Background(), int64(len(payload)))
+		service.metrics.addBytes(int64(len(payload)))
 		return nil
 	}
 	_ = agent.send(envelope)
@@ -478,6 +485,10 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 		return errors.New("role-incompatible agent frame")
 	}
 	service.mu.Lock()
+	if !service.sessionActiveLocked(agent) {
+		service.mu.Unlock()
+		return nil
+	}
 	tracked, exists := service.streams[envelope.StreamID]
 	if !exists {
 		if service.absorbLateStreamFrameLocked(agent, enrollment.RoleAgent, envelope, time.Now()) {
@@ -500,7 +511,7 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 			service.removeStreamLocked(tracked)
 			notifications := service.streamCloseNotificationsLocked(tracked, "opening_timeout", agent)
 			service.mu.Unlock()
-			_ = service.store.incrementError(context.Background(), "opening_timeout")
+			service.metrics.addError("opening_timeout")
 			service.dispatchNotifications(notifications)
 			return nil
 		}
@@ -534,7 +545,7 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 	service.mu.Unlock()
 	if envelope.Type == protocol.TypeData {
 		if admission == outboundDataSaturated {
-			_ = service.store.incrementError(context.Background(), "agent_unavailable")
+			service.metrics.addError("agent_unavailable")
 			service.dispatchNotifications(notifications)
 			return nil
 		}
@@ -542,7 +553,7 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 			return nil
 		}
 		payload, _ := envelope.DecodePayload()
-		_ = service.store.addBytes(context.Background(), int64(len(payload)))
+		service.metrics.addBytes(int64(len(payload)))
 		return nil
 	}
 	_ = client.send(envelope)
@@ -572,14 +583,14 @@ func parseClientOpen(payload []byte) (clientOpenRequest, error) {
 }
 
 func (service *Service) rejectOpen(client *session, streamID, code string) {
-	_ = service.store.incrementError(context.Background(), code)
+	service.metrics.addError(code)
 	_ = client.send(protocol.Envelope{
 		Version: protocol.Version1, Type: protocol.TypeRejected, StreamID: streamID, Payload: encodeRelayError(code),
 	})
 }
 
 func (service *Service) protocolViolation(activeSession *session) {
-	_ = service.store.incrementError(context.Background(), "protocol_error")
+	service.metrics.addError("protocol_error")
 	activeSession.close("protocol_error")
 }
 
@@ -607,7 +618,12 @@ func (service *Service) revokeIdentity(ctx context.Context, serial string, now t
 		return err
 	}
 	activeSession := service.sessions[serial]
+	var notifications []streamNotification
+	if activeSession != nil {
+		notifications = service.detachSessionLocked(activeSession, "revoked")
+	}
 	service.mu.Unlock()
+	service.dispatchNotifications(notifications)
 	if activeSession != nil {
 		activeSession.close("revoked")
 	}
@@ -793,7 +809,7 @@ func (service *Service) expireStreams(now time.Time) {
 		activeSession.close("session_closed")
 	}
 	for _, code := range expiredCodes {
-		_ = service.store.incrementError(context.Background(), code)
+		service.metrics.addError(code)
 	}
 	service.dispatchNotifications(notifications)
 }

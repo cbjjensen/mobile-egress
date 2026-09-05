@@ -20,12 +20,18 @@ import (
 )
 
 type Service struct {
-	store       *store
-	caCert      *x509.Certificate
-	caCertPEM   []byte
-	caKey       crypto.Signer
-	serverCert  tls.Certificate
-	clientRoots *x509.CertPool
+	metrics       trafficMetrics
+	metricsCancel context.CancelFunc
+	metricsDone   chan struct{}
+	workers       sync.WaitGroup
+	shutdownOnce  sync.Once
+	shutdownError error
+	store         *store
+	caCert        *x509.Certificate
+	caCertPEM     []byte
+	caKey         crypto.Signer
+	serverCert    tls.Certificate
+	clientRoots   *x509.CertPool
 
 	mu                   sync.RWMutex
 	agentConnected       bool
@@ -135,7 +141,14 @@ func Open(stateDir string) (*Service, error) {
 		return nil, fmt.Errorf("validate SQLite state: %w", err)
 	}
 
-	return &Service{
+	snapshot, err := state.metrics(context.Background())
+	if err != nil {
+		state.Close()
+		return nil, err
+	}
+	metricsContext, metricsCancel := context.WithCancel(context.Background())
+	service := &Service{
+		metrics: trafficMetrics{totals: snapshot}, metricsCancel: metricsCancel, metricsDone: make(chan struct{}),
 		store: state, caCert: caCert, caCertPEM: caCertPEM, caKey: caKey,
 		serverCert: serverCert, clientRoots: roots,
 		sessions: make(map[string]*session), pendingSessions: make(map[string]struct{}), streams: make(map[string]*stream),
@@ -145,26 +158,33 @@ func Open(stateDir string) (*Service, error) {
 		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
 		lookupNetIP: defaultLookupNetIP,
-	}, nil
+	}
+	go service.runMetricsWriter(metricsContext)
+	return service, nil
 }
 
 func (service *Service) Close() error {
-	service.mu.Lock()
-	if service.closed {
+	service.shutdownOnce.Do(func() {
+		service.mu.Lock()
+		service.closed = true
+		close(service.stopJanitor)
+		sessions := make([]*session, 0, len(service.sessions))
+		for _, activeSession := range service.sessions {
+			sessions = append(sessions, activeSession)
+		}
 		service.mu.Unlock()
-		return nil
-	}
-	service.closed = true
-	close(service.stopJanitor)
-	sessions := make([]*session, 0, len(service.sessions))
-	for _, activeSession := range service.sessions {
-		sessions = append(sessions, activeSession)
-	}
-	service.mu.Unlock()
-	for _, activeSession := range sessions {
-		activeSession.close("session_closed")
-	}
-	return service.store.Close()
+		for _, activeSession := range sessions {
+			activeSession.close("session_closed")
+		}
+		service.workers.Wait()
+		service.metricsCancel()
+		<-service.metricsDone
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		flushError := service.metrics.flush(ctx, service.store)
+		service.shutdownError = errors.Join(flushError, service.store.Close())
+	})
+	return service.shutdownError
 }
 
 func (service *Service) TLSConfig() *tls.Config {
@@ -190,7 +210,8 @@ func (service *Service) Handler() http.Handler {
 }
 
 func (service *Service) handleHealth(writer http.ResponseWriter, request *http.Request) {
-	metrics, err := service.store.metrics(request.Context())
+	_, err := service.store.metrics(request.Context())
+	metrics, _ := service.metrics.snapshot()
 	service.mu.RLock()
 	response := healthResponse{
 		Readiness: !service.closed && err == nil, AgentConnected: service.agentConnected,

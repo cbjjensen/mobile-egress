@@ -529,39 +529,6 @@ func (state *store) metrics(ctx context.Context) (metricsSnapshot, error) {
 	return snapshot, rows.Err()
 }
 
-func (state *store) incrementTotalStreams(ctx context.Context) error {
-	_, err := state.db.ExecContext(ctx, `UPDATE metrics SET total_streams = total_streams + 1 WHERE singleton_id = 1`)
-	if err != nil {
-		return fmt.Errorf("increment aggregate stream count: %w", err)
-	}
-	return nil
-}
-
-func (state *store) addBytes(ctx context.Context, count int64) error {
-	if count < 0 {
-		return errors.New("byte count cannot be negative")
-	}
-	_, err := state.db.ExecContext(ctx, `UPDATE metrics SET byte_count = byte_count + ? WHERE singleton_id = 1`, count)
-	if err != nil {
-		return fmt.Errorf("increment aggregate byte count: %w", err)
-	}
-	return nil
-}
-
-func (state *store) incrementError(ctx context.Context, code string) error {
-	if !validErrorCode(code) {
-		return errors.New("invalid redacted error code")
-	}
-	_, err := state.db.ExecContext(ctx, `
-        INSERT INTO error_metrics(code, count) VALUES (?, 1)
-        ON CONFLICT(code) DO UPDATE SET count = count + 1`, code,
-	)
-	if err != nil {
-		return fmt.Errorf("increment redacted error count: %w", err)
-	}
-	return nil
-}
-
 func (state *store) validSchema(ctx context.Context) error {
 	return validSchemaFromQuery(ctx, state.db)
 }
