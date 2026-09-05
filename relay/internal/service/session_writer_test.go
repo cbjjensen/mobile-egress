@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -12,10 +13,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"mobile-egress/relay/internal/enrollment"
@@ -129,45 +132,46 @@ func TestFailedSessionUpgradeReleasesPendingReservation(t *testing.T) {
 }
 
 func TestClientOpenWaitsForPendingAgentWithoutHoldingServiceMutex(t *testing.T) {
-	fixture := newRelayFixture(t)
-	defer fixture.Close()
-	_, devices := enrollDevices(t, fixture, "client", "agent")
-	client := newDormantSession(fixture.service, devices[0].serial, enrollment.RoleClient)
-	registerTestSessions(fixture.service, client)
-	agentWriter := newBlockingUpgradeResponseWriter()
-	defer agentWriter.release()
-	agentRequest := authenticatedSessionRequest(t, devices[1])
-
-	agentDone := make(chan struct{})
-	go func() {
-		fixture.service.handleSession(agentWriter, agentRequest)
-		close(agentDone)
-	}()
-	waitForSignal(t, agentWriter.connection.writeStarted, "pending Agent upgrade")
-
-	openDone := make(chan struct{})
-	go func() {
-		fixture.service.handleClientOpen(client, openEnvelope("pending-agent-open", "1.1.1.1", 443))
-		close(openDone)
-	}()
-	openFinishedEarly := false
-	select {
-	case <-openDone:
-		openFinishedEarly = true
-	case <-time.After(250 * time.Millisecond):
-	}
-	if !fixture.service.mu.TryLock() {
-		t.Fatal("Client open waiting for a pending Agent held the global service mutex")
-	}
-	fixture.service.mu.Unlock()
-	agentWriter.release()
-	waitForSignal(t, agentDone, "pending Agent handler completion")
-	if !openFinishedEarly {
-		waitForSignal(t, openDone, "Client open after pending Agent completion")
-	}
-	if openFinishedEarly {
-		t.Fatal("Client open was rejected before the pending Agent handshake completed")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		service := newWriterTestService()
+		service.maxClientStreams, service.maxAgentStreams = 256, 256
+		service.openingTimeout = 30 * time.Second
+		service.lookupNetIP = func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
+		}
+		service.agentPending = make(chan struct{})
+		client := newDormantSession(service, "client", enrollment.RoleClient)
+		registerTestSessions(service, client)
+		defer closeTestSessions(client)
+		service.handleClientOpen(client, openEnvelope("pending-agent-open", "fast.test", 443))
+		// The resolver must be durably blocked on the pending handshake, not
+		// merely scheduled to start after this assertion.
+		synctest.Wait()
+		if !service.mu.TryLock() {
+			t.Fatal("pending Agent held service mutex")
+		}
+		pending := service.pendingOpens["pending-agent-open"]
+		service.mu.Unlock()
+		if pending == nil {
+			t.Fatal("Client open did not retain pending reservation")
+		}
+		if item, ok := client.outbound.poll(); ok {
+			t.Fatalf("premature rejection: %+v", item.envelope)
+		}
+		agent := newDormantSession(service, "agent", enrollment.RoleAgent)
+		registerTestSessions(service, agent)
+		defer closeTestSessions(agent)
+		service.mu.Lock()
+		close(service.agentPending)
+		service.agentPending = nil
+		service.mu.Unlock()
+		synctest.Wait()
+		item, ok := agent.outbound.poll()
+		if !ok || item.envelope.Type != protocol.TypeOpen || item.envelope.StreamID != "pending-agent-open" {
+			t.Fatalf("pending handshake did not resume open: %+v", item)
+		}
+		service.workers.Wait()
+	})
 }
 
 func TestBlockedAgentWriterDoesNotHoldServiceMutexOrBlockAnotherClientOpen(t *testing.T) {

@@ -303,12 +303,7 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 	for index := 0; index < 256; index++ {
 		streamID := fmt.Sprintf("client-one-%d", index+1)
 		fixture.service.handleClientOpen(clientOne, openEnvelope(streamID, "1.1.1.1", 443))
-		fixture.service.mu.RLock()
-		_, admitted := fixture.service.streams[streamID]
-		fixture.service.mu.RUnlock()
-		if !admitted {
-			t.Fatalf("per-Client stream %d was rejected, want streams 1-256 admitted", index+1)
-		}
+		waitForAdmittedStream(t, fixture.service, streamID)
 	}
 	fixture.service.handleClientOpen(clientOne, openEnvelope("client-one-over-limit", "1.1.1.1", 443))
 	if rejected, ok := clientOne.outbound.poll(); !ok || rejected.envelope.Type != protocol.TypeRejected || decodedErrorCode(t, rejected.envelope) != "client_stream_limit" {

@@ -18,7 +18,6 @@ import (
 	"github.com/gorilla/websocket"
 	"mobile-egress/internal/capacity"
 	"mobile-egress/relay/internal/enrollment"
-	"mobile-egress/relay/internal/policy"
 	"mobile-egress/relay/internal/protocol"
 )
 
@@ -307,117 +306,21 @@ func (service *Service) routeEnvelope(sender *session, envelope protocol.Envelop
 	return service.handleAgentStreamFrame(sender, envelope)
 }
 
-func (service *Service) handleClientOpen(client *session, envelope protocol.Envelope) {
-	payload, err := envelope.DecodePayload()
-	if err != nil {
-		service.rejectOpen(client, envelope.StreamID, "invalid_target")
-		return
-	}
-	target, err := parseClientOpen(payload)
-	if err != nil {
-		service.rejectOpen(client, envelope.StreamID, "invalid_target")
-		return
-	}
-	resolveContext, cancelResolve := context.WithTimeout(context.Background(), service.openingTimeout)
-	defer cancelResolve()
-	addresses, err := service.lookupNetIP(resolveContext, "ip", target.Host)
-	if err != nil || len(addresses) == 0 {
-		service.rejectOpen(client, envelope.StreamID, "dns_failure")
-		return
-	}
-	approved := make([]netip.Addr, 0, len(addresses))
-	for _, address := range addresses {
-		address = address.Unmap()
-		if err := policy.ValidatePublicTCPAddress(address, target.Port); err != nil {
-			service.rejectOpen(client, envelope.StreamID, "policy_denied")
-			return
-		}
-		approved = append(approved, address)
-	}
-	forwardPayload, err := json.Marshal(agentOpenRequest{IP: approved[0].String(), Port: target.Port})
-	if err != nil {
-		service.rejectOpen(client, envelope.StreamID, "invalid_target")
-		return
-	}
-	forward := protocol.Envelope{
-		Version: protocol.Version1, Type: protocol.TypeOpen, StreamID: envelope.StreamID,
-		Payload: base64.RawURLEncoding.EncodeToString(forwardPayload),
-	}
-
-	for {
-		now := time.Now()
-		service.mu.Lock()
-		if !service.sessionActiveLocked(client) {
-			service.mu.Unlock()
-			return
-		}
-		if _, exists := service.streams[envelope.StreamID]; exists || service.closedStreamIDInUseLocked(envelope.StreamID, now) {
-			service.mu.Unlock()
-			service.rejectOpen(client, envelope.StreamID, "stream_in_use")
-			return
-		}
-		if service.agent == nil && service.agentPending != nil {
-			pendingAgent := service.agentPending
-			service.mu.Unlock()
-			select {
-			case <-pendingAgent:
-				continue
-			case <-resolveContext.Done():
-				service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
-				return
-			}
-		}
-		if service.agent == nil {
-			service.mu.Unlock()
-			service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
-			return
-		}
-		clientStreams := 0
-		for _, existing := range service.streams {
-			if existing.client == client {
-				clientStreams++
-			}
-		}
-		if clientStreams >= service.maxClientStreams {
-			service.mu.Unlock()
-			service.rejectOpen(client, envelope.StreamID, "client_stream_limit")
-			return
-		}
-		if len(service.streams) >= service.maxAgentStreams {
-			service.mu.Unlock()
-			service.rejectOpen(client, envelope.StreamID, "agent_stream_limit")
-			return
-		}
-		agent := service.agent
-		tracked := &stream{
-			id: envelope.StreamID, client: client, agent: agent, state: streamOpening,
-			openingDeadline: now.Add(service.openingTimeout), lastActivity: now,
-		}
-		service.streams[envelope.StreamID] = tracked
-		service.activeStreams++
-		admission := agent.outbound.enqueue(forward)
-		if admission != outboundAdmitted {
-			service.removeStreamLocked(tracked)
-		} else {
-			service.metrics.addStream()
-		}
-		service.mu.Unlock()
-		if admission == outboundControlSaturated {
-			agent.close("session_closed")
-		}
-		if admission != outboundAdmitted {
-			service.rejectOpen(client, envelope.StreamID, "agent_unavailable")
-		}
-		return
-	}
-}
-
 func (service *Service) handleClientStreamFrame(client *session, envelope protocol.Envelope) error {
 	if envelope.Type != protocol.TypeData && envelope.Type != protocol.TypeClose {
 		return errors.New("role-incompatible client frame")
 	}
 	service.mu.Lock()
 	if !service.sessionActiveLocked(client) {
+		service.mu.Unlock()
+		return nil
+	}
+	if pending := service.pendingOpens[envelope.StreamID]; pending != nil {
+		if pending.client != client || envelope.Type != protocol.TypeClose || !validEnvelopeErrorCode(envelope) {
+			service.mu.Unlock()
+			return errors.New("invalid frame for pending open")
+		}
+		service.releasePendingOpenLocked(pending, true)
 		service.mu.Unlock()
 		return nil
 	}
@@ -635,6 +538,11 @@ func (service *Service) detachSessionLocked(activeSession *session, code string)
 		return nil
 	}
 	activeSession.registered = false
+	for _, pending := range service.pendingOpens {
+		if pending.client == activeSession {
+			service.releasePendingOpenLocked(pending, true)
+		}
+	}
 	delete(service.sessions, activeSession.serial)
 	if activeSession.role == enrollment.RoleAgent && service.agent == activeSession {
 		service.agent = nil

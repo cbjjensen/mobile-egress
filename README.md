@@ -45,7 +45,7 @@ These steps apply only after the signed/notarized Mac PKG completes the pending 
 ## Capacity and safety boundaries
 
 - At most ten managed EC2 Clients per controller.
-- At most 256 active streams per Client identity and 256 active streams through the one active Agent. One Client may consume every Agent slot; up to ten authenticated Client identities compete first-come for the same aggregate limit.
+- At most 256 streams per Client identity and 256 streams globally, counting pending DNS opens and forwarded streams together. One Client may consume every Agent slot; up to ten authenticated Client identities compete first-come for the same aggregate limit.
 - Senders prefer 16 KiB data frames while accepting valid frames up to 32 KiB. Every retained data lane allows 32 frames per stream and is capped at 8,192 frames and 64 MiB. Client-to-Agent and Agent-to-Client data use separate 64 MiB directional budgets. Data saturation closes only the contributing stream; required-control saturation or writer failure closes the affected session.
 - Mobile Egress mTLS authenticates Owner, Client, and Agent identities. Tailscale supplies ingress, not application identity.
 - EC2 Client private keys and configuration private keys are generated on-node and never returned through SSM.

@@ -41,6 +41,8 @@ type Service struct {
 	agent                *session
 	sessions             map[string]*session
 	pendingSessions      map[string]struct{}
+	pendingOpens         map[string]*pendingOpen
+	resolverWorkers      int
 	agentPending         chan struct{}
 	streams              map[string]*stream
 	closedStreams        map[string]closedStreamTombstone
