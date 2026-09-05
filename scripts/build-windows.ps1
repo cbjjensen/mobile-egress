@@ -233,7 +233,12 @@ try {
     $publicCertificatePath = Join-Path $repositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
     $publicRecordPath = Join-Path $repositoryRoot 'windows-signing\release-signing-certificate.txt'
     $null = New-Item -ItemType Directory -Force -Path $packageRoot
-    Copy-Item -Force -LiteralPath ($executables + $manifestPath + $publicCertificatePath + $publicRecordPath) -Destination $packageRoot
+    $payloadRoot = Join-Path $packageRoot 'payload'
+    $null = New-Item -ItemType Directory -Path $payloadRoot
+    Copy-Item -LiteralPath (Join-Path $binRoot 'MobileEgressSetup.exe') -Destination $packageRoot
+    $payloadExecutables = @($executables | Where-Object { (Split-Path -Leaf $_) -ne 'MobileEgressSetup.exe' })
+    Copy-Item -LiteralPath ($payloadExecutables + $manifestPath + $publicCertificatePath + $publicRecordPath) -Destination $payloadRoot
+    Copy-Item -LiteralPath (Join-Path $windowsRoot 'setup-start-here.txt') -Destination (Join-Path $packageRoot 'START-HERE.txt')
     Compress-Archive -Force -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath
 
     if ($Installer) {

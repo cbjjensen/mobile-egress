@@ -36,6 +36,7 @@ var (
 )
 
 type ParentOptions struct {
+	PrepareRuntime      func(context.Context) error
 	Executable          string
 	InstalledController string
 	Identity            Identity
@@ -119,6 +120,11 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if !result.Success {
 		return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
 	}
+	if options.PrepareRuntime != nil {
+		if err := options.PrepareRuntime(ctx); err != nil {
+			return err
+		}
+	}
 	if err := platform.Launch(options.InstalledController); err != nil {
 		return errors.New("launch installed controller")
 	}
@@ -176,8 +182,22 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
 	}
 	releaseDir := filepath.Dir(options.SetupPath)
+	// New packages expose only Setup; retain support for existing flat archives.
+	payloadDir := releaseDir
+	if info, err := os.Lstat(filepath.Join(releaseDir, "payload")); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("release payload directory is invalid")
+		}
+		payloadDir = filepath.Join(releaseDir, "payload")
+	}
+	releasePath := func(name string) string {
+		if name == SetupExecutableName {
+			return options.SetupPath
+		}
+		return filepath.Join(payloadDir, name)
+	}
 	for _, name := range verifiedReleaseExecutables {
-		info, err := os.Lstat(filepath.Join(releaseDir, name))
+		info, err := os.Lstat(releasePath(name))
 		if err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("required signed release file is missing: %s", name)
 		}
@@ -201,14 +221,14 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 		}
 	}()
 	for _, name := range verifiedReleaseExecutables {
-		if err := platform.VerifyAuthenticode(filepath.Join(releaseDir, name), options.Identity); err != nil {
+		if err := platform.VerifyAuthenticode(releasePath(name), options.Identity); err != nil {
 			return fmt.Errorf("verify signed release file %s: %w", name, err)
 		}
 	}
 	files := []InstallFile{
-		{Source: filepath.Join(releaseDir, ControllerExecutableName), Destination: filepath.Join(InstallRoot, ControllerExecutableName)},
-		{Source: filepath.Join(releaseDir, AdminExecutableName), Destination: filepath.Join(InstallRoot, AdminExecutableName)},
-		{Source: filepath.Join(releaseDir, RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
+		{Source: releasePath(ControllerExecutableName), Destination: filepath.Join(InstallRoot, ControllerExecutableName)},
+		{Source: releasePath(AdminExecutableName), Destination: filepath.Join(InstallRoot, AdminExecutableName)},
+		{Source: releasePath(RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
 	}
 	if err := platform.Install(files, options.Identity); err != nil {
 		return fmt.Errorf("transactionally install signed release files and Start Menu shortcut: %w", err)

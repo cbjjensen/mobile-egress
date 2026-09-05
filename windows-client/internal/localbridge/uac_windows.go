@@ -28,10 +28,10 @@ func (helper UACHelper) Setup(ctx context.Context, request SetupRequest) (OwnerB
 		return OwnerBootstrapResult{}, errors.New("elevated relay setup input is incomplete")
 	}
 	if err := verifySignedSibling(helper.AdminExecutable); err != nil {
-		return OwnerBootstrapResult{}, errors.New("elevated helper signature verification failed")
+		return OwnerBootstrapResult{}, errors.New("elevated helper signature verification failed. Run MobileEgressSetup.exe from the complete official release, then open Mobile Egress from the Start menu and retry")
 	}
 	if err := verifySignedSibling(helper.RelayExecutable); err != nil {
-		return OwnerBootstrapResult{}, errors.New("relay signature verification failed")
+		return OwnerBootstrapResult{}, errors.New("relay signature verification failed. Run MobileEgressSetup.exe from the complete official release, then open Mobile Egress from the Start menu and retry")
 	}
 	temporaryDirectory, err := os.MkdirTemp("", "mobile-egress-relay-setup-")
 	if err != nil {

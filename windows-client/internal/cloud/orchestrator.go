@@ -33,6 +33,9 @@ type NodeRelease struct {
 	SignerCertificateBase64 string `json:"signerCertificateBase64"`
 }
 
+// ErrClientIdentity identifies a local relay failure without exposing its response.
+var ErrClientIdentity = errors.New("local bridge could not issue the Client identity")
+
 type ManagedNode struct {
 	InstanceID              string `json:"instanceId"`
 	ClientSerial            string `json:"clientSerial"`
@@ -90,10 +93,10 @@ func (orchestrator *Orchestrator) Install(ctx context.Context, instanceID string
 	}
 	issued, err := orchestrator.issuer.ProvisionClient(ctx, bootstrap.CSRPEM)
 	if err != nil {
-		return ManagedNode{}, errors.New("relay rejected the Client certificate request")
+		return ManagedNode{}, ErrClientIdentity
 	}
 	if issued.Role != "client" || issued.Serial == "" || issued.RelayURL == "" || issued.CertificatePEM == "" || issued.CACertificatePEM == "" {
-		return ManagedNode{}, errors.New("relay returned an incomplete Client identity")
+		return ManagedNode{}, ErrClientIdentity
 	}
 	username, err := randomCredential()
 	if err != nil {

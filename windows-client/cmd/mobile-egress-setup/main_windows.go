@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"mobile-egress/windows-client/internal/prerequisites"
 	"mobile-egress/windows-client/internal/setup"
 )
 
@@ -72,6 +73,7 @@ func runParent(platform *setup.WindowsPlatform) error {
 	}
 	nonce := hex.EncodeToString(nonceBytes)
 	return setup.RunParent(context.Background(), setup.ParentOptions{
+		PrepareRuntime:      prerequisites.EnsureWebView2Installed,
 		Executable:          executable,
 		InstalledController: filepath.Join(setup.InstallRoot, setup.ControllerExecutableName),
 		Identity:            identity,

@@ -431,7 +431,7 @@ function Assert-MobileEgressReleaseZipMatchesSources {
             throw 'Release ZIP does not contain exactly the expected files.'
         }
         foreach ($entry in $ExpectedSources.GetEnumerator()) {
-            $matches = @($fileEntries | Where-Object { $_.FullName -ceq $entry.Key })
+            $matches = @($fileEntries | Where-Object { $_.FullName.Replace('\', '/') -ceq $entry.Key })
             if ($matches.Count -ne 1) {
                 throw "Release ZIP does not contain exactly one $($entry.Key)."
             }
@@ -928,11 +928,13 @@ function Assert-MobileEgressReleaseArtifacts {
 
         $zipSources = [ordered]@{}
         foreach ($name in $expectedExecutables) {
-            $zipSources[$name] = Join-Path $binRoot $name
+            $entryName = if ($name -eq 'MobileEgressSetup.exe') { $name } else { "payload/$name" }
+            $zipSources[$entryName] = Join-Path $binRoot $name
         }
-        $zipSources['mobile-egress-code-signing.cer'] = Join-Path $RepositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
-        $zipSources['release-manifest.json'] = $manifestPath
-        $zipSources['release-signing-certificate.txt'] = Join-Path $RepositoryRoot 'windows-signing\release-signing-certificate.txt'
+        $zipSources['payload/mobile-egress-code-signing.cer'] = Join-Path $RepositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
+        $zipSources['payload/release-manifest.json'] = $manifestPath
+        $zipSources['payload/release-signing-certificate.txt'] = Join-Path $RepositoryRoot 'windows-signing\release-signing-certificate.txt'
+        $zipSources['START-HERE.txt'] = Join-Path $RepositoryRoot 'windows-client\setup-start-here.txt'
         Assert-MobileEgressReleaseZipMatchesSources `
             -ZipPath (Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip") `
             -ExpectedSources $zipSources

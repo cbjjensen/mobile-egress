@@ -453,15 +453,20 @@ $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-releas
 try {
     $zipSource = Join-Path $zipFixture 'source'
     $null = New-Item -ItemType Directory -Path $zipSource
-    $sourceExecutable = Join-Path $zipSource 'client.exe'
-    $sourceManifest = Join-Path $zipSource 'release-manifest.json'
+    $payloadSource = Join-Path $zipSource 'payload'
+    $null = New-Item -ItemType Directory -Path $payloadSource
+    $sourceSetup = Join-Path $zipSource 'MobileEgressSetup.exe'
+    Set-Content -LiteralPath $sourceSetup -Value 'signed-setup-fixture'
+    $sourceExecutable = Join-Path $payloadSource 'client.exe'
+    $sourceManifest = Join-Path $payloadSource 'release-manifest.json'
     Set-Content -LiteralPath $sourceExecutable -Value 'signed-client-fixture'
     Set-Content -LiteralPath $sourceManifest -Value '{"version":2}'
     $fixtureZip = Join-Path $zipFixture 'release.zip'
     Compress-Archive -Path (Join-Path $zipSource '*') -DestinationPath $fixtureZip
     $zipSources = [ordered]@{
-        'client.exe' = $sourceExecutable
-        'release-manifest.json' = $sourceManifest
+        'MobileEgressSetup.exe' = $sourceSetup
+        'payload/client.exe' = $sourceExecutable
+        'payload/release-manifest.json' = $sourceManifest
     }
     Assert-MobileEgressReleaseZipMatchesSources -ZipPath $fixtureZip -ExpectedSources $zipSources
 

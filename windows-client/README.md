@@ -6,6 +6,12 @@ The shared React/Wails and Go controller runs on Windows 10/11 or Apple Silicon 
 
 ### Windows
 
+Extract the whole release ZIP and double-click **MobileEgressSetup.exe**, the only top-level executable. Keep the `payload` folder beside it. Setup installs the signed application and automatically installs Microsoft's WebView2 runtime when missing; allow several minutes with an internet connection. If runtime installation fails, rerun Setup after correcting the connection or device policy. Later, launch **Mobile Egress** from the Start menu.
+
+Follow the **Next step** card: connect Tailscale, finish the local bridge, connect AWS, install the selected EC2 Client, then verify connectivity with the paired phone sharing cellular data. **Funnel active** alone does not mean setup is complete. EC2 installation is blocked in both the UI and backend until a fresh bridge status check passes. Connection details are expandable. If the bridge becomes unavailable during Client pairing, the app reports that stage and directs you to repair the bridge and retry the same instance; use Repair when node configuration is already saved.
+
+The prerequisite installer follows [Microsoft's Evergreen deployment guidance](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution), verifies the downloaded bootstrapper's trusted Microsoft signature, and checks runtime availability before launching the app. Older flat ZIP layouts remain supported by Setup.
+
 Download `mobile-egress-windows-<version>.zip` only from the project's official GitHub Releases page and extract it; do not start an individual controller, relay, admin, or Client executable. Obtain the publisher SHA-256 certificate fingerprint through a separate trusted channel. You may independently inspect the exact `MobileEgressSetup.exe` signer through **Properties → Digital Signatures** or trusted system **Windows PowerShell** and compare it with that separately shared identity. This optional PowerShell inspection rejects a damaged, unsigned, or differently signed setup and prints the certificate SHA-256 for comparison:
 
 ```powershell

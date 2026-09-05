@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -70,6 +71,19 @@ func TestInstallNodeRedactsRunnerErrors(t *testing.T) {
 	_, err := orchestrator.Install(context.Background(), "i-0123456789abcdef0", testNodeRelease(t))
 	if err == nil || strings.Contains(err.Error(), "private-output-marker") {
 		t.Fatalf("Install() error was not redacted: %v", err)
+	}
+}
+
+func TestInstallNodeIdentifiesIncompleteRelayIdentity(t *testing.T) {
+	bootstrap, _ := json.Marshal(map[string]string{
+		"csrPem":                 "-----BEGIN CERTIFICATE REQUEST-----\nPUBLIC-CSR\n-----END CERTIFICATE REQUEST-----\n",
+		"configurationPublicKey": "uwCX-1JULdTd8a14hBKNL8CyZdmKf6w_X0tnQkEMaV0",
+	})
+	runner := &fakeCommandRunner{outputs: []string{string(bootstrap)}}
+	store := &memoryNodeStore{}
+	_, err := NewOrchestrator(runner, &fakeIssuer{}, store).Install(context.Background(), "i-0123456789abcdef0", testNodeRelease(t))
+	if !errors.Is(err, ErrClientIdentity) || len(runner.scripts) != 1 || len(store.saves) != 0 {
+		t.Fatalf("identity failure = %v, commands = %d, saves = %d", err, len(runner.scripts), len(store.saves))
 	}
 }
 

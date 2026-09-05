@@ -719,6 +719,9 @@ func (app *DesktopApp) RebootEC2Instance(instanceID string) error {
 func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView, error) {
 	app.provisioning.Lock()
 	defer app.provisioning.Unlock()
+	if !app.GetBridgeStatus().Ready {
+		return cloud.ManagedNodeView{}, errors.New("Finish local bridge setup before installing an EC2 Client. Open Bridge and use Set up local bridge or Repair, then retry. No EC2 installation was started.")
+	}
 
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {
@@ -759,6 +762,9 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 }
 
 func formatNodeInstallError(err error) error {
+	if errors.Is(err, cloud.ErrClientIdentity) {
+		return errors.New("The Client files were installed, but the local bridge could not finish pairing the Client. Open Bridge, repair the connection, then retry Install Client for this instance.")
+	}
 	stage, ok := cloud.SSMCommandFailureStage(err)
 	if !ok {
 		return errors.New("Unable to install the Client node through Systems Manager. No EC2 networking was changed.")

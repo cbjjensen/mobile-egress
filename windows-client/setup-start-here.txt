@@ -1,0 +1,10 @@
+Extract the whole ZIP, then double-click MobileEgressSetup.exe.
+Keep the payload folder beside Setup. Do not run the programs inside it.
+
+Setup installs Mobile Egress and, if missing, Microsoft's WebView2 runtime.
+Keep an internet connection available and wait for the app to open.
+This can take several minutes. If runtime setup fails, correct the reported
+problem and run Setup again.
+
+Later, open Mobile Egress from the Start menu.
+Follow the Next step card in the app to finish connecting your devices.

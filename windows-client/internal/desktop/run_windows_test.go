@@ -167,6 +167,26 @@ func TestNodeInstallErrorShowsOnlyTheApprovedFailureStage(t *testing.T) {
 	}
 }
 
+func TestInstallEC2NodeRequiresBridgeBeforeAWSOrRemoteWork(t *testing.T) {
+	store := securestore.NewMemoryStore()
+	core, err := client.NewCore(context.Background(), store, desktopGateway{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &DesktopApp{core: core, ownerRepository: client.NewRepository(store)}
+	_, err = app.InstallEC2Node("i-0123456789abcdef0")
+	if err == nil || !strings.Contains(err.Error(), "Finish local bridge setup") {
+		t.Fatalf("install without bridge = %v", err)
+	}
+}
+
+func TestNodeInstallRelayFailureIsNotReportedAsSSM(t *testing.T) {
+	err := formatNodeInstallError(cloud.ErrClientIdentity)
+	if !strings.Contains(err.Error(), "local bridge") || strings.Contains(err.Error(), "Systems Manager") {
+		t.Fatalf("relay failure = %v", err)
+	}
+}
+
 func TestNodeUpdateErrorShowsOnlyTheApprovedFailureStage(t *testing.T) {
 	staged := fmt.Errorf("orchestration wrapper: %w", cloud.NewSSMCommandFailure("service-start"))
 	err := formatNodeUpdateError(staged)

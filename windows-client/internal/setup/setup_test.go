@@ -14,6 +14,30 @@ import (
 
 const trackedFingerprint = "9F:E2:14:C3:50:D7:CE:04:C8:EE:7F:71:E1:69:28:1B:50:FF:0B:2A:7C:56:69:A3:48:AC:10:61:6F:B7:06:1F"
 
+func TestSetupAcceptsPayloadDirectoryWithOnlySetupAtTopLevel(t *testing.T) {
+	options, _ := elevatedTestOptions(t, "payload layout")
+	root := filepath.Dir(options.SetupPath)
+	payload := filepath.Join(root, "payload")
+	if err := os.Mkdir(payload, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range verifiedReleaseExecutables {
+		if name == SetupExecutableName {
+			continue
+		}
+		if err := os.Rename(filepath.Join(root, name), filepath.Join(payload, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &elevatedPlatformFake{elevated: true}
+	if err := RunElevated(options, fake); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.installed) != 3 || filepath.Dir(fake.installed[0].Source) != payload {
+		t.Fatal("payload was not installed")
+	}
+}
+
 func trackedCertificateDER(t *testing.T) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "windows-signing", PublicCertificateName))
@@ -395,6 +419,15 @@ func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
 	}
 	if fake.launched != options.InstalledController {
 		t.Fatalf("launched %q", fake.launched)
+	}
+	fake.launched = ""
+	options.PrepareRuntime = func(context.Context) error { return errors.New("runtime unavailable") }
+	if err := RunParent(context.Background(), options, fake); err == nil || fake.launched != "" {
+		t.Fatalf("launched before runtime was ready: %v", err)
+	}
+	options.PrepareRuntime = func(context.Context) error { return nil }
+	if err := RunParent(context.Background(), options, fake); err != nil || fake.launched != options.InstalledController {
+		t.Fatalf("runtime retry did not launch: %v", err)
 	}
 }
 
