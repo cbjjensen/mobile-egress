@@ -156,11 +156,10 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 		return nil, err
 	}
 	httpClient.Timeout = 10 * time.Second
-	agentAvailable, err := fetchAgentHealth(ctx, httpClient, baseURL.String())
-	if err != nil {
-		transport.CloseIdleConnections()
-		return nil, err
-	}
+	// Health controls admission, not relay connectivity. A health outage must
+	// not prevent an independently authenticated WebSocket connection.
+	agentAvailable, healthErr := fetchAgentHealth(ctx, httpClient, baseURL.String())
+	agentAvailable = healthErr == nil && agentAvailable
 	tlsConfig := transport.TLSClientConfig.Clone()
 	webSocketURL := *baseURL
 	webSocketURL.Scheme = "wss"
@@ -190,6 +189,9 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 	go session.healthLoop(baseURL.String())
 	return session, nil
 }
+
+// Done closes on actual relay transport shutdown, independently of Agent readiness.
+func (session *Session) Done() <-chan struct{} { return session.ctx.Done() }
 
 func (session *Session) Healthy() bool {
 	session.mu.Lock()

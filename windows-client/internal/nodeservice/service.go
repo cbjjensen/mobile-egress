@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 )
 
 type Tunnel interface {
+	Done() <-chan struct{}
 	Healthy() bool
 	OpenStream(context.Context, string, uint16) (io.ReadWriteCloser, error)
 	Close() error
@@ -86,27 +88,43 @@ func (service *Service) Run(ctx context.Context) error {
 	if retryInterval <= 0 {
 		retryInterval = 2 * time.Second
 	}
-	ticker := time.NewTicker(retryInterval)
-	defer ticker.Stop()
+
+	backoff := reconnectBackoff{base: retryInterval}
 	for {
-		current := opener.current()
-		if current == nil || !current.Healthy() {
-			if current != nil {
-				opener.swap(nil)
+		if ctx.Err() != nil {
+			return nil
+		}
+		tunnel, err := service.dialer.Dial(ctx, runtime.Identity)
+		if err == nil {
+			opener.swap(tunnel)
+			service.updateConnected(true)
+			stable := time.NewTimer(30 * time.Second)
+			select {
+			case <-ctx.Done():
+				stable.Stop()
+				return nil
+			case <-tunnel.Done():
+				stable.Stop()
+			case <-stable.C:
+				backoff.reset()
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-tunnel.Done():
+				}
 			}
 			service.updateConnected(false)
-			tunnel, err := service.dialer.Dial(ctx, runtime.Identity)
-			if err == nil {
-				opener.swap(tunnel)
-				service.updateConnected(true)
-			}
+			opener.swap(nil)
 		}
+		timer := time.NewTimer(backoff.next(rand.Float64()))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
+
 }
 
 func (service *Service) Status() ServiceStatus {
@@ -159,4 +177,21 @@ func (opener *switchingTunnel) swap(replacement Tunnel) {
 	if previous != nil && previous != replacement {
 		_ = previous.Close()
 	}
+}
+
+// The nominal delays are 2, 4, 8, 16, 30 seconds. Equal jitter spreads
+// reconnects over the latter half of each interval, never exceeding 30s.
+type reconnectBackoff struct{ base, current time.Duration }
+
+func (backoff *reconnectBackoff) reset() { backoff.current = 0 }
+func (backoff *reconnectBackoff) next(random float64) time.Duration {
+	if backoff.current == 0 {
+		backoff.current = backoff.base
+	} else {
+		backoff.current *= 2
+	}
+	if backoff.current > 30*time.Second {
+		backoff.current = 30 * time.Second
+	}
+	return backoff.current/2 + time.Duration(float64(backoff.current/2)*random)
 }

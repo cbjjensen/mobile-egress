@@ -144,6 +144,7 @@ type fakeTunnel struct {
 	mu      sync.Mutex
 	healthy bool
 	closed  bool
+	done    chan struct{}
 }
 
 func (tunnel *fakeTunnel) Healthy() bool {
@@ -158,6 +159,12 @@ func (tunnel *fakeTunnel) OpenStream(context.Context, string, uint16) (io.ReadWr
 
 func (tunnel *fakeTunnel) Close() error {
 	tunnel.mu.Lock()
+	if !tunnel.closed {
+		if tunnel.done == nil {
+			tunnel.done = make(chan struct{})
+		}
+		close(tunnel.done)
+	}
 	tunnel.closed = true
 	tunnel.mu.Unlock()
 	return nil
@@ -173,4 +180,93 @@ func configuredRepository(t *testing.T) *Repository {
 	configuration := signedNodeConfig(t, bootstrap.CSRPEM, "https://relay.example.ts.net:8443", "service-user", "service-password")
 	applyNodeConfig(t, repository, bootstrap.ConfigurationPublicKey, configuration)
 	return repository
+}
+
+func (tunnel *fakeTunnel) Done() <-chan struct{} {
+	tunnel.mu.Lock()
+	defer tunnel.mu.Unlock()
+	if tunnel.done == nil {
+		tunnel.done = make(chan struct{})
+	}
+	return tunnel.done
+}
+
+func TestHealthFailureDoesNotReconnectLiveTunnel(t *testing.T) {
+	tunnel := &fakeTunnel{healthy: false}
+	dialer := &fakeDialer{results: []dialResult{{tunnel: tunnel}}}
+	service := NewService(configuredRepository(t), dialer)
+	service.retryInterval = 5 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- service.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	deadline := time.Now().Add(time.Second)
+	for !service.Status().Connected {
+		if time.Now().After(deadline) {
+			t.Fatal("did not connect")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-tunnel.Done():
+		t.Fatal("Agent absence closed connected relay")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !service.Status().Connected {
+		t.Fatal("health failure changed relay connectivity")
+	}
+}
+
+func TestRelayDisconnectImmediatelyUpdatesStatusAndBackoffIsCancellable(t *testing.T) {
+	tunnel := &fakeTunnel{healthy: true}
+	service := NewService(configuredRepository(t), &fakeDialer{results: []dialResult{{tunnel: tunnel}}})
+	service.retryInterval = 30 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- service.Run(ctx) }()
+	defer cancel()
+	deadline := time.Now().Add(time.Second)
+	for !service.Status().Connected {
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("did not connect")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	tunnel.Close()
+	deadline = time.Now().Add(250 * time.Millisecond)
+	for service.Status().Connected {
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("disconnect waited for polling timer")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("backoff ignored cancellation")
+	}
+}
+
+func TestReconnectBackoffJitterCapAndStableReset(t *testing.T) {
+	for _, random := range []float64{0, 0.5, 0.999999} {
+		backoff := reconnectBackoff{base: 2 * time.Second}
+		for _, nominal := range []time.Duration{2, 4, 8, 16, 30, 30, 30} {
+			delay := backoff.next(random)
+			if delay < nominal*time.Second/2 || delay > nominal*time.Second {
+				t.Fatalf("delay=%v nominal=%v", delay, nominal)
+			}
+		}
+		backoff.reset()
+		if delay := backoff.next(random); delay < time.Second || delay > 2*time.Second {
+			t.Fatalf("reset delay=%v", delay)
+		}
+	}
 }

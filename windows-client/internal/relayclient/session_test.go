@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1029,7 +1030,7 @@ func newSessionFixture(t *testing.T) *sessionFixture {
 
 func (fixture *sessionFixture) Close() { fixture.server.Close() }
 
-func newCustomSessionFixture(t *testing.T, websocketHandler func(*websocket.Conn)) *sessionFixture {
+func newCustomSessionFixture(t *testing.T, websocketHandler func(*websocket.Conn), healthHandlers ...http.HandlerFunc) *sessionFixture {
 	t.Helper()
 	ca, caKey, caPEM := newTestCA(t, "custom-session-ca")
 	serverCertificate := newSignedCertificate(t, ca, caKey, &x509.Certificate{
@@ -1051,6 +1052,10 @@ func newCustomSessionFixture(t *testing.T, websocketHandler func(*websocket.Conn
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/healthz" {
+			if len(healthHandlers) > 0 {
+				healthHandlers[0](writer, request)
+				return
+			}
 			_ = json.NewEncoder(writer).Encode(map[string]any{"readiness": true, "agentConnected": true})
 			return
 		}
@@ -1100,5 +1105,95 @@ func writeWireEnvelope(t *testing.T, connection *websocket.Conn, envelope wireEn
 	}
 	if err := connection.WriteMessage(websocket.BinaryMessage, raw); err != nil && !strings.Contains(err.Error(), "closed") {
 		t.Error(err)
+	}
+}
+
+func TestHealthFailurePreservesRelayAndEstablishedStream(t *testing.T) {
+	var healthy atomic.Bool
+	healthy.Store(true)
+	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
+		for {
+			_, raw, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			var frame wireEnvelope
+			if err := json.Unmarshal(raw, &frame); err != nil {
+				t.Error(err)
+				return
+			}
+			switch frame.Type {
+			case "open":
+				writeWireEnvelope(t, connection, wireEnvelope{Version: 1, Type: "opened", StreamID: frame.StreamID})
+			case "data":
+				writeWireEnvelope(t, connection, frame)
+			}
+		}
+	}, func(w http.ResponseWriter, r *http.Request) {
+		if !healthy.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"readiness": true, "agentConnected": true})
+	})
+	defer fixture.Close()
+	session, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	stream, err := session.OpenStream(context.Background(), "echo.example", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	healthy.Store(false)
+	deadline := time.Now().Add(4 * time.Second)
+	for session.Healthy() {
+		if time.Now().After(deadline) {
+			t.Fatal("health not refreshed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !session.Status().Connected {
+		t.Fatal("health outage disconnected relay")
+	}
+	select {
+	case <-session.Done():
+		t.Fatal("health outage signaled disconnection")
+	default:
+	}
+	if _, err := stream.Write([]byte("still flowing")); err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan error, 1)
+	go func() {
+		b := make([]byte, 13)
+		_, err := io.ReadFull(stream, b)
+		if err == nil && string(b) != "still flowing" {
+			err = errors.New("corrupt echo")
+		}
+		received <- err
+	}()
+	select {
+	case err := <-received:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("established data stalled")
+	}
+	if _, err := session.OpenStream(context.Background(), "blocked.example", 443); !errors.Is(err, ErrRelayUnavailable) {
+		t.Fatalf("new stream error=%v", err)
+	}
+	second, err := DialSession(context.Background(), fixture.identity)
+	if err != nil {
+		t.Fatalf("health outage prevented relay dial: %v", err)
+	}
+	second.Close()
+	select {
+	case <-second.Done():
+	default:
+		t.Fatal("Close did not signal immediately")
 	}
 }
