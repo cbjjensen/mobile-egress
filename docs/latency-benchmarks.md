@@ -54,6 +54,23 @@ connections. Keep the single-session topology. Physical mixed-traffic and
 packet-loss evidence remains unmeasured; do not infer a cellular latency gain
 from this fixture.
 
+Validation for source commit `50802d2`:
+
+- `go test ./...`, `go vet ./...`, and `go build ./...`: passed.
+- Go race checks for relay service/protocol and Windows relay Client: passed;
+  HTTP CONNECT/SOCKS race checks also passed during the change.
+- Android: 223 tests, zero failures/errors; lint completed with zero errors and
+  17 warnings in unchanged files/dependencies; debug assembly passed.
+- Exact-commit Mac gate: native Swift tests and warnings-as-errors tests passed
+  (308 tests, two expected device/entitled-Keychain skips), followed by unsigned
+  iPhoneOS and iOS Simulator app/extension builds.
+- The final Xcode package test runner failed with exit 65 because the Mac's
+  `com.apple.testmanagerd.control` service was unavailable. Its built-in retry
+  failed for the same reason. The full iOS gate is therefore **not passing**;
+  this is the previously recorded Mac test-runner infrastructure issue.
+- Mobile feature manifest validation and cross-platform code review completed.
+  No installed apps were replaced and no release was published.
+
 ## Relay fixture and measurements
 
 `relay/internal/service/latency_benchmark_test.go` starts an initialized relay

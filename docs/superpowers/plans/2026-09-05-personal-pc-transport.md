@@ -19,8 +19,12 @@
 - [x] iOS: Implement equivalent negotiation, binary codec and bounded candidate dialing using native transport; test corresponding behaviors with native Swift on the existing Mac build server. Full Xcode gate is part of integration below.
 - [x] Documentation: Record the permanent routing requirement in AGENTS.md, README and architecture; document negotiated transport and update mobile parity evidence.
 - [x] Contention: Add/run a controlled local mixed small-message/bulk benchmark, record limits honestly, retain current topology pending physical evidence.
-- [ ] Integration: Run relevant Go tests/race checks, build/vet, mobile gates, review changes and record measured framing/latency results. Do not publish or replace installed apps.
+- [x] Integration: Run relevant Go tests/race checks, build/vet, mobile gates, review changes and record measured framing/latency results. Do not publish or replace installed apps. The full iOS gate was attempted but is not passing because of the Mac test-runner infrastructure limitation recorded below.
 
 ## Verification before exact-commit Xcode gate
 
 `go test ./...`, `go vet ./...`, `go build ./...` passed. Go race checks passed for relay service/protocol and Windows relay Client; HTTP CONNECT/SOCKS race checks also passed. Android: 223 tests, zero failures/errors, lint passed with 17 warnings in unchanged UI/dependency/resource/security files, debug assembly passed. Native Mac Swift tests with warnings-as-errors: 308 tests, zero failures, two expected device/entitled-Keychain skips. Mobile manifest validation passed. Cross-platform review issues were fixed and regression-tested. The final three-run local contention result is recorded in `docs/latency-benchmarks.md`; physical cellular/Funnel performance remains unmeasured.
+
+## Exact-commit native result
+
+`scripts/test-ios.ps1 -UseMacBuildServer -MacHost Y9YD7JN54M.local` tested source commit `50802d2`. Native Swift tests, warnings-as-errors tests, unsigned iPhoneOS app/extension build, and unsigned Simulator build completed. The final Xcode package test runner failed with exit 65, including its automatic retry, because `com.apple.testmanagerd.control` was unavailable. This is the same infrastructure failure already recorded before this change; the full native gate remains not passing. No Apple account, signing, or Mac system-service settings were changed. Implementation and local performance measurement are complete; physical testing and a passing full Xcode gate remain separate validation limits.

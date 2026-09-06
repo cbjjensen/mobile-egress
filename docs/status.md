@@ -1,6 +1,10 @@
 # Current status
 
+Personal-computer routing is a permanent requirement: keep the owner's local relay and Tailscale Funnel. Hosted/cloud relay alternatives and benchmarks are prohibited; see [AGENTS.md](../AGENTS.md) and [architecture](architecture.md#permanent-personal-computer-routing-requirement).
+
 ## Implemented
+
+- Negotiated raw binary data with legacy-peer compatibility, stream-local rejection handling in the Windows Client, and bounded validated destination-address fallback on Android and iOS. Local mixed-traffic p95 improved from about 11 ms to 3.5 ms with eight bulk streams; this is not a cellular measurement. Go and Android checks passed. Exact-commit native Swift tests and unsigned iOS builds completed, but the final Xcode runner remains blocked by the existing `testmanagerd` infrastructure issue. Full evidence and limits are in [latency benchmarks](latency-benchmarks.md#negotiated-binary-framing-and-mixed-traffic-2026-09-05).
 
 - Loopback-only Windows relay service, direct CSR Owner bootstrap, Owner-authorized Client CSR provisioning, endpoint leaf rotation, one-use Agent migration, revocation, and multi-Client routing.
 - No fixed active-stream ceiling across relay and Clients/Agents; DNS work remains bounded at 256 concurrent workers independently of live connections. Queues, timeouts and historical records remain bounded.
