@@ -12,7 +12,7 @@ Automated component and native build checks do not substitute for physical measu
 | Component scope | |
 | Source commit | |
 | Test start/end (UTC) | |
-| Windows ZIP filename / SHA-256 | |
+| Windows installer filename / SHA-256 (ZIP for releases through v1.1.6) | |
 | Client filename / SHA-256 | |
 | Authenticode subject / thumbprint | |
 | Mac PKG filename / SHA-256 (if Desktop) | `mobile-egress-macos-<version>-arm64.pkg` / |
@@ -50,7 +50,7 @@ For the Windows-only v1.1.1 hotfix, record the current Windows ZIP and Client pl
 
 | Check | Result | Sanitized note |
 |---|---|---|
-| Downloaded Windows ZIP hash/signatures match release evidence | `NOT RUN` | |
+| Downloaded Windows installer hash/signatures match release evidence (historical ZIP where applicable) | `NOT RUN` | |
 | Downloaded APK hash/signer match release evidence | `NOT RUN` | |
 | App-only Tailscale Funnel and loopback relay setup | `NOT RUN` | |
 | Relay listens only on `127.0.0.1:8443` | `NOT RUN` | |

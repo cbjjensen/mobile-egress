@@ -14,6 +14,37 @@ import (
 
 const trackedFingerprint = "9F:E2:14:C3:50:D7:CE:04:C8:EE:7F:71:E1:69:28:1B:50:FF:0B:2A:7C:56:69:A3:48:AC:10:61:6F:B7:06:1F"
 
+func TestEmbeddedPayloadIsPreparedUnderTransactionBeforeTrustAndCleaned(t *testing.T) {
+	for _, preparationFails := range []bool{false, true} {
+		options, _ := elevatedTestOptions(t, "embedded payload")
+		fake := &elevatedPlatformFake{elevated: true}
+		prepared, cleaned := false, false
+		options.PreparePayload = func() (string, func(), error) {
+			if len(fake.events) != 1 || fake.events[0] != "transaction-acquire" {
+				t.Fatalf("payload prepared outside transaction: %v", fake.events)
+			}
+			prepared = true
+			if preparationFails {
+				return "", nil, errors.New("corrupt payload")
+			}
+			return filepath.Dir(options.SetupPath), func() { cleaned = true }, nil
+		}
+		err := RunElevated(options, fake)
+		if !prepared || (err != nil) != preparationFails {
+			t.Fatalf("prepare=%v error=%v", prepared, err)
+		}
+		if cleaned == preparationFails {
+			t.Fatalf("unexpected cleanup=%v", cleaned)
+		}
+		if preparationFails && len(fake.installed) != 0 {
+			t.Fatal("installed corrupt payload")
+		}
+		if preparationFails && !reflect.DeepEqual(fake.events, []string{"transaction-acquire", "transaction-release"}) {
+			t.Fatalf("mutated trust after payload failure: %v", fake.events)
+		}
+	}
+}
+
 func TestSetupAcceptsPayloadDirectoryWithOnlySetupAtTopLevel(t *testing.T) {
 	options, _ := elevatedTestOptions(t, "payload layout")
 	root := filepath.Dir(options.SetupPath)
@@ -35,6 +66,33 @@ func TestSetupAcceptsPayloadDirectoryWithOnlySetupAtTopLevel(t *testing.T) {
 	}
 	if len(fake.installed) != 3 || filepath.Dir(fake.installed[0].Source) != payload {
 		t.Fatal("payload was not installed")
+	}
+}
+
+func TestEmbeddedSetupNeedsNoAdjacentFilesAndIgnoresAdjacentPayload(t *testing.T) {
+	options, _ := elevatedTestOptions(t, "self-contained payload")
+	release := filepath.Dir(options.SetupPath)
+	staging := t.TempDir()
+	for _, name := range verifiedReleaseExecutables {
+		if name == SetupExecutableName {
+			continue
+		}
+		if err := os.Rename(filepath.Join(release, name), filepath.Join(staging, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(release, "payload"), []byte("unrelated neighboring file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	options.PreparePayload = func() (string, func(), error) { return staging, func() {}, nil }
+	fake := &elevatedPlatformFake{elevated: true}
+	if err := RunElevated(options, fake); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range fake.installed {
+		if filepath.Dir(file.Source) != staging {
+			t.Fatal("used neighboring payload instead of embedded files")
+		}
 	}
 }
 

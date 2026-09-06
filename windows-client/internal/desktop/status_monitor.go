@@ -31,6 +31,7 @@ type ComponentStatus struct {
 	LastSuccess string `json:"lastSuccess,omitempty"`
 }
 type ControllerSnapshot struct {
+	AWSConfigured       bool                                `json:"awsConfigured"`
 	Bridge              BridgeView                          `json:"bridge"`
 	Nodes               []cloud.ManagedNodeView             `json:"nodes"`
 	PendingReservations []string                            `json:"pendingReservations"`
@@ -38,13 +39,15 @@ type ControllerSnapshot struct {
 }
 
 type componentResult struct {
-	tailscale    tailscale.Status
-	helper       relayServiceState
-	ownerReady   bool
-	ownerURL     string
-	relayReady   bool
-	nodes        []cloud.ManagedNodeView
-	reservations []string
+	tailscale      tailscale.Status
+	helper         relayServiceState
+	ownerReady     bool
+	ownerURL       string
+	relayReady     bool
+	agentConnected bool
+	agentPaired    *bool
+	nodes          []cloud.ManagedNodeView
+	reservations   []string
 }
 type monitorChecks map[statusComponent]func(context.Context) (componentResult, error)
 type monitoredComponent struct {
@@ -242,6 +245,15 @@ func (m *statusMonitor) snapshot() ControllerSnapshot {
 	helper := m.components[componentHelper].result.helper
 	s.Bridge = BridgeView{Platform: string(m.platform), RelayServiceState: string(helper), TailscaleInstalled: ts.Installed, TailscaleOnline: ts.Online, FunnelReady: ts.FunnelReady, FQDN: ts.FQDN, PublicURL: ts.PublicURL, OwnerReady: relay.ownerReady, RelayReady: relay.relayReady, TailscaleError: s.Components[componentTailscale].Error}
 	s.Bridge.Checking = s.Components[componentTailscale].Checking || s.Components[componentHelper].Checking || s.Components[componentRelay].Checking
+	relayState := s.Components[componentRelay]
+	relayComponent := m.components[componentRelay]
+	if !m.stopped && relayComponent.valid && relayComponent.holds == 0 && !relayComponent.success.IsZero() && !relayState.Stale && !relayState.Checking && relayState.Error == "" {
+		s.Bridge.AgentConnected = relay.agentConnected
+		if relay.agentPaired != nil {
+			paired := *relay.agentPaired
+			s.Bridge.AgentPaired = &paired
+		}
+	}
 	s.Bridge.Stale = s.Components[componentTailscale].Stale || s.Components[componentHelper].Stale || s.Components[componentRelay].Stale
 	s.Bridge.NeedsRotation = relay.ownerReady && ts.Online && relay.ownerURL != ts.PublicURL
 	s.Bridge.Ready = usable && bridgeReady(m.platform, helper, s.Bridge)
@@ -337,10 +349,16 @@ func (app *DesktopApp) newStatusMonitor() *statusMonitor {
 }
 
 func (app *DesktopApp) GetControllerSnapshot() ControllerSnapshot {
+	var snapshot ControllerSnapshot
 	if app.monitor == nil {
-		return newStatusMonitor(app.desktopPlatform(), nil).snapshot()
+		snapshot = newStatusMonitor(app.desktopPlatform(), nil).snapshot()
+	} else {
+		snapshot = app.monitor.snapshot()
 	}
-	return app.monitor.snapshot()
+	app.mu.RLock()
+	snapshot.AWSConfigured = app.awsClient != nil
+	app.mu.RUnlock()
+	return snapshot
 }
 func (app *DesktopApp) monitorAction(keys ...statusComponent) func() {
 	if app.monitor == nil {

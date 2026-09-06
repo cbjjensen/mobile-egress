@@ -15,13 +15,26 @@ import (
 	"mobile-egress/windows-client/internal/localbridge"
 	"mobile-egress/windows-client/internal/prerequisites"
 	"mobile-egress/windows-client/internal/securestore"
+	"mobile-egress/windows-client/internal/setup"
 	"mobile-egress/windows-client/internal/tailscale"
 )
 
 func Run() error {
 	if err := prerequisites.CheckWebView2Installed(); err != nil {
-		showFatal(err)
-		return err
+		progress, progressErr := setup.NewNativeProgress()
+		if progressErr != nil {
+			showFatal(progressErr)
+			return progressErr
+		}
+		platform := setup.NewWindowsPlatform()
+		runtimeErr := prerequisites.RetryRuntime(context.Background(), func(ctx context.Context) error {
+			return prerequisites.EnsureWebView2WithProgress(ctx, progress.Report)
+		}, platform.RetryRuntime)
+		progress.Close()
+		if runtimeErr != nil {
+			showFatal(runtimeErr)
+			return runtimeErr
+		}
 	}
 	application, err := newWindowsDesktopApp()
 	if err != nil {

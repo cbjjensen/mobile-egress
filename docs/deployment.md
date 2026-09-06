@@ -2,7 +2,7 @@
 
 This is the operator runbook for producing the signed artifacts that friends download and proving them on real Windows and macOS controllers, an Android or iOS cellular Agent device, and Windows Server 2019 EC2 nodes. Normal friends do not perform these steps; they follow the root README after an accepted release is published. Android APK packaging and cellular-IP rotation are covered here. iOS TestFlight signing, upload, and real-device acceptance are separate release work described in [the iOS Agent guide](../ios/README.md); `release-all.ps1` does not sign or publish iOS artifacts.
 
-The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A public **Desktop** release couples the Windows controller ZIP, EC2 Client, and macOS PKG at one version when Apple signing/notarization is ready. Windows and Android may also ship together as a non-Apple release scope while macOS/iOS are handled separately; those notes mark macOS outside the release scope and the published tag remains immutable. The approved v1.1.1 proxy hotfix is Windows-only, falls back to the published v1.1.0 Android APK in its managed notes, and marks macOS unavailable while Apple Developer Program enrollment remains pending. The prepared v1.1.2 candidate is Android-only: it delivers bounded mobile target ingress for browser bursts while Windows/macOS remain v1.1.1; iOS version metadata is updated separately for its TestFlight path.
+The former EC2-relay Docker Compose deployment is removed. The supported controller runs on Windows 10/11 or Apple Silicon macOS 13+ with a platform-local relay behind Tailscale Funnel, an Android or iOS cellular Agent, and SSM-managed x86-64 Windows Server 2019 EC2 Clients. A public **Desktop** release couples the Windows installer, EC2 Client, and macOS PKG at one version when Apple signing/notarization is ready. Upcoming releases built from this source use the self-contained `MobileEgressSetup.exe`; already published releases through v1.1.6 retain their ZIP assets. Windows and Android may also ship together as a non-Apple release scope while macOS/iOS are handled separately; those notes mark macOS outside the release scope and the published tag remains immutable. The approved v1.1.1 proxy hotfix is Windows-only, falls back to the published v1.1.0 Android APK in its managed notes, and marks macOS unavailable while Apple Developer Program enrollment remains pending. The historical v1.1.2 Android-only candidate delivered bounded mobile target ingress for browser bursts while Windows/macOS remained v1.1.1; iOS version metadata was updated separately for its TestFlight path.
 
 ## Routine release commands
 
@@ -58,7 +58,7 @@ For the explicitly approved v1.1.1 Windows proxy hotfix while macOS signing is u
 
 That release contains only the Windows ZIP and EC2 Client. Its notes link the published v1.1.0 Android APK and mark macOS unavailable; do not select, rebuild, or version-bump Android.
 
-All paths use the deterministic orchestrator. Desktop means the Windows ZIP, EC2 Client, and macOS PKG from one tag. The `Windows,Android` scope ships Windows and Android without resolving Mac prerequisites; the bare `Windows` selector is restricted to exactly the v1.1.1 hotfix. Android may otherwise be selected separately. In particular, v1.1.2 with `Android` alone is an executable accepted scope. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
+All paths use the deterministic orchestrator. For upcoming releases built from this source, Desktop means `MobileEgressSetup.exe`, EC2 Client, and macOS PKG from one tag. The existing v1.1.0 through v1.1.6 ZIP asset contracts remain immutable. The `Windows,Android` scope ships Windows and Android without resolving Mac prerequisites; the bare `Windows` selector is restricted to exactly the v1.1.1 hotfix. Android may otherwise be selected separately. In particular, v1.1.2 with `Android` alone is an executable accepted scope. The orchestrator runs only the matching gates, validates established signing identities, records the exact source, scope, artifact names, and SHA-256 digests locally, freezes exact artifacts, and publishes only an immutable prerelease after explicit `-Publish` approval. An interrupted/unknown Mac or GitHub operation must be reconciled from the exact local/remote outputs before retrying; never rerun blindly, clobber, delete, or rebuild tagged evidence.
 
 Parts 1–5 below document prerequisites, invariants, and low-level recovery evidence. Do not manually reconstruct them when a component release entry point is available. Parts 6–7 remain required physical acceptance and stable-promotion work.
 
@@ -137,7 +137,9 @@ if ($certificateSha256 -ne $expectedCertificateSha256) { throw 'Reject setup: si
 $certificateSha256
 ```
 
-Double-click `MobileEgressSetup.exe` after any desired Windows signature inspection. The initial Windows dialog can identify setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**; self-signing does not create SmartScreen reputation. Setup displays the tracked fingerprint, requires explicit **Yes**, locks its own exact executable against write/delete/replacement, verifies its exact signer, hashes it after confirmation, and holds the lock while waiting indefinitely for actual elevated-child completion. The child independently checks the request-bound digest and signature before trust, then acquires the bounded fixed `Global\MobileEgressSetupTransaction` mutex before trust mutation and holds it through trust, signed-sibling verification, installation, and rollback. Timeout fails before trust changes; abandoned ownership is recovered; cleanup releases the mutex on success and failure. Existing files and the Start Menu shortcut are backed up under a SYSTEM/Administrators-only ACL. Backup state is removed only after successful promotion or successful rollback. A restore failure preserves recovery state and returns redacted `install_rollback_failed` guidance to stop, avoid rerunning setup, and contact the publisher. The parent launches only when child exit is zero and the bound result reports success.
+Double-click `MobileEgressSetup.exe` after any desired Windows signature inspection. The initial Windows dialog can identify setup as **Unknown publisher** and SmartScreen can require **More info → Run anyway**; self-signing does not create SmartScreen reputation. Setup displays the tracked fingerprint, requires explicit **Yes**, locks its own exact executable against write/delete/replacement, verifies its exact signer, hashes it after confirmation, and holds the lock while waiting indefinitely for actual elevated-child completion. The child independently checks the request-bound digest and signature before trust, then acquires the bounded fixed `Global\MobileEgressSetupTransaction` mutex before trust mutation and holds it through protected embedded-payload extraction, trust, signed-file verification, installation, and rollback. Embedded installers ignore adjacent files; legacy installers continue to support their flat and payload-folder ZIP layouts. Timeout fails before trust changes; abandoned ownership is recovered; cleanup releases the mutex on success and failure. Existing files and the Start Menu shortcut are backed up under a SYSTEM/Administrators-only ACL. Backup state is removed only after successful promotion or successful rollback. A restore failure preserves recovery state and returns redacted `install_rollback_failed` guidance to stop, avoid rerunning setup, and contact the publisher. The parent launches only when child exit is zero, the bound result reports success, and WebView2 is available.
+
+The upcoming installer displays native setup and WebView2 stage windows. If runtime preparation fails after application installation, **Retry** repeats only the runtime step. **Cancel** leaves the installed app available; opening Mobile Egress from the Start Menu can prepare the missing runtime later without reinstalling the application. See [Windows installer](windows-installer.md) for the new packaging and recovery flow. The historical acceptance procedure below retains its original ZIP-specific release scope.
 
 The signed controller carries node-release manifest v2 with that same public publisher certificate DER, its SHA-1 thumbprint and SHA-256 fingerprint, and the exact Client URL/artifact SHA-256. Go validates the bounded X.509 DER, cryptographic self-signature, Code Signing EKU, CA=false constraint, current validity, fingerprints, and release metadata before constructing SSM commands. The SSM flow verifies the artifact hash and exact untrusted signer bytes before importing the embedded DER into EC2 `LocalMachine\Root` and `LocalMachine\TrustedPublisher`. Windows Server 2019 can return pre-trust Authenticode `UnknownError` for this self-signed publisher; the node flow permits it only after the pinned artifact hash and exact certificate bytes match. It always requires post-trust `Valid` with the same signer. EC2 nodes receive only public certificate/release material; they never receive the PFX, its password, or another private signing value.
 
@@ -203,10 +205,12 @@ $codeSigningThumbprint = '<40-hex-thumbprint>'
 if ($LASTEXITCODE -ne 0) { throw 'The signed Windows build failed.' }
 ```
 
-The script builds and verifies the setup application and four executables, reads the tracked CER, emits node-release manifest v2, embeds that manifest in the controller before signing it, and creates:
+The script signs and verifies all four application executables, reads the tracked CER, emits node-release manifest v2, embeds that manifest in the controller before signing it, then embeds the signed payload into setup and signs the complete installer last. It creates:
 
 ```text
 windows-client\build\release\mobile-egress-windows-<version>.zip
+windows-client\build\release\mobile-egress-windows-<version>\MobileEgressSetup.exe
+windows-client\build\release\mobile-egress-windows-<version>\payload-verification.zip
 windows-client\build\bin\MobileEgressSetup.exe
 windows-client\build\bin\mobile-egress-windows.exe
 windows-client\build\bin\mobile-egress-admin.exe
@@ -215,7 +219,7 @@ windows-client\build\bin\mobile-egress-client.exe
 windows-client\build\bin\release-manifest.json
 ```
 
-The ZIP contains `MobileEgressSetup.exe`, all four sibling executables, the public publisher certificate, and the audit manifest. Friends run only `MobileEgressSetup.exe` after extracting the ZIP. The same standalone `mobile-egress-client.exe` must be uploaded with that exact filename to the matching GitHub tag because the signed controller embeds this URL:
+For upcoming releases built from this source, friends download and run only the self-contained `MobileEgressSetup.exe`; extraction and adjacent files are unnecessary. The compatibility ZIP contains setup plus the four application executables and public metadata in its payload folder. The local `payload-verification.zip` binds the embedded archive to independently verified sources and is never uploaded. Existing v1.1.0 through v1.1.6 releases retain their original ZIP downloads and extraction instructions; no published asset is replaced by this source change. The standalone `mobile-egress-client.exe` must also be uploaded with that exact filename to the matching GitHub tag because the signed controller embeds this URL:
 
 ```text
 https://github.com/cbjjensen/mobile-egress/releases/download/v<version>/mobile-egress-client.exe
@@ -224,9 +228,9 @@ https://github.com/cbjjensen/mobile-egress/releases/download/v<version>/mobile-e
 Verify the output again before upload:
 
 ```powershell
-$windowsZip = ".\windows-client\build\release\mobile-egress-windows-$releaseVersion.zip"
+$windowsInstaller = ".\windows-client\build\release\mobile-egress-windows-$releaseVersion\MobileEgressSetup.exe"
 $clientExecutable = '.\windows-client\build\bin\mobile-egress-client.exe'
-$windowsExecutables = Get-ChildItem -LiteralPath '.\windows-client\build\bin' -Filter 'mobile-egress-*.exe'
+$windowsExecutables = @(Get-ChildItem -LiteralPath '.\windows-client\build\bin' -Filter 'mobile-egress-*.exe') + @(Get-Item -LiteralPath $windowsInstaller)
 
 $signatureResults = foreach ($executable in $windowsExecutables) {
     $signature = Get-AuthenticodeSignature -LiteralPath $executable.FullName
@@ -242,7 +246,7 @@ if ($signatureResults | Where-Object { $_.Status -ne 'Valid' }) {
     throw 'A Windows release signature is invalid.'
 }
 
-Get-FileHash -Algorithm SHA256 -LiteralPath $windowsZip, $clientExecutable
+Get-FileHash -Algorithm SHA256 -LiteralPath $windowsInstaller, $clientExecutable
 Get-Content -Raw '.\windows-client\build\bin\release-manifest.json'
 ```
 
@@ -327,13 +331,13 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $androidApk
 
 The non-publishing run creates or confirms the local annotated tag only after artifact verification. An explicitly approved `-Publish` run may then push source/tag state and change GitHub. It verifies the exact tag and commit, creates or reconciles the draft, uploads the expected assets in deterministic order, waits for each matching remote digest, and exposes only a prerelease. Do not issue direct `gh release create/edit/upload` commands for production publication.
 
-A Desktop-scoped prerelease has exactly:
+An upcoming Desktop-scoped prerelease built from this source has exactly:
 
-- `mobile-egress-windows-<version>.zip`;
+- `MobileEgressSetup.exe`;
 - `mobile-egress-client.exe`; and
 - `mobile-egress-macos-<version>-arm64.pkg`.
 
-The normal Windows-and-Android prerelease has exactly `mobile-egress-windows-<version>.zip`, `mobile-egress-client.exe`, and `zfnf-mobile-egress-android-<version>.apk`. The v1.1.1 Windows-scoped prerelease has exactly `mobile-egress-windows-1.1.1.zip` and `mobile-egress-client.exe`. Neither includes a macOS PKG. The Mac verification JSON is local/private evidence and is never uploaded.
+An upcoming Windows-and-Android prerelease built from this source has exactly `MobileEgressSetup.exe`, `mobile-egress-client.exe`, and `zfnf-mobile-egress-android-<version>.apk`. Published v1.1.0 through v1.1.6 releases keep their versioned Windows ZIP names. The v1.1.1 Windows-scoped prerelease has exactly `mobile-egress-windows-1.1.1.zip` and `mobile-egress-client.exe`. Neither Windows-scoped format includes a macOS PKG. The Mac verification JSON and Windows payload verification ZIP are local evidence and are never uploaded.
 
 Managed release notes always render four Downloads entries in order: Windows controller, EC2 Client, macOS controller PKG, Android Agent APK. A Windows-and-Android release links its current Windows and Android artifacts and marks macOS outside the release scope. The v1.1.1 notes link both current Windows artifacts, mark macOS unavailable pending Apple Developer Program enrollment, and link the published v1.1.0 Android APK. A Desktop release keeps its first three assets on the same tag; Android may point to a different eligible release.
 

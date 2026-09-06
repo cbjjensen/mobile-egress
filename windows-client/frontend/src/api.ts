@@ -35,6 +35,8 @@ export type BridgeStatus = {
   ownerReady: boolean
   ready: boolean
   needsRotation: boolean
+  agentConnected?: boolean
+  agentPaired?: boolean
 }
 
 export type DeviceAuthorization = { verificationUrl: string; userCode: string; expiresAt: string }
@@ -68,12 +70,14 @@ export type SSMInstanceStatus = {
 }
 
 export type ComponentStatus = { checking: boolean; stale: boolean; error?: string; lastSuccess?: string }
-export type ControllerSnapshot = { bridge: BridgeStatus; nodes: ManagedNode[]; pendingReservations: string[]; components: Record<'tailscale' | 'helper' | 'relay' | 'metadata', ComponentStatus> }
+export type ControllerSnapshot = { bridge: BridgeStatus; awsConfigured?: boolean; nodes: ManagedNode[]; pendingReservations: string[]; components: Record<'tailscale' | 'helper' | 'relay' | 'metadata', ComponentStatus> }
 
 type DesktopAPI = {
   GetControllerSnapshot(): Promise<ControllerSnapshot>
   GetStatus(): Promise<Status>
   GetBridgeStatus(): Promise<BridgeStatus>
+  GetSetupProgress(): Promise<{ stage: string; message: string }>
+  CancelSetup(): Promise<void>
   InstallTailscale(): Promise<void>
   ConnectTailscale(): Promise<BridgeStatus>
   SetupLocalBridge(): Promise<BridgeStatus>

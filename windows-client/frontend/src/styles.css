@@ -312,6 +312,8 @@ button:disabled {
 
 @keyframes ssm-spin { to { transform: rotate(360deg); } }
 
+.setup-next { margin-bottom: 20px; }
+
 .copyline, .issued, .setup-callout, .serialline, .managed, .activity-entry, .note {
   background: var(--ip-surface-subtle);
   border: 1px solid var(--ip-line);

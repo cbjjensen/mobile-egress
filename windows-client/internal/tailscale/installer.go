@@ -31,6 +31,9 @@ type Installer struct {
 }
 
 func (installer Installer) Install(ctx context.Context) (Release, error) {
+	if err := ctx.Err(); err != nil {
+		return Release{}, err
+	}
 	if installer.VerifyAuthenticode == nil || installer.ElevatedInstall == nil {
 		return Release{}, errors.New("Tailscale installer verification and elevation are required")
 	}
@@ -38,6 +41,7 @@ func (installer Installer) Install(ctx context.Context) (Release, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
+	ReportSetupProgress(ctx, "download", "Downloading the official Tailscale installer.")
 	page, err := downloadSmall(ctx, client, StablePackagesURL, 8<<20)
 	if err != nil {
 		return Release{}, errors.New("download Tailscale stable package index")
@@ -70,6 +74,10 @@ func (installer Installer) Install(ctx context.Context) (Release, error) {
 	if err := file.Close(); err != nil {
 		return Release{}, errors.New("close Tailscale MSI staging file")
 	}
+	if err := ctx.Err(); err != nil {
+		return Release{}, err
+	}
+	ReportSetupProgress(ctx, "verify", "Verifying the Tailscale installer signature and publisher.")
 	signature, err := installer.VerifyAuthenticode(path)
 	if err != nil {
 		return Release{}, errors.New("verify Tailscale Authenticode signature")
@@ -77,8 +85,18 @@ func (installer Installer) Install(ctx context.Context) (Release, error) {
 	if err := ValidateSignature(signature); err != nil {
 		return Release{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Release{}, err
+	}
+	ReportSetupProgress(ctx, "install", "Installing Tailscale. Approve the system installer if prompted.")
+	if err := ctx.Err(); err != nil {
+		return Release{}, err
+	}
 	if err := installer.ElevatedInstall(path); err != nil {
 		return Release{}, fmt.Errorf("Tailscale installation was cancelled or failed: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Release{}, err
 	}
 	return release, nil
 }

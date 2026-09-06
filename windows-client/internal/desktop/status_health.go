@@ -44,5 +44,7 @@ func (h *controllerHealth) read(ctx context.Context, identity relayclient.Identi
 	}
 	health, err := h.client.Health(ctx)
 	result.relayReady = health.Readiness
+	result.agentConnected = health.AgentConnected
+	result.agentPaired = health.AgentPaired
 	return result, err
 }

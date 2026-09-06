@@ -85,6 +85,7 @@ func (installer DarwinInstaller) Install(ctx context.Context) (Release, error) {
 	if err != nil {
 		return Release{}, err
 	}
+	ReportSetupProgress(ctx, "download", "Downloading the official Tailscale installer.")
 	release, stage, stageErr := resolver(ctx, installer.HTTPClient)
 	if stage != nil {
 		if bindErr := lease.BindStage(stage); bindErr != nil {
@@ -95,6 +96,7 @@ func (installer DarwinInstaller) Install(ctx context.Context) (Release, error) {
 	if stageErr != nil || stage == nil {
 		return installer.failBeforeDispatch(lease, errDarwinInstallerFailed)
 	}
+	ReportSetupProgress(ctx, "verify", "Verifying the Tailscale installer signature and publisher.")
 	if installer.VerifyPKG(ctx, stage) != nil {
 		return installer.failBeforeDispatch(lease, errDarwinInstallerFailed)
 	}
@@ -104,6 +106,7 @@ func (installer DarwinInstaller) Install(ctx context.Context) (Release, error) {
 		return installer.failBeforeDispatch(lease, errDarwinInstallerFailed)
 	}
 
+	ReportSetupProgress(ctx, "install", "Installing Tailscale. Approve the system installer if prompted.")
 	session, launchErr := installer.LaunchInstaller(ctx, stage)
 	if session != nil {
 		if bindErr := lease.BindSession(session); bindErr != nil {

@@ -459,6 +459,33 @@ function Assert-MobileEgressReleaseZipMatchesSources {
     }
 }
 
+function Assert-MobileEgressInstallerPayload {
+    param([Parameter(Mandatory)][string]$InstallerPath, [Parameter(Mandatory)][string]$PayloadPath, [Parameter(Mandatory)][System.Collections.IDictionary]$ExpectedSources)
+
+    Assert-MobileEgressReleaseZipMatchesSources -ZipPath $PayloadPath -ExpectedSources $ExpectedSources
+    if (-not ('MobileEgress.ReleasePayloadBytes' -as [type])) {
+        Add-Type -TypeDefinition @'
+namespace MobileEgress {
+    public static class ReleasePayloadBytes {
+        public static bool Contains(byte[] executable, byte[] payload) {
+            if (payload.Length == 0) return false;
+            for (int i = 0; i <= executable.Length - payload.Length; i++) {
+                if (executable[i] != payload[0]) continue;
+                int j = 1;
+                while (j < payload.Length && executable[i + j] == payload[j]) j++;
+                if (j == payload.Length) return true;
+            }
+            return false;
+        }
+    }
+}
+'@
+    }
+    if (-not [MobileEgress.ReleasePayloadBytes]::Contains([IO.File]::ReadAllBytes($InstallerPath), [IO.File]::ReadAllBytes($PayloadPath))) {
+        throw 'The signed installer does not embed the exact verified release payload.'
+    }
+}
+
 function Resolve-MobileEgressReleaseComponents {
     param([AllowEmptyCollection()][string[]]$Components = @())
 
@@ -581,9 +608,11 @@ function Get-MobileEgressReleaseArtifactDefinitions {
 
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
     if (($resolvedComponents -contains 'Desktop') -or ($resolvedComponents -contains 'Windows')) {
+        $windowsName = Get-MobileEgressWindowsDownloadName -Version $Version
+        $windowsPath = if ($windowsName -eq 'MobileEgressSetup.exe') { "windows-client\build\release\mobile-egress-windows-$Version\MobileEgressSetup.exe" } else { "windows-client\build\release\$windowsName" }
         [pscustomobject]@{
-            Name = "mobile-egress-windows-$Version.zip"
-            Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip"
+            Name = $windowsName
+            Path = Join-Path $RepositoryRoot $windowsPath
         }
         [pscustomobject]@{
             Name = 'mobile-egress-client.exe'
@@ -605,6 +634,13 @@ function Get-MobileEgressReleaseArtifactDefinitions {
     }
 }
 
+function Get-MobileEgressWindowsDownloadName {
+    param([Parameter(Mandatory)][string]$Version)
+    # Published historical contracts are immutable.
+    if ($Version -match '^1\.1\.[0-6]$') { return "mobile-egress-windows-$Version.zip" }
+    return 'MobileEgressSetup.exe'
+}
+
 function Get-MobileEgressReleaseDownloadItemDefinitions {
     param(
         [Parameter(Mandatory)]
@@ -614,8 +650,8 @@ function Get-MobileEgressReleaseDownloadItemDefinitions {
     return @(
         [pscustomobject]@{
             Key = 'windows'
-            Label = 'Windows controller bundle'
-            CurrentName = "mobile-egress-windows-$Version.zip"
+            Label = 'Windows installer'
+            CurrentName = Get-MobileEgressWindowsDownloadName -Version $Version
         },
         [pscustomobject]@{
             Key = 'client'
@@ -644,7 +680,7 @@ function Test-MobileEgressReleaseDownloadAssetName {
     )
 
     switch ($Key) {
-        'windows' { return $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
+        'windows' { return $Name -ceq 'MobileEgressSetup.exe' -or $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
         'client' { return $Name -ceq 'mobile-egress-client.exe' }
         'macos' { return $Name -match '^mobile-egress-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
         'android' { return $Name -match '^zfnf-mobile-egress-android-[0-9]+\.[0-9]+\.[0-9]+\.apk$' -or $Name -ceq 'app-release.apk' }
@@ -978,6 +1014,19 @@ function Assert-MobileEgressReleaseArtifacts {
         Assert-MobileEgressReleaseZipMatchesSources `
             -ZipPath (Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip") `
             -ExpectedSources $zipSources
+
+        if ((Get-MobileEgressWindowsDownloadName -Version $Version) -eq 'MobileEgressSetup.exe') {
+            $packageRoot = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version"
+            $installerPath = Join-Path $packageRoot 'MobileEgressSetup.exe'
+            if ((Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath (Join-Path $binRoot 'MobileEgressSetup.exe') -Algorithm SHA256).Hash) {
+                throw 'The downloadable installer differs from the verified signed setup.'
+            }
+            $payloadSources = [ordered]@{}
+            foreach ($entry in $zipSources.GetEnumerator()) {
+                if ($entry.Key.StartsWith('payload/')) { $payloadSources[$entry.Key.Substring(8)] = $entry.Value }
+            }
+            Assert-MobileEgressInstallerPayload -InstallerPath $installerPath -PayloadPath (Join-Path $packageRoot 'payload-verification.zip') -ExpectedSources $payloadSources
+        }
 
     }
 

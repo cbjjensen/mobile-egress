@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -34,13 +35,21 @@ func TestInstallerVerifiesChecksumAuthenticodeAndPublisherBeforeElevation(t *tes
 	})}
 	verified := false
 	elevated := false
+	var stages []string
+	ctx := WithSetupProgress(context.Background(), func(stage, message string) { stages = append(stages, stage) })
 	installer := Installer{
 		HTTPClient: client,
 		VerifyAuthenticode: func(path string) (Signature, error) {
+			if stages[len(stages)-1] != "verify" {
+				t.Fatal("signature check missing verification progress")
+			}
 			verified = true
 			return Signature{Valid: true, Subject: "CN=Tailscale Inc., O=Tailscale Inc."}, nil
 		},
 		ElevatedInstall: func(path string) error {
+			if stages[len(stages)-1] != "install" {
+				t.Fatal("elevation missing installation progress")
+			}
 			if !verified {
 				t.Fatal("elevation occurred before signature verification")
 			}
@@ -48,12 +57,15 @@ func TestInstallerVerifiesChecksumAuthenticodeAndPublisherBeforeElevation(t *tes
 			return nil
 		},
 	}
-	release, err := installer.Install(context.Background())
+	release, err := installer.Install(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !verified || !elevated || release.Version != "1.100.1" {
 		t.Fatalf("Install() = %#v, verified=%t elevated=%t", release, verified, elevated)
+	}
+	if !reflect.DeepEqual(stages, []string{"download", "verify", "install"}) {
+		t.Fatalf("progress = %v", stages)
 	}
 }
 

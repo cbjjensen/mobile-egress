@@ -1,0 +1,11 @@
+# Windows installer
+
+For upcoming releases built from this source, download **MobileEgressSetup.exe** directly from the project's official GitHub Releases and double-click it. It contains the signed application files; no extraction or adjacent payload folder is needed. Choose **Yes** to trust the displayed publisher and install Mobile Egress, then approve Windows permission. Independently checking Properties > Digital Signatures against the separately shared certificate fingerprint is optional. This source change has not published a new installer; existing releases through v1.1.6 retain their ZIP downloads.
+
+Native Windows setup windows show the current installation stage before the app opens, including unpacking, signature verification, application installation, and WebView2 preparation. Keep an internet connection available if WebView2 is missing. If runtime preparation fails, **Retry** repeats only that runtime step. **Cancel** leaves the installed application available; opening Mobile Egress from the Start Menu retries missing runtime preparation without reinstalling the application.
+
+The established publisher identity, exact executable locking through elevation, nonce and digest bound completion, bounded machine-global installer mutex, signed-file verification, and transactional rollback remain required. A reported `install_rollback_failed` still means stop and contact the publisher; do not rerun setup or move the restricted recovery backup.
+
+The guarded Windows build signs the application binaries first, embeds their exact compressed bytes with the manifest and public certificate metadata into setup, and signs the complete installer last. The release verifier checks every executable signature, the manifest and Client hash, and the embedded payload against the verified sources. Private signing material never enters the payload. The local `payload-verification.zip` is verification evidence and is not a release asset.
+
+Upcoming Windows releases built from this source publish the single installer plus the separately used EC2 Client executable. Local compatibility ZIPs are still produced; existing flat and payload-folder ZIP layouts remain supported by development/legacy setup. All established v1.1.0 through v1.1.6 ZIP artifact contracts stay unchanged. Previously published assets must never be rebuilt or replaced.

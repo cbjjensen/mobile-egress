@@ -17,13 +17,23 @@ import (
 // Microsoft documents the Evergreen bootstrapper for prerequisite deployment:
 // https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
 func EnsureWebView2Installed(ctx context.Context) error {
+	return EnsureWebView2WithProgress(ctx, func(string) {})
+}
+
+func EnsureWebView2WithProgress(ctx context.Context, progress func(string)) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	return EnsureRuntime(ctx, CheckWebView2Installed, installWebView2)
+	progress("Checking Microsoft WebView2 Runtime…")
+	return EnsureRuntime(ctx, CheckWebView2Installed, func(ctx context.Context) error { return installWebView2WithProgress(ctx, progress) })
 }
 
 func installWebView2(ctx context.Context) error {
-	const guidance = "Mobile Egress is installed, but WebView2 setup did not finish. Check your internet connection and run MobileEgressSetup.exe again. If this is a work PC, ask your administrator whether runtime installation is allowed."
+	return installWebView2WithProgress(ctx, func(string) {})
+}
+
+func installWebView2WithProgress(ctx context.Context, progress func(string)) error {
+	const guidance = "Mobile Egress is installed, but WebView2 setup did not finish. Check your internet connection and retry the runtime step. If this is a work PC, ask your administrator whether runtime installation is allowed."
+	progress("Downloading the Microsoft WebView2 installer…")
 	directory, err := os.MkdirTemp("", "mobile-egress-webview2-")
 	if err != nil {
 		return errors.New(guidance)
@@ -74,10 +84,12 @@ try {
 	command := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
 	command.Env = append(os.Environ(), "MOBILE_EGRESS_WEBVIEW2_INSTALLER="+path)
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	progress("Verifying Microsoft’s signature and installing WebView2. This can take several minutes…")
 	if command.Run() != nil {
 		return errors.New(guidance)
 	}
 	// The bootstrapper can finish before runtime registration becomes visible.
+	progress("Waiting for Microsoft WebView2 to become available…")
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
 	ticker := time.NewTicker(time.Second)

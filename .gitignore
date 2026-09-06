@@ -48,6 +48,7 @@ windows-client/frontend/*.tsbuildinfo
 windows-client/internal/assets/bundle/*
 !windows-client/internal/assets/bundle/.keep
 windows-client/build/
+windows-client/internal/setup/payload.zip
 
 # Agent coordination scratch space
 .superpowers/

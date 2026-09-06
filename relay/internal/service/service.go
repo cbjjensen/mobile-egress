@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"mobile-egress/internal/capacity"
+	"mobile-egress/relay/internal/enrollment"
 )
 
 type Service struct {
@@ -60,6 +61,7 @@ type Service struct {
 type healthResponse struct {
 	Readiness       bool             `json:"readiness"`
 	AgentConnected  bool             `json:"agentConnected"`
+	AgentPaired     *bool            `json:"agentPaired,omitempty"`
 	ConnectedClient int              `json:"connectedClients"`
 	ActiveStreams   int              `json:"activeStreams"`
 	TotalStreams    int64            `json:"totalStreams"`
@@ -220,6 +222,16 @@ func (service *Service) handleHealth(writer http.ResponseWriter, request *http.R
 		TotalStreams: metrics.TotalStreams, ByteCount: metrics.ByteCount, ErrorCounts: metrics.ErrorCounts,
 	}
 	service.mu.RUnlock()
+	// Enrollment history is available only to the authenticated active Owner.
+	// Older callers and unauthenticated readiness probes retain their schema.
+	if request.Header.Get("X-Mobile-Egress-Health-Agent-Pairing") == "1" {
+		if _, role, status := service.authenticateRequest(request); status == 0 && role == enrollment.RoleOwner {
+			if count, countErr := service.store.activeIdentityCount(request.Context(), enrollment.RoleAgent); countErr == nil {
+				paired := count > 0
+				response.AgentPaired = &paired
+			}
+		}
+	}
 	writer.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		response.ErrorCounts = map[string]int64{}

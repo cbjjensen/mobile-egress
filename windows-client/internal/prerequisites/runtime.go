@@ -21,3 +21,23 @@ func EnsureRuntime(ctx context.Context, check func() error, install func(context
 	}
 	return nil
 }
+
+// RetryRuntime repeats only prerequisite preparation after application install
+// succeeds. Each attempt gets its own installer timeout; cancellation stops it.
+func RetryRuntime(ctx context.Context, prepare func(context.Context) error, retry func() bool) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := prepare(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !retry() {
+			return err
+		}
+	}
+}

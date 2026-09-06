@@ -9,11 +9,23 @@ import (
 type fakeControllerHealth struct {
 	closed bool
 	calls  int
+	health relayclient.RelayHealth
 }
 
 func (h *fakeControllerHealth) Health(context.Context) (relayclient.RelayHealth, error) {
 	h.calls++
-	return relayclient.RelayHealth{Readiness: true}, nil
+	return h.health, nil
+}
+
+func TestControllerHealthPropagatesLiveAgentEvidence(t *testing.T) {
+	paired := true
+	h := controllerHealth{create: func(relayclient.Identity) (controllerHealthClient, error) {
+		return &fakeControllerHealth{health: relayclient.RelayHealth{Readiness: true, AgentConnected: true, AgentPaired: &paired}}, nil
+	}}
+	result, err := h.read(context.Background(), relayclient.Identity{Role: "owner"}, true)
+	if err != nil || !result.agentConnected || result.agentPaired == nil || !*result.agentPaired {
+		t.Fatalf("agent evidence = %+v / %v", result, err)
+	}
 }
 func (h *fakeControllerHealth) Close() error { h.closed = true; return nil }
 func TestControllerHealthReplacesEveryIdentityOrEndpointChange(t *testing.T) {

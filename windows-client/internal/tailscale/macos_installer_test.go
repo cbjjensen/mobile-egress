@@ -11,6 +11,8 @@ import (
 )
 
 func TestDarwinInstallerVerifiesBeforeLaunchAndRequiresFreshFinalStandaloneAssessment(t *testing.T) {
+	var progress []string
+	ctx := WithSetupProgress(context.Background(), func(stage, _ string) { progress = append(progress, stage) })
 	stage, operations := newModelStagedPackage(t)
 	events := []string{}
 	observedStage := &installerEventStageOperations{macStageOperations: stage.operations, events: &events}
@@ -23,6 +25,9 @@ func TestDarwinInstallerVerifiesBeforeLaunchAndRequiresFreshFinalStandaloneAsses
 		return MacRelease{Version: "1.100.1"}, stage, nil
 	}
 	installer.VerifyPKG = func(ctx context.Context, got *stagedMacPKG) error {
+		if !reflect.DeepEqual(progress, []string{"download", "verify"}) {
+			t.Fatalf("verification progress = %v", progress)
+		}
 		events = append(events, "verify")
 		if got != stage || got.Revalidate(ctx) != nil || got.Path() == "" {
 			return errors.New("unusable retained stage")
@@ -33,6 +38,9 @@ func TestDarwinInstallerVerifiesBeforeLaunchAndRequiresFreshFinalStandaloneAsses
 		return nil
 	}
 	installer.LaunchInstaller = func(ctx context.Context, got *stagedMacPKG) (installerSession, error) {
+		if !reflect.DeepEqual(progress, []string{"download", "verify", "install"}) {
+			t.Fatalf("installation progress = %v", progress)
+		}
 		events = append(events, "launch")
 		if observedStage.validateParentCalls != 6 {
 			return nil, errors.New("two transaction revalidations did not precede launch")
@@ -48,7 +56,7 @@ func TestDarwinInstallerVerifiesBeforeLaunchAndRequiresFreshFinalStandaloneAsses
 		return standaloneTestInstallation(&events), nil
 	}
 
-	release, err := installer.Install(context.Background())
+	release, err := installer.Install(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

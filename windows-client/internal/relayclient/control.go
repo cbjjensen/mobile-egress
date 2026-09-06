@@ -43,6 +43,7 @@ type EndpointMigration struct {
 type RelayHealth struct {
 	Readiness        bool             `json:"readiness"`
 	AgentConnected   bool             `json:"agentConnected"`
+	AgentPaired      *bool            `json:"agentPaired,omitempty"`
 	ConnectedClients int              `json:"connectedClients"`
 	ActiveStreams    int              `json:"activeStreams"`
 	TotalStreams     int64            `json:"totalStreams"`
@@ -231,6 +232,8 @@ func (client *HealthClient) Health(ctx context.Context) (RelayHealth, error) {
 	if err != nil {
 		return RelayHealth{}, err
 	}
+	// Opt in explicitly: older desktop clients reject unknown health fields.
+	request.Header.Set("X-Mobile-Egress-Health-Agent-Pairing", "1")
 	response, err := client.client.Do(request)
 	if err != nil {
 		return RelayHealth{}, errors.New("relay health is unavailable")

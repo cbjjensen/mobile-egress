@@ -72,8 +72,25 @@ func runParent(platform *setup.WindowsPlatform) error {
 		return errors.New("create setup request nonce")
 	}
 	nonce := hex.EncodeToString(nonceBytes)
+	var progress *setup.NativeProgress
+	defer func() {
+		if progress != nil {
+			progress.Close()
+		}
+	}()
+	report := func(message string) {
+		if progress == nil {
+			progress, _ = setup.NewNativeProgress()
+		}
+		if progress != nil {
+			progress.Report(message)
+		}
+	}
 	return setup.RunParent(context.Background(), setup.ParentOptions{
-		PrepareRuntime:      prerequisites.EnsureWebView2Installed,
+		Progress: report,
+		PrepareRuntime: func(ctx context.Context) error {
+			return prerequisites.RetryRuntime(ctx, func(ctx context.Context) error { return prerequisites.EnsureWebView2WithProgress(ctx, report) }, platform.RetryRuntime)
+		},
 		Executable:          executable,
 		InstalledController: filepath.Join(setup.InstallRoot, setup.ControllerExecutableName),
 		Identity:            identity,
@@ -96,12 +113,19 @@ func runElevated(nonce string, platform *setup.WindowsPlatform) error {
 		return err
 	}
 	exchange := setup.Exchange{Root: exchangeRoot}
+	progress, err := setup.NewNativeProgress()
+	if err != nil {
+		return err
+	}
+	defer progress.Close()
 	return completeElevatedRun(nonce, executable, exchange, func() error {
 		return setup.RunElevated(setup.ElevatedOptions{
-			Nonce:     nonce,
-			SetupPath: executable,
-			Exchange:  exchange,
-			Identity:  identity,
+			Progress:       progress.Report,
+			PreparePayload: setup.PrepareEmbeddedPayload,
+			Nonce:          nonce,
+			SetupPath:      executable,
+			Exchange:       exchange,
+			Identity:       identity,
 		}, platform)
 	})
 }

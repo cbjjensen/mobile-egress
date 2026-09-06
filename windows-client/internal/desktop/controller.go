@@ -58,6 +58,7 @@ type DesktopApp struct {
 	bridgeWorkflow  chan struct{}
 	ctx             context.Context
 	awsClient       *awssdk.Client
+	setup           *setupAction
 	identityLogin   *awssdk.IdentityCenterLogin
 	identitySession *awssdk.IdentityCenterSession
 	awsInventory    []cloud.Instance
@@ -149,6 +150,8 @@ type BridgeView struct {
 	TailscaleOnline    bool   `json:"tailscaleOnline"`
 	FunnelReady        bool   `json:"funnelReady"`
 	RelayReady         bool   `json:"relayReady"`
+	AgentConnected     bool   `json:"agentConnected"`
+	AgentPaired        *bool  `json:"agentPaired,omitempty"`
 	FQDN               string `json:"fqdn,omitempty"`
 	PublicURL          string `json:"publicUrl,omitempty"`
 	OwnerReady         bool   `json:"ownerReady"`
@@ -384,9 +387,12 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 }
 
 func (app *DesktopApp) InstallTailscale() error {
+	ctx, finish, err := app.beginSetup(15*time.Minute, "checking", "Checking the Tailscale installation.")
+	if err != nil {
+		return err
+	}
+	defer finish()
 	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
-	ctx, cancel := context.WithTimeout(app.operationContext(), 15*time.Minute)
-	defer cancel()
 	checkContext, checkCancel := context.WithTimeout(ctx, 15*time.Second)
 	checkErr := app.tailscale.CheckInstalled(checkContext)
 	checkCancel()
@@ -402,17 +408,23 @@ func (app *DesktopApp) InstallTailscale() error {
 	if _, err := app.tailscaleInstall.Install(ctx); err != nil {
 		return fmt.Errorf("Unable to install the verified Tailscale package: %w", err)
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
+	ctx, finish, err := app.beginSetup(10*time.Minute, "connect", "Connecting Tailscale. Complete sign-in in your browser if prompted.")
+	if err != nil {
+		return BridgeView{}, err
+	}
+	defer finish()
 	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	if app.tailscale == nil {
 		return BridgeView{}, errors.New("Install Tailscale before connecting it.")
 	}
-	ctx, cancel := context.WithTimeout(app.operationContext(), 10*time.Minute)
-	defer cancel()
 	status, err := app.tailscale.Connect(ctx)
+	if ctx.Err() != nil {
+		return BridgeView{}, ctx.Err()
+	}
 	if err != nil {
 		return BridgeView{}, fmt.Errorf("Unable to connect Tailscale: %w", err)
 	}
@@ -423,9 +435,16 @@ func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
 }
 
 func (app *DesktopApp) SetupLocalBridge() (BridgeView, error) {
-	ctx, cancel := context.WithTimeout(app.operationContext(), 10*time.Minute)
-	defer cancel()
-	return app.setupLocalBridge(ctx)
+	ctx, finish, err := app.beginSetup(10*time.Minute, "bridge", "Setting up the local relay and Tailscale Funnel.")
+	if err != nil {
+		return BridgeView{}, err
+	}
+	defer finish()
+	view, err := app.setupLocalBridge(ctx)
+	if ctx.Err() != nil {
+		return BridgeView{}, ctx.Err()
+	}
+	return view, err
 }
 
 func (app *DesktopApp) setupLocalBridge(ctx context.Context) (BridgeView, error) {
@@ -472,13 +491,16 @@ func (app *DesktopApp) setupLocalBridge(ctx context.Context) (BridgeView, error)
 }
 
 func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
-	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	timeout := 10 * time.Minute
 	if app.desktopPlatform() == platformMacOS {
 		timeout = relayadmin.OperationTimeout
 	}
-	ctx, cancel := context.WithTimeout(app.operationContext(), timeout)
-	defer cancel()
+	ctx, finish, err := app.beginSetup(timeout, "bridge", "Repairing the local relay and Tailscale Funnel.")
+	if err != nil {
+		return BridgeView{}, err
+	}
+	defer finish()
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	release, err := app.acquireBridgeWorkflow(ctx)
 	if err != nil {
 		return BridgeView{}, err
@@ -498,8 +520,14 @@ func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
 	if err := app.bridge.Repair(ctx); err != nil {
 		return BridgeView{}, fmt.Errorf("Unable to repair the local relay: %w", err)
 	}
+	if ctx.Err() != nil {
+		return BridgeView{}, ctx.Err()
+	}
 	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
 		observation := app.relayService.WaitForExactHelper(ctx)
+		if ctx.Err() != nil {
+			return BridgeView{}, ctx.Err()
+		}
 		if app.monitor != nil {
 			app.monitor.publish(componentHelper, componentResult{helper: relayStateFromObservation(observation)}, nil)
 		}

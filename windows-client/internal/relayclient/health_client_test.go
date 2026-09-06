@@ -2,9 +2,38 @@ package relayclient
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/http/httptrace"
 	"testing"
 )
+
+func TestHealthClientNegotiatesOptionalPairingEvidenceWithOlderRelayFallback(t *testing.T) {
+	for _, field := range []string{"", `,"agentPaired":false`, `,"agentPaired":true`} {
+		t.Run(field, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Header.Get("X-Mobile-Egress-Health-Agent-Pairing") != "1" {
+					t.Error("missing pairing evidence opt-in")
+				}
+				fmt.Fprintf(writer, `{"readiness":true,"agentConnected":false,"connectedClients":0,"activeStreams":0,"totalStreams":0,"byteCount":0,"errorCounts":{}%s}`, field)
+			}))
+			defer server.Close()
+			client := &HealthClient{client: server.Client(), url: server.URL}
+			health, err := client.Health(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if field == "" {
+				if health.AgentPaired != nil {
+					t.Fatal("older relay reported known pairing")
+				}
+			} else if health.AgentPaired == nil || *health.AgentPaired != (field == `,"agentPaired":true`) {
+				t.Fatalf("pairing evidence = %v", health.AgentPaired)
+			}
+		})
+	}
+}
 
 func TestHealthClientReusesAuthenticatedConnection(t *testing.T) {
 	identity, server, requests := newControlFixture(t, "owner")

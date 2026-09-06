@@ -36,6 +36,7 @@ var (
 )
 
 type ParentOptions struct {
+	Progress            func(string)
 	PrepareRuntime      func(context.Context) error
 	Executable          string
 	InstalledController string
@@ -88,6 +89,7 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if !confirmed {
 		return ErrConfirmationDeclined
 	}
+	reportProgress(options.Progress, "Waiting for Windows permission and installing Mobile Egress…")
 	setupSHA256, err := setupLock.SHA256()
 	if err != nil {
 		return errors.New("hash confirmed setup executable")
@@ -121,10 +123,12 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 		return fmt.Errorf("setup failed (%s): %s", result.Code, result.Message)
 	}
 	if options.PrepareRuntime != nil {
+		reportProgress(options.Progress, "Checking Microsoft WebView2 Runtime…")
 		if err := options.PrepareRuntime(ctx); err != nil {
 			return err
 		}
 	}
+	reportProgress(options.Progress, "Opening Mobile Egress…")
 	if err := platform.Launch(options.InstalledController); err != nil {
 		return errors.New("launch installed controller")
 	}
@@ -132,10 +136,12 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 }
 
 type ElevatedOptions struct {
-	Nonce     string
-	SetupPath string
-	Exchange  Exchange
-	Identity  Identity
+	Progress       func(string)
+	PreparePayload func() (string, func(), error)
+	Nonce          string
+	SetupPath      string
+	Exchange       Exchange
+	Identity       Identity
 }
 
 type TrustChanges struct {
@@ -181,14 +187,41 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 	if err := platform.VerifyPreTrustAuthenticode(options.SetupPath, options.Identity); err != nil {
 		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
 	}
-	releaseDir := filepath.Dir(options.SetupPath)
-	// New packages expose only Setup; retain support for existing flat archives.
-	payloadDir := releaseDir
-	if info, err := os.Lstat(filepath.Join(releaseDir, "payload")); err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("release payload directory is invalid")
+	reportProgress(options.Progress, "Waiting for other Mobile Egress setup operations…")
+	transaction, err := platform.AcquireSetupTransaction()
+	if err != nil {
+		return fmt.Errorf("acquire elevated setup transaction: %w", err)
+	}
+	defer func() {
+		if err := transaction.Close(); err != nil {
+			resultErr = errors.Join(resultErr, errors.New("release elevated setup transaction"))
 		}
-		payloadDir = filepath.Join(releaseDir, "payload")
+	}()
+	releaseDir := filepath.Dir(options.SetupPath)
+	payloadDir := ""
+	if options.PreparePayload != nil {
+		reportProgress(options.Progress, "Unpacking signed Mobile Egress files…")
+		directory, cleanup, err := options.PreparePayload()
+		if err != nil {
+			return err
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+		if directory != "" {
+			payloadDir = directory
+		}
+	}
+	// Embedded installers never consult adjacent files. Retain both legacy ZIP
+	// layouts only when this executable has no embedded release payload.
+	if payloadDir == "" {
+		payloadDir = releaseDir
+		if info, err := os.Lstat(filepath.Join(releaseDir, "payload")); err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return errors.New("release payload directory is invalid")
+			}
+			payloadDir = filepath.Join(releaseDir, "payload")
+		}
 	}
 	releasePath := func(name string) string {
 		if name == SetupExecutableName {
@@ -202,15 +235,7 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 			return fmt.Errorf("required signed release file is missing: %s", name)
 		}
 	}
-	transaction, err := platform.AcquireSetupTransaction()
-	if err != nil {
-		return fmt.Errorf("acquire elevated setup transaction: %w", err)
-	}
-	defer func() {
-		if err := transaction.Close(); err != nil {
-			resultErr = errors.Join(resultErr, errors.New("release elevated setup transaction"))
-		}
-	}()
+	reportProgress(options.Progress, "Installing the confirmed publisher trust…")
 	changes, err := platform.EnsureTrust(options.Identity)
 	if err != nil {
 		return rollbackTrustAfterFailure(platform, options.Identity, changes, fmt.Errorf("install publisher trust: %w", err))
@@ -220,6 +245,7 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 			resultErr = rollbackTrustAfterFailure(platform, options.Identity, changes, resultErr)
 		}
 	}()
+	reportProgress(options.Progress, "Verifying signed application files…")
 	for _, name := range verifiedReleaseExecutables {
 		if err := platform.VerifyAuthenticode(releasePath(name), options.Identity); err != nil {
 			return fmt.Errorf("verify signed release file %s: %w", name, err)
@@ -230,10 +256,17 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 		{Source: releasePath(AdminExecutableName), Destination: filepath.Join(InstallRoot, AdminExecutableName)},
 		{Source: releasePath(RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
 	}
+	reportProgress(options.Progress, "Installing Mobile Egress and its Start Menu shortcut…")
 	if err := platform.Install(files, options.Identity); err != nil {
 		return fmt.Errorf("transactionally install signed release files and Start Menu shortcut: %w", err)
 	}
 	return nil
+}
+
+func reportProgress(report func(string), message string) {
+	if report != nil {
+		report(message)
+	}
 }
 
 func rollbackTrustAfterFailure(platform ElevatedPlatform, identity Identity, changes TrustChanges, cause error) error {

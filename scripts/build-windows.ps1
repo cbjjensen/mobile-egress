@@ -15,6 +15,8 @@ $binRoot = Join-Path $windowsRoot 'build\bin'
 $serviceBinRoot = Join-Path $windowsRoot 'build\service-bin'
 $packageRoot = Join-Path $windowsRoot "build\release\mobile-egress-windows-$ReleaseVersion"
 $zipPath = "$packageRoot.zip"
+$setupPath = Join-Path $packageRoot 'MobileEgressSetup.exe'
+$embeddedPayloadPath = Join-Path $windowsRoot 'internal\setup\payload.zip'
 $timestampServer = 'http://timestamp.digicert.com'
 $wailsProjectPath = Join-Path $windowsRoot 'wails.json'
 
@@ -176,12 +178,7 @@ try {
     $artifacts = @(
         @{ Name = 'mobile-egress-relay.exe'; Package = './relay/cmd/relay'; Ldflags = $versionLdflags },
         @{ Name = 'mobile-egress-admin.exe'; Package = './windows-client/cmd/mobile-egress-admin'; Ldflags = $versionLdflags },
-        @{ Name = 'mobile-egress-client.exe'; Package = './windows-client/cmd/mobile-egress-client'; Ldflags = $versionLdflags },
-        @{
-            Name = 'MobileEgressSetup.exe'
-            Package = './windows-client/cmd/mobile-egress-setup'
-            Ldflags = "-H windowsgui -X mobile-egress/windows-client/internal/setup.embeddedCertificateBase64=$($identity.CertificateBase64) -X mobile-egress/windows-client/internal/setup.embeddedCertificateFingerprint=$($identity.Fingerprint)"
-        }
+        @{ Name = 'mobile-egress-client.exe'; Package = './windows-client/cmd/mobile-egress-client'; Ldflags = $versionLdflags }
     )
     $null = New-Item -ItemType Directory -Force -Path $serviceBinRoot
     foreach ($artifact in $artifacts) {
@@ -215,7 +212,6 @@ try {
     Set-WindowsReleaseSignature -Path $controllerExecutable -Identity $identity
 
     $stagedExecutables = @(
-        (Join-Path $serviceBinRoot 'MobileEgressSetup.exe'),
         (Join-Path $serviceBinRoot 'mobile-egress-admin.exe'),
         (Join-Path $serviceBinRoot 'mobile-egress-relay.exe'),
         (Join-Path $serviceBinRoot 'mobile-egress-client.exe')
@@ -232,20 +228,34 @@ try {
     }
     $publicCertificatePath = Join-Path $repositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
     $publicRecordPath = Join-Path $repositoryRoot 'windows-signing\release-signing-certificate.txt'
-    $null = New-Item -ItemType Directory -Force -Path $packageRoot
+    $null = New-Item -ItemType Directory -Path $packageRoot
+    # Embed only signed final artifacts. The complete executable is signed AFTER
+    # embedding, so Authenticode binds both bootstrap code and compressed payload.
+    $payloadSources = @($executables) + @($manifestPath, $publicCertificatePath, $publicRecordPath)
+    Compress-Archive -Force -LiteralPath $payloadSources -DestinationPath $embeddedPayloadPath
+    try {
+        $setupLdflags = "-H windowsgui -X mobile-egress/windows-client/internal/setup.embeddedCertificateBase64=$($identity.CertificateBase64) -X mobile-egress/windows-client/internal/setup.embeddedCertificateFingerprint=$($identity.Fingerprint)"
+        go build -trimpath -tags setup_payload -ldflags $setupLdflags -o $setupPath ./windows-client/cmd/mobile-egress-setup
+        if ($LASTEXITCODE -ne 0) { throw 'Self-contained Windows setup compilation failed.' }
+        Set-WindowsReleaseSignature -Path $setupPath -Identity $identity
+        Copy-Item -LiteralPath $setupPath -Destination (Join-Path $binRoot 'MobileEgressSetup.exe') -Force
+        Copy-Item -LiteralPath $embeddedPayloadPath -Destination (Join-Path $packageRoot 'payload-verification.zip')
+    } finally {
+        Remove-Item -LiteralPath $embeddedPayloadPath -Force -ErrorAction SilentlyContinue
+    }
+    # The ZIP remains a compatibility artifact; friends download the EXE alone.
     $payloadRoot = Join-Path $packageRoot 'payload'
     $null = New-Item -ItemType Directory -Path $payloadRoot
-    Copy-Item -LiteralPath (Join-Path $binRoot 'MobileEgressSetup.exe') -Destination $packageRoot
-    $payloadExecutables = @($executables | Where-Object { (Split-Path -Leaf $_) -ne 'MobileEgressSetup.exe' })
-    Copy-Item -LiteralPath ($payloadExecutables + $manifestPath + $publicCertificatePath + $publicRecordPath) -Destination $payloadRoot
+    Copy-Item -LiteralPath $payloadSources -Destination $payloadRoot
     Copy-Item -LiteralPath (Join-Path $windowsRoot 'setup-start-here.txt') -Destination (Join-Path $packageRoot 'START-HERE.txt')
-    Compress-Archive -Force -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath
+    Compress-Archive -Force -LiteralPath @($setupPath, $payloadRoot, (Join-Path $packageRoot 'START-HERE.txt')) -DestinationPath $zipPath
 
     if ($Installer) {
-        Write-Warning 'The self-contained release is the signed ZIP package. The legacy -Installer switch is retained only for command compatibility and does not create a partial NSIS package.'
+        Write-Host 'A self-contained signed installer is always built; -Installer remains supported for command compatibility.'
     }
 
-    Write-Host "Signed guided setup package: $zipPath"
+    Write-Host "Signed self-contained installer: $setupPath"
+    Write-Host "Legacy ZIP compatibility package: $zipPath"
     Write-Host "Signed headless Client release: $(Join-Path $binRoot 'mobile-egress-client.exe')"
     Write-Host "Client SHA-256: $clientDigest"
     Write-Host "Publisher SHA-256 fingerprint: $($identity.Fingerprint)"
