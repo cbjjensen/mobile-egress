@@ -30,6 +30,7 @@ coverage.out
 
 # Android and Gradle
 android/.gradle/
+android/.kotlin/
 android/local.properties
 android/keystore.properties
 android/mobile-egress-release.jks

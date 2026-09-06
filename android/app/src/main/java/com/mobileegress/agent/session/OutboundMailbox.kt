@@ -18,6 +18,7 @@ class OutboundFrame internal constructor(
     internal val onEmitted: (() -> Unit)? = null,
 ) {
     internal var released = false
+    internal var transportOwned = false
 }
 
 internal data class OutboundMailboxSnapshot(
@@ -46,6 +47,7 @@ class OutboundMailbox(
     private val outstandingFrames = LinkedHashSet<OutboundFrame>()
     private val available = Channel<Unit>(Channel.CONFLATED)
     private var outstandingDataFrames = 0
+    private var outstandingControlFrames = 0
     private var outstandingDataBytes = 0L
     private var closed = false
 
@@ -130,7 +132,7 @@ class OutboundMailbox(
         onSaturated: () -> Unit,
     ): Boolean {
         val queued = synchronized(lock) {
-            if (closed || controls.size >= controlCapacity) return@synchronized false
+            if (closed || outstandingControlFrames >= controlCapacity) return@synchronized false
             blockDataStream(streamId)
             val outboundFrame = createFrame(
                 bytes = frame,
@@ -146,9 +148,14 @@ class OutboundMailbox(
         return queued
     }
 
-    fun poll(): OutboundFrame? = synchronized(lock) {
-        pollEligibleControl() ?: pollData()
+    fun poll(
+        maxDataBytes: Long = Long.MAX_VALUE,
+        maxControlBytes: Long = Long.MAX_VALUE,
+    ): OutboundFrame? = synchronized(lock) {
+        pollEligibleControl(maxControlBytes) ?: pollData(maxDataBytes)
     }
+
+    internal suspend fun awaitAvailable(): Boolean = !available.receiveCatching().isClosed
 
     suspend fun receive(): OutboundFrame? {
         while (true) {
@@ -161,7 +168,11 @@ class OutboundMailbox(
         }
     }
 
-    fun emit(frame: OutboundFrame, sender: (ByteArray) -> Boolean): OutboundEmission {
+    fun emit(
+        frame: OutboundFrame,
+        retainUntilDrained: Boolean = false,
+        sender: (ByteArray) -> Boolean,
+    ): OutboundEmission {
         if (frame.beforeEmission?.invoke() == false) {
             synchronized(lock) { release(frame) }
             return OutboundEmission.Canceled
@@ -170,19 +181,32 @@ class OutboundMailbox(
         val result = synchronized(lock) {
             val canceledStream = frame.streamCancellation?.canceled == true
             val canceledData = frame.dataCancellation?.canceled == true
-            val canceled = canceledStream || canceledData
+            val canceled = closed || frame.released || canceledStream || canceledData
             if (canceled) {
                 OutboundEmission.Canceled
-            } else if (!sender(frame.bytes)) {
-                OutboundEmission.Failed
             } else {
-                emittedCallback = frame.onEmitted
-                OutboundEmission.Emitted
-            }.also { release(frame) }
+                // Claim before send: cancellation may run reentrantly in sender callbacks.
+                frame.transportOwned = retainUntilDrained
+                try {
+                    if (!sender(frame.bytes)) {
+                        frame.transportOwned = false
+                        OutboundEmission.Failed
+                    } else {
+                        emittedCallback = frame.onEmitted
+                        OutboundEmission.Emitted
+                    }
+                } catch (error: Throwable) {
+                    frame.transportOwned = false
+                    release(frame)
+                    throw error
+                }
+            }.also { if (it != OutboundEmission.Emitted || !retainUntilDrained) release(frame) }
         }
         emittedCallback?.invoke()
         return result
     }
+
+    internal fun drained(frame: OutboundFrame) = synchronized(lock) { release(frame) }
 
     fun close() {
         synchronized(lock) {
@@ -199,7 +223,7 @@ class OutboundMailbox(
             canceledStreams.clear()
             streamCancellations.clear()
             dataCancellations.clear()
-            check(outstandingDataFrames == 0 && outstandingDataBytes == 0L)
+            check(outstandingDataFrames == 0 && outstandingDataBytes == 0L && outstandingControlFrames == 0)
         }
         available.close()
     }
@@ -210,7 +234,7 @@ class OutboundMailbox(
 
     private fun offerControl(bytes: ByteArray, streamId: String?): Boolean {
         val queued = synchronized(lock) {
-            if (closed || controls.size >= controlCapacity) return@synchronized false
+            if (closed || outstandingControlFrames >= controlCapacity) return@synchronized false
             controls.addLast(ControlFrame(createFrame(bytes, streamId = streamId)))
             true
         }
@@ -218,10 +242,12 @@ class OutboundMailbox(
         return queued
     }
 
-    private fun pollEligibleControl(): OutboundFrame? {
+    private fun pollEligibleControl(maxBytes: Long = Long.MAX_VALUE): OutboundFrame? {
         repeat(controls.size) {
             val control = controls.removeFirst()
-            if (control.afterDataStreamId == null || control.afterDataStreamId !in dataByStream) {
+            if (control.frame.bytes.size <= maxBytes &&
+                (control.afterDataStreamId == null || control.afterDataStreamId !in dataByStream)
+            ) {
                 return control.frame
             }
             controls.addLast(control)
@@ -229,16 +255,23 @@ class OutboundMailbox(
         return null
     }
 
-    private fun pollData(): OutboundFrame? {
-        val streamId = readyStreams.pollFirst() ?: return null
-        val streamData = requireNotNull(dataByStream[streamId])
-        val frame = streamData.removeFirst()
-        if (streamData.isEmpty()) {
-            dataByStream.remove(streamId)
-        } else {
-            readyStreams.addLast(streamId)
+    private fun pollData(maxBytes: Long = Long.MAX_VALUE): OutboundFrame? {
+        repeat(readyStreams.size) {
+            val streamId = readyStreams.removeFirst()
+            val streamData = requireNotNull(dataByStream[streamId])
+            if (streamData.first.bytes.size > maxBytes) {
+                readyStreams.addLast(streamId)
+            } else {
+                val frame = streamData.removeFirst()
+                if (streamData.isEmpty()) {
+                    dataByStream.remove(streamId)
+                } else {
+                    readyStreams.addLast(streamId)
+                }
+                return frame
+            }
         }
-        return frame
+        return null
     }
 
     private fun discardData(streamId: String) {
@@ -247,7 +280,7 @@ class OutboundMailbox(
         }
         readyStreams.removeAll { it == streamId }
         outstandingFrames
-            .filter { frame -> frame.streamId == streamId && frame.dataCancellation != null }
+            .filter { frame -> frame.streamId == streamId && frame.dataCancellation != null && !frame.transportOwned }
             .forEach(::release)
     }
 
@@ -277,6 +310,8 @@ class OutboundMailbox(
             if (isData) {
                 outstandingDataFrames += 1
                 outstandingDataBytes += bytes.size.toLong()
+            } else {
+                outstandingControlFrames += 1
             }
         }
     }
@@ -297,6 +332,9 @@ class OutboundMailbox(
             outstandingDataFrames -= 1
             outstandingDataBytes -= frame.dataByteCount.toLong()
             check(outstandingDataFrames >= 0 && outstandingDataBytes >= 0)
+        } else {
+            outstandingControlFrames -= 1
+            check(outstandingControlFrames >= 0)
         }
         frame.streamId?.let { streamId ->
             release(streamCancellations, streamId, frame.streamCancellation)

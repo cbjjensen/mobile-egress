@@ -116,7 +116,7 @@
     },
     {
       "id": "agent.stream-capacity",
-      "title": "Bounded stream admission and queueing",
+      "title": "Uncapped live stream ownership with bounded queues",
       "platforms": {
         "android": {
           "status": "implemented",
@@ -125,13 +125,16 @@
             "android/app/src/main/java/com/mobileegress/agent/session/AgentTargetBridge.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/StreamAdmission.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt",
-            "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt"
+            "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/OutboundSender.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/session/AgentTargetBridgeTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/StreamAdmissionTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/OutboundSenderTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorIntegrationTest.kt"
           ]
         },
         "ios": {
@@ -139,12 +142,16 @@
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift",
             "ios/Sources/MobileEgressCore/Session/SessionPrimitives.swift",
-            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift"
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionRuntime.swift",
+            "ios/Sources/MobileEgressCore/Runtime/TunnelProviderMessaging.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/RelayRuntimeConfigurationTests.swift",
             "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
-            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift"
+            "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift",
+            "ios/Tests/MobileEgressCoreTests/ProviderMessagingTests.swift"
           ]
         }
       }

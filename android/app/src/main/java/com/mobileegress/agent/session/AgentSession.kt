@@ -175,16 +175,9 @@ class AgentSession internal constructor(
 
     private suspend fun writeLoop(socket: WebSocket) {
         try {
-            while (true) {
-                val message = outbound.receive() ?: return
-                when (outbound.emit(message) { socket.send(it.toByteString()) }) {
-                    OutboundEmission.Emitted,
-                    OutboundEmission.Canceled -> Unit
-                    OutboundEmission.Failed -> {
-                        terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
-                        return
-                    }
-                }
+            val sender = OutboundSender(outbound, { socket.send(it.toByteString()) }, socket::queueSize)
+            if (!sender.run()) {
+                terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
             }
         } catch (_: Exception) {
             terminate(ErrorClass.RelayUnavailable, sendWebSocketClose = false)
