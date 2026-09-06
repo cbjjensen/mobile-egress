@@ -44,6 +44,7 @@ class OutboundMailbox(
     private val canceledStreams = LinkedHashSet<String>()
     private val streamCancellations = HashMap<String, OutboundCancellation>()
     private val dataCancellations = HashMap<String, OutboundCancellation>()
+    private val outstandingDataFramesByStream = HashMap<String, Int>()
     private val outstandingFrames = LinkedHashSet<OutboundFrame>()
     private val available = Channel<Unit>(Channel.CONFLATED)
     private var outstandingDataFrames = 0
@@ -65,7 +66,7 @@ class OutboundMailbox(
                 closed ||
                 streamId in blockedDataStreams ||
                 outstandingDataFrames >= dataCapacity ||
-                (dataCancellations[streamId]?.outstanding ?: 0) >= perStreamDataCapacity ||
+                (outstandingDataFramesByStream[streamId] ?: 0) >= perStreamDataCapacity ||
                 frame.size.toLong() > dataByteCapacity - outstandingDataBytes
             ) {
                 return@synchronized false
@@ -224,6 +225,7 @@ class OutboundMailbox(
             streamCancellations.clear()
             dataCancellations.clear()
             check(outstandingDataFrames == 0 && outstandingDataBytes == 0L && outstandingControlFrames == 0)
+            check(outstandingDataFramesByStream.isEmpty())
         }
         available.close()
     }
@@ -308,6 +310,8 @@ class OutboundMailbox(
         ).also { frame ->
             outstandingFrames += frame
             if (isData) {
+                val dataStreamId = requireNotNull(streamId)
+                outstandingDataFramesByStream[dataStreamId] = (outstandingDataFramesByStream[dataStreamId] ?: 0) + 1
                 outstandingDataFrames += 1
                 outstandingDataBytes += bytes.size.toLong()
             } else {
@@ -329,6 +333,10 @@ class OutboundMailbox(
         frame.released = true
         outstandingFrames -= frame
         if (frame.dataCancellation != null) {
+            val streamId = requireNotNull(frame.streamId)
+            val remaining = requireNotNull(outstandingDataFramesByStream[streamId]) - 1
+            if (remaining == 0) outstandingDataFramesByStream.remove(streamId)
+            else outstandingDataFramesByStream[streamId] = remaining
             outstandingDataFrames -= 1
             outstandingDataBytes -= frame.dataByteCount.toLong()
             check(outstandingDataFrames >= 0 && outstandingDataBytes >= 0)

@@ -23,8 +23,9 @@ const (
 	capacityExecutableName    = "mobile-egress-capacity"
 	capacityCleanupGrace      = 2*time.Minute + 5*time.Second
 	maximumCapacityEventBytes = 512
-	maximumCapacityEventLines = 1024
-	maximumCapacityEventCount = 512
+	// Two events per holder stream plus input, provisioning, probe, replacement, and cleanup.
+	maximumCapacityEventLines = 2*capacityharness.MaximumHeldStreams + 16
+	maximumCapacityEventCount = capacityharness.MaximumHeldStreams + 2
 )
 
 type SignedCapacityConfig struct {
@@ -349,7 +350,7 @@ func (event capacityOutputEvent) valid() bool {
 
 func allowedCapacityPhase(phase string) bool {
 	switch phase {
-	case "input", "preflight", "provision", "open", "verify", "limit", "hold", "replacement", "cleanup", "target", "complete":
+	case "input", "preflight", "provision", "open", "verify", "probe", "hold", "replacement", "cleanup", "target", "complete":
 		return true
 	default:
 		return false

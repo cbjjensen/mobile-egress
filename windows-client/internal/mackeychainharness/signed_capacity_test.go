@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,42 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSignedCapacityOutputAcceptsDefaultAndMaximumPacedRunReports(t *testing.T) {
+	for _, held := range []int{512, 4096} {
+		t.Run(fmt.Sprint(held), func(t *testing.T) {
+			var destination bytes.Buffer
+			stream := newCapacityEventStream(&destination)
+			emit := func(phase string, count int) {
+				t.Helper()
+				_, err := fmt.Fprintf(stream, "{\"phase\":\"%s\",\"attempted\":%d,\"open\":%d,\"verified\":%d,\"closed\":%d,\"failure\":\"none\"}\n", phase, count, count, count, count)
+				if err != nil {
+					t.Fatalf("%s event at %d: %v", phase, count, err)
+				}
+			}
+			for _, phase := range []string{"input", "preflight", "provision", "provision", "open", "open"} {
+				emit(phase, 0)
+			}
+			for index := 1; index <= held; index++ {
+				emit("open", index)
+				emit("verify", index)
+			}
+			emit("probe", held)
+			emit("verify", held+1)
+			emit("hold", held+1)
+			emit("replacement", held+1)
+			emit("verify", held+2)
+			emit("cleanup", held+2)
+			emit("complete", held+2)
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got := bytes.Count(destination.Bytes(), []byte{'\n'}); got != 2*held+13 {
+				t.Fatalf("forwarded %d events", got)
+			}
+		})
+	}
+}
 
 // Mutation caught: running capacity in the unsigned launcher, exporting the
 // Owner identity, or copying the secret document into argv/environment/temp
@@ -83,7 +120,7 @@ func TestSignedCapacityHostBuildsVerifiedBundleAndAttachesOnlySecretStdin(t *tes
 	if strings.Contains(strings.Join(runner.attached.Args, " ")+strings.Join(runner.attached.Env, " ")+stdout.String()+stderr.String(), "SECRET-STDIN-DOCUMENT") {
 		t.Fatal("signed capacity host disclosed stdin secret outside the attached reader")
 	}
-	if stdout.String() != capacityReadinessFixture+"{\"phase\":\"complete\",\"attempted\":266,\"open\":257,\"verified\":257,\"closed\":257,\"failure\":\"none\"}\n" || stderr.Len() != 0 {
+	if stdout.String() != capacityReadinessFixture+"{\"phase\":\"complete\",\"attempted\":514,\"open\":514,\"verified\":514,\"closed\":514,\"failure\":\"none\"}\n" || stderr.Len() != 0 {
 		t.Fatalf("filtered output stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
@@ -96,7 +133,7 @@ func TestSignedCapacityHostRejectsNonAllowlistedChildOutputWithoutForwardingIt(t
 	repository, profile, workspace := harnessFixturePaths(t)
 	secretInput := bytes.NewBufferString("SECRET-STDIN-DOCUMENT")
 	runner := newCapacityFixtureRunner(t, workspace, secretInput)
-	runner.attachedStdout = "{\"phase\":\"complete\",\"attempted\":266,\"open\":257,\"verified\":257,\"closed\":257,\"failure\":\"none\",\"detail\":\"SECRET-CHILD-OUTPUT\"}\n"
+	runner.attachedStdout = "{\"phase\":\"complete\",\"attempted\":514,\"open\":514,\"verified\":514,\"closed\":514,\"failure\":\"none\",\"detail\":\"SECRET-CHILD-OUTPUT\"}\n"
 	var stdout, stderr bytes.Buffer
 	err := RunSignedCapacity(context.Background(), runner, SignedCapacityConfig{
 		Signing: Config{RepositoryRoot: repository, ProfilePath: profile, Identity: fixtureIdentity, Workspace: workspace},
@@ -121,6 +158,7 @@ func TestCapacityEventStreamIsLineBoundedAndRequiresCompleteJSON(t *testing.T) {
 		input string
 	}{
 		{name: "oversized", input: strings.Repeat("x", 513) + "\n"},
+		{name: "count above run bound", input: "{\"phase\":\"complete\",\"attempted\":4099,\"open\":4098,\"verified\":4098,\"closed\":4098,\"failure\":\"none\"}\n"},
 		{name: "partial", input: "{\"phase\":\"complete\"}"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -242,7 +280,7 @@ func newCapacityFixtureRunner(t *testing.T, workspace string, stdin io.Reader) *
 	return &capacityFixtureRunner{
 		fixtureRunner:  newFixtureRunner(t, workspace),
 		expectedStdin:  stdin,
-		attachedStdout: "{\"phase\":\"complete\",\"attempted\":266,\"open\":257,\"verified\":257,\"closed\":257,\"failure\":\"none\"}\n",
+		attachedStdout: "{\"phase\":\"complete\",\"attempted\":514,\"open\":514,\"verified\":514,\"closed\":514,\"failure\":\"none\"}\n",
 	}
 }
 

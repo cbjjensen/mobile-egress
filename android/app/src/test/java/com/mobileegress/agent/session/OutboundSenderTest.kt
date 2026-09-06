@@ -13,6 +13,24 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class OutboundSenderTest {
     @Test
+    fun `reusing stream ID retains old SDK debt against per stream bound`() {
+        val mailbox = OutboundMailbox(perStreamDataCapacity = 2)
+        val sdk = StalledSdk()
+        val sender = OutboundSender(mailbox, sdk::send, sdk::queueSize, 8, 4)
+        assertTrue(mailbox.offerData("reused", ByteArray(4) { 1 }))
+        sender.pump()
+        mailbox.cancelStream("reused")
+        mailbox.allowData("reused")
+        assertTrue(mailbox.offerData("reused", ByteArray(4) { 2 }))
+        assertFalse(mailbox.offerData("reused", ByteArray(4) { 3 }))
+        assertTrue(mailbox.offerData("peer", ByteArray(4) { 4 }))
+        sdk.queued = 0
+        sender.pump()
+        assertTrue(mailbox.offerData("reused", ByteArray(4) { 3 }))
+        sender.close()
+        assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+    }
+    @Test
     fun `SDK buffered controls retain mailbox control slots until drain`() {
         val mailbox = OutboundMailbox(controlCapacity = 2)
         val sdk = StalledSdk()
