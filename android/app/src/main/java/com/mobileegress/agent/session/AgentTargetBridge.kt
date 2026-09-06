@@ -35,13 +35,12 @@ internal class AgentTargetBridge(
     private val reactorFactory: (TargetReactorListener) -> TargetReactorPort,
     private val onSessionFailure: (ErrorClass) -> Unit,
     private val status: AgentTargetStatusSink = NoOpAgentTargetStatusSink,
-    maxStreams: Int = AgentCapacity.MAX_STREAMS,
     retainedStreamCapacity: Int = AgentCapacity.RETAINED_STREAM_CAPACITY,
     private val beforeMailboxCommit: () -> Unit = {},
     private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
 ) : TargetReactorListener {
     private val lifecycleLock = Any()
-    private val admission = StreamAdmission(maxStreams)
+    private val admission = StreamAdmission()
     private val streams = ConcurrentHashMap<String, TargetStream>()
     private val tombstones = StreamTombstones(retainedStreamCapacity)
     private val nextCorrelation = AtomicLong(1L)

@@ -155,8 +155,8 @@ func TestRelayProductionStreamLimitsMatchCapacityContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer relay.Close()
-	if relay.maxClientStreams != 256 || relay.maxAgentStreams != 256 {
-		t.Fatalf("stream limits = %d per Client/%d aggregate, want 256/256", relay.maxClientStreams, relay.maxAgentStreams)
+	if relay.maxResolverWorkers != 256 {
+		t.Fatalf("DNS worker limit = %d, want 256", relay.maxResolverWorkers)
 	}
 }
 

@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	maximumHarnessSessionStreams = holderStreams + 1
+	maximumHarnessSessionStreams = MaximumHeldStreams + 1
 	maximumHarnessPayloadBytes   = 1 << 20
 	maximumHarnessDataBytes      = 32 << 10
 	maximumHarnessInboundFrames  = 8

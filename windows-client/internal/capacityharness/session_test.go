@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"mobile-egress/internal/capacity"
 )
 
 func TestCapacityWireEnvelopeAcceptsDataAtThirtyTwoKiB(t *testing.T) {
@@ -67,7 +66,25 @@ func TestCapacityWireEnvelopePreservesLargerNonDataPayloadLimit(t *testing.T) {
 	}
 }
 
-func TestProductionSessionDriverUsesMTLSAndReceivesRemoteTwoHundredFiftySeventhStreamLimit(t *testing.T) {
+func TestProductionSessionDriverDecodesLegacyPeerStreamLimit(t *testing.T) {
+	fixture := newHarnessSessionFixture(t, 1)
+	defer fixture.server.Close()
+	session, err := (ProductionSessionDialer{}).Dial(context.Background(), fixture.credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	stream, err := session.OpenStream(context.Background(), "echo.example.com", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err := session.OpenStream(context.Background(), "echo.example.com", 443); !rejectedWith(err, "client_stream_limit") {
+		t.Fatalf("legacy rejection = %v", err)
+	}
+}
+
+func TestProductionSessionDriverUsesMTLSAndKeepsElevenHundredStreamsLive(t *testing.T) {
 	t.Parallel()
 
 	fixture := newHarnessSessionFixture(t)
@@ -78,16 +95,13 @@ func TestProductionSessionDriverUsesMTLSAndReceivesRemoteTwoHundredFiftySeventhS
 	}
 	defer session.Close()
 
-	streams := make([]CapacityStream, 0, capacity.ClientMaxConcurrentStreams)
-	for index := 0; index < capacity.ClientMaxConcurrentStreams; index++ {
+	streams := make([]CapacityStream, 0, 1_100)
+	for index := 0; index < 1_100; index++ {
 		stream, openErr := session.OpenStream(context.Background(), "echo.example.com", 443)
 		if openErr != nil {
 			t.Fatalf("OpenStream(%d) = %v", index+1, openErr)
 		}
 		streams = append(streams, stream)
-	}
-	if _, openErr := session.OpenStream(context.Background(), "echo.example.com", 443); !rejectedWith(openErr, "client_stream_limit") {
-		t.Fatalf("OpenStream(%d) = %v, want remote client_stream_limit", capacity.ClientMaxConcurrentStreams+1, openErr)
 	}
 	if got := fixture.peerCertificates.Load(); got == 0 {
 		t.Fatal("session fixture never received a verified mTLS peer certificate")
@@ -265,7 +279,7 @@ type harnessSessionFixture struct {
 	peerCertificates atomic.Int64
 }
 
-func newHarnessSessionFixture(t *testing.T) *harnessSessionFixture {
+func newHarnessSessionFixture(t *testing.T, legacyLimit ...int) *harnessSessionFixture {
 	t.Helper()
 	ca, caKey, caPEM := newHarnessTestCA(t)
 	serverCertificate, _, _ := newHarnessSignedCertificate(t, ca, caKey, &x509.Certificate{
@@ -315,7 +329,7 @@ func newHarnessSessionFixture(t *testing.T) *harnessSessionFixture {
 				}
 				switch envelope.Type {
 				case "open":
-					if active >= capacity.ClientMaxConcurrentStreams {
+					if len(legacyLimit) > 0 && active >= legacyLimit[0] {
 						envelope.Type = "rejected"
 						envelope.Payload = base64.RawURLEncoding.EncodeToString([]byte("client_stream_limit"))
 					} else {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
@@ -72,7 +73,7 @@ func waitForAdmittedStream(t *testing.T, service *Service, id string) {
 func TestPendingDNSReservesCapacityAndRejectsDuplicates(t *testing.T) {
 	fixture := newRelayFixture(t)
 	defer fixture.Close()
-	fixture.service.maxClientStreams, fixture.service.maxAgentStreams = 2, 3
+	fixture.service.maxResolverWorkers = 3
 	started := make(chan struct{}, 4)
 	fixture.service.lookupNetIP = func(ctx context.Context, _, _ string) ([]netip.Addr, error) {
 		started <- struct{}{}
@@ -93,7 +94,6 @@ func TestPendingDNSReservesCapacityAndRejectsDuplicates(t *testing.T) {
 		id, code string
 	}{
 		{first, "one", "stream_in_use"},
-		{first, "client-over", "client_stream_limit"},
 	} {
 		fixture.service.handleClientOpen(tc.client, openEnvelope(tc.id, "slow.test", 443))
 		item, ok := tc.client.outbound.poll()
@@ -105,7 +105,7 @@ func TestPendingDNSReservesCapacityAndRejectsDuplicates(t *testing.T) {
 	waitForSignal(t, started, "third resolver start")
 	fixture.service.handleClientOpen(second, openEnvelope("global-over", "slow.test", 443))
 	item, ok := second.outbound.poll()
-	if !ok || decodedErrorCode(t, item.envelope) != "agent_stream_limit" {
+	if !ok || decodedErrorCode(t, item.envelope) != "agent_unavailable" {
 		t.Fatalf("expected global limit, got %+v", item)
 	}
 	if err := fixture.service.handleClientStreamFrame(first, streamCloseEnvelope("one", "client_closed")); err != nil {
@@ -267,7 +267,7 @@ func TestPendingDNSTimeoutRejectsAndReleasesReservation(t *testing.T) {
 func TestCanceledResolverKeepsWorkerPermitUntilItExits(t *testing.T) {
 	fixture := newRelayFixture(t)
 	defer fixture.Close()
-	fixture.service.maxClientStreams, fixture.service.maxAgentStreams = 1, 1
+	fixture.service.maxResolverWorkers = 1
 	started, release := make(chan struct{}, 2), make(chan struct{})
 	releaseLookup := sync.OnceFunc(func() { close(release) })
 	defer releaseLookup()
@@ -287,7 +287,7 @@ func TestCanceledResolverKeepsWorkerPermitUntilItExits(t *testing.T) {
 	}
 	fixture.service.handleClientOpen(client, openEnvelope("too-soon", "slow.test", 443))
 	item, ok := client.outbound.poll()
-	if !ok || decodedErrorCode(t, item.envelope) != "agent_stream_limit" {
+	if !ok || decodedErrorCode(t, item.envelope) != "agent_unavailable" {
 		t.Fatalf("launched another resolver before canceled worker exited: %+v", item)
 	}
 	releaseLookup()
@@ -322,5 +322,55 @@ func TestClientCloseCancelsPendingDNS(t *testing.T) {
 	writeEnvelope(t, client, protocol.Envelope{Version: 1, Type: protocol.TypePing})
 	if frame := readEnvelope(t, client); frame.Type != protocol.TypePong {
 		t.Fatalf("cancel emitted unexpected response: %+v", frame)
+	}
+}
+
+func TestEstablishedStreamsDoNotConsumeDNSWorkersOrLoseOwnership(t *testing.T) {
+	fixture := newRelayFixture(t)
+	defer fixture.Close()
+	fixture.service.lookupNetIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
+	}
+	client := newDormantSession(fixture.service, "client", enrollment.RoleClient)
+	other := newDormantSession(fixture.service, "other", enrollment.RoleClient)
+	agent := newDormantSession(fixture.service, "agent", enrollment.RoleAgent)
+	registerTestSessions(fixture.service, client, other, agent)
+	defer closeTestSessions(client, other, agent)
+	for i := 0; i < 1100; i++ {
+		id := fmt.Sprintf("held-%d", i)
+		fixture.service.handleClientOpen(client, openEnvelope(id, "fast.test", 443))
+		fixture.service.workers.Wait()
+		item, ok := agent.outbound.poll()
+		if !ok || item.envelope.StreamID != id {
+			t.Fatalf("open %d not admitted", i)
+		}
+	}
+	fixture.service.handleClientOpen(other, openEnvelope("extra", "fast.test", 443))
+	fixture.service.workers.Wait()
+	if item, ok := agent.outbound.poll(); !ok || item.envelope.StreamID != "extra" {
+		t.Fatal("additional Client was capped")
+	}
+	fixture.service.handleClientOpen(other, openEnvelope("held-0", "fast.test", 443))
+	item, ok := other.outbound.poll()
+	if !ok || decodedErrorCode(t, item.envelope) != "stream_in_use" {
+		t.Fatal("live ownership evicted")
+	}
+	fixture.service.mu.RLock()
+	active, workers := fixture.service.activeStreams, fixture.service.resolverWorkers
+	fixture.service.mu.RUnlock()
+	if active != 1101 || workers != 0 {
+		t.Fatalf("active=%d workers=%d", active, workers)
+	}
+	for i := 0; i < 1100; i++ {
+		if err := fixture.service.handleClientStreamFrame(client, streamCloseEnvelope(fmt.Sprintf("held-%d", i), "client_closed")); err != nil {
+			t.Fatal(err)
+		}
+		agent.outbound.poll()
+	}
+	fixture.service.mu.RLock()
+	remaining := len(fixture.service.streams)
+	fixture.service.mu.RUnlock()
+	if remaining != 1 {
+		t.Fatalf("cleanup retained %d", remaining)
 	}
 }

@@ -172,6 +172,44 @@ final class AgentSessionRuntimeTests: XCTestCase {
         await relay.completeNextSend(.success(()))
     }
 
+    func testRelaySendCompletionRefundsOnlyCompletedFrameWhileQueuedAndInFlightRemainCharged() async throws {
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let target = RecordingTargetConnection()
+        let runtime = AgentSessionRuntime(
+            relay: relay,
+            targetFactory: RecordingTargetConnectionFactory(target: target)
+        )
+        await runtime.start()
+        await relay.emit(.connected)
+        let open = try WireProtocol.encode(
+            type: .open,
+            streamID: "stream",
+            payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8)
+        )
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await target.emit(.ready)
+        await relay.completeNextSend(.success(()))
+
+        for byte in 0 ..< 32 {
+            await target.emit(.data(Data([UInt8(byte)])))
+        }
+        XCTAssertEqual(relay.sentBinary.count, 2, "one opened control and one in-flight data send")
+        XCTAssertEqual(target.cancelCount, 0)
+
+        await relay.completeNextSend(.success(()))
+        XCTAssertEqual(relay.sentBinary.count, 3, "completion starts exactly one queued send")
+        await target.emit(.data(Data([32])))
+        XCTAssertEqual(target.cancelCount, 0, "one completion refunds exactly one frame")
+        await target.emit(.data(Data([33])))
+        XCTAssertEqual(target.cancelCount, 1, "31 queued frames plus one in-flight frame fill the retained budget")
+        let saturated = await runtime.snapshot()
+        XCTAssertEqual(saturated.connectionState, .connected)
+        XCTAssertEqual(saturated.activeStreamCount, 0)
+        await relay.completeNextSend(.success(()))
+        XCTAssertEqual(target.cancelCount, 1)
+        await runtime.stop()
+    }
+
     func testRuntimeStopDuringTargetWriteCancelsOnceAndIgnoresLateCompletion() async throws {
         let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
         let target = RecordingTargetConnection(automaticallyCompletesSends: false)
@@ -419,9 +457,9 @@ final class AgentSessionRuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.bytesUploaded, 0)
     }
 
-    func testRuntimeStopProcessesTwoHundredFiftySixTargetCancellationsExactlyOnce() async throws {
+    func testRuntimeStopProcessesElevenHundredTargetCancellationsExactlyOnce() async throws {
         let relay = RecordingRelayWebSocket()
-        let targets = (0 ..< 256).map { _ in RecordingTargetConnection() }
+        let targets = (0 ..< 1_100).map { _ in RecordingTargetConnection() }
         let runtime = AgentSessionRuntime(
             relay: relay,
             targetFactory: SequencedTargetConnectionFactory(targets: targets)
@@ -439,6 +477,9 @@ final class AgentSessionRuntimeTests: XCTestCase {
             await target.emit(.ready)
         }
 
+        let liveSnapshot = await runtime.snapshot()
+        XCTAssertEqual(liveSnapshot.activeStreamCount, 1_100)
+        XCTAssertTrue(targets.allSatisfy { $0.cancelCount == 0 })
         await runtime.stop()
         await runtime.stop()
 

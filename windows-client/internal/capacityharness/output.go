@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-const maxReportedCount = 512
+const maxReportedCount = MaximumHeldStreams + 3
 
 type Phase string
 
@@ -19,7 +19,7 @@ const (
 	PhaseProvision   Phase = "provision"
 	PhaseOpen        Phase = "open"
 	PhaseVerify      Phase = "verify"
-	PhaseLimit       Phase = "limit"
+	PhaseProbe       Phase = "probe"
 	PhaseHold        Phase = "hold"
 	PhaseReplacement Phase = "replacement"
 	PhaseCleanup     Phase = "cleanup"
@@ -92,7 +92,7 @@ func (event Event) valid() bool {
 
 func validPhase(phase Phase) bool {
 	switch phase {
-	case PhaseInput, PhasePreflight, PhaseProvision, PhaseOpen, PhaseVerify, PhaseLimit, PhaseHold, PhaseReplacement, PhaseCleanup, PhaseTarget, PhaseComplete:
+	case PhaseInput, PhasePreflight, PhaseProvision, PhaseOpen, PhaseVerify, PhaseProbe, PhaseHold, PhaseReplacement, PhaseCleanup, PhaseTarget, PhaseComplete:
 		return true
 	default:
 		return false

@@ -148,6 +148,11 @@ func TestCLIRejectsSecretFlagsAndEnvironmentWithoutDisclosingValues(t *testing.T
 		environ []string
 	}{
 		{name: "token flag", args: []string{"run", "--token=SECRET-FLAG-TOKEN"}},
+		{name: "zero streams", args: []string{"run", "--streams=0"}},
+		{name: "oversized run", args: []string{"run", "--streams=4097"}},
+		{name: "zero pace", args: []string{"run", "--open-interval=0"}},
+		{name: "oversized pace", args: []string{"run", "--open-interval=2s"}},
+		{name: "oversized target", args: []string{"target", "--streams=4097"}},
 		{name: "destination flag", args: []string{"run", "--destination=SECRET-FLAG-DESTINATION"}},
 		{name: "relay flag", args: []string{"run", "--relay-url=SECRET-FLAG-RELAY"}},
 		{name: "identity flag", args: []string{"run", "--identity=SECRET-FLAG-IDENTITY"}},
@@ -171,6 +176,25 @@ func TestCLIRejectsSecretFlagsAndEnvironmentWithoutDisclosingValues(t *testing.T
 	}
 }
 
+func TestRunCLIConfiguresFiniteRunSizeAndPacing(t *testing.T) {
+	token := base64.RawURLEncoding.EncodeToString([]byte("abcdefghijklmnopqrstuvwxyz012345"))
+	document := `{"token":"` + token + `","targetHost":"echo.example.com","targetPort":443}`
+	var stdout, stderr bytes.Buffer
+	called := false
+	code := execute(context.Background(), []string{"run", "--streams=1100", "--open-interval=25ms"}, strings.NewReader(document), &stdout, &stderr, commandDependencies{
+		run: func(_ context.Context, config capacityharness.RunConfig) (capacityharness.Result, *capacityharness.RunError) {
+			called = true
+			if config.HeldStreams != 1100 || config.OpenInterval != 25*time.Millisecond {
+				t.Fatalf("configuration = %d/%v", config.HeldStreams, config.OpenInterval)
+			}
+			return capacityharness.Result{}, nil
+		},
+	}, nil)
+	if code != 0 || !called {
+		t.Fatalf("execute = %d, called %t", code, called)
+	}
+}
+
 func TestRunCLIReadsStrictSecretsOnlyFromStdinAndAcceptsOnlyBoundedOperationalFlags(t *testing.T) {
 	t.Parallel()
 
@@ -180,13 +204,16 @@ func TestRunCLIReadsStrictSecretsOnlyFromStdinAndAcceptsOnlyBoundedOperationalFl
 	dependencies := commandDependencies{
 		run: func(_ context.Context, config capacityharness.RunConfig) (capacityharness.Result, *capacityharness.RunError) {
 			called = true
+			if config.HeldStreams != 512 || config.OpenInterval != 10*time.Millisecond {
+				t.Fatalf("stream count/pace = %d/%v", config.HeldStreams, config.OpenInterval)
+			}
 			if config.HoldDuration != 15*time.Minute || config.PhaseTimeout != 45*time.Second || config.CleanupTimeout != 40*time.Second {
 				t.Fatalf("run durations = %v/%v/%v", config.HoldDuration, config.PhaseTimeout, config.CleanupTimeout)
 			}
 			if config.Secrets.TargetHost != "echo.example.com" || config.Secrets.TargetPort != 443 || !bytes.Equal(config.Secrets.Token, tokenMaterial) {
 				t.Fatal("run secrets were not passed from strict stdin")
 			}
-			result := capacityharness.Result{Attempted: 258, Open: 257, Verified: 257, Closed: 257}
+			result := capacityharness.Result{Attempted: 514, Open: 514, Verified: 514, Closed: 514}
 			_ = config.Emitter.Emit(capacityharness.Event{
 				Phase: capacityharness.PhaseComplete, Attempted: result.Attempted, Open: result.Open,
 				Verified: result.Verified, Closed: result.Closed, Failure: capacityharness.FailureNone,

@@ -25,7 +25,6 @@ var (
 )
 
 const (
-	MaxConcurrentStreams      = capacity.ClientMaxConcurrentStreams
 	maxClosedStreamTombstones = capacity.StreamTombstones
 	maxOutboundDataChunkSize  = 16 << 10
 )
@@ -217,10 +216,7 @@ func (session *Session) OpenStream(ctx context.Context, host string, port uint16
 		session.mu.Unlock()
 		return nil, ErrRelayUnavailable
 	}
-	if len(session.streams) >= MaxConcurrentStreams {
-		session.mu.Unlock()
-		return nil, ErrStreamLimit
-	}
+
 	streamID, err := newStreamID()
 	if err != nil {
 		session.mu.Unlock()

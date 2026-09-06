@@ -195,17 +195,14 @@ func TestServerRejectsConnectWhenRelayAgentIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestServerUsesRelaySessionLimitForEarlyAdmission(t *testing.T) {
+func TestServerAdmitsOver1024StreamsAndReleasesAll(t *testing.T) {
 	server := &Server{listener: &net.TCPListener{}}
-	for index := 0; index < 256; index++ {
+	for index := 0; index < 1100; index++ {
 		if !server.reserveStream() {
-			t.Fatalf("reservation %d rejected, want 256 admitted", index+1)
+			t.Fatalf("reservation %d rejected, want 1100 admitted", index+1)
 		}
 	}
-	if server.reserveStream() {
-		t.Fatal("reservation 257 admitted, want rejection")
-	}
-	for index := 0; index < 256; index++ {
+	for index := 0; index < 1100; index++ {
 		server.releaseStream()
 	}
 	if active := server.Status().ActiveStreams; active != 0 {

@@ -75,7 +75,7 @@ struct AgentSessionStateMachine {
 
     init(limits: AgentRuntimeLimits = .production) {
         self.limits = limits
-        admission = StreamAdmission(limit: limits.maximumStreams)
+        admission = StreamAdmission()
         outbound = OutboundMailbox(
             controlCapacity: limits.outboundControls,
             dataCapacity: limits.outboundData,

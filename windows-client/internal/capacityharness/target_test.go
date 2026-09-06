@@ -337,7 +337,7 @@ func TestTargetSaturatesReportedCountsWithoutRejectingConnectionsAfterLifetimeBo
 		t.Fatalf("post-bound legitimate connection stopped target: %v", serveErr)
 	case <-time.After(25 * time.Millisecond):
 	}
-	const maximumExpectedTargetEvents = 1024
+	const maximumExpectedTargetEvents = 8_198
 	if lines := bytes.Count(output.Bytes(), []byte{'\n'}); lines != maximumExpectedTargetEvents {
 		t.Fatalf("JSON event lines = %d, want finite budget %d", lines, maximumExpectedTargetEvents)
 	}

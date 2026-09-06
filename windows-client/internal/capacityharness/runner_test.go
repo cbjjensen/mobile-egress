@@ -17,7 +17,51 @@ import (
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
-func TestRunTopologyUsesOne256StreamHolderAndSecondIdentityProbe(t *testing.T) {
+func TestConfiguredRunPacesOpensAndCleansEveryStream(t *testing.T) {
+	control := newFakeControl()
+	dialer := newCapacityFakeDialer(control)
+	result, runErr := Run(context.Background(), RunConfig{
+		OwnerLoader: fakeOwnerLoader{}, Control: control, Dialer: dialer, Verifier: &fakeVerifier{},
+		Secrets: testRunSecrets(), HeldStreams: 3, OpenInterval: 5 * time.Millisecond,
+		HoldDuration: time.Millisecond, PhaseTimeout: time.Second, CleanupTimeout: time.Second,
+	})
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if result != (Result{Attempted: 5, Open: 5, Verified: 5, Closed: 5}) {
+		t.Fatalf("result = %#v", result)
+	}
+	opens := dialer.openTimes
+	for index := 1; index < 4; index++ {
+		if opens[index].Sub(opens[index-1]) < 5*time.Millisecond {
+			t.Fatalf("opens %d and %d were not paced", index-1, index)
+		}
+	}
+	if dialer.activeCount() != 0 {
+		t.Fatal("streams remained after cleanup")
+	}
+}
+
+func TestRunRejectsInvalidDeveloperSizesAndPacingBeforeProvisioning(t *testing.T) {
+	for _, test := range []struct {
+		count    int
+		interval time.Duration
+	}{
+		{-1, 0}, {4097, 0}, {1, -time.Nanosecond}, {1, time.Second + 1},
+	} {
+		control := newFakeControl()
+		_, runErr := Run(context.Background(), RunConfig{
+			OwnerLoader: fakeOwnerLoader{}, Control: control, Dialer: newCapacityFakeDialer(control), Verifier: &fakeVerifier{},
+			Secrets: testRunSecrets(), HeldStreams: test.count, OpenInterval: test.interval,
+			HoldDuration: time.Millisecond, PhaseTimeout: time.Second, CleanupTimeout: time.Second,
+		})
+		if runErr == nil || runErr.Phase != PhaseInput || control.provisionCalls != 0 {
+			t.Fatalf("invalid configuration accepted: %#v", test)
+		}
+	}
+}
+
+func TestRunTopologyUsesOne512StreamHolderAndSuccessfulSecondIdentity(t *testing.T) {
 	t.Parallel()
 
 	control := newFakeControl()
@@ -41,25 +85,25 @@ func TestRunTopologyUsesOne256StreamHolderAndSecondIdentityProbe(t *testing.T) {
 	if dialer.dialCalls != 2 || len(dialer.sessions) != 2 {
 		t.Fatalf("session dials/sessions = %d/%d, want exactly 2/2", dialer.dialCalls, len(dialer.sessions))
 	}
-	if verifier.calls != 257 {
-		t.Fatalf("verified echoes = %d, want 257 (256 held plus replacement)", verifier.calls)
+	if verifier.calls != 514 {
+		t.Fatalf("verified echoes = %d, want 514 (512 held plus second identity and replacement)", verifier.calls)
 	}
-	if result.Attempted != 258 || result.Open != 257 || result.Verified != 257 || result.Closed != 257 {
-		t.Fatalf("result = %#v, want attempted/open/verified/closed 258/257/257/257", result)
+	if result.Attempted != 514 || result.Open != 514 || result.Verified != 514 || result.Closed != 514 {
+		t.Fatalf("result = %#v, want attempted/open/verified/closed 514/514/514/514", result)
 	}
 	holder := dialer.sessions[0]
-	if holder.openCalls != 257 {
-		t.Fatalf("holder open calls = %d, want 257 (256 held plus replacement)", holder.openCalls)
+	if holder.openCalls != 513 {
+		t.Fatalf("holder open calls = %d, want 513 (512 held plus replacement)", holder.openCalls)
 	}
-	if len(holder.streams) != 257 {
-		t.Fatalf("holder verified streams = %d, want 257 including replacement", len(holder.streams))
+	if len(holder.streams) != 513 {
+		t.Fatalf("holder verified streams = %d, want 513 including replacement", len(holder.streams))
 	}
 	if len(holder.rejectionCodes) != 0 {
 		t.Fatalf("holder rejections = %#v, want none", holder.rejectionCodes)
 	}
 	probe := dialer.sessions[1]
-	if probe.openCalls != 1 || len(probe.streams) != 0 || len(probe.rejectionCodes) != 1 || probe.rejectionCodes[0] != "agent_stream_limit" {
-		t.Fatalf("probe calls/opened streams/rejections = %d/%d/%#v, want only aggregate stream 257 rejected with agent_stream_limit", probe.openCalls, len(probe.streams), probe.rejectionCodes)
+	if probe.openCalls != 1 || len(probe.streams) != 1 || len(probe.rejectionCodes) != 0 {
+		t.Fatalf("probe calls/opened streams/rejections = %d/%d/%#v, want one additional verified stream with no rejection", probe.openCalls, len(probe.streams), probe.rejectionCodes)
 	}
 	var final Event
 	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
@@ -72,8 +116,8 @@ func TestRunTopologyUsesOne256StreamHolderAndSecondIdentityProbe(t *testing.T) {
 		}
 		final = event
 	}
-	if final.Phase != PhaseComplete || final.Attempted != 258 || final.Open != 257 || final.Verified != 257 || final.Closed != 257 || final.Failure != FailureNone {
-		t.Fatalf("final event = %#v, want secret-free complete totals 258/257/257/257", final)
+	if final.Phase != PhaseComplete || final.Attempted != 514 || final.Open != 514 || final.Verified != 514 || final.Closed != 514 || final.Failure != FailureNone {
+		t.Fatalf("final event = %#v, want secret-free complete totals 514/514/514/514", final)
 	}
 	for _, secret := range []string{"0123456789abcdefghijklmnopqrstuv", "echo.example.com", "owner-key", "client-cert"} {
 		if strings.Contains(output.String(), secret) {
@@ -95,8 +139,8 @@ func TestRunTopologyCleansUpAllHeldStreamsAfterProbe(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("Run() = %v", runErr)
 	}
-	if result.Closed != 257 {
-		t.Fatalf("closed streams = %d, want all 256 held streams plus replacement", result.Closed)
+	if result.Closed != 514 {
+		t.Fatalf("closed streams = %d, want all 512 holder streams plus second identity and replacement", result.Closed)
 	}
 	for sessionIndex, session := range dialer.sessions {
 		if session.closeCalls != 1 {
@@ -136,8 +180,8 @@ func TestRunTopologyAttemptsBothIdentityRevocationsWhenOneFails(t *testing.T) {
 	if runErr == nil || runErr.Phase != PhaseCleanup || runErr.Category != FailureCleanup {
 		t.Fatalf("Run() = %#v, want cleanup failure after one identity revocation fails", runErr)
 	}
-	if result.Closed != 257 {
-		t.Fatalf("closed streams = %d, want all 256 held streams plus replacement", result.Closed)
+	if result.Closed != 514 {
+		t.Fatalf("closed streams = %d, want all 512 holder streams plus second identity and replacement", result.Closed)
 	}
 	if len(control.revokeCalls) != 2 || control.revokeCalls["01"] != 1 || control.revokeCalls["02"] != 1 {
 		t.Fatalf("revocations = %#v, want both identities attempted exactly once", control.revokeCalls)
@@ -280,7 +324,7 @@ func TestRunnerCancellationWhileExternalPhaseOperationsAreInFlight(t *testing.T)
 			case PhaseHold:
 				emitter = &phaseSignalEmitter{phase: PhaseHold, entered: entered}
 			case PhaseReplacement:
-				verifier.blockAt = aggregateStreams + 1
+				verifier.blockAt = DefaultHeldStreams + 2
 				verifier.entered = entered
 			}
 			type outcome struct {
@@ -726,6 +770,7 @@ type capacityFakeDialer struct {
 	control             *fakeControl
 	dialCalls           int
 	active              int
+	openTimes           []time.Time
 	sessions            []*capacityFakeSession
 	sessionCloseControl *fakeSessionCloseControl
 	blockDialAt         int
@@ -783,16 +828,9 @@ func (session *capacityFakeSession) OpenStream(context.Context, string, uint16) 
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.openCalls++
-	if session.active >= holderStreams {
-		session.rejectionCodes = append(session.rejectionCodes, "client_stream_limit")
-		return nil, RelayRejection{Code: "client_stream_limit"}
-	}
 	session.dialer.mu.Lock()
 	defer session.dialer.mu.Unlock()
-	if session.dialer.active >= aggregateStreams {
-		session.rejectionCodes = append(session.rejectionCodes, "agent_stream_limit")
-		return nil, RelayRejection{Code: "agent_stream_limit"}
-	}
+	session.dialer.openTimes = append(session.dialer.openTimes, time.Now())
 	stream := &capacityFakeStream{session: session, done: make(chan struct{})}
 	session.active++
 	session.dialer.active++
@@ -977,7 +1015,7 @@ func (verifier *finalClaimRaceVerifier) Verify(_ context.Context, stream Capacit
 	verifier.mu.Lock()
 	defer verifier.mu.Unlock()
 	verifier.calls++
-	if verifier.calls != aggregateStreams+1 {
+	if verifier.calls != DefaultHeldStreams+2 {
 		return held, nil
 	}
 	verifier.replacement = &controlledClaimHeldStream{

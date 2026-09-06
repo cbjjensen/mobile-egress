@@ -3,14 +3,14 @@ import XCTest
 @testable import MobileEgressCore
 
 final class SessionPrimitivesTests: XCTestCase {
-    func testStreamAdmissionAllowsOnlyTwoHundredFiftySixUniqueStreams() {
-        let admission = StreamAdmission(limit: 256)
+    func testStreamAdmissionKeepsElevenHundredLiveStreamsAndRejectsDuplicates() {
+        let admission = StreamAdmission()
 
-        (0 ..< 256).forEach { XCTAssertTrue(admission.tryReserve("stream-\($0)")) }
+        (0 ..< 1_100).forEach { XCTAssertTrue(admission.tryReserve("stream-\($0)")) }
 
-        XCTAssertFalse(admission.tryReserve("stream-256"))
+        XCTAssertFalse(admission.tryReserve("stream-1099"))
         XCTAssertFalse(admission.tryReserve("stream-0"))
-        XCTAssertEqual(admission.count, 256)
+        XCTAssertEqual(admission.count, 1_100)
     }
 
     func testOutboundMailboxSignalsRequiredControlSaturation() {

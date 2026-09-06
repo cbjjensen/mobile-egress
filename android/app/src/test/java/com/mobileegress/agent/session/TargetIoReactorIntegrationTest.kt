@@ -20,29 +20,25 @@ import org.junit.Test
 
 class TargetIoReactorIntegrationTest {
     @Test
-    fun `two hundred fifty six loopback targets exchange data and target two hundred fifty seven is rejected`() {
+    fun `three hundred loopback targets exchange data on one reactor thread`() {
         LoopbackEchoServer().use { server ->
-            val listener = RecordingTargetListener(expectedOpens = 256, expectedData = 256)
+            val listener = RecordingTargetListener(expectedOpens = 300, expectedData = 300)
             val reactor = TargetIoReactor(TargetSocketBinder {}, listener)
             reactor.start()
 
-            repeat(256) { index ->
+            repeat(300) { index ->
                 assertEquals(
                     ReactorSubmitResult.Accepted,
                     reactor.open("stream-$index", server.address),
                 )
             }
-            assertEquals(
-                ReactorSubmitResult.StreamLimit,
-                reactor.open("stream-256", server.address),
-            )
             assertTrue(listener.opens.await(10, TimeUnit.SECONDS))
             assertEquals(
                 1,
                 Thread.getAllStackTraces().keys.count { it.name == TargetIoReactor.REACTOR_THREAD_NAME },
             )
 
-            repeat(256) { index ->
+            repeat(300) { index ->
                 assertEquals(
                     ReactorSubmitResult.Accepted,
                     reactor.write("stream-$index", byteArrayOf(index.toByte())),
@@ -50,7 +46,7 @@ class TargetIoReactorIntegrationTest {
             }
 
             assertTrue(listener.data.await(10, TimeUnit.SECONDS))
-            repeat(256) { index ->
+            repeat(300) { index ->
                 assertEquals(listOf(index.toByte()), listener.received.getValue("stream-$index").toList())
             }
 
@@ -63,24 +59,23 @@ class TargetIoReactorIntegrationTest {
     }
 
     @Test
-    fun `released reactor slot can be reused`() {
+    fun `released reactor identity can be reused`() {
         LoopbackEchoServer().use { server ->
             val listener = RecordingTargetListener(expectedOpens = 2, expectedTerminals = 1)
             val reactor = TargetIoReactor(
                 binder = TargetSocketBinder {},
                 listener = listener,
-                maxStreams = 1,
             )
             reactor.start()
 
             assertEquals(ReactorSubmitResult.Accepted, reactor.open("first", server.address))
             assertTrue(listener.firstOpen.await(5, TimeUnit.SECONDS))
-            assertEquals(ReactorSubmitResult.StreamLimit, reactor.open("blocked", server.address))
+            assertEquals(ReactorSubmitResult.MissingOrClosed, reactor.open("first", server.address))
             assertEquals(ReactorSubmitResult.Accepted, reactor.cancel("first"))
             assertTrue(listener.terminals.await(5, TimeUnit.SECONDS))
             assertEquals(listOf(TargetTerminalReason.Canceled), listener.terminalReasons["first"])
 
-            assertEquals(ReactorSubmitResult.Accepted, reactor.open("replacement", server.address))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.open("first", server.address))
             assertTrue(listener.opens.await(5, TimeUnit.SECONDS))
 
             reactor.shutdown()

@@ -290,7 +290,7 @@ func TestLateAgentOpeningOutcomeLeavesUnrelatedStreamUsable(t *testing.T) {
 	}
 }
 
-func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
+func TestSessionAdmitsBeyondFormerPerClientAndAggregateLimits(t *testing.T) {
 	fixture := newRelayFixture(t)
 	defer fixture.Close()
 	_, devices := enrollDevices(t, fixture, "client", "client", "agent")
@@ -300,20 +300,14 @@ func TestSessionEnforcesPerClientAndAgentWideStreamLimits(t *testing.T) {
 	registerTestSessions(fixture.service, agent, clientOne, clientTwo)
 	defer closeTestSessions(agent, clientOne, clientTwo)
 
-	for index := 0; index < 256; index++ {
+	for index := 0; index < 1100; index++ {
 		streamID := fmt.Sprintf("client-one-%d", index+1)
 		fixture.service.handleClientOpen(clientOne, openEnvelope(streamID, "1.1.1.1", 443))
 		waitForAdmittedStream(t, fixture.service, streamID)
+		agent.outbound.poll()
 	}
-	fixture.service.handleClientOpen(clientOne, openEnvelope("client-one-over-limit", "1.1.1.1", 443))
-	if rejected, ok := clientOne.outbound.poll(); !ok || rejected.envelope.Type != protocol.TypeRejected || decodedErrorCode(t, rejected.envelope) != "client_stream_limit" {
-		t.Fatalf("per-client stream 257 response = %#v/%t, want client_stream_limit rejection", rejected, ok)
-	}
-
-	fixture.service.handleClientOpen(clientTwo, openEnvelope("agent-over-limit", "1.1.1.1", 443))
-	if rejected, ok := clientTwo.outbound.poll(); !ok || rejected.envelope.Type != protocol.TypeRejected || decodedErrorCode(t, rejected.envelope) != "agent_stream_limit" {
-		t.Fatalf("aggregate stream 257 response = %#v/%t, want agent_stream_limit rejection", rejected, ok)
-	}
+	fixture.service.handleClientOpen(clientTwo, openEnvelope("second-client", "1.1.1.1", 443))
+	waitForAdmittedStream(t, fixture.service, "second-client")
 }
 
 func TestSessionRoutesThirtyTwoKiBDataAndRetainsOversizeProtocolRejection(t *testing.T) {

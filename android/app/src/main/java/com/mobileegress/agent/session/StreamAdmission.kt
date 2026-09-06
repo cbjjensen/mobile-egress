@@ -1,6 +1,6 @@
 package com.mobileegress.agent.session
 
-class StreamAdmission(private val limit: Int) {
+class StreamAdmission {
     private val reserved = LinkedHashSet<String>()
 
     val size: Int
@@ -8,7 +8,7 @@ class StreamAdmission(private val limit: Int) {
 
     @Synchronized
     fun tryReserve(streamId: String): Boolean {
-        if (reserved.size >= limit || streamId in reserved) return false
+        if (streamId in reserved) return false
         reserved += streamId
         return true
     }

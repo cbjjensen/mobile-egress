@@ -35,7 +35,7 @@ type relayEnvelope struct {
 	Payload  string `json:"payload"`
 }
 
-func TestRealSessionShares256SlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *testing.T) {
+func TestRealSessionRetainsOver1024StreamsAcrossProxyTypes(t *testing.T) {
 	fixture := newListenerRelayFixture(t, false)
 	defer fixture.Close()
 	session, err := relayclient.DialSession(context.Background(), fixture.identity)
@@ -84,8 +84,8 @@ func TestRealSessionShares256SlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *testing.T
 		}
 		_ = response.Body.Close()
 	}
-	directStreams := make([]io.ReadWriteCloser, 0, relayclient.MaxConcurrentStreams-4)
-	for index := 0; index < relayclient.MaxConcurrentStreams-4; index++ {
+	directStreams := make([]io.ReadWriteCloser, 0, 1100-4)
+	for index := 0; index < 1100-4; index++ {
 		stream, openErr := session.OpenStream(context.Background(), "logical.example", 443)
 		if openErr != nil {
 			t.Fatalf("logical stream %d open error = %v", index+1, openErr)
@@ -97,17 +97,14 @@ func TestRealSessionShares256SlotsAcrossSOCKSHTTPConnectAndIdleHTTP(t *testing.T
 			_ = stream.Close()
 		}
 	}()
-	listenerWaitActive(t, session, 256)
-	if _, openErr := session.OpenStream(context.Background(), "over-capacity.example", 443); !errors.Is(openErr, relayclient.ErrStreamLimit) {
-		t.Fatalf("stream 257 error = %v, want ErrStreamLimit", openErr)
-	}
+	listenerWaitActive(t, session, 1100)
 
 	if err := httpServer.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	listenerWaitActive(t, session, 253)
+	listenerWaitActive(t, session, 1097)
 	_ = socksClient.Close()
-	listenerWaitActive(t, session, 252)
+	listenerWaitActive(t, session, 1096)
 	replacement, openErr := session.OpenStream(context.Background(), "replacement.example", 443)
 	if openErr != nil {
 		t.Fatalf("replacement stream error = %v", openErr)

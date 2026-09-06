@@ -205,7 +205,7 @@ func TestRelayStreamLocalTerminalDoesNotDrainBufferedInbound(t *testing.T) {
 	}
 }
 
-func TestSessionAllows256CombinedStreamsAndRejects257(t *testing.T) {
+func TestSessionAllowsOver1024ConcurrentStreams(t *testing.T) {
 	fixture := newCustomSessionFixture(t, func(connection *websocket.Conn) {
 		for {
 			open := readTestWireEnvelope(t, connection)
@@ -222,17 +222,15 @@ func TestSessionAllows256CombinedStreamsAndRejects257(t *testing.T) {
 	}
 	defer session.Close()
 
-	streams := make([]io.ReadWriteCloser, 0, 256)
-	for index := 0; index < 256; index++ {
+	streams := make([]io.ReadWriteCloser, 0, 1100)
+	for index := 0; index < 1100; index++ {
 		stream, openErr := session.OpenStream(context.Background(), "capacity.example", 443)
 		if openErr != nil {
 			t.Fatalf("stream %d open error = %v", index+1, openErr)
 		}
 		streams = append(streams, stream)
 	}
-	if _, openErr := session.OpenStream(context.Background(), "over-capacity.example", 443); !errors.Is(openErr, ErrStreamLimit) {
-		t.Fatalf("stream 257 open error = %v, want ErrStreamLimit", openErr)
-	}
+
 	for _, stream := range streams {
 		_ = stream.Close()
 	}

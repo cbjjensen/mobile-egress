@@ -147,7 +147,7 @@ public enum TunnelProviderMessageCodec {
 
     public static func encodeStatus(_ status: TunnelProviderStatus) throws -> Data {
         let snapshot = status.runtimeSnapshot
-        guard (0 ... AgentRuntimeLimits.production.maximumStreams).contains(snapshot.activeStreamCount) else {
+        guard snapshot.activeStreamCount >= 0 else {
             throw TunnelProviderMessageError.invalidMessage
         }
         return try boundedEncode(StatusResponseWire(
@@ -183,7 +183,7 @@ public enum TunnelProviderMessageCodec {
             let wire = try JSONDecoder().decode(StatusResponseWire.self, from: data)
             guard wire.version == 1,
                   wire.type == "status",
-                  (0 ... AgentRuntimeLimits.production.maximumStreams).contains(wire.activeStreamCount),
+                  wire.activeStreamCount >= 0,
                   let providerState = TunnelProviderLifecycleState(rawValue: wire.providerState),
                   let connectionState = AgentRuntimeConnectionState(rawValue: wire.connectionState),
                   let providerError = TunnelProviderErrorClass(rawValue: wire.providerError),

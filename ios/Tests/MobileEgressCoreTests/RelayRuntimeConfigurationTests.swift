@@ -7,7 +7,6 @@ final class RelayRuntimeConfigurationTests: XCTestCase {
         XCTAssertEqual(
             AgentRuntimeLimits.production,
             AgentRuntimeLimits(
-                maximumStreams: 256,
                 tombstones: 1_024,
                 outboundControls: 512,
                 outboundData: 8_192,

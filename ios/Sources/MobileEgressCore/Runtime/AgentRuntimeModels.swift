@@ -178,7 +178,6 @@ public struct RelayWebSocketConfiguration: Equatable, Sendable {
 }
 
 struct AgentRuntimeLimits: Equatable, Sendable {
-    let maximumStreams: Int
     let tombstones: Int
     let outboundControls: Int
     let outboundData: Int
@@ -191,7 +190,6 @@ struct AgentRuntimeLimits: Equatable, Sendable {
     let maximumInboundDataBytes: Int
 
     static let production = AgentRuntimeLimits(
-        maximumStreams: 256,
         tombstones: 1_024,
         outboundControls: 512,
         outboundData: 8_192,

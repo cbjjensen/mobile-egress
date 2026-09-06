@@ -262,7 +262,6 @@ class AgentSession internal constructor(
 }
 
 object AgentCapacity {
-    const val MAX_STREAMS = 256
     const val OUTBOUND_CONTROL_CAPACITY = 512
     const val OUTBOUND_DATA_CAPACITY = 8_192
     const val OUTBOUND_PER_STREAM_DATA_CAPACITY = 32

@@ -66,10 +66,12 @@ func execute(ctx context.Context, arguments []string, stdin io.Reader, stdout, s
 func executeRun(ctx context.Context, arguments []string, stdin io.Reader, stdout, stderr io.Writer, dependencies commandDependencies) int {
 	flags := flag.NewFlagSet("mobile-egress-capacity run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	duration := flags.Duration("duration", 15*time.Minute, "fixed-topology hold duration")
+	heldStreams := flags.Int("streams", capacityharness.DefaultHeldStreams, "developer acceptance holder stream count")
+	openInterval := flags.Duration("open-interval", 10*time.Millisecond, "delay between verified stream opens")
+	duration := flags.Duration("duration", 15*time.Minute, "acceptance hold duration")
 	phaseTimeout := flags.Duration("phase-timeout", 30*time.Second, "bounded phase timeout")
 	cleanupTimeout := flags.Duration("cleanup-timeout", 30*time.Second, "bounded cleanup timeout")
-	if flags.Parse(arguments) != nil || flags.NArg() != 0 || !boundedDuration(*duration, minimumRunDuration, maximumRunDuration) ||
+	if flags.Parse(arguments) != nil || flags.NArg() != 0 || *heldStreams < 1 || *heldStreams > capacityharness.MaximumHeldStreams || !boundedDuration(*openInterval, time.Millisecond, time.Second) || !boundedDuration(*duration, minimumRunDuration, maximumRunDuration) ||
 		!boundedDuration(*phaseTimeout, minimumCommandTimeout, maximumCommandTimeout) ||
 		!boundedDuration(*cleanupTimeout, minimumCommandTimeout, maximumCommandTimeout) {
 		emitCommandFailure(stderr, capacityharness.PhaseInput, capacityharness.FailureInput, capacityharness.Result{})
@@ -99,6 +101,7 @@ func executeRun(ctx context.Context, arguments []string, stdin io.Reader, stdout
 	result, runErr := dependencies.run(ctx, capacityharness.RunConfig{
 		OwnerLoader: dependencies.owner, Control: dependencies.control, Dialer: dependencies.dialer,
 		Verifier: dependencies.verifier, Secrets: secrets, HoldDuration: *duration,
+		HeldStreams: *heldStreams, OpenInterval: *openInterval,
 		PhaseTimeout: *phaseTimeout, CleanupTimeout: *cleanupTimeout,
 		Emitter: capacityharness.NewJSONEmitter(stdout),
 	})
@@ -112,10 +115,11 @@ func executeRun(ctx context.Context, arguments []string, stdin io.Reader, stdout
 func executeTarget(ctx context.Context, arguments []string, stdin io.Reader, stdout, stderr io.Writer, dependencies commandDependencies) int {
 	flags := flag.NewFlagSet("mobile-egress-capacity target", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	heldStreams := flags.Int("streams", capacityharness.DefaultHeldStreams, "developer acceptance holder stream count")
 	listenPort := flags.Uint("listen-port", defaultTargetListenPort, "fixed IPv4 loopback TLS listen port")
 	connectionTimeout := flags.Duration("connection-timeout", 30*time.Second, "bounded TLS/auth/echo timeout")
 	cleanupTimeout := flags.Duration("cleanup-timeout", 30*time.Second, "bounded cleanup timeout")
-	if flags.Parse(arguments) != nil || flags.NArg() != 0 || *listenPort < 1024 || *listenPort > 65535 ||
+	if flags.Parse(arguments) != nil || flags.NArg() != 0 || *heldStreams < 1 || *heldStreams > capacityharness.MaximumHeldStreams || *listenPort < 1024 || *listenPort > 65535 ||
 		!boundedDuration(*connectionTimeout, minimumCommandTimeout, maximumCommandTimeout) ||
 		!boundedDuration(*cleanupTimeout, minimumCommandTimeout, maximumCommandTimeout) {
 		emitCommandFailure(stderr, capacityharness.PhaseInput, capacityharness.FailureInput, capacityharness.Result{})
@@ -144,7 +148,8 @@ func executeTarget(ctx context.Context, arguments []string, stdin io.Reader, std
 		return 1
 	}
 	err = dependencies.serveTarget(ctx, capacityharness.TargetConfig{
-		Token: secrets.Token, TLSConfig: tlsConfig, ListenPort: uint16(*listenPort),
+		HeldStreams: *heldStreams,
+		Token:       secrets.Token, TLSConfig: tlsConfig, ListenPort: uint16(*listenPort),
 		ConnectionTimeout: *connectionTimeout, CleanupTimeout: *cleanupTimeout,
 		Emitter: capacityharness.NewJSONEmitter(stdout),
 	})

@@ -8,7 +8,6 @@ import org.junit.Test
 class StreamAdmissionTest {
     @Test
     fun `production limits expose expanded bounded Android lanes`() {
-        assertEquals(256, AgentCapacity.MAX_STREAMS)
         assertEquals(512, AgentCapacity.OUTBOUND_CONTROL_CAPACITY)
         assertEquals(32, AgentCapacity.OUTBOUND_PER_STREAM_DATA_CAPACITY)
         assertEquals(8_192, AgentCapacity.OUTBOUND_DATA_CAPACITY)
@@ -24,19 +23,19 @@ class StreamAdmissionTest {
     }
 
     @Test
-    fun `admits at most two hundred fifty six unique agent streams`() {
-        val admission = StreamAdmission(AgentCapacity.MAX_STREAMS)
+    fun `admits more than historical retention capacity without evicting live streams`() {
+        val admission = StreamAdmission()
 
-        repeat(256) { index -> assertTrue(admission.tryReserve("stream-$index")) }
+        repeat(1_100) { index -> assertTrue(admission.tryReserve("stream-$index")) }
 
-        assertFalse(admission.tryReserve("stream-256"))
+        assertFalse(admission.tryReserve("stream-1099"))
         assertFalse(admission.tryReserve("stream-0"))
-        assertEquals(256, admission.size)
+        assertEquals(1_100, admission.size)
     }
 
     @Test
     fun `released slots can be reused and clear closes the session view`() {
-        val admission = StreamAdmission(2)
+        val admission = StreamAdmission()
         admission.tryReserve("stream-1")
         admission.tryReserve("stream-2")
 

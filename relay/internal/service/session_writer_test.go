@@ -134,7 +134,7 @@ func TestFailedSessionUpgradeReleasesPendingReservation(t *testing.T) {
 func TestClientOpenWaitsForPendingAgentWithoutHoldingServiceMutex(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newWriterTestService()
-		service.maxClientStreams, service.maxAgentStreams = 256, 256
+		service.maxResolverWorkers = 256
 		service.openingTimeout = 30 * time.Second
 		service.lookupNetIP = func(context.Context, string, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil

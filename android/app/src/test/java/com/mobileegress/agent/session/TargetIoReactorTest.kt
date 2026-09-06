@@ -20,6 +20,31 @@ import org.junit.Test
 
 class TargetIoReactorTest {
     @Test
+    fun `reactor holds more than historical retention capacity without evicting live streams`() {
+        val connections = Array(1_100) { FakeConnection("stream-$it", connectedImmediately = true) }
+        val backend = FakeSelectorBackend(*connections)
+        val listener = RecordingListener(openCount = 1_100)
+        val reactor = reactor(backend, listener)
+        repeat(1_100) {
+            assertEquals(ReactorSubmitResult.Accepted, reactor.open("stream-$it", targetAddress()))
+        }
+        reactor.start()
+        try {
+            assertTrue(listener.opens.await(5, TimeUnit.SECONDS))
+            assertTrue(connections.all { it.closeCalls.get() == 0 })
+            assertEquals(ReactorSubmitResult.MissingOrClosed, reactor.open("stream-0", targetAddress()))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-0", byteArrayOf(1)))
+            assertEquals(ReactorSubmitResult.Accepted, reactor.write("stream-1099", byteArrayOf(2)))
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(5, TimeUnit.SECONDS))
+        }
+        assertTrue(connections.all { it.closeCalls.get() == 1 })
+        assertEquals(1_100, listener.released.size)
+        assertEquals(TargetIoReactorSnapshot(0, 0, 0, 0), reactor.snapshot())
+    }
+
+    @Test
     fun `immediate and deferred connects each emit opened exactly once`() {
         val backend = FakeSelectorBackend(
             FakeConnection("immediate", connectedImmediately = true),
@@ -661,7 +686,6 @@ class TargetIoReactorTest {
         val reactor = reactor(
             backend = backend,
             listener = listener,
-            maxStreams = 1,
             dataCommandCapacity = 2,
             totalCommandCapacity = 3,
             commandsPerCycle = 1,
@@ -804,7 +828,6 @@ class TargetIoReactorTest {
         val reactor = reactor(
             backend = backend,
             listener = listener,
-            maxStreams = 2,
             dataCommandCapacity = 2,
             totalCommandCapacity = 4,
             commandsPerCycle = 4,
@@ -840,7 +863,6 @@ class TargetIoReactorTest {
         val reactor = reactor(
             backend = backend,
             listener = listener,
-            maxStreams = 3,
             dataCommandCapacity = 1,
             totalCommandCapacity = 3,
             commandsPerCycle = 2,
@@ -867,7 +889,6 @@ class TargetIoReactorTest {
         val reactor = reactor(
             backend = FakeSelectorBackend(),
             listener = RecordingListener(terminalCount = 1),
-            maxStreams = 1,
             dataCommandCapacity = 1,
             totalCommandCapacity = 2,
         )
@@ -950,7 +971,6 @@ class TargetIoReactorTest {
                 failures += failure
                 bridge.shutdownAndAwait(2, TimeUnit.SECONDS)
             },
-            maxStreams = 1,
         )
         assertTrue(bridge.start())
         bridge.open("stream", targetAddress())
@@ -1008,7 +1028,6 @@ class TargetIoReactorTest {
         val reactor = TargetIoReactor(
             binder = TargetSocketBinder {},
             listener = listener,
-            maxStreams = 1,
             dataCommandCapacity = 1,
             totalCommandCapacity = 2,
             backendFactory = { throw IllegalStateException("selector creation failed") },
@@ -1158,7 +1177,6 @@ class TargetIoReactorTest {
     private fun reactor(
         backend: FakeSelectorBackend,
         listener: TargetReactorListener,
-        maxStreams: Int = 256,
         dataCommandCapacity: Int = AgentCapacity.REACTOR_DATA_COMMAND_CAPACITY,
         totalCommandCapacity: Int = AgentCapacity.REACTOR_COMMAND_CAPACITY,
         commandsPerCycle: Int = AgentCapacity.REACTOR_COMMANDS_PER_CYCLE,
@@ -1172,7 +1190,6 @@ class TargetIoReactorTest {
     ) = TargetIoReactor(
         binder = TargetSocketBinder {},
         listener = listener,
-        maxStreams = maxStreams,
         dataCommandCapacity = dataCommandCapacity,
         totalCommandCapacity = totalCommandCapacity,
         commandsPerCycle = commandsPerCycle,

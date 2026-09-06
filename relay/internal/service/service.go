@@ -46,8 +46,7 @@ type Service struct {
 	agentPending         chan struct{}
 	streams              map[string]*stream
 	closedStreams        map[string]closedStreamTombstone
-	maxClientStreams     int
-	maxAgentStreams      int
+	maxResolverWorkers   int
 	openingTimeout       time.Duration
 	idleTimeout          time.Duration
 	sweepInterval        time.Duration
@@ -156,8 +155,8 @@ func Open(stateDir string) (*Service, error) {
 		sessions: make(map[string]*session), pendingSessions: make(map[string]struct{}), streams: make(map[string]*stream),
 		closedStreams:        make(map[string]closedStreamTombstone),
 		agentToClientsBudget: newOutboundDataBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane),
-		maxClientStreams:     capacity.ClientMaxConcurrentStreams, maxAgentStreams: capacity.AgentMaxConcurrentStreams,
-		openingTimeout: 30 * time.Second, idleTimeout: 5 * time.Minute,
+		maxResolverWorkers:   capacity.ResolverWorkers,
+		openingTimeout:       30 * time.Second, idleTimeout: 5 * time.Minute,
 		sweepInterval: time.Second, stopJanitor: make(chan struct{}),
 		lookupNetIP: defaultLookupNetIP,
 	}

@@ -7,8 +7,8 @@ import (
 )
 
 func TestProductionCapacityContract(t *testing.T) {
-	if capacity.ClientMaxConcurrentStreams != 256 || capacity.AgentMaxConcurrentStreams != 256 {
-		t.Fatal("stream contract drifted")
+	if capacity.ResolverWorkers != 256 {
+		t.Fatal("DNS worker contract drifted")
 	}
 	if capacity.DataFramesPerStream != 32 || capacity.DataFramesPerLane != 8_192 || capacity.DataBytesPerLane != 64<<20 {
 		t.Fatal("data-lane contract drifted")

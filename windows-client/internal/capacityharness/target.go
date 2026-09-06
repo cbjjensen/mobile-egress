@@ -15,17 +15,16 @@ import (
 
 const (
 	minimumTargetListenPort = 1024
-	// The relay still admits at most aggregateStreams. The target permits one
-	// bounded retiring+replacement overlap because relay slot release can race
-	// with the old target-side TCP connection draining its TLS close.
-	maximumTargetConnections      = aggregateStreams + 1
-	maximumTargetEvents           = 1024
+	// One additional identity and one retiring/replacement overlap for this developer run.
+	maximumTargetConnections      = DefaultHeldStreams + 2
+	maximumTargetEvents           = 2 * maxReportedCount
 	defaultExtraDataProbe         = 20 * time.Millisecond
 	defaultTargetHeartbeatTimeout = 4 * time.Minute
 	maximumTargetHeartbeatTimeout = 4*time.Minute + 30*time.Second
 )
 
 type TargetConfig struct {
+	HeldStreams       int
 	Token             []byte
 	TLSConfig         *tls.Config
 	ListenPort        uint16
@@ -33,6 +32,13 @@ type TargetConfig struct {
 	CleanupTimeout    time.Duration
 	HeartbeatTimeout  time.Duration
 	Emitter           Emitter
+}
+
+func targetConnectionBudget(heldStreams int) int {
+	if heldStreams == 0 {
+		heldStreams = DefaultHeldStreams
+	}
+	return heldStreams + 2
 }
 
 func ServeTarget(ctx context.Context, config TargetConfig) error {
@@ -66,7 +72,7 @@ func serveTargetListener(ctx context.Context, listener net.Listener, config Targ
 	defer cancel()
 	state := &targetState{
 		listener: listener, config: config, connections: make(map[net.Conn]struct{}),
-		semaphore: make(chan struct{}, maximumTargetConnections), failures: make(chan error, 1),
+		semaphore: make(chan struct{}, targetConnectionBudget(config.HeldStreams)), failures: make(chan error, 1),
 	}
 	listenerClosed := make(chan struct{})
 	go func() {
@@ -143,6 +149,9 @@ acceptLoop:
 }
 
 func validTargetConfig(config TargetConfig) bool {
+	if config.HeldStreams < 0 || config.HeldStreams > MaximumHeldStreams {
+		return false
+	}
 	return len(config.Token) == tokenBytes && config.TLSConfig != nil && len(config.TLSConfig.Certificates) == 1 &&
 		config.TLSConfig.MinVersion == tls.VersionTLS13 && config.TLSConfig.MaxVersion == tls.VersionTLS13 &&
 		config.ConnectionTimeout > 0 && config.ConnectionTimeout <= maxPhaseTimeout &&

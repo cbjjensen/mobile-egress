@@ -177,7 +177,6 @@ final class AgentSessionStateMachineTests: XCTestCase {
 
     func testInjectedStateMachineLimitsFlowIntoCreatedTargetConfiguration() throws {
         let limits = AgentRuntimeLimits(
-            maximumStreams: 7,
             tombstones: 11,
             outboundControls: 13,
             outboundData: 5,
@@ -198,11 +197,11 @@ final class AgentSessionStateMachineTests: XCTestCase {
         XCTAssertEqual(target.configuration.connectTimeout, 30)
     }
 
-    func testProductionAdmissionAcceptsTwoHundredFiftySixRejectsNextAndImmediatelyReusesReleasedSlot() throws {
+    func testProductionAdmissionKeepsElevenHundredLiveStreamsAndReusesClosedIdentity() throws {
         var machine = connectedMachine()
         var firstToken: UInt64?
 
-        for index in 0 ..< 256 {
+        for index in 0 ..< 1_100 {
             let effects = machine.receiveRelay(try openMessage(streamID: "stream-\(index)", ip: "8.8.8.8", port: 443))
             XCTAssertTrue(effects.containsTargetCreation)
             if index == 0 {
@@ -210,27 +209,24 @@ final class AgentSessionStateMachineTests: XCTestCase {
             }
         }
 
-        let overflow = machine.receiveRelay(try openMessage(streamID: "stream-256", ip: "8.8.8.8", port: 443))
-        XCTAssertFalse(overflow.containsTargetCreation)
-        try assertOutbound(&machine, type: .rejected, streamID: "stream-256", payload: Data("agent_stream_limit".utf8))
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 256)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1_100)
 
         let close = try binary(type: .close, streamID: "stream-0", payload: Data("client_closed".utf8))
         XCTAssertTrue(machine.receiveRelay(close).isEmpty)
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 255)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1_099)
 
         let reused = machine.receiveRelay(try openMessage(streamID: "stream-0", ip: "1.1.1.1", port: 443))
         let reusedTarget = try XCTUnwrap(reused.singleTargetCreation)
         let originalToken = try XCTUnwrap(firstToken)
         XCTAssertNotEqual(reusedTarget.token, originalToken)
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 256)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1_100)
 
         machine.targetWasCreated(streamID: "stream-0", token: originalToken)
         XCTAssertTrue(machine.targetCreationFailed(
             streamID: "stream-0",
             token: originalToken
         ).isEmpty)
-        XCTAssertEqual(machine.snapshot.activeStreamCount, 256)
+        XCTAssertEqual(machine.snapshot.activeStreamCount, 1_100)
         machine.targetWasCreated(streamID: "stream-0", token: reusedTarget.token)
         XCTAssertTrue(machine.targetConnected(streamID: "stream-0", token: reusedTarget.token).isEmpty)
         try assertOutbound(&machine, type: .opened, streamID: "stream-0", payload: Data())
@@ -1048,7 +1044,6 @@ final class AgentSessionStateMachineTests: XCTestCase {
         byteLimit: Int = 1
     ) -> AgentRuntimeLimits {
         AgentRuntimeLimits(
-            maximumStreams: 4,
             tombstones: 8,
             outboundControls: 8,
             outboundData: 4,
@@ -1064,7 +1059,6 @@ final class AgentSessionStateMachineTests: XCTestCase {
 
     private func outboundLimits(frameLimit: Int) -> AgentRuntimeLimits {
         AgentRuntimeLimits(
-            maximumStreams: 4,
             tombstones: 8,
             outboundControls: 8,
             outboundData: frameLimit,

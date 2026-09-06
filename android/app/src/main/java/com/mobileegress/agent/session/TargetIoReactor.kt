@@ -64,7 +64,6 @@ internal data class TargetIoReactorSnapshot(
 internal class TargetIoReactor(
     private val binder: TargetSocketBinder,
     private val listener: TargetReactorListener,
-    private val maxStreams: Int = MAX_STREAMS,
     private val dataCommandCapacity: Int = DATA_COMMAND_CAPACITY,
     private val totalCommandCapacity: Int = COMMAND_CAPACITY,
     private val commandsPerCycle: Int = COMMANDS_PER_CYCLE,
@@ -104,7 +103,6 @@ internal class TargetIoReactor(
     @Volatile private var reactorThread: Thread? = null
 
     init {
-        require(maxStreams > 0)
         require(dataCommandCapacity > 0)
         require(totalCommandCapacity >= dataCommandCapacity)
         require(commandsPerCycle > 0)
@@ -179,7 +177,6 @@ internal class TargetIoReactor(
             if (shutdownRequested.get() || streamId in reservations) {
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
-            if (reservations.size >= maxStreams) return@synchronized ReactorSubmitResult.StreamLimit
             if (commands.size >= totalCommandCapacity) {
                 saturationSource = BackpressureSource.RequiredControlSaturation
                 return@synchronized ReactorSubmitResult.SessionSaturated
@@ -839,7 +836,6 @@ internal class TargetIoReactor(
     )
 
     internal companion object {
-        const val MAX_STREAMS = AgentCapacity.MAX_STREAMS
         const val DATA_COMMAND_CAPACITY = AgentCapacity.REACTOR_DATA_COMMAND_CAPACITY
         const val COMMAND_CAPACITY = AgentCapacity.REACTOR_COMMAND_CAPACITY
         const val COMMANDS_PER_CYCLE = AgentCapacity.REACTOR_COMMANDS_PER_CYCLE

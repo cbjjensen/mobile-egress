@@ -37,24 +37,10 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 	code := ""
 	if service.streams[envelope.StreamID] != nil || service.pendingOpens[envelope.StreamID] != nil || service.closedStreamIDInUseLocked(envelope.StreamID, time.Now()) {
 		code = "stream_in_use"
-	} else {
-		clientStreams := 0
-		for _, existing := range service.streams {
-			if existing.client == client {
-				clientStreams++
-			}
-		}
-		for _, existing := range service.pendingOpens {
-			if existing.client == client {
-				clientStreams++
-			}
-		}
-		if clientStreams >= service.maxClientStreams {
-			code = "client_stream_limit"
-		} else if len(service.streams)+len(service.pendingOpens) >= service.maxAgentStreams || service.resolverWorkers >= service.maxAgentStreams {
-			code = "agent_stream_limit"
-		}
+	} else if service.resolverWorkers >= service.maxResolverWorkers {
+		code = "agent_unavailable"
 	}
+
 	if code != "" {
 		service.mu.Unlock()
 		service.rejectOpen(client, envelope.StreamID, code)
@@ -74,7 +60,7 @@ func (service *Service) handleClientOpen(client *session, envelope protocol.Enve
 
 func (service *Service) resolvePendingOpen(pending *pendingOpen, target clientOpenRequest) {
 	defer service.workers.Done()
-	// A canceled reservation releases its stream slot immediately, but its
+	// A canceled reservation is removed immediately, but its
 	// worker still owns a permit until resolution has actually returned.
 	defer func() { service.mu.Lock(); service.resolverWorkers--; service.mu.Unlock() }()
 	defer pending.cancel()

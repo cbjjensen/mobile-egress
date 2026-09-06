@@ -11,14 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"mobile-egress/internal/capacity"
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
 const (
 	holderIdentities     = 1
-	holderStreams        = capacity.ClientMaxConcurrentStreams
-	aggregateStreams     = capacity.AgentMaxConcurrentStreams
+	DefaultHeldStreams   = 512
+	MaximumHeldStreams   = 4096 // Developer acceptance run size only.
 	probeIdentities      = 1
 	totalFreshIdentities = holderIdentities + probeIdentities
 	echoPayloadBytes     = 16 << 10
@@ -71,6 +70,8 @@ type RunConfig struct {
 	Dialer         SessionDialer
 	Verifier       StreamVerifier
 	Secrets        RunSecrets
+	HeldStreams    int
+	OpenInterval   time.Duration
 	HoldDuration   time.Duration
 	PhaseTimeout   time.Duration
 	CleanupTimeout time.Duration
@@ -101,6 +102,9 @@ func Run(ctx context.Context, config RunConfig) (result Result, runErr *RunError
 	defer config.Secrets.Zero()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if config.HeldStreams == 0 {
+		config.HeldStreams = DefaultHeldStreams
 	}
 	if validationErr := validateRunConfig(config); validationErr != nil {
 		return result, &RunError{Phase: PhaseInput, Category: FailureInput, cause: validationErr}
@@ -184,9 +188,14 @@ func Run(ctx context.Context, config RunConfig) (result Result, runErr *RunError
 	}
 
 	for holderIndex := 0; holderIndex < holderIdentities; holderIndex++ {
-		for streamIndex := 0; streamIndex < holderStreams; streamIndex++ {
+		for streamIndex := 0; streamIndex < config.HeldStreams; streamIndex++ {
 			if runErr = emitAndCheck(ctx, config.Emitter, result.event(PhaseOpen, FailureNone)); runErr != nil {
 				return result, runErr
+			}
+			if streamIndex > 0 {
+				if err := paceOpen(ctx, config.OpenInterval); err != nil {
+					return result, failureFor(ctx, PhaseOpen, FailureCanceled, err)
+				}
 			}
 			held, openErr := openAndVerify(ctx, config, sessions[holderIndex], &result)
 			if openErr != nil {
@@ -196,19 +205,17 @@ func Run(ctx context.Context, config RunConfig) (result Result, runErr *RunError
 		}
 	}
 
-	if runErr = emitAndCheck(ctx, config.Emitter, result.event(PhaseLimit, FailureNone)); runErr != nil {
+	if runErr = emitAndCheck(ctx, config.Emitter, result.event(PhaseProbe, FailureNone)); runErr != nil {
 		return result, runErr
 	}
-	result.Attempted++
-	probeCtx, cancelProbe := context.WithTimeout(ctx, config.PhaseTimeout)
-	unexpected, probeErr := sessions[holderIdentities].OpenStream(probeCtx, config.Secrets.TargetHost, config.Secrets.TargetPort)
-	cancelProbe()
-	if unexpected != nil {
-		_ = unexpected.Close()
+	if err := paceOpen(ctx, config.OpenInterval); err != nil {
+		return result, failureFor(ctx, PhaseProbe, FailureCanceled, err)
 	}
-	if !rejectedWith(probeErr, "agent_stream_limit") {
-		return result, failureFor(ctx, PhaseLimit, FailureAgentLimit, probeErr)
+	additional, probeErr := openAndVerify(ctx, config, sessions[holderIdentities], &result)
+	if probeErr != nil {
+		return result, probeErr.withPhase(PhaseProbe)
 	}
+	resources.trackStream(additional)
 
 	if runErr = emitAndCheck(ctx, config.Emitter, result.event(PhaseHold, FailureNone)); runErr != nil {
 		return result, runErr
@@ -252,6 +259,20 @@ func Run(ctx context.Context, config RunConfig) (result Result, runErr *RunError
 	return result, nil
 }
 
+func paceOpen(ctx context.Context, interval time.Duration) error {
+	if interval == 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func openAndVerify(ctx context.Context, config RunConfig, session CapacitySession, result *Result) (HeldStream, *RunError) {
 	result.Attempted++
 	openCtx, cancelOpen := context.WithTimeout(ctx, config.PhaseTimeout)
@@ -279,7 +300,8 @@ func openAndVerify(ctx context.Context, config RunConfig, session CapacitySessio
 func validateRunConfig(config RunConfig) error {
 	if config.OwnerLoader == nil || config.Control == nil || config.Dialer == nil || config.Verifier == nil ||
 		len(config.Secrets.Token) != tokenBytes || !validPublicHostname(config.Secrets.TargetHost) || config.Secrets.TargetPort != 443 ||
-		config.HoldDuration <= 0 || config.HoldDuration > maxHoldDuration || config.PhaseTimeout <= 0 ||
+		config.HeldStreams < 1 || config.HeldStreams > MaximumHeldStreams || config.OpenInterval < 0 ||
+		config.OpenInterval > time.Second || config.HoldDuration <= 0 || config.HoldDuration > maxHoldDuration || config.PhaseTimeout <= 0 ||
 		config.PhaseTimeout > maxPhaseTimeout || config.CleanupTimeout <= 0 || config.CleanupTimeout > maxCleanupTimeout {
 		return errors.New("capacity harness run configuration is invalid")
 	}

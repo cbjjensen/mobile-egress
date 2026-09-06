@@ -61,13 +61,9 @@ final class BoundedDeque<Element>: @unchecked Sendable {
 
 public final class StreamAdmission: @unchecked Sendable {
     private let lock = NSLock()
-    private let limit: Int
     private var reserved: Set<String> = []
 
-    public init(limit: Int) {
-        precondition(limit > 0)
-        self.limit = limit
-    }
+    public init() {}
 
     public var count: Int {
         lock.withLock { reserved.count }
@@ -75,7 +71,7 @@ public final class StreamAdmission: @unchecked Sendable {
 
     public func tryReserve(_ streamID: String) -> Bool {
         lock.withLock {
-            guard reserved.count < limit, !reserved.contains(streamID) else { return false }
+            guard !reserved.contains(streamID) else { return false }
             reserved.insert(streamID)
             return true
         }

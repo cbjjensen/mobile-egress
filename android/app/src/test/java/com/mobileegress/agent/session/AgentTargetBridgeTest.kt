@@ -19,6 +19,25 @@ import org.junit.Test
 
 class AgentTargetBridgeTest {
     @Test
+    fun `more than historical retention capacity stays live until explicit cancellation`() {
+        val fixture = Fixture()
+        repeat(1_100) { fixture.bridge.open("stream-$it", targetAddress()) }
+        assertEquals(1_100, fixture.bridge.activeStreamCount)
+        assertEquals(1_100, fixture.reactor.opened.size)
+        fixture.bridge.routeData("stream-0", byteArrayOf(1))
+        fixture.bridge.routeData("stream-1099", byteArrayOf(2))
+        assertEquals(listOf("stream-0", "stream-1099"), fixture.reactor.writes.map { it.streamId })
+        assertTrue(fixture.failures.isEmpty())
+        fixture.reactor.opened.toMap().forEach { (id, token) ->
+            fixture.bridge.closeFromRelay(id)
+            fixture.bridge.closeFromRelay(id)
+            fixture.listener.onReleased(id, token)
+            fixture.listener.onReleased(id, token)
+        }
+        assertEquals(0, fixture.bridge.activeStreamCount)
+    }
+
+    @Test
     fun `reactor construction is deferred and factory failure is session internal`() {
         val factoryCalls = AtomicInteger()
         val failures = Collections.synchronizedList(mutableListOf<ErrorClass>())
@@ -76,7 +95,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `target write saturation emits exactly one required agent unavailable close`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("saturated", targetAddress())
         fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
 
@@ -95,7 +114,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `stream local target backpressure never becomes session status error at submission or terminal`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("saturated", targetAddress())
         val token = fixture.reactor.opened.getValue("saturated")
         fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
@@ -110,7 +129,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `saturated stream release is exact once and its slot is reusable`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("saturated", targetAddress())
         val firstToken = fixture.reactor.opened.getValue("saturated")
         fixture.reactor.writeResults["saturated"] = ReactorSubmitResult.StreamSaturated
@@ -137,7 +156,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `late saturated stream data is absorbed while an unrelated stream continues`() {
-        val fixture = Fixture(maxStreams = 2)
+        val fixture = Fixture()
         fixture.bridge.open("saturated", targetAddress())
         fixture.bridge.open("peer", targetAddress())
         val saturatedToken = fixture.reactor.opened.getValue("saturated")
@@ -172,7 +191,6 @@ class AgentTargetBridgeTest {
     fun `late data after relay bound saturation release is absorbed before close emission`() {
         val fixture = Fixture(
             outbound = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1),
-            maxStreams = 2,
         )
         fixture.bridge.open("saturated", targetAddress())
         fixture.bridge.open("peer", targetAddress())
@@ -202,7 +220,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `eof saturation atomically replaces target closed before release finalizes`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
@@ -232,7 +250,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `graceful close emission cannot overtake a crossing target write submission`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
@@ -284,7 +302,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `crossing saturation wins before target closed sender and emits one terminal`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
@@ -346,7 +364,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `target closed emission advances state before sender can route data`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
@@ -388,7 +406,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `reactor terminal reservation removal cannot make correlated data session fatal`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         val callbackStarted = CountDownLatch(1)
@@ -429,7 +447,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `captured unopened terminal cannot reject a replacement generation`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("same", targetAddress())
         val oldToken = fixture.reactor.opened.getValue("same")
         fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
@@ -481,7 +499,6 @@ class AgentTargetBridgeTest {
         val allowMailboxCommit = CountDownLatch(1)
         val pauseOnce = AtomicBoolean(true)
         val fixture = Fixture(
-            maxStreams = 1,
             beforeMailboxCommit = {
                 if (pauseOnce.compareAndSet(true, false)) {
                     callbackChecked.countDown()
@@ -534,7 +551,6 @@ class AgentTargetBridgeTest {
         val allowMailboxCommit = CountDownLatch(1)
         val pauseOnce = AtomicBoolean(true)
         val fixture = Fixture(
-            maxStreams = 1,
             beforeMailboxCommit = {
                 if (pauseOnce.compareAndSet(true, false)) {
                     callbackChecked.countDown()
@@ -578,7 +594,6 @@ class AgentTargetBridgeTest {
         val allowMailboxCommit = CountDownLatch(1)
         val pauseOnce = AtomicBoolean(true)
         val fixture = Fixture(
-            maxStreams = 1,
             beforeMailboxCommit = {
                 if (pauseOnce.compareAndSet(true, false)) {
                     callbackChecked.countDown()
@@ -629,7 +644,6 @@ class AgentTargetBridgeTest {
         val closeChecked = CountDownLatch(1)
         val allowCloseCommit = CountDownLatch(1)
         val fixture = Fixture(
-            maxStreams = 1,
             beforeMailboxCommit = {
                 if (pauseClose.get()) {
                     closeChecked.countDown()
@@ -671,29 +685,8 @@ class AgentTargetBridgeTest {
     }
 
     @Test
-    fun `full admission rejects malformed and policy denied opens as stream limit`() {
-        val fixture = Fixture(maxStreams = 1)
-        fixture.bridge.open("active", targetAddress())
-
-        fixture.bridge.open(malformedOpen("malformed"))
-        fixture.bridge.open(policyDeniedOpen("policy"))
-
-        assertEquals(
-            listOf("YWdlbnRfc3RyZWFtX2xpbWl0", "YWdlbnRfc3RyZWFtX2xpbWl0"),
-            fixture.emittedFrames().map { frame ->
-                Regex("\\\"payload\\\":\\\"([^\\\"]+)\\\"")
-                    .find(frame.decodeToString())
-                    ?.groupValues
-                    ?.get(1)
-            },
-        )
-        assertEquals(emptyList<ErrorClass>(), fixture.status.errors)
-        assertEquals(setOf("active"), fixture.reactor.opened.keys)
-    }
-
-    @Test
     fun `duplicate admission rejects malformed and policy denied opens as stream limit`() {
-        val fixture = Fixture(maxStreams = 2)
+        val fixture = Fixture()
         fixture.bridge.open("same", targetAddress())
 
         fixture.bridge.open(malformedOpen("same"))
@@ -714,7 +707,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `any matching terminal crossing cancel releases admission exactly once`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("same", targetAddress())
         val firstToken = fixture.reactor.opened.getValue("same")
         fixture.bridge.closeFromRelay("same")
@@ -733,7 +726,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `late callbacks from a prior same id token cannot mutate replacement`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("same", targetAddress())
         val firstToken = fixture.reactor.opened.getValue("same")
         fixture.listener.onTerminal("same", firstToken, TargetTerminalReason.TargetFailure)
@@ -758,7 +751,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `target eof permits relay writes until close emission then drains release`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.bridge.routeData("stream", "before".encodeToByteArray())
@@ -792,7 +785,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `reactor release before graceful emission preserves ordered target closed`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.reactor.releaseResult = ReactorSubmitResult.MissingOrClosed
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
@@ -819,7 +812,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `reactor release during target closed sender finalizes only after send`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.reactor.releaseResult = ReactorSubmitResult.MissingOrClosed
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
@@ -850,7 +843,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `relay close cancels a graceful terminal after early reactor release`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.reactor.cancelResult = ReactorSubmitResult.MissingOrClosed
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
@@ -878,7 +871,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `shutdown releases a graceful terminal whose reactor already released`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.listener.onTerminal("stream", token, TargetTerminalReason.TargetClosed)
@@ -904,7 +897,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `duplicate relay closes submit one cancel and cannot saturate the session`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         fixture.bridge.open("stream", targetAddress())
         val token = fixture.reactor.opened.getValue("stream")
         fixture.reactor.cancelAction = {
@@ -953,7 +946,6 @@ class AgentTargetBridgeTest {
                     TargetIoReactor(TargetSocketBinder {}, listener)
                 },
                 onSessionFailure = failures::add,
-                maxStreams = 1,
             )
             assertTrue(bridge.start())
             try {
@@ -1081,7 +1073,7 @@ class AgentTargetBridgeTest {
 
     @Test
     fun `shutdown cannot linearize through an in flight open submission`() {
-        val fixture = Fixture(maxStreams = 1)
+        val fixture = Fixture()
         val openEntered = CountDownLatch(1)
         val allowOpen = CountDownLatch(1)
         fixture.reactor.openAction = {
@@ -1119,7 +1111,6 @@ class AgentTargetBridgeTest {
     private class Fixture(
         outbound: OutboundMailbox = OutboundMailbox(),
         openResult: ReactorSubmitResult = ReactorSubmitResult.Accepted,
-        maxStreams: Int = 256,
         beforeMailboxCommit: () -> Unit = {},
         backpressureReporter: BackpressureReporter = NoOpBackpressureReporter,
     ) {
@@ -1135,7 +1126,6 @@ class AgentTargetBridgeTest {
             },
             onSessionFailure = failures::add,
             status = status,
-            maxStreams = maxStreams,
             beforeMailboxCommit = beforeMailboxCommit,
             backpressureReporter = backpressureReporter,
         )
