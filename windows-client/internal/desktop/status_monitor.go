@@ -303,7 +303,7 @@ func (app *DesktopApp) newStatusMonitor() *statusMonitor {
 		if app.desktopPlatform() == platformMacOS && app.relayService != nil {
 			observation := app.relayService.Observe(ctx)
 			if observation.State == relayservice.StateUnavailable {
-				return componentResult{}, errors.New("helper unavailable")
+				return componentResult{helper: relayServiceUnavailable}, errors.New("helper unavailable")
 			}
 			state = relayStateFromObservation(observation)
 		}

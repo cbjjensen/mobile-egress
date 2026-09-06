@@ -32,6 +32,16 @@ func TestGetBridgeStatusUsesVerifiedMacRelayServiceObservation(t *testing.T) {
 	}
 }
 
+func TestFirstHelperFailurePreservesRelayStateContract(t *testing.T) {
+	service := &desktopRelayServiceFake{observations: []relayservice.Observation{{State: relayservice.StateUnavailable}}}
+	app := newMacWorkflowTestApp(t, securestore.NewMemoryStore(), service, &desktopBridgeSpy{})
+	collectControllerForTest(t, app)
+	snapshot := app.GetControllerSnapshot()
+	if snapshot.Bridge.RelayServiceState != "unavailable" || snapshot.Components[componentHelper].Error == "" || snapshot.Bridge.Ready {
+		t.Fatalf("first helper failure lost its display contract: %+v", snapshot)
+	}
+}
+
 func TestSetupLocalBridgeReturnsApprovalStateWithoutCreatingOwner(t *testing.T) {
 	t.Parallel()
 
