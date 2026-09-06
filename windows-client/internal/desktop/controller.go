@@ -39,6 +39,7 @@ const (
 )
 
 type DesktopApp struct {
+	monitor          *statusMonitor
 	platform         desktopPlatform
 	relayState       func() relayServiceState
 	relayService     relayservice.Controller
@@ -138,6 +139,8 @@ type EndpointMigrationView struct {
 }
 
 type BridgeView struct {
+	Checking           bool   `json:"checking"`
+	Stale              bool   `json:"stale"`
 	Platform           string `json:"platform"`
 	RelayServiceState  string `json:"relayServiceState"`
 	TailscaleInstalled bool   `json:"tailscaleInstalled"`
@@ -186,6 +189,7 @@ func newDesktopApp(ctx context.Context, config desktopControllerConfig) (*Deskto
 			AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken,
 		})
 	}
+	application.monitor = application.newStatusMonitor()
 	return application, nil
 }
 
@@ -237,6 +241,9 @@ func (app *DesktopApp) startup(ctx context.Context) {
 	app.mu.Lock()
 	app.ctx = ctx
 	app.mu.Unlock()
+	if app.monitor != nil {
+		app.monitor.start(ctx)
+	}
 	if app.native != nil {
 		app.native.StartTray(app)
 	}
@@ -256,43 +263,7 @@ func (app *DesktopApp) beforeClose(ctx context.Context) bool {
 
 func (app *DesktopApp) GetStatus() client.Status { return app.core.Status() }
 
-func (app *DesktopApp) GetBridgeStatus() BridgeView {
-	platform := app.desktopPlatform()
-	view := BridgeView{Platform: string(platform), OwnerReady: app.core.Status().OwnerReady}
-	// Tailscale trust/status checks have their own budget. Relay or Keychain
-	// latency must not consume the deadline before Tailscale even starts.
-	if app.tailscale != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		status, err := app.tailscale.Inspect(ctx)
-		cancel()
-		view.TailscaleInstalled = status.Installed
-		view.TailscaleOnline = status.Online
-		view.FunnelReady = status.FunnelReady
-		view.FQDN = status.FQDN
-		view.PublicURL = status.PublicURL
-		if err != nil && !errors.Is(err, tailscale.ErrNotInstalled) && !errors.Is(err, tailscale.ErrNotOnline) {
-			view.TailscaleError = err.Error()
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	relayState := app.currentRelayServiceState()
-	if platform == platformMacOS && app.relayService != nil {
-		relayState = relayStateFromObservation(app.relayService.Observe(ctx))
-	}
-	view.RelayServiceState = string(relayState)
-	owner, _, ownerErr := app.ownerRepository.LoadOwnerIdentity(ctx)
-	if ownerErr == nil {
-		if health, healthErr := relayclient.Health(ctx, owner); healthErr == nil {
-			view.RelayReady = health.Readiness
-		}
-	}
-	if ownerErr == nil && view.TailscaleOnline && owner.RelayURL != view.PublicURL {
-		view.NeedsRotation = true
-	}
-	view.Ready = bridgeReady(platform, relayState, view)
-	return view
-}
+func (app *DesktopApp) GetBridgeStatus() BridgeView { return app.GetControllerSnapshot().Bridge }
 
 func bridgeReady(platform desktopPlatform, relayState relayServiceState, view BridgeView) bool {
 	relayServiceReady := (platform == platformWindows && relayState == relayServiceNotRequired) ||
@@ -317,6 +288,9 @@ func relayStateFromObservation(observation relayservice.Observation) relayServic
 
 func (app *DesktopApp) bridgeViewForObservation(observation relayservice.Observation) BridgeView {
 	relayState := relayStateFromObservation(observation)
+	if app.monitor != nil {
+		app.monitor.publish(componentHelper, componentResult{helper: relayState}, nil)
+	}
 	view := BridgeView{
 		Platform: string(platformMacOS), RelayServiceState: string(relayState),
 		OwnerReady: app.core != nil && app.core.Status().OwnerReady,
@@ -341,6 +315,7 @@ func (app *DesktopApp) acquireBridgeWorkflow(ctx context.Context) (func(), error
 }
 
 func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	release, err := app.acquireBridgeWorkflow(ctx)
@@ -408,6 +383,7 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 }
 
 func (app *DesktopApp) InstallTailscale() error {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	checkContext, checkCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -429,6 +405,7 @@ func (app *DesktopApp) InstallTailscale() error {
 }
 
 func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	if app.tailscale == nil {
 		return BridgeView{}, errors.New("Install Tailscale before connecting it.")
 	}
@@ -447,6 +424,7 @@ func (app *DesktopApp) SetupLocalBridge() (BridgeView, error) {
 }
 
 func (app *DesktopApp) setupLocalBridge(ctx context.Context) (BridgeView, error) {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	release, err := app.acquireBridgeWorkflow(ctx)
 	if err != nil {
 		return BridgeView{}, err
@@ -489,6 +467,7 @@ func (app *DesktopApp) setupLocalBridge(ctx context.Context) (BridgeView, error)
 }
 
 func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	timeout := 10 * time.Minute
 	if app.desktopPlatform() == platformMacOS {
 		timeout = relayadmin.OperationTimeout
@@ -524,6 +503,7 @@ func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
 }
 
 func (app *DesktopApp) SaveAWSAccessKeys(accessKeyID, secretAccessKey, sessionToken string) error {
+	defer app.monitorAction(componentMetadata)()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	awsClient, err := awssdk.NewAccessKey(ctx, awssdk.AccessKeyCredentials{
@@ -741,6 +721,7 @@ func (app *DesktopApp) RebootEC2Instance(instanceID string) error {
 }
 
 func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView, error) {
+	defer app.monitorAction(componentMetadata)()
 	app.provisioning.Lock()
 	defer app.provisioning.Unlock()
 	if !app.GetBridgeStatus().Ready {
@@ -835,6 +816,7 @@ func (app *DesktopApp) RepairEC2Node(instanceID string) (cloud.ManagedNodeView, 
 }
 
 func (app *DesktopApp) updateOrRepairNode(instanceID string, repair bool) (cloud.ManagedNodeView, error) {
+	defer app.monitorAction(componentMetadata)()
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {
 		return cloud.ManagedNodeView{}, errors.New("Connect AWS before updating a managed node.")
@@ -881,18 +863,22 @@ func (app *DesktopApp) updateOrRepairNode(instanceID string, repair bool) (cloud
 }
 
 func (app *DesktopApp) ManagedNodes() ([]cloud.ManagedNodeView, error) {
-	return app.cloudRepository.NodeViews(context.Background())
+	snapshot := app.GetControllerSnapshot()
+	return snapshot.Nodes, componentSnapshotError(snapshot.Components[componentMetadata])
 }
-
 func (app *DesktopApp) PendingEC2NodeReservations() ([]string, error) {
-	reservations, err := app.cloudRepository.NodeReservations(context.Background())
-	if err != nil {
-		return nil, errors.New("Unable to load encrypted pending-node reservations.")
+	snapshot := app.GetControllerSnapshot()
+	return snapshot.PendingReservations, componentSnapshotError(snapshot.Components[componentMetadata])
+}
+func componentSnapshotError(status ComponentStatus) error {
+	if status.Error != "" {
+		return errors.New(status.Error)
 	}
-	return reservations, nil
+	return nil
 }
 
 func (app *DesktopApp) CancelEC2NodeReservation(instanceID string, confirmed bool) error {
+	defer app.monitorAction(componentMetadata)()
 	if !confirmed {
 		return errors.New("Explicit confirmation is required to cancel a pending node reservation.")
 	}
@@ -927,6 +913,7 @@ func (app *DesktopApp) NodeSOCKSProxyURL(instanceID string) (string, error) {
 }
 
 func (app *DesktopApp) BootstrapOwner(encodedBundle string) error {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	bundle, err := pairing.Decode(encodedBundle)
 	if err != nil {
 		return errors.New("Unable to complete secure setup. Verify the owner invitation and try again.")
@@ -991,6 +978,7 @@ func encodeQrPNG(encoded string) ([]byte, error) {
 }
 
 func (app *DesktopApp) Revoke(serial string) error {
+	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := app.core.Revoke(ctx, serial); err != nil {
@@ -1122,6 +1110,9 @@ func decodeNodeReleaseManifest(raw []byte) (cloud.NodeRelease, error) {
 
 func (app *DesktopApp) shutdownApp() {
 	app.shutdown.Do(func() {
+		if app.monitor != nil {
+			app.monitor.stop(time.Second)
+		}
 		if app.core != nil {
 			_ = app.core.Close()
 		}

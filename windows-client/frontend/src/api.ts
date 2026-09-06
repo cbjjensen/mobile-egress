@@ -21,6 +21,8 @@ export type DesktopPlatform = 'windows' | 'macos'
 export type RelayServiceState = 'not-required' | 'not-registered' | 'approval-required' | 'enabled' | 'version-mismatch' | 'unavailable'
 
 export type BridgeStatus = {
+  checking?: boolean
+  stale?: boolean
   platform: DesktopPlatform
   relayServiceState: RelayServiceState
   tailscaleInstalled: boolean
@@ -65,7 +67,11 @@ export type SSMInstanceStatus = {
   lastPingAt?: string
 }
 
+export type ComponentStatus = { checking: boolean; stale: boolean; error?: string; lastSuccess?: string }
+export type ControllerSnapshot = { bridge: BridgeStatus; nodes: ManagedNode[]; pendingReservations: string[]; components: Record<'tailscale' | 'helper' | 'relay' | 'metadata', ComponentStatus> }
+
 type DesktopAPI = {
+  GetControllerSnapshot(): Promise<ControllerSnapshot>
   GetStatus(): Promise<Status>
   GetBridgeStatus(): Promise<BridgeStatus>
   InstallTailscale(): Promise<void>

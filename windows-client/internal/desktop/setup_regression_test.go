@@ -30,6 +30,7 @@ func TestFailedStatusIsNotReportedAsMissingOrAReasonToReinstall(t *testing.T) {
 	}
 	runner := &setupStatusRunner{}
 	app.tailscale = tailscale.NewController(executable, runner)
+	collectControllerForTest(t, app)
 	view := app.GetBridgeStatus()
 	if !view.TailscaleInstalled || view.TailscaleError == "" || view.Ready {
 		t.Fatalf("status must identify an installed app with an unavailable check: %+v", view)

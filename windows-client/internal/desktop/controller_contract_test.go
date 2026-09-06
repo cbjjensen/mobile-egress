@@ -29,6 +29,7 @@ func TestWindowsBridgeStatusIncludesThePlatformContract(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	collectControllerForTest(t, app)
 	status := app.GetBridgeStatus()
 	if got, want := status.Platform, "windows"; got != want {
 		t.Fatalf("BridgeStatus platform = %q, want %q", got, want)
@@ -85,6 +86,7 @@ func TestBridgeReadinessRequiresThePlatformSpecificRelayState(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			current = test.injected
+			collectControllerForTest(t, app)
 			status := app.GetBridgeStatus()
 			if status.Platform != "macos" || status.RelayServiceState != test.wantStatus {
 				t.Fatalf("GetBridgeStatus() = %#v, want platform macos and relay state %q", status, test.wantStatus)
@@ -163,6 +165,7 @@ func TestMacOSDesktopManagedNodeProxyBindingsUseLoopbackTwo(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	collectControllerForTest(t, app)
 	views, err := app.ManagedNodes()
 	if err != nil || len(views) != 1 {
 		t.Fatalf("ManagedNodes() = %#v/%v", views, err)

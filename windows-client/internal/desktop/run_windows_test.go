@@ -239,6 +239,7 @@ func TestGetBridgeStatusDistinguishesInstalledTailscaleFromOnlineTailscale(t *te
 		tailscale:       tailscale.NewController(executable, offlineTailscaleRunner{}),
 	}
 
+	collectControllerForTest(t, app)
 	status := app.GetBridgeStatus()
 	if !status.TailscaleInstalled || status.TailscaleOnline {
 		t.Fatalf("GetBridgeStatus() = %#v, want installed and offline", status)
@@ -293,6 +294,7 @@ func TestReservationCancellationRequiresExplicitConfirmation(t *testing.T) {
 	if err := app.CancelEC2NodeReservation(instanceID, false); err == nil {
 		t.Fatal("CancelEC2NodeReservation() accepted missing confirmation")
 	}
+	collectControllerForTest(t, app)
 	pending, err := app.PendingEC2NodeReservations()
 	if err != nil || len(pending) != 1 || pending[0] != instanceID {
 		t.Fatalf("pending reservations after rejected cancellation = %#v/%v", pending, err)
@@ -300,6 +302,7 @@ func TestReservationCancellationRequiresExplicitConfirmation(t *testing.T) {
 	if err := app.CancelEC2NodeReservation(instanceID, true); err != nil {
 		t.Fatal(err)
 	}
+	collectControllerForTest(t, app)
 	pending, err = app.PendingEC2NodeReservations()
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending reservations after confirmed cancellation = %#v/%v", pending, err)

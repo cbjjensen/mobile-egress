@@ -130,6 +130,10 @@ func (controller *desktopMenuBarController) quitMenu() {
 
 func menuBarStatusTitle(status BridgeView) string {
 	switch {
+	case status.Checking:
+		return "Checking bridge status"
+	case status.Stale:
+		return "Bridge status stale"
 	case status.NeedsRotation:
 		return "Funnel endpoint changed · rotation required"
 	case status.Ready:

@@ -22,6 +22,7 @@ func TestGetBridgeStatusUsesVerifiedMacRelayServiceObservation(t *testing.T) {
 	}}}
 	app := newMacWorkflowTestApp(t, securestore.NewMemoryStore(), service, &desktopBridgeSpy{})
 
+	collectControllerForTest(t, app)
 	status := app.GetBridgeStatus()
 	if got, want := status.RelayServiceState, "version-mismatch"; got != want {
 		t.Fatalf("GetBridgeStatus().RelayServiceState = %q, want %q", got, want)
