@@ -192,6 +192,25 @@ func (repository *Repository) NodeViews(ctx context.Context) ([]ManagedNodeView,
 	if err != nil {
 		return nil, err
 	}
+	return managedNodeViews(nodes), nil
+}
+
+// ControllerMetadata returns sanitized nodes and reservations from one state read.
+func (repository *Repository) ControllerMetadata(ctx context.Context) ([]ManagedNodeView, []string, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	state, err := repository.loadOrCreate(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	views := managedNodeViews(state.Nodes)
+	sort.Slice(views, func(left, right int) bool { return views[left].InstanceID < views[right].InstanceID })
+	reservations := append([]string(nil), state.NodeReservations...)
+	sort.Strings(reservations)
+	return views, reservations, nil
+}
+
+func managedNodeViews(nodes []ManagedNode) []ManagedNodeView {
 	views := make([]ManagedNodeView, 0, len(nodes))
 	for _, node := range nodes {
 		views = append(views, ManagedNodeView{
@@ -199,7 +218,7 @@ func (repository *Repository) NodeViews(ctx context.Context) ([]ManagedNodeView,
 			Health: node.Health, Proxy: proxyendpoint.HTTPConnectAddress() + ":***:***", ProxyReady: supportsManagedNodeProxy(node.ServiceVersion),
 		})
 	}
-	return views, nil
+	return views
 }
 
 func (repository *Repository) ProxyLine(ctx context.Context, instanceID string) (string, error) {

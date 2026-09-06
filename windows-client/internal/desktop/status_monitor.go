@@ -249,7 +249,7 @@ func (m *statusMonitor) snapshot() ControllerSnapshot {
 	return s
 }
 
-func (m *statusMonitor) stop(timeout time.Duration) {
+func (m *statusMonitor) beginStop() {
 	m.mu.Lock()
 	if !m.stopped {
 		m.stopped = true
@@ -272,6 +272,10 @@ func (m *statusMonitor) stop(timeout time.Duration) {
 		}()
 	}
 	m.mu.Unlock()
+}
+
+func (m *statusMonitor) stop(timeout time.Duration) {
+	m.beginStop()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -303,29 +307,31 @@ func (app *DesktopApp) newStatusMonitor() *statusMonitor {
 		}
 		return componentResult{helper: state}, nil
 	}
+	health := &controllerHealth{create: func(identity relayclient.Identity) (controllerHealthClient, error) {
+		return relayclient.NewHealthClient(identity)
+	}}
 	checks[componentRelay] = func(ctx context.Context) (componentResult, error) {
-		if app.core == nil || !app.core.Status().OwnerReady {
-			return componentResult{}, nil
+		if app.core == nil {
+			return health.read(ctx, relayclient.Identity{}, false)
 		}
-		owner, _, err := app.ownerRepository.LoadOwnerIdentity(ctx)
-		if err != nil {
-			return componentResult{}, err
-		}
-		health, err := relayclient.Health(ctx, owner)
-		return componentResult{ownerReady: true, ownerURL: owner.RelayURL, relayReady: health.Readiness}, err
+		identity, ready := app.core.OwnerSnapshot()
+		return health.read(ctx, identity, ready)
 	}
 	checks[componentMetadata] = func(ctx context.Context) (componentResult, error) {
 		if app.cloudRepository == nil {
 			return componentResult{}, nil
 		}
-		nodes, err := app.cloudRepository.NodeViews(ctx)
-		if err != nil {
-			return componentResult{}, err
-		}
-		reservations, err := app.cloudRepository.NodeReservations(ctx)
+		nodes, reservations, err := app.cloudRepository.ControllerMetadata(ctx)
 		return componentResult{nodes: nodes, reservations: reservations}, err
 	}
-	return newStatusMonitor(app.desktopPlatform(), checks)
+	m := newStatusMonitor(app.desktopPlatform(), checks)
+	m.cleanup = func() {
+		health.close()
+		if app.tailscale != nil {
+			_ = app.tailscale.Close()
+		}
+	}
+	return m
 }
 
 func (app *DesktopApp) GetControllerSnapshot() ControllerSnapshot {

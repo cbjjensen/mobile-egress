@@ -86,6 +86,17 @@ func NewCore(ctx context.Context, store securestore.Store, gateway Gateway) (*Co
 	return core, nil
 }
 
+// OwnerSnapshot copies the already loaded identity for internal controller use.
+// It must not be exposed through frontend bindings because it contains secrets.
+func (core *Core) OwnerSnapshot() (relayclient.Identity, bool) {
+	core.mu.RLock()
+	defer core.mu.RUnlock()
+	if core.owner == nil {
+		return relayclient.Identity{}, false
+	}
+	return *core.owner, true
+}
+
 func (core *Core) Pair(ctx context.Context, bundle pairing.Bundle) error {
 	return core.BootstrapOwner(ctx, bundle)
 }

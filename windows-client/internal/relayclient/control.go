@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mobile-egress/pairing"
@@ -186,21 +187,51 @@ func IssueEndpointMigration(ctx context.Context, identity Identity) (EndpointMig
 }
 
 func Health(ctx context.Context, identity Identity) (RelayHealth, error) {
-	baseURL, err := validateRelayURL(identity.RelayURL)
+	client, err := NewHealthClient(identity)
 	if err != nil {
 		return RelayHealth{}, err
+	}
+	defer client.Close()
+	return client.Health(ctx)
+}
+
+// HealthClient retains the authenticated HTTP transport for repeated polling.
+type HealthClient struct {
+	client    *http.Client
+	transport *http.Transport
+	url       string
+	closed    atomic.Bool
+}
+
+func NewHealthClient(identity Identity) (*HealthClient, error) {
+	baseURL, err := validateRelayURL(identity.RelayURL)
+	if err != nil {
+		return nil, err
 	}
 	client, transport, err := identityHTTPClient(identity)
 	if err != nil {
-		return RelayHealth{}, err
+		return nil, err
 	}
-	defer transport.CloseIdleConnections()
 	client.Timeout = 5 * time.Second
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String()+"/healthz", nil)
+	return &HealthClient{client: client, transport: transport, url: baseURL.String() + "/healthz"}, nil
+}
+
+// Close releases idle connections and prevents subsequent health requests.
+func (client *HealthClient) Close() error {
+	client.closed.Store(true)
+	client.transport.CloseIdleConnections()
+	return nil
+}
+
+func (client *HealthClient) Health(ctx context.Context) (RelayHealth, error) {
+	if client.closed.Load() {
+		return RelayHealth{}, errors.New("relay health client is closed")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.url, nil)
 	if err != nil {
 		return RelayHealth{}, err
 	}
-	response, err := client.Do(request)
+	response, err := client.client.Do(request)
 	if err != nil {
 		return RelayHealth{}, errors.New("relay health is unavailable")
 	}
