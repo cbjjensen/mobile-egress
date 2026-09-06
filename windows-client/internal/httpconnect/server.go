@@ -17,12 +17,12 @@ import (
 	"sync"
 	"time"
 
+	"mobile-egress/windows-client/internal/preopen"
 	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
 const (
-	maxPreOpenBytes            = 64 << 10
 	forwardIdleTimeout         = 60 * time.Second
 	maxIdleRelayStreams        = 16
 	maxIdleRelayStreamsPerHost = 4
@@ -191,17 +191,17 @@ func (server *Server) handleConnect(writer http.ResponseWriter, request *http.Re
 
 	openContext, cancelOpen := context.WithTimeout(server.context, server.config.OpenTimeout)
 	openingComplete := make(chan struct{})
-	clientState := make(chan preOpenResult, 1)
-	go watchClientDuringOpen(openContext, cancelOpen, client, buffered.Reader, openingComplete, clientState)
+	clientState := make(chan preopen.Result, 1)
+	go preopen.Watch(openContext, cancelOpen, client, buffered.Reader, openingComplete, clientState)
 	stream, openErr := server.config.Opener.OpenStream(openContext, host, port)
 	close(openingComplete)
 	state := <-clientState
 	cancelOpen()
-	if openErr != nil || state.err != nil {
+	if openErr != nil || state.Err != nil {
 		if stream != nil {
 			_ = stream.Close()
 		}
-		if state.err == nil || errors.Is(state.err, context.DeadlineExceeded) {
+		if state.Err == nil || errors.Is(state.Err, context.DeadlineExceeded) {
 			_ = writeResponse(buffered.Writer, openFailureStatus(openErr))
 		}
 		return
@@ -212,8 +212,8 @@ func (server *Server) handleConnect(writer http.ResponseWriter, request *http.Re
 	if writeResponse(buffered.Writer, http.StatusOK) != nil {
 		return
 	}
-	if len(state.buffer) > 0 {
-		if written, err := stream.Write(state.buffer); err != nil || written != len(state.buffer) {
+	if len(state.Buffer) > 0 {
+		if written, err := stream.Write(state.Buffer); err != nil || written != len(state.Buffer) {
 			return
 		}
 	}
@@ -384,66 +384,6 @@ func copyHeaders(destination, source http.Header) {
 	for name, values := range source {
 		for _, value := range values {
 			destination.Add(name, value)
-		}
-	}
-}
-
-type preOpenResult struct {
-	buffer []byte
-	err    error
-}
-
-func watchClientDuringOpen(ctx context.Context, cancel context.CancelFunc, connection net.Conn, reader *bufio.Reader, openingComplete <-chan struct{}, result chan<- preOpenResult) {
-	var state preOpenResult
-	// Publish only after the interrupt goroutine has exited and its deadline
-	// has been cleared, so forwarding cannot race with either operation.
-	defer func() { result <- state }()
-	stopInterrupt := make(chan struct{})
-	interruptDone := make(chan struct{})
-	go func() {
-		defer close(interruptDone)
-		select {
-		case <-openingComplete:
-		case <-ctx.Done():
-		case <-stopInterrupt:
-			return
-		}
-		_ = connection.SetReadDeadline(time.Now())
-	}()
-	defer func() {
-		close(stopInterrupt)
-		<-interruptDone
-		_ = connection.SetReadDeadline(time.Time{})
-	}()
-	var buffered bytes.Buffer
-	readBuffer := make([]byte, 8<<10)
-	for {
-		select {
-		case <-openingComplete:
-			state = preOpenResult{buffer: append([]byte(nil), buffered.Bytes()...)}
-			return
-		case <-ctx.Done():
-			state = preOpenResult{err: ctx.Err()}
-			return
-		default:
-		}
-		read, err := reader.Read(readBuffer)
-		if read > 0 {
-			if buffered.Len()+read > maxPreOpenBytes {
-				cancel()
-				state = preOpenResult{err: errors.New("pre-open client data limit exceeded")}
-				return
-			}
-			_, _ = buffered.Write(readBuffer[:read])
-		}
-		if err != nil {
-			var networkError net.Error
-			if errors.As(err, &networkError) && networkError.Timeout() {
-				continue
-			}
-			cancel()
-			state = preOpenResult{err: err}
-			return
 		}
 	}
 }

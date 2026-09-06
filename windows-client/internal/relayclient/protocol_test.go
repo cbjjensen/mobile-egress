@@ -44,3 +44,19 @@ func TestParseWireEnvelopePreservesLargerNonDataPayloadLimit(t *testing.T) {
 		t.Fatalf("parseWireEnvelope() applied the data limit to a non-data payload: %v", err)
 	}
 }
+
+func TestParseWireEnvelopeRejectsAmbiguousFields(t *testing.T) {
+	for name, raw := range map[string]string{
+		"duplicate":      `{"version":2,"version":1,"type":"ping","streamId":"","payload":""}`,
+		"missing":        `{"version":1,"type":"ping","streamId":""}`,
+		"null":           `{"version":1,"type":"ping","streamId":"","payload":null}`,
+		"alternate case": `{"Version":1,"type":"ping","streamId":"","payload":""}`,
+		"blank stream":   `{"version":1,"type":"data","streamId":" ","payload":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseWireEnvelope([]byte(raw)); err == nil {
+				t.Fatal("accepted an envelope outside the shared wire contract")
+			}
+		})
+	}
+}

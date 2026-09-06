@@ -1,4 +1,4 @@
-// Package tunnelwire defines the negotiated raw data framing shared by Go peers.
+// Package tunnelwire defines the JSON and negotiated binary framing shared by Go peers.
 package tunnelwire
 
 import (

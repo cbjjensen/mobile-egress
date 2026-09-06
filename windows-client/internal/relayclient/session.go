@@ -288,7 +288,7 @@ func (session *Session) readLoop() {
 			return
 		}
 		if envelope.Type == "ping" {
-			payload, err := decodeWirePayload(envelope.Payload)
+			payload, err := envelope.DecodePayload()
 			if err == nil && string(payload) == tunnelwire.Capability {
 				session.binaryData.Store(true)
 			}
@@ -327,11 +327,7 @@ func (session *Session) readLoop() {
 			session.removeStream(stream.id)
 			stream.finish(RelayError{Code: code})
 		case "data":
-			payload := envelope.Data
-			var err error
-			if payload == nil {
-				payload, err = decodeWirePayload(envelope.Payload)
-			}
+			payload, err := envelope.DecodePayload()
 			if err != nil {
 				return
 			}
@@ -385,19 +381,7 @@ func (session *Session) healthLoop(baseURL string) {
 }
 
 func (session *Session) send(envelope wireEnvelope) error {
-	var raw []byte
-	var err error
-	if envelope.Type == "data" && session.binaryData.Load() {
-		payload := envelope.Data
-		if payload == nil {
-			payload, err = decodeWirePayload(envelope.Payload)
-		}
-		if err == nil {
-			raw, err = tunnelwire.EncodeData(envelope.StreamID, payload)
-		}
-	} else {
-		raw, err = marshalWireEnvelope(envelope)
-	}
+	raw, err := envelope.MarshalForPeer(session.binaryData.Load())
 	if err != nil {
 		return err
 	}

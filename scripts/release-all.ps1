@@ -486,6 +486,48 @@ function Resolve-MobileEgressReleaseComponents {
     return @($resolved)
 }
 
+function Get-MobileEgressReleasePolicy {
+    param([Parameter(Mandatory)][string]$Version)
+
+    # Immutable historical approvals belong here; unlisted versions use the normal scope rules.
+    $historicalPolicies = @{
+        '1.1.0' = @{
+            ExactScope = 'Windows,Android'
+            ScopeError = 'The immutable v1.1.0 interim release must contain exactly Windows and Android.'
+        }
+        '1.1.1' = @{
+            ExactScope = 'Windows'
+            ScopeError = 'The v1.1.1 Windows hotfix release must contain exactly Windows.'
+            DownloadOverride = @{
+                CurrentTag = 'v1.1.1'
+                RequiredArtifacts = @('mobile-egress-windows-1.1.1.zip', 'mobile-egress-client.exe')
+                DisabledFallbackKeys = @('macos')
+                PinnedFallbacks = @{
+                    android = @{ Tag = 'v1.1.0'; Name = 'zfnf-mobile-egress-android-1.1.0.apk' }
+                }
+            }
+        }
+        '1.1.3' = @{
+            ExactScope = 'Windows,Android'
+            ScopeError = 'The v1.1.3 relay-liveness release must contain exactly Windows and Android.'
+        }
+    }
+
+    $policy = @{
+        ExactScope = ''
+        ScopeError = ''
+        MacUnavailableReason = 'Not included in this release scope; use a later Desktop release for macOS'
+        DownloadOverride = $null
+    }
+    if ($historicalPolicies.ContainsKey($Version)) {
+        foreach ($entry in $historicalPolicies[$Version].GetEnumerator()) {
+            $policy[$entry.Key] = $entry.Value
+        }
+        $policy.MacUnavailableReason = 'Deferred to a later release pending Apple Developer Program enrollment'
+    }
+    return $policy
+}
+
 function Assert-MobileEgressApprovedReleaseScope {
     param(
         [Parameter(Mandatory)]
@@ -496,21 +538,10 @@ function Assert-MobileEgressApprovedReleaseScope {
 
     $resolved = @(Resolve-MobileEgressReleaseComponents -Components $Components)
     $scope = $resolved -join ','
-    if ($Version -eq '1.1.0') {
-        if ($scope -cne 'Windows,Android') {
-            throw 'The immutable v1.1.0 interim release must contain exactly Windows and Android.'
-        }
-        return
-    }
-    if ($Version -eq '1.1.1') {
-        if ($scope -cne 'Windows') {
-            throw 'The v1.1.1 Windows hotfix release must contain exactly Windows.'
-        }
-        return
-    }
-    if ($Version -eq '1.1.3') {
-        if ($scope -cne 'Windows,Android') {
-            throw 'The v1.1.3 relay-liveness release must contain exactly Windows and Android.'
+    $policy = Get-MobileEgressReleasePolicy -Version $Version
+    if ($policy.ExactScope) {
+        if ($scope -cne $policy.ExactScope) {
+            throw $policy.ScopeError
         }
         return
     }
@@ -647,12 +678,17 @@ function Resolve-MobileEgressReleaseDownloadLinks {
 
     $releasedNames = @($ReleasedArtifacts | ForEach-Object { $_.Name })
     $currentWindowsReleased = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key 'windows' -Name $_ }).Count -gt 0
-    $isV111WindowsHotfix = `
-        $CurrentTag -ceq 'v1.1.1' -and `
-        $Version -ceq '1.1.1' -and `
-        $releasedNames.Count -eq 2 -and `
-        $releasedNames -ccontains 'mobile-egress-windows-1.1.1.zip' -and `
-        $releasedNames -ccontains 'mobile-egress-client.exe'
+    $policy = Get-MobileEgressReleasePolicy -Version $Version
+    $downloadOverride = $policy.DownloadOverride
+    if ($null -ne $downloadOverride) {
+        # Apply historical download exceptions only to their exact tag and artifact set.
+        $missingArtifacts = @($downloadOverride.RequiredArtifacts | Where-Object { $releasedNames -cnotcontains $_ })
+        if ($CurrentTag -cne $downloadOverride.CurrentTag -or
+            $releasedNames.Count -ne $downloadOverride.RequiredArtifacts.Count -or
+            $missingArtifacts.Count -ne 0) {
+            $downloadOverride = $null
+        }
+    }
     foreach ($item in @(Get-MobileEgressReleaseDownloadItemDefinitions -Version $Version)) {
         $currentMatch = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $_ } | Select-Object -First 1)
         if ($currentMatch.Count -ne 0) {
@@ -668,15 +704,20 @@ function Resolve-MobileEgressReleaseDownloadLinks {
         }
 
         $fallback = $null
-        $publishedFallbackDisabled = $isV111WindowsHotfix -and $item.Key -eq 'macos'
+        $publishedFallbackDisabled = $false
+        $pinnedFallback = $null
+        if ($null -ne $downloadOverride) {
+            $publishedFallbackDisabled = $item.Key -in $downloadOverride.DisabledFallbackKeys
+            $pinnedFallback = $downloadOverride.PinnedFallbacks[$item.Key]
+        }
         if (-not $publishedFallbackDisabled) {
             foreach ($release in @($PublishedReleases | Where-Object { -not $_.isDraft })) {
-                if ($isV111WindowsHotfix -and $item.Key -eq 'android' -and [string]$release.tagName -cne 'v1.1.0') {
+                if ($null -ne $pinnedFallback -and [string]$release.tagName -cne $pinnedFallback.Tag) {
                     continue
                 }
                 foreach ($asset in @($release.assets)) {
-                    $assetMatches = if ($isV111WindowsHotfix -and $item.Key -eq 'android') {
-                        [string]$asset.name -ceq 'zfnf-mobile-egress-android-1.1.0.apk'
+                    $assetMatches = if ($null -ne $pinnedFallback) {
+                        [string]$asset.name -ceq $pinnedFallback.Name
                     } else {
                         Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $asset.name
                     }
@@ -701,11 +742,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
             Name = if ($null -ne $fallback) { $fallback.Name } else { '' }
             Url = if ($null -ne $fallback) { New-MobileEgressReleaseDownloadUrl -Tag $fallback.Tag -Name $fallback.Name } else { '' }
             UnavailableReason = if ($null -eq $fallback -and $item.Key -eq 'macos' -and $currentWindowsReleased) {
-                if ($Version -in @('1.1.0', '1.1.1', '1.1.3')) {
-                    'Deferred to a later release pending Apple Developer Program enrollment'
-                } else {
-                    'Not included in this release scope; use a later Desktop release for macOS'
-                }
+                $policy.MacUnavailableReason
             } else {
                 ''
             }

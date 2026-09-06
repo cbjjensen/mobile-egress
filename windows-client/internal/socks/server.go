@@ -2,7 +2,6 @@
 package socks
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/binary"
@@ -13,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mobile-egress/windows-client/internal/preopen"
 	"mobile-egress/windows-client/internal/proxyendpoint"
 )
 
@@ -194,18 +194,18 @@ func (server *Server) handleConnection(tracked *trackedConnection) {
 
 	openContext, cancelOpen := context.WithTimeout(server.context, server.config.OpenTimeout)
 	openingComplete := make(chan struct{})
-	clientState := make(chan preOpenResult, 1)
-	go watchClientDuringOpen(openContext, cancelOpen, tracked.client, openingComplete, clientState)
+	clientState := make(chan preopen.Result, 1)
+	go preopen.Watch(openContext, cancelOpen, tracked.client, tracked.client, openingComplete, clientState)
 	stream, err := server.config.Opener.OpenStream(openContext, host, port)
 	close(openingComplete)
 	state := <-clientState
 	cancelOpen()
-	if err != nil || state.err != nil {
+	if err != nil || state.Err != nil {
 		if stream != nil {
 			_ = stream.Close()
 		}
 		release()
-		if state.err == nil || errors.Is(state.err, context.DeadlineExceeded) {
+		if state.Err == nil || errors.Is(state.Err, context.DeadlineExceeded) {
 			_ = writeReply(tracked.client, 1)
 		}
 		return
@@ -216,10 +216,10 @@ func (server *Server) handleConnection(tracked *trackedConnection) {
 	if writeReply(tracked.client, 0) != nil {
 		return
 	}
-	if len(state.buffer) > 0 {
-		written, writeErr := stream.Write(state.buffer)
+	if len(state.Buffer) > 0 {
+		written, writeErr := stream.Write(state.Buffer)
 		server.bytesUp.Add(int64(written))
-		if writeErr != nil || written != len(state.buffer) {
+		if writeErr != nil || written != len(state.Buffer) {
 			return
 		}
 	}
@@ -237,66 +237,6 @@ func (server *Server) handleConnection(tracked *trackedConnection) {
 	_ = tracked.client.Close()
 	_ = stream.Close()
 	<-completed
-}
-
-type preOpenResult struct {
-	buffer []byte
-	err    error
-}
-
-func watchClientDuringOpen(ctx context.Context, cancel context.CancelFunc, connection net.Conn, openingComplete <-chan struct{}, result chan<- preOpenResult) {
-	var state preOpenResult
-	// Publish only after the interrupt goroutine has exited and its deadline
-	// has been cleared, so forwarding cannot race with either operation.
-	defer func() { result <- state }()
-	stopInterrupt := make(chan struct{})
-	interruptDone := make(chan struct{})
-	go func() {
-		defer close(interruptDone)
-		select {
-		case <-openingComplete:
-		case <-ctx.Done():
-		case <-stopInterrupt:
-			return
-		}
-		_ = connection.SetReadDeadline(time.Now())
-	}()
-	defer func() {
-		close(stopInterrupt)
-		<-interruptDone
-		_ = connection.SetReadDeadline(time.Time{})
-	}()
-	var buffered bytes.Buffer
-	readBuffer := make([]byte, 8<<10)
-	for {
-		select {
-		case <-openingComplete:
-			state = preOpenResult{buffer: append([]byte(nil), buffered.Bytes()...)}
-			return
-		case <-ctx.Done():
-			state = preOpenResult{err: ctx.Err()}
-			return
-		default:
-		}
-		read, err := connection.Read(readBuffer)
-		if read > 0 {
-			if buffered.Len()+read > 64<<10 {
-				cancel()
-				state = preOpenResult{err: errors.New("pre-open client data limit exceeded")}
-				return
-			}
-			_, _ = buffered.Write(readBuffer[:read])
-		}
-		if err != nil {
-			var networkError net.Error
-			if errors.As(err, &networkError) && networkError.Timeout() {
-				continue
-			}
-			cancel()
-			state = preOpenResult{err: err}
-			return
-		}
-	}
 }
 
 func (tracked *trackedConnection) setStream(stream io.ReadWriteCloser) bool {

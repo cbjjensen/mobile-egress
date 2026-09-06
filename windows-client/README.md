@@ -81,6 +81,8 @@ Before remote configuration, the controller atomically reserves capacity and per
 
 ## Developer checks
 
+The guided Tailscale installer on macOS delegates package trust to the system: `pkgutil --check-signature` must report a trusted certificate and the exact `Developer ID Installer: Tailscale Inc. (W5364U7YZB)` leaf identity, then `spctl --assess --type install` must succeed. Both commands use fixed executable paths, a minimal environment, bounded output, and staged-path revalidation before and after execution. The controller does not maintain a separate XAR/CMS verifier or bundled Apple root certificates.
+
 From the repository root:
 
 ```powershell

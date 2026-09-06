@@ -22,6 +22,8 @@ Managed nodes remain Windows Server 2019; there is no Mac headless Client. The f
 
 ## Components
 
+The Go relay and Client share the tunnel envelope codec in `internal/tunnelwire`, including JSON validation, payload limits, binary framing, and mixed-version serialization. Session negotiation and role checks remain in their callers. SOCKS and HTTP CONNECT share the Client's `internal/preopen` reader lifecycle, so buffering, cancellation, and deadline cleanup follow one implementation.
+
 ### Desktop controller
 
 The shared Wails/React and Go app is the only normal operator interface. Both thin Windows and Darwin roots retain the same four tabs, backend bindings, AWS/node logic, QR flows, and release-manifest handling.

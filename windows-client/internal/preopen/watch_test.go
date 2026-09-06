@@ -1,6 +1,7 @@
-package socks
+package preopen
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -11,6 +12,25 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWatch(t *testing.T) {
+	for _, reader := range []struct {
+		name string
+		wrap func(io.Reader) io.Reader
+	}{
+		{"raw", func(r io.Reader) io.Reader { return r }},
+		{"buffered", func(r io.Reader) io.Reader { return bufio.NewReader(r) }},
+	} {
+		t.Run(reader.name, func(t *testing.T) {
+			t.Run("interrupt_and_cleanup", func(t *testing.T) {
+				testOpeningInterruptAndDeadlineCleanupBeforeHandoff(t, reader.wrap)
+			})
+			t.Run("buffer_limit", func(t *testing.T) {
+				testOpeningPreservesBytesAndEnforcesLimit(t, reader.wrap)
+			})
+		})
+	}
+}
 
 // Suppress future deadlines so polling cannot accidentally satisfy this test.
 // Immediate interrupts and clearing still exercise a real net.Pipe.
@@ -36,7 +56,7 @@ func (c *openingConn) SetReadDeadline(d time.Time) error {
 	return c.Conn.SetReadDeadline(d)
 }
 
-func TestOpeningInterruptAndDeadlineCleanupBeforeHandoff(t *testing.T) {
+func testOpeningInterruptAndDeadlineCleanupBeforeHandoff(t *testing.T, newReader func(io.Reader) io.Reader) {
 	for _, canceled := range []bool{false, true} {
 		name := "opened"
 		if canceled {
@@ -51,8 +71,8 @@ func TestOpeningInterruptAndDeadlineCleanupBeforeHandoff(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			opened := make(chan struct{})
-			result := make(chan preOpenResult, 1)
-			go watchClientDuringOpen(ctx, cancel, c, opened, result)
+			result := make(chan Result, 1)
+			go Watch(ctx, cancel, c, newReader(c), opened, result)
 			<-c.reading
 			if canceled {
 				cancel()
@@ -71,18 +91,18 @@ func TestOpeningInterruptAndDeadlineCleanupBeforeHandoff(t *testing.T) {
 			}
 			// Release cleanup without closing the gate twice.
 			c.allowClear <- struct{}{}
-			var state preOpenResult
+			var state Result
 			select {
 			case state = <-result:
 			case <-time.After(time.Second):
 				t.Fatal("watcher did not finish")
 			}
 			if canceled {
-				if !errors.Is(state.err, context.Canceled) {
-					t.Fatalf("error = %v", state.err)
+				if !errors.Is(state.Err, context.Canceled) {
+					t.Fatalf("error = %v", state.Err)
 				}
-			} else if state.err != nil {
-				t.Fatal(state.err)
+			} else if state.Err != nil {
+				t.Fatal(state.Err)
 			}
 			sent := make(chan error, 1)
 			go func() { _, err := peer.Write([]byte("after")); sent <- err }()
@@ -100,7 +120,7 @@ func TestOpeningInterruptAndDeadlineCleanupBeforeHandoff(t *testing.T) {
 	}
 }
 
-func TestOpeningPreservesBytesAndEnforcesLimit(t *testing.T) {
+func testOpeningPreservesBytesAndEnforcesLimit(t *testing.T, newReader func(io.Reader) io.Reader) {
 	for _, size := range []int{64 << 10, (64 << 10) + 1} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			local, peer := net.Pipe()
@@ -109,9 +129,9 @@ func TestOpeningPreservesBytesAndEnforcesLimit(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			opened := make(chan struct{})
-			result := make(chan preOpenResult, 1)
+			result := make(chan Result, 1)
 			c := local
-			go watchClientDuringOpen(ctx, cancel, c, opened, result)
+			go Watch(ctx, cancel, c, newReader(c), opened, result)
 			payload := bytes.Repeat([]byte("abcdefgh"), (size+7)/8)[:size]
 			if _, err := peer.Write(payload); err != nil {
 				t.Fatal(err)
@@ -122,11 +142,11 @@ func TestOpeningPreservesBytesAndEnforcesLimit(t *testing.T) {
 			select {
 			case state := <-result:
 				if size == 64<<10 {
-					if state.err != nil || !bytes.Equal(state.buffer, payload) {
-						t.Fatalf("buffer length=%d error=%v", len(state.buffer), state.err)
+					if state.Err != nil || !bytes.Equal(state.Buffer, payload) {
+						t.Fatalf("buffer length=%d error=%v", len(state.Buffer), state.Err)
 					}
 				} else {
-					if state.err == nil || ctx.Err() == nil {
+					if state.Err == nil || ctx.Err() == nil {
 						t.Fatal("excess data did not cancel opening")
 					}
 				}

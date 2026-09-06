@@ -77,6 +77,24 @@ Assert-Condition $futureWindowsExceptionRejected 'The uncoupled Windows selector
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.2' -Components @('Android')
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.3' -Components @('Windows', 'Android')
 Assert-MobileEgressApprovedReleaseScope -Version '1.1.4' -Components @('Windows', 'Android')
+foreach ($scopeCase in @(
+    @{ Version = '1.1.0'; Allowed = @('Windows,Android') },
+    @{ Version = '1.1.1'; Allowed = @('Windows') },
+    @{ Version = '1.1.3'; Allowed = @('Windows,Android') },
+    @{ Version = '1.1.2'; Allowed = @('Desktop', 'Android', 'Desktop,Android', 'Windows,Android') },
+    @{ Version = '2.0.0'; Allowed = @('Desktop', 'Android', 'Desktop,Android', 'Windows,Android') }
+)) {
+    foreach ($candidateScope in @('Desktop', 'Windows', 'Android', 'Desktop,Android', 'Windows,Android', 'macOS', 'Desktop,Windows')) {
+        $accepted = $true
+        try {
+            Assert-MobileEgressApprovedReleaseScope -Version $scopeCase.Version -Components ($candidateScope -split ',')
+        } catch {
+            $accepted = $false
+        }
+        Assert-Condition ($accepted -eq ($candidateScope -in $scopeCase.Allowed)) "Release $($scopeCase.Version) must preserve the approval restriction for $candidateScope."
+    }
+}
+Assert-MobileEgressApprovedReleaseScope -Version '1.1.3' -Components @('android', 'windows', 'Android')
 $desktopWindowsConflictRejected = $false
 try {
     $null = Resolve-MobileEgressReleaseComponents -Components @('Desktop', 'Windows')
@@ -194,6 +212,48 @@ Assert-Condition ($hotfixAndroidDownload.Name -ceq 'zfnf-mobile-egress-android-1
 Assert-Condition ([string]::IsNullOrWhiteSpace(($hotfixDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Url)) 'The v1.1.1 notes must not manufacture a macOS download.'
 Assert-Condition (($hotfixDownloadLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The v1.1.1 notes must mark macOS unavailable.'
 Assert-Condition ($hotfixAndroidDownload.Url -ceq 'https://github.com/cbjjensen/mobile-egress/releases/download/v1.1.0/zfnf-mobile-egress-android-1.1.0.apk') 'The v1.1.1 notes must fall back to the published v1.1.0 Android APK.'
+
+foreach ($unusablePin in @(
+    @{ Tag = 'v1.1.0'; Name = 'app-release.apk'; Draft = $false },
+    @{ Tag = 'v1.1.0'; Name = 'zfnf-mobile-egress-android-1.1.2.apk'; Draft = $false },
+    @{ Tag = 'V1.1.0'; Name = 'zfnf-mobile-egress-android-1.1.0.apk'; Draft = $false },
+    @{ Tag = 'v1.1.0'; Name = 'ZFNF-mobile-egress-android-1.1.0.apk'; Draft = $false },
+    @{ Tag = 'v1.1.0'; Name = 'zfnf-mobile-egress-android-1.1.0.apk'; Draft = $true }
+)) {
+    $links = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.1' -Version '1.1.1' -ReleasedArtifacts $hotfixDefinitions -PublishedReleases @(
+        [pscustomobject]@{ tagName = $unusablePin.Tag; isDraft = $unusablePin.Draft; assets = @([pscustomobject]@{ name = $unusablePin.Name }) }
+    ))
+    Assert-Condition ([string]::IsNullOrWhiteSpace(($links | Where-Object { $_.Key -eq 'android' }).Url)) 'The hotfix must leave Android unavailable when the exact published pinned APK is absent.'
+}
+
+$ordinaryFallbackRelease = [pscustomobject]@{
+    tagName = 'v1.2.0'
+    isDraft = $false
+    assets = @(
+        [pscustomobject]@{ name = 'mobile-egress-macos-1.2.0-arm64.pkg' },
+        [pscustomobject]@{ name = 'zfnf-mobile-egress-android-1.2.0.apk' }
+    )
+}
+foreach ($ordinaryCase in @(
+    @{ Tag = 'V1.1.1'; Version = '1.1.1'; Names = @('mobile-egress-windows-1.1.1.zip', 'mobile-egress-client.exe') },
+    @{ Tag = 'v1.1.1'; Version = '1.1.2'; Names = @('mobile-egress-windows-1.1.1.zip', 'mobile-egress-client.exe') },
+    @{ Tag = 'v1.1.1'; Version = '1.1.1'; Names = @('mobile-egress-windows-1.1.2.zip', 'mobile-egress-client.exe') },
+    @{ Tag = 'v1.1.1'; Version = '1.1.1'; Names = @('mobile-egress-windows-1.1.1.zip') },
+    @{ Tag = 'v1.1.1'; Version = '1.1.1'; Names = @('mobile-egress-windows-1.1.1.zip', 'mobile-egress-client.exe', 'extra.txt') },
+    @{ Tag = 'v1.1.0'; Version = '1.1.0'; Names = @('mobile-egress-windows-1.1.0.zip', 'mobile-egress-client.exe') },
+    @{ Tag = 'v1.1.3'; Version = '1.1.3'; Names = @('mobile-egress-windows-1.1.3.zip', 'mobile-egress-client.exe') }
+)) {
+    $links = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag $ordinaryCase.Tag -Version $ordinaryCase.Version -ReleasedArtifacts @(
+        $ordinaryCase.Names | ForEach-Object { [pscustomobject]@{ Name = $_ } }
+    ) -PublishedReleases @($ordinaryFallbackRelease))
+    Assert-Condition (($links | Where-Object { $_.Key -eq 'android' }).Tag -ceq 'v1.2.0') 'Only the exact Windows hotfix tag, version, and artifact set may pin the Android fallback.'
+    Assert-Condition (($links | Where-Object { $_.Key -eq 'macos' }).Tag -ceq 'v1.2.0') 'Only the exact Windows hotfix may suppress a published macOS fallback.'
+}
+
+$livenessLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.1.3' -Version '1.1.3' -ReleasedArtifacts @(
+    [pscustomobject]@{ Name = 'mobile-egress-windows-1.1.3.zip' }
+) -PublishedReleases @())
+Assert-Condition (($livenessLinks | Where-Object { $_.Key -eq 'macos' }).UnavailableReason -match 'Apple Developer Program') 'The historical relay-liveness release must retain its macOS deferral explanation.'
 
 $downloadSection = Format-MobileEgressReleaseDownloadSection -DownloadLinks $desktopDownloadLinks
 Assert-Condition ($downloadSection -match '## Downloads') 'The generated release notes section must be clearly titled.'

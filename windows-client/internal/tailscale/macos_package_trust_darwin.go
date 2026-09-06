@@ -6,21 +6,10 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
-	"time"
 )
 
 func verifyStagedMacPKGOnDarwin(ctx context.Context, stage *stagedMacPKG) error {
 	return verifyMacPackageSystemTrust(ctx, stage, packageTrustDarwinCommandRunner{})
-}
-
-func darwinStagedMacPKGTrustDependencies() stagedMacPKGTrustDependencies {
-	return stagedMacPKGTrustDependencies{
-		loadRoots:    loadEmbeddedAppleRoots,
-		newEvaluator: newDarwinPackageChainTrustEvaluator,
-		runner:       packageTrustDarwinCommandRunner{},
-		now:          time.Now,
-		verify:       verifyStagedMacPKG,
-	}
 }
 
 type packageTrustDarwinCommandRunner struct {

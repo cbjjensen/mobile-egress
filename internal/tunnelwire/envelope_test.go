@@ -1,4 +1,4 @@
-package protocol
+package tunnelwire
 
 import (
 	"encoding/base64"
@@ -129,5 +129,17 @@ func TestParseEnvelopeRejectsDuplicateRequiredFields(t *testing.T) {
 	raw := `{"version":2,"version":1,"type":"ping","streamId":"","payload":""}`
 	if _, err := ParseEnvelope([]byte(raw)); err == nil {
 		t.Fatal("ParseEnvelope() accepted duplicate required fields")
+	}
+}
+
+func TestMarshalControlsPreservesLegacyWireFormat(t *testing.T) {
+	for _, negotiated := range []bool{false, true} {
+		raw, err := (Envelope{Version: 1, Type: TypePing, Payload: "aGVsbG8"}).MarshalForPeer(negotiated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != `{"version":1,"type":"ping","streamId":"","payload":"aGVsbG8"}` {
+			t.Fatalf("control frame changed with negotiation=%v: %s", negotiated, raw)
+		}
 	}
 }

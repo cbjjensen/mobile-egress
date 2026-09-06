@@ -2,7 +2,6 @@ package relayclient
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,83 +9,14 @@ import (
 	"mobile-egress/internal/tunnelwire"
 )
 
-const (
-	maxPayloadBytes     = 1 << 20
-	maxDataPayloadBytes = 32 << 10
-)
-
-type wireEnvelope struct {
-	Version  int    `json:"version"`
-	Type     string `json:"type"`
-	StreamID string `json:"streamId"`
-	Payload  string `json:"payload"`
-	Data     []byte `json:"-"`
-}
+type wireEnvelope = tunnelwire.Envelope
 
 func parseWireEnvelope(raw []byte) (wireEnvelope, error) {
-	if tunnelwire.IsData(raw) {
-		id, data, err := tunnelwire.ParseData(raw)
-		if err != nil {
-			return wireEnvelope{}, err
-		}
-		return wireEnvelope{Version: 1, Type: "data", StreamID: id, Data: data}, nil
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var envelope wireEnvelope
-	if err := decoder.Decode(&envelope); err != nil || requireJSONEOF(decoder) != nil {
-		return wireEnvelope{}, errors.New("invalid relay envelope")
-	}
-	if envelope.Version != 1 || !validWireType(envelope.Type) {
-		return wireEnvelope{}, errors.New("invalid relay envelope")
-	}
-	keepalive := envelope.Type == "ping" || envelope.Type == "pong"
-	if keepalive != (envelope.StreamID == "") {
-		return wireEnvelope{}, errors.New("invalid relay envelope stream ID")
-	}
-	payloadLimit := maxPayloadBytes
-	if envelope.Type == "data" {
-		payloadLimit = maxDataPayloadBytes
-	}
-	if _, err := decodeWirePayloadLimit(envelope.Payload, payloadLimit); err != nil {
-		return wireEnvelope{}, err
-	}
-	return envelope, nil
+	return tunnelwire.ParseEnvelope(raw)
 }
 
 func decodeWirePayload(value string) ([]byte, error) {
-	return decodeWirePayloadLimit(value, maxPayloadBytes)
-}
-
-func decodeWirePayloadLimit(value string, maximumBytes int) ([]byte, error) {
-	if base64.RawURLEncoding.DecodedLen(len(value)) > maximumBytes {
-		return nil, errors.New("relay payload too large")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(payload) > maximumBytes {
-		return nil, errors.New("invalid relay payload")
-	}
-	return payload, nil
-}
-
-func validWireType(value string) bool {
-	switch value {
-	case "open", "opened", "rejected", "data", "close", "ping", "pong":
-		return true
-	default:
-		return false
-	}
-}
-
-func marshalWireEnvelope(envelope wireEnvelope) ([]byte, error) {
-	if envelope.Version != 1 || !validWireType(envelope.Type) {
-		return nil, errors.New("invalid relay envelope")
-	}
-	if envelope.Data != nil {
-		envelope.Payload = base64.RawURLEncoding.EncodeToString(envelope.Data)
-		envelope.Data = nil
-	}
-	return json.Marshal(envelope)
+	return (wireEnvelope{Payload: value}).DecodePayload()
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {
