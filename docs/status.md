@@ -1,11 +1,14 @@
 # Current status
 
+Reconciled on 2026-09-06 against source commit `209171a`, the recorded validation evidence, and GitHub's published release list. Source metadata, source validation, and released artifacts are reported separately below.
+
 Personal-computer routing is a permanent requirement: keep the owner's local relay and Tailscale Funnel. Hosted/cloud relay alternatives and benchmarks are prohibited; see [AGENTS.md](../AGENTS.md) and [architecture](architecture.md#permanent-personal-computer-routing-requirement).
 
 ## Implemented
 
 - Negotiated raw binary data with legacy-peer compatibility, stream-local rejection handling in the Windows Client, and bounded validated destination-address fallback on Android and iOS. Local mixed-traffic p95 improved from about 11 ms to 3.5 ms with eight bulk streams; this is not a cellular measurement. Go and Android checks passed. Exact-commit native Swift tests and unsigned iOS builds completed, but the final Xcode runner remains blocked by the existing `testmanagerd` infrastructure issue. Full evidence and limits are in [latency benchmarks](latency-benchmarks.md#negotiated-binary-framing-and-mixed-traffic-2026-09-05).
 
+- Shared Go tunnel codec and SOCKS/HTTP CONNECT pre-open lifecycle, declarative historical release policy, and removal of the unused custom Mac package-verification stack. The active native `pkgutil`/`spctl` checks remain intact. See the [maintenance implementation and validation record](superpowers/plans/2026-09-06-maintenance-simplification.md).
 - Loopback-only Windows relay service, direct CSR Owner bootstrap, Owner-authorized Client CSR provisioning, endpoint leaf rotation, one-use Agent migration, revocation, and multi-Client routing.
 - No fixed active-stream ceiling across relay and Clients/Agents; DNS work remains bounded at 256 concurrent workers independently of live connections. Queues, timeouts and historical records remain bounded.
 - Self-contained Windows controller flow with distinct absent, installed/offline, and online Tailscale states; duplicate-MSI suppression; connect-only browser/unattended setup; raw TCP Funnel; UAC relay lifecycle; DPAPI Owner/AWS/node state; IAM Identity Center; EC2 inventory; guarded SSM IAM preparation; signed node install/update/repair; a default Refract proxy-line action; and a SOCKS5 fallback action.
@@ -14,10 +17,20 @@ Personal-computer routing is a permanent requirement: keep the owner's local rel
 - Android cellular-only foreground Agent with strict enrollment/migration QRs, Android Keystore identity retention, bounded fair queues, and a target-I/O reactor. Relay-bound and target-bound data each allow 32 frames per stream within separate 8,192-frame/64-MiB lanes, admission has no fixed stream-count ceiling, and data saturation closes only the contributing stream while required-control saturation or writer failure closes the session. The Agent also provides guided non-root cellular IP rotation, ZFNF OLED status presentation, safe copied diagnostics, and separate cellular/relay visibility.
 - iOS/iPadOS 17+ Agent with VisionKit scanning, Secure Enclave/shared-Keychain identity retention, cellular-required pinned/mTLS relay and target transports, an app-managed on-demand packet tunnel with no included routes, and the same uncapped active-stream admission plus separate relay-bound/target-bound 32-frame-per-stream, 8,192-frame/64-MiB lane bounds as Android. Its state machine preserves contributing-stream-only data saturation, guided Control Center cellular-IP rotation, ZFNF OLED dashboard/assets, safe copied diagnostics, and separate cellular/relay visibility.
 - Versioned mobile parity manifest with tracked Android/iOS source and test evidence for every recorded user-facing capability.
-- Windows signing plus deterministic Apple Silicon/macOS 13 staging, Developer ID/notary packaging machinery, strict local verification record, coupled Desktop release orchestration, and a supported Windows-and-Android non-Apple release lane. Desktop assets are the Windows controller ZIP, Windows EC2 Client, and macOS PKG at one version. The Windows-and-Android lane publishes the current Windows ZIP, EC2 Client, and Android APK while marking macOS outside that immutable release scope. The explicitly approved v1.1.1 proxy hotfix is exactly Windows, reuses the published v1.1.0 Android APK in managed notes, and marks macOS unavailable. The v1.1.2 policy accepts an Android-only candidate; Windows and macOS metadata remain at v1.1.1.
+- Windows signing plus deterministic Apple Silicon/macOS 13 staging, Developer ID/notary packaging machinery, strict local verification record, coupled Desktop release orchestration, and a supported Windows-and-Android non-Apple release lane. Desktop assets are the Windows controller ZIP, Windows EC2 Client, and macOS PKG at one version. The Windows-and-Android lane publishes the current Windows ZIP, EC2 Client, and Android APK while marking macOS outside that immutable release scope. Historical exceptions remain encoded in `scripts/release-all.ps1`: v1.1.0 and v1.1.3 require Windows plus Android; v1.1.1 is Windows-only with its pinned v1.1.0 Android download fallback. These exceptions do not describe the current source versions.
 - Windows-to-Mac SSH build-server runbook for Desktop PKG production and separate iOS Agent exact-tree verification.
 
 ## Automated validation
+
+Latest recorded results:
+
+| Source/change | Verified | Remaining limit |
+|---|---|---|
+| Transport work, `50802d2` | Go tests/vet/build and targeted race checks; 223 Android tests, lint and debug build; 308 native Swift tests with two expected skips; unsigned iPhoneOS and Simulator builds. | The final Xcode package test runner failed with `com.apple.testmanagerd.control` unavailable, including its retry. Full native iOS validation remains incomplete. |
+| Maintenance cleanup, `209171a` | Full Go tests/vet/build; race checks for the shared codec, relay, Client, proxy listeners/helper and Tailscale; release-policy tests; Darwin arm64 Tailscale test cross-compilation and native Mac Tailscale package tests. | Native package tests do not establish real installer, signing, Keychain, service, or physical network acceptance. |
+| Local transport benchmarks | Mixed-traffic p95 approximately 11 ms to 3.5 ms with eight bulk streams. | Local fixture only; personal-PC/Funnel/cellular performance remains unmeasured. |
+
+Detailed evidence: [transport validation](superpowers/plans/2026-09-05-personal-pc-transport.md), [maintenance validation and parser cost](superpowers/plans/2026-09-06-maintenance-simplification.md), and [latency measurements](latency-benchmarks.md).
 
 The full local gate covers Go unit/integration tests and vet, Windows builds, frontend typecheck/build, Android unit tests/lint/debug APK, PowerShell operation-script tests, strict protocol/crypto cases, AWS/IAM guards, single-controller enforcement, atomic node-capacity reservations/cancellation, partial-install and endpoint-rotation retry, encrypted-state migration, secret redaction, service command construction, hidden background Tailscale CLI launches, stream bounds/fairness, endpoint migration, cellular IP-rotation transitions, public-IP parsing/failure isolation, one-shot settings launch, and diagnostic redaction. Component release gates run the same relevant checks while omitting unrelated Android work from Windows releases and unrelated Windows work from Android releases.
 
@@ -29,31 +42,38 @@ Stream admission and queue accounting have automated regressions, including more
 
 Portable Mac-focused tests cover Keychain policy/adapters, relay framing/authorization/peer-credential selection, Service Management state gates, Tailscale package/app parsing/trust/arguments/cleanup, packaging fixtures, frontend platform copy, release-record validation, and coupled Desktop release contracts. Darwin selection/cross-compilation catches build-tag/composition errors available from the Windows host. These tests do not prove live Security.framework, Service Management/Login Items, root ACL/socket behavior, authentic current Apple/Tailscale chains, Apple Installer, Developer ID/notary service access, SSH transport, or real Funnel/cellular traffic.
 
-Go's race detector is not available in the current Windows environment unless CGO and a supported C compiler are installed. Normal Go tests are still run. See the latest commit/CI output for release evidence.
+Go race checks have passed on this Windows workstation with CGO enabled and the existing GCC toolchain. The [reproduction commands](latency-benchmarks.md#validation) record the temporary compiler location; a compatible compiler and explicit environment setup are required when repeating them. Plain Go tests do not substitute for race checks.
 
-## Remaining for v1.1.2
+## Source metadata and published releases
 
-The mobile target-ingress implementation and focused policy coverage are complete. Android and iOS bound browser-originated target bursts to 32 outstanding frames per target and 8,192 frames / 64 MiB per Agent session; saturation closes only the contributing target and leaves the relay session and peer targets available. Android release metadata is `1.1.2` / versionCode `17`; iOS metadata is `1.1.2` / build `3` for its separate TestFlight path. Windows and macOS remain at `1.1.1`. The remaining work is Android release execution and recorded acceptance:
-
-| Status | Gate | Completion evidence |
+| Component | Tracked source metadata at `209171a` | Source |
 |---|---|---|
-| Complete | Bounded mobile target ingress and focused regression | Android reactor and iOS state-machine tests cover 32-frame per-target, 8,192-frame/64-MiB aggregate limits, capacity refund, and contributing-stream-only failure. |
-| Complete | v1.1.2 Android-only policy coverage | The executable release-policy test directly accepts `1.1.2` with `Android` alone while retaining the v1.1.0 and v1.1.1 frozen-scope protections. |
-| Deferred | Mac builder preflight | Apple Developer Program enrollment, Developer ID Application/Installer identities, distribution profile, notary profile, and the ignored eight-key `release-desktop.psd1` are not configured. The first Mac artifact must use a version later than v1.1.1. |
-| Pending | Native Mac validation | Run the signed [Keychain continuity harness](macos-keychain-integration.md) and exercise native Security.framework, Service Management/Login Items, relay socket ownership/peer authorization, launchd restart, Tailscale package/app validation, and Apple Installer behavior. |
-| Approved | Signed Android-only candidate | Run `& .\scripts\release-android.ps1 -ReleaseVersion '1.1.2'` without `-Publish`; verify the Android APK, hash, signer, and frozen local tag. Do not select Windows or macOS. |
-| Separate approval required | Prerelease publication | Only after explicit publication approval, publish that exact Android APK with `-Publish`. Windows/macOS artifacts remain at v1.1.1. |
-| Pending | v1.1.2 physical acceptance | Complete the Android browser-burst and two-node regression using the v1.1.2 APK with the current Windows v1.1.1 artifacts, then record it in the [physical acceptance template](templates/physical-acceptance-record.md). Mac rows are not applicable. |
-| Deferred | Future Mac physical acceptance | For the later Mac-bearing version, complete quarantined install, the private upgrade fixture, daemon approval/restart, Keychain continuity, Tailscale login/Funnel, Android pairing, one real EC2 Client, HTTP/CONNECT and SOCKS traffic, rotation/update/repair, reboot recovery, and logout fail-closed behavior. |
-| Pending | Stable promotion | Promote the exact prerelease only after every required acceptance row passes. A failure requires a new version; never replace assets or move an existing release tag. |
+| Windows controller | `1.1.7` | [Wails configuration](../windows-client/wails.json) |
+| Android Agent | `1.1.6`, versionCode `20` | [Gradle configuration](../android/app/build.gradle.kts) |
+| iOS Agent | `1.1.2`, build `3` | [shared Xcode configuration](../ios/Configuration/Shared.xcconfig) |
 
-The detailed commands, browser-burst boundary, stop conditions, and promotion procedure remain in the [release and deployment runbook](deployment.md).
+GitHub's latest published release at this check is [v1.1.6](https://github.com/cbjjensen/mobile-egress/releases/tag/v1.1.6), published on 2026-09-02 as a **prerelease**. Its assets are `mobile-egress-windows-1.1.6.zip`, `mobile-egress-client.exe`, and `zfnf-mobile-egress-android-1.1.6.apk`; it has no macOS or iOS asset. v1.1.2 is already published and is not a pending release task. No v1.1.7 release appears in the published list.
+
+The September 5–6 transport and maintenance changes are source work after those published artifacts. Current source versions differ across components and do not establish a prepared or verified coordinated release. Before a new release, select the applicable scope, align its version metadata, increase Android's versionCode when selected, and use the guarded [release workflow](../.agents/skills/mobile-egress-release/SKILL.md). Existing tags and assets remain immutable.
+
+## Remaining work
+
+| Status | Gate | Required evidence |
+|---|---|---|
+| Pending | Physical performance and acceptance | Run the paired browser/bulk workload through the owner's personal-computer relay and Funnel with the real cellular Agent. Record latency, failures, resource use and the applicable two-node regression in the [physical acceptance record](templates/physical-acceptance-record.md). iOS physical throughput remains unverified without a device. |
+| Blocked in the last run | Full native iOS validation | Resolve the Mac `testmanagerd` infrastructure failure and rerun the exact-commit Xcode gate. Passing Swift tests and unsigned builds do not close this item. |
+| Not established for current source | Next release candidate | Prepare and verify an explicitly selected release scope through the guarded orchestrator; record its source, artifacts, signers and hashes. Older version-specific candidate instructions do not authorize a new release. |
+| Pending | Publication and stable acceptance | Publish only the authorized verified candidate; stable promotion requires all acceptance rows applicable to that exact artifact set to pass. Published prereleases are not evidence of completed physical acceptance. |
+| Deferred; preflight not rechecked | Mac distribution prerequisites | Earlier records lack Apple signing/profile/notary setup. Verify the current prerequisites before selecting a Mac-bearing release; source tests do not establish distribution readiness. |
+| Pending | Mac native product and physical acceptance | Exercise signed Keychain continuity, Service Management, relay socket authorization, launchd restart, actual Tailscale/Installer behavior, upgrade, reboot recovery and logout fail-closed behavior. Retain the signed/notarized PKG and private verification record for the selected release. |
+
+The [deployment runbook](deployment.md) contains detailed acceptance procedures and historical v1.1.2 commands. Those version-specific examples are historical; current metadata and release scope must be reconciled before execution.
 
 ## Required external acceptance
 
 The repository cannot automatically prove real Tailscale browser/Funnel authorization, real AWS IAM/SSM behavior, Windows UAC/service ACLs on clean machines, Android or iOS radio behavior on physical hardware, carrier egress, browser-originated target bursts on a physical handset, iOS active-stream rotation and foreground recovery, iOS provisioning, TestFlight upload, or empty-route packet-tunnel acceptance. Android paired browser/soak measurements need an isolated relay and controlled public HTTPS fixture. iOS physical throughput remains `unverified (no device)`; release acceptance is separate from native source validation.
 
-Mac production acceptance is deferred to a release later than v1.1.1: the Developer ID-signed/notarized exact-commit PKG and private verification record, quarantined install on the available macOS 26.2 Apple-Silicon Mac, Service Management approval/restart, signed [Keychain continuity](macos-keychain-integration.md), Tailscale install/login/Funnel, mobile Agent pairing, one real EC2 Client, HTTP/CONNECT and SOCKS proxy traffic, rotation/update/repair, reboot recovery, and logout fail-closed behavior remain pending/unrun.
+Mac production acceptance remains unrecorded for a Mac-bearing release: the Developer ID-signed/notarized exact-commit PKG and private verification record, quarantined install on the available Apple-Silicon Mac, Service Management approval/restart, signed [Keychain continuity](macos-keychain-integration.md), Tailscale install/login/Funnel, mobile Agent pairing, one real EC2 Client, HTTP/CONNECT and SOCKS proxy traffic, rotation/update/repair, reboot recovery, and logout fail-closed behavior remain pending/unrun.
 
 Follow the [signed-release and physical-acceptance runbook](deployment.md), preserve the Android browser-burst and Windows/Android two-node regression, follow the [iOS real-device checklist](../ios/README.md#real-device-acceptance) when iOS is selected, and save a sanitized copy of the applicable [acceptance record](templates/physical-acceptance-record.md) before stable promotion. Complete the Mac one-node checks only for a later Mac-bearing release.
 
