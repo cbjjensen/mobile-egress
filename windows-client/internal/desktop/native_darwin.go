@@ -33,7 +33,7 @@ func (native *wailsDesktopNative) StartTray(app *DesktopApp) {
 		menuBarConfig{
 			Icon:          append([]byte(nil), darwinMenuBarIcon...),
 			Tooltip:       desktopDisplayName,
-			InitialStatus: "Bridge status unavailable",
+			InitialStatus: "Checking bridge status",
 			ShowTitle:     "Show " + desktopDisplayName,
 			ShowTooltip:   "Open the controller window",
 			QuitTitle:     "Quit controller",

@@ -15,7 +15,7 @@ var zfnfTrayIcon []byte
 func (app *DesktopApp) trayReady() {
 	systray.SetIcon(trayIcon())
 	systray.SetTooltip(desktopDisplayName)
-	statusItem := systray.AddMenuItem("Bridge status unavailable", "Local relay and Funnel status")
+	statusItem := systray.AddMenuItem("Checking bridge status", "Local relay and Funnel status")
 	statusItem.Disable()
 	showItem := systray.AddMenuItem("Show "+desktopDisplayName, "Open the controller window")
 	systray.AddSeparator()
@@ -33,7 +33,12 @@ func (app *DesktopApp) trayReady() {
 		case <-quitItem.ClickedCh:
 			app.Quit()
 			return
+		case <-app.trayStopped:
+			return
 		case <-ticker.C:
+			if app.quitting.Load() {
+				return
+			}
 			statusItem.SetTitle(menuBarStatusTitle(app.GetBridgeStatus()))
 		}
 	}

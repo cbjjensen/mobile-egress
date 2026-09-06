@@ -39,6 +39,7 @@ const (
 )
 
 type DesktopApp struct {
+	trayStopped      chan struct{}
 	monitor          *statusMonitor
 	platform         desktopPlatform
 	relayState       func() relayServiceState
@@ -166,7 +167,7 @@ func newDesktopApp(ctx context.Context, config desktopControllerConfig) (*Deskto
 	if err != nil {
 		return nil, err
 	}
-	application := &DesktopApp{
+	application := &DesktopApp{trayStopped: make(chan struct{}),
 		platform: config.Platform, relayState: config.RelayServiceState, relayService: config.RelayService, native: config.Native,
 		core: core, tailscale: config.Tailscale, tailscaleInstall: config.TailscaleInstall,
 		cloudRepository: cloud.NewRepository(config.Store), ownerRepository: client.NewRepository(config.Store),
@@ -215,7 +216,7 @@ func newWailsOptions(application *DesktopApp, platform desktopPlatform) *options
 }
 
 func (app *DesktopApp) openFunnelApproval(approvalURL string) {
-	if app == nil || app.browserOpenURL == nil {
+	if app == nil || app.browserOpenURL == nil || app.quitting.Load() {
 		return
 	}
 	if runtimeContext := app.runtimeContext(); runtimeContext != nil {
@@ -316,7 +317,7 @@ func (app *DesktopApp) acquireBridgeWorkflow(ctx context.Context) (func(), error
 
 func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 20*time.Minute)
 	defer cancel()
 	release, err := app.acquireBridgeWorkflow(ctx)
 	if err != nil {
@@ -384,7 +385,7 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 
 func (app *DesktopApp) InstallTailscale() error {
 	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 15*time.Minute)
 	defer cancel()
 	checkContext, checkCancel := context.WithTimeout(ctx, 15*time.Second)
 	checkErr := app.tailscale.CheckInstalled(checkContext)
@@ -409,7 +410,7 @@ func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
 	if app.tailscale == nil {
 		return BridgeView{}, errors.New("Install Tailscale before connecting it.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 10*time.Minute)
 	defer cancel()
 	if _, err := app.tailscale.Connect(ctx); err != nil {
 		return BridgeView{}, fmt.Errorf("Unable to connect Tailscale: %w", err)
@@ -418,7 +419,7 @@ func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
 }
 
 func (app *DesktopApp) SetupLocalBridge() (BridgeView, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 10*time.Minute)
 	defer cancel()
 	return app.setupLocalBridge(ctx)
 }
@@ -472,7 +473,7 @@ func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
 	if app.desktopPlatform() == platformMacOS {
 		timeout = relayadmin.OperationTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(app.operationContext(), timeout)
 	defer cancel()
 	release, err := app.acquireBridgeWorkflow(ctx)
 	if err != nil {
@@ -504,7 +505,7 @@ func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
 
 func (app *DesktopApp) SaveAWSAccessKeys(accessKeyID, secretAccessKey, sessionToken string) error {
 	defer app.monitorAction(componentMetadata)()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 30*time.Second)
 	defer cancel()
 	awsClient, err := awssdk.NewAccessKey(ctx, awssdk.AccessKeyCredentials{
 		AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, SessionToken: sessionToken,
@@ -530,7 +531,7 @@ func (app *DesktopApp) SaveAWSAccessKeys(accessKeyID, secretAccessKey, sessionTo
 }
 
 func (app *DesktopApp) BeginAWSIdentityCenter(startURL, ssoRegion string) (awssdk.DeviceAuthorization, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 30*time.Second)
 	defer cancel()
 	login, err := awssdk.BeginIdentityCenterLogin(ctx, startURL, ssoRegion)
 	if err != nil {
@@ -574,7 +575,7 @@ func (app *DesktopApp) CompleteAWSIdentityCenter() ([]awssdk.IdentityCenterAccou
 	if login == nil {
 		return nil, errors.New("Start IAM Identity Center login first.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 10*time.Minute)
 	defer cancel()
 	session, err := login.Complete(ctx)
 	if err != nil {
@@ -597,7 +598,7 @@ func (app *DesktopApp) AWSIdentityCenterRoles(accountID string) ([]string, error
 	if session == nil {
 		return nil, errors.New("Complete IAM Identity Center login first.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 30*time.Second)
 	defer cancel()
 	roles, err := session.Roles(ctx, accountID)
 	if err != nil {
@@ -613,7 +614,7 @@ func (app *DesktopApp) SelectAWSIdentityCenterRole(accountID, roleName string) e
 	if session == nil {
 		return errors.New("Complete IAM Identity Center login first.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 30*time.Second)
 	defer cancel()
 	awsClient, err := session.Client(ctx, accountID, roleName)
 	if err != nil {
@@ -631,7 +632,7 @@ func (app *DesktopApp) ListEC2Instances() ([]cloud.Instance, error) {
 	if awsClient == nil {
 		return nil, errors.New("Connect AWS with IAM Identity Center or access keys first.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 45*time.Second)
 	defer cancel()
 	instances, err := awsClient.Instances(ctx)
 	if err != nil {
@@ -667,7 +668,7 @@ func (app *DesktopApp) InstanceSSMStatus(instanceID string) (cloud.SSMInstanceSt
 	if _, ok := app.inventoryInstance(instanceID); !ok {
 		return cloud.SSMInstanceStatus{}, errors.New("Refresh EC2 inventory and select a supported instance.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 15*time.Second)
 	defer cancel()
 	status, err := awsClient.InstanceSSMStatus(ctx, instanceID)
 	if err != nil {
@@ -688,7 +689,7 @@ func (app *DesktopApp) EnsureInstanceSSM(instanceID string, confirmExistingRoleC
 	if !ok {
 		return cloud.SSMProfileResult{}, errors.New("Refresh EC2 inventory and select a supported instance.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 2*time.Minute)
 	defer cancel()
 	result, err := cloud.NewManager(awsClient).EnsureSSM(ctx, instance, confirmExistingRoleChange)
 	if errors.Is(err, cloud.ErrConfirmationRequired) {
@@ -712,7 +713,7 @@ func (app *DesktopApp) RebootEC2Instance(instanceID string) error {
 	if _, ok := app.inventoryInstance(instanceID); !ok {
 		return errors.New("Refresh EC2 inventory and select a supported instance.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 30*time.Second)
 	defer cancel()
 	if err := awsClient.RebootInstance(ctx, instanceID); err != nil {
 		return errors.New("Unable to restart that EC2 instance. Confirm the AWS user allows ec2:RebootInstances and try again.")
@@ -736,13 +737,13 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 	if !ok || !instance.SSMOnline {
 		return cloud.ManagedNodeView{}, errors.New("The selected instance is not currently online in Systems Manager.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 15*time.Minute)
 	defer cancel()
 	if err := app.cloudRepository.ReserveNode(ctx, instanceID); err != nil {
 		return cloud.ManagedNodeView{}, errors.New("At most ten unique EC2 Client nodes can be managed. Use Update or Repair for an existing node.")
 	}
 	defer func() {
-		releaseContext, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		releaseContext, releaseCancel := context.WithTimeout(app.operationContext(), 10*time.Second)
 		defer releaseCancel()
 		_ = app.cloudRepository.ReleaseNodeReservation(releaseContext, instanceID)
 	}()
@@ -839,7 +840,7 @@ func (app *DesktopApp) updateOrRepairNode(instanceID string, repair bool) (cloud
 	if err != nil {
 		return cloud.ManagedNodeView{}, errors.New("This desktop build is missing a valid signed Client release manifest.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 15*time.Minute)
 	defer cancel()
 	orchestrator := cloud.NewOrchestrator(awsClient, nil, app.cloudRepository)
 	if repair {
@@ -918,7 +919,7 @@ func (app *DesktopApp) BootstrapOwner(encodedBundle string) error {
 	if err != nil {
 		return errors.New("Unable to complete secure setup. Verify the owner invitation and try again.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 35*time.Second)
 	defer cancel()
 	if err := app.core.BootstrapOwner(ctx, bundle); err != nil {
 		return errors.New("Unable to complete secure setup. Verify the owner invitation and try again.")
@@ -927,7 +928,7 @@ func (app *DesktopApp) BootstrapOwner(encodedBundle string) error {
 }
 
 func (app *DesktopApp) RetryClientSetup() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 35*time.Second)
 	defer cancel()
 	if err := app.core.RetryClientSetup(ctx); err != nil {
 		return errors.New("Unable to finish Windows client setup. Please try again.")
@@ -936,7 +937,7 @@ func (app *DesktopApp) RetryClientSetup() error {
 }
 
 func (app *DesktopApp) ReplaceClient() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 35*time.Second)
 	defer cancel()
 	if err := app.core.ReplaceClient(ctx); err != nil {
 		return errors.New("Unable to replace the local Windows Client. Please try again.")
@@ -951,7 +952,7 @@ func (app *DesktopApp) StopProxy() error { return app.core.StopProxy() }
 func (app *DesktopApp) ProxyLine() (string, error) { return app.core.ProxyLine() }
 
 func (app *DesktopApp) IssueAgentQr() (AgentQrView, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 20*time.Second)
 	defer cancel()
 	result, err := app.core.IssuePairing(ctx, "agent")
 	if err != nil {
@@ -979,7 +980,7 @@ func encodeQrPNG(encoded string) ([]byte, error) {
 
 func (app *DesktopApp) Revoke(serial string) error {
 	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(app.operationContext(), 20*time.Second)
 	defer cancel()
 	if err := app.core.Revoke(ctx, serial); err != nil {
 		return errors.New("Unable to revoke that certificate. Verify the serial and try again.")
@@ -1108,16 +1109,35 @@ func decodeNodeReleaseManifest(raw []byte) (cloud.NodeRelease, error) {
 	return manifest.Client, nil
 }
 
+func (app *DesktopApp) operationContext() context.Context {
+	if app.monitor != nil {
+		app.monitor.mu.Lock()
+		ctx := app.monitor.ctx
+		app.monitor.mu.Unlock()
+		if ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
 func (app *DesktopApp) shutdownApp() {
 	app.shutdown.Do(func() {
+		app.quitting.Store(true)
+		if app.monitor != nil {
+			app.monitor.beginStop()
+		}
+		if app.trayStopped != nil {
+			close(app.trayStopped)
+		}
+		if app.native != nil {
+			app.native.StopTray()
+		}
 		if app.monitor != nil {
 			app.monitor.stop(time.Second)
 		}
 		if app.core != nil {
 			_ = app.core.Close()
-		}
-		if app.native != nil {
-			app.native.StopTray()
 		}
 	})
 }
