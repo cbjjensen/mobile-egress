@@ -14,7 +14,8 @@ func TestStatusVerifiesApplicationOncePerRefresh(t *testing.T) {
 	if err != nil || !status.Online || !status.FunnelReady {
 		t.Fatalf("status failed: %v", err)
 	}
-	if tracker.resolutions.Load() != 1 || tracker.closes.Load() != 1 {
+	defer controller.Close()
+	if tracker.resolutions.Load() != 1 || tracker.closes.Load() != 0 {
 		t.Fatal("status repeats full app verification instead of sharing one operation guard")
 	}
 }
@@ -67,7 +68,7 @@ func TestFunnelApprovalWaitsForTheCompleteURL(t *testing.T) {
 	runner := &partialFunnelRunner{opened: &opened}
 	controller := newResolverController((&resolverGuardTracker{}).resolver(DarwinStandalone), runner)
 	controller.SetFunnelApprovalHandler(func(string) { opened = true })
-	_, err := controller.operation(context.Background(), func(session *Controller) (Status, error) { return Status{}, session.enableFunnel(context.Background()) })
+	_, err := controller.operation(context.Background(), true, func(session *Controller) (Status, error) { return Status{}, session.enableFunnel(context.Background()) })
 	if err != nil || !opened {
 		t.Fatalf("Funnel browser approval: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestLoginOpensBrowserBeforeCommandCompletes(t *testing.T) {
 	runner := &loginApprovalRunner{opened: &opened}
 	controller := newResolverController((&resolverGuardTracker{}).resolver(DarwinStandalone), runner)
 	controller.SetFunnelApprovalHandler(func(url string) { opened = strings.HasSuffix(url, "/a/1234abcd") })
-	_, err := controller.operation(context.Background(), func(session *Controller) (Status, error) {
+	_, err := controller.operation(context.Background(), true, func(session *Controller) (Status, error) {
 		return Status{}, session.runWithApproval(context.Background(), findLoginApprovalURL, "login")
 	})
 	if err != nil || !opened {

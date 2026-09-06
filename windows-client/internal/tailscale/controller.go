@@ -61,7 +61,8 @@ func (output *streamingOutput) Bytes() []byte {
 }
 
 type Controller struct {
-	guard                 appExecutionGuard // shared only within one operation, never cached
+	guard                 appExecutionGuard // borrowed by a session while the cache gate is held
+	verification          *controllerVerification
 	executable            string
 	resolver              installationResolver
 	runner                CommandRunner
@@ -86,14 +87,8 @@ func (controller *Controller) CheckInstalled(ctx context.Context) error {
 		return controller.guard.Revalidate(ctx)
 	}
 	if controller.resolver != nil {
-		installation, err := controller.resolveInstallation(ctx)
-		if err != nil {
-			return err
-		}
-		if installation.guard.Close() != nil {
-			return errTailscaleAppCleanup
-		}
-		return nil
+		_, err := controller.operation(ctx, true, func(*Controller) (Status, error) { return Status{}, nil })
+		return err
 	}
 	if controller.executable == "" {
 		return ErrNotInstalled
@@ -108,7 +103,7 @@ func (controller *Controller) CheckInstalled(ctx context.Context) error {
 	return nil
 }
 
-func (controller *Controller) operation(ctx context.Context, work func(*Controller) (Status, error)) (status Status, err error) {
+func (controller *Controller) operation(ctx context.Context, fresh bool, work func(*Controller) (Status, error)) (status Status, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -118,18 +113,41 @@ func (controller *Controller) operation(ctx context.Context, work func(*Controll
 	if controller.resolver == nil || controller.guard != nil {
 		return work(controller)
 	}
-	installation, err := controller.resolveInstallation(ctx)
-	if err != nil {
+	cache := controller.verification
+	if err := cache.acquire(ctx); err != nil {
 		return Status{}, err
 	}
+	defer cache.release()
+	if cache.closed {
+		return Status{}, errTailscaleAppVerification
+	}
 	defer func() {
-		if installation.guard.Close() != nil {
+		// Being offline is a live daemon state, not a failed app verification.
+		failed := err != nil && !errors.Is(err, ErrNotOnline)
+		if (fresh || failed || ctx.Err() != nil) && cache.discard() != nil {
 			status = Status{}
 			err = errTailscaleAppCleanup
 		}
 	}()
+	if cache.installation.guard != nil && (fresh || !cache.now().Before(cache.verifiedAt.Add(controllerVerificationTTL)) ||
+		!validControllerInstallation(cache.installation) || cache.installation.guard.Revalidate(ctx) != nil) {
+		if err := cache.discard(); err != nil {
+			return Status{}, err
+		}
+	}
+	if ctx.Err() != nil {
+		return Status{}, ctx.Err()
+	}
+	if cache.installation.guard == nil {
+		installation, resolveErr := controller.resolveInstallation(ctx)
+		if resolveErr != nil {
+			return Status{}, resolveErr
+		}
+		cache.installation = installation
+		cache.verifiedAt = cache.now()
+	}
 	session := *controller
-	session.guard = installation.guard
+	session.guard = cache.installation.guard
 	session.executable = fixedTailscaleExecutablePath
 	return work(&session)
 }
@@ -139,7 +157,7 @@ func NewController(executable string, runner CommandRunner) *Controller {
 }
 
 func newResolverController(resolver installationResolver, runner CommandRunner) *Controller {
-	return &Controller{resolver: resolver, runner: runner}
+	return &Controller{resolver: resolver, runner: runner, verification: &controllerVerification{gate: make(chan struct{}, 1), now: time.Now}}
 }
 
 func (controller *Controller) SetFunnelApprovalHandler(handler func(string)) {
@@ -237,7 +255,7 @@ func (controller *Controller) Installed() bool {
 }
 
 func (controller *Controller) Status(ctx context.Context) (Status, error) {
-	return controller.operation(ctx, func(session *Controller) (Status, error) { return session.status(ctx) })
+	return controller.operation(ctx, false, func(session *Controller) (Status, error) { return session.status(ctx) })
 }
 
 // Inspect performs one installation/status check for UI consumers.
@@ -284,7 +302,7 @@ func (controller *Controller) status(ctx context.Context) (Status, error) {
 }
 
 func (controller *Controller) Connect(ctx context.Context) (Status, error) {
-	return controller.operation(ctx, func(session *Controller) (Status, error) { return session.connect(ctx) })
+	return controller.operation(ctx, true, func(session *Controller) (Status, error) { return session.connect(ctx) })
 }
 
 func (controller *Controller) connect(ctx context.Context) (Status, error) {
@@ -305,7 +323,7 @@ func (controller *Controller) connect(ctx context.Context) (Status, error) {
 }
 
 func (controller *Controller) Enable(ctx context.Context) (Status, error) {
-	return controller.operation(ctx, func(session *Controller) (Status, error) { return session.enable(ctx) })
+	return controller.operation(ctx, true, func(session *Controller) (Status, error) { return session.enable(ctx) })
 }
 
 func (controller *Controller) enable(ctx context.Context) (Status, error) {

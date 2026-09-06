@@ -41,7 +41,7 @@ func TestControllerResolverInstalledUsesFiveSecondFreshGuard(t *testing.T) {
 	}
 }
 
-func TestControllerResolverStatusUsesOneFreshGuardPerOperationForBothVariants(t *testing.T) {
+func TestControllerResolverStatusRetainsOneVerifiedGuardForBothVariants(t *testing.T) {
 	t.Parallel()
 
 	for _, variant := range []DarwinVariant{DarwinStandalone, DarwinAppStore} {
@@ -58,11 +58,14 @@ func TestControllerResolverStatusUsesOneFreshGuardPerOperationForBothVariants(t 
 			if got := tracker.resolutions.Load(); got != 1 {
 				t.Fatalf("resolver calls = %d, want 1", got)
 			}
-			if got := tracker.closes.Load(); got != 1 {
-				t.Fatalf("guard closes = %d, want 1", got)
+			if got := tracker.closes.Load(); got != 0 {
+				t.Fatalf("guard closes = %d, want 0 before shutdown", got)
 			}
-			if got := tracker.live.Load(); got != 0 {
-				t.Fatalf("live guards = %d, want 0", got)
+			if got := tracker.live.Load(); got != 1 {
+				t.Fatalf("live guards = %d, want 1", got)
+			}
+			if err := controller.Close(); err != nil || tracker.live.Load() != 0 {
+				t.Fatalf("Close() = %v, live guards = %d", err, tracker.live.Load())
 			}
 		})
 	}
@@ -209,6 +212,12 @@ func TestControllerResolverClosesAfterRunnerFailureAndCleanupOverridesEveryOutco
 			return resolverTestInstallation(DarwinStandalone, guard), nil
 		}, runner)
 		_, err := controller.Status(context.Background())
+		if runnerErr == nil {
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = controller.Close()
+		}
 		if !errors.Is(err, errTailscaleAppCleanup) || err.Error() != "Tailscale application verification cleanup failed" {
 			t.Fatalf("Status() error = %v, want exact cleanup error", err)
 		}
