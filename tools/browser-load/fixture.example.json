@@ -1,0 +1,11 @@
+{
+  "origins": [
+    "https://retail-fixture.example.net:8443",
+    "https://retail-fixture.example.net:8444",
+    "https://retail-fixture.example.net:8445"
+  ],
+  "bindHost": "127.0.0.1",
+  "keyPath": "/configured/private/key.pem",
+  "certPath": "/configured/public/fullchain.pem",
+  "telemetryPath": "fixture-telemetry.local.jsonl"
+}

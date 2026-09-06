@@ -50,6 +50,6 @@ The host accepts only the capacity runner's bounded JSON event schema on stdout 
 
 Both the signed-host code and capacity command remain behind the `capacityharness` build tag and are absent from normal controller and release dependency graphs. This command is acceptance tooling, not macOS package/version metadata and not a release artifact. Delete `.local/capacity-harness/mobile-egress-keychain-integration` after the run; never distribute or attach it to a release.
 
-Follow the complete [authenticated 256-stream acceptance runbook](capacity-acceptance.md) for the one-time target, strict stdin fields, dedicated-relay preconditions, required result, and cleanup policy.
+Follow the complete [paced stream admission acceptance runbook](capacity-acceptance.md) for the one-time target, strict stdin fields, dedicated-relay preconditions, required result, and cleanup policy.
 
 The access-group and app-like-bundle requirements follow Apple's [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) and [`kSecAttrAccessGroup` documentation](https://developer.apple.com/documentation/security/ksecattraccessgroup).

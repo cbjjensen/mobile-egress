@@ -1,0 +1,5 @@
+node_modules/
+results/
+*.local.json
+*.pem
+*.key

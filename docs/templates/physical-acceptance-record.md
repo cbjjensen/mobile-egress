@@ -2,7 +2,7 @@
 
 Save a copy of this template with the private release evidence. Do not record QR payloads, capabilities, SOCKS credentials, private keys, relay/device certificates, Apple chain dumps, operator UIDs, destinations, carrier/EC2 IP addresses, or traffic payloads. Every real check starts `NOT RUN`; a required `FAIL` or `NOT RUN` blocks stable promotion.
 
-The 256-stream/32-frame expansion updates definitions only. Its authenticated harness, load/soak/memory, and physical-device execution is `PENDING` and was prohibited for the 2026-09-02 implementation; deterministic unit/component and ordinary build checks are not substitutes for the rows below.
+Automated component and native build checks do not substitute for physical measurements. Record actual paced stream run size and paired browser/soak evidence; leave unexecuted rows `PENDING`.
 
 ## Release identity
 
@@ -61,7 +61,7 @@ For the Windows-only v1.1.1 hotfix, record the current Windows ZIP and Client pl
 | Node A direct/proxied egress differ; values not recorded | `NOT RUN` | |
 | Node B direct/proxied egress differ; values not recorded | `NOT RUN` | |
 | Both Clients route simultaneously without changing default routes | `NOT RUN` | |
-| One Client identity can hold the full 256-stream Agent capacity | `NOT RUN` | SOCKS, ordinary HTTP, HTTPS CONNECT, active requests, and retained idle HTTP streams share one 256-slot session. This expanded boundary is pending physical validation. |
+| One Client identity holds configurable paced streams (default 512) and another Client opens an additional stream | `NOT RUN` | Production has no fixed stream-count ceiling; record actual connections and cleanup. |
 | Cellular loss with Wi-Fi available fails closed | `NOT RUN` | |
 | Guided IP rotation warns before disconnecting active streams and opens public Airplane Mode settings after confirmation | `NOT RUN` | Record only the bounded stream count and changed/unchanged/unverified outcome; never record addresses. |
 | Ten-second rotation reconnects the relay without Wi-Fi fallback | `NOT RUN` | |
@@ -103,9 +103,9 @@ Clean-install-only means the first Mac bridge begins with empty Mac controller/r
 | Operator logout fails proxy traffic closed; relogin/reopen recovers the same identities | `NOT RUN` | Root daemon alone is not availability. |
 | UI/activity/IPC/SSM review finds no Owner/AWS/node/proxy/CA/raw-error/destination/payload leakage | `NOT RUN` | |
 
-## Android 256-stream physical acceptance — pending
+## Android paced stream admission - pending
 
-Keep these as two separate evidence rows and follow the [authenticated capacity runbook](../capacity-acceptance.md) only after separate authorization. Do not execute it for the 2026-09-02 implementation. For each desktop host, one authenticated Client identity must verify and hold all 256 exact 16 KiB echo streams for 15 minutes; a second authenticated identity's first and only stream attempt must probe aggregate stream 257 and reject with `agent_stream_limit`; closing one held stream must permit the holder to open one verified replacement. Final attempted/open/verified/closed totals must be `258/257/257/257`. A passing row also requires no corruption, process or Agent restart, queue overflow, continuously growing memory, or leaked socket. This is not a throughput benchmark and has no throughput floor.
+Keep Windows-hosted and macOS-hosted evidence separate and follow the [paced admission runbook](../capacity-acceptance.md). One authenticated Client holds a configurable number of verified 16-KiB echo streams (default 512); a second Client opens and holds another stream. Close one held stream and verify a replacement. For default settings, final attempted/open/verified/closed totals are `514/514/514/514`. Require no corruption, avoidable restart, queue overflow or sustained resource leak. This is a liveness gate; use the separate browser harness for throughput measurements.
 
 | Desktop bridge host | Result | Sanitized evidence |
 |---|---|---|
@@ -160,11 +160,11 @@ Current status is `unverified—no device`, and TestFlight promotion is deferred
 
 | Check | Result | Sanitized note |
 |---|---|---|
-| One Client identity holds 256 fair aggregate streams for 15 minutes after verified 16 KiB echoes | `NOT RUN` | |
-| Second identity's only attempt, aggregate stream 257, fails closed with `agent_stream_limit` | `NOT RUN` | |
+| One Client identity holds a configurable 512 streams by default for 15 minutes after verified 16 KiB echoes | `NOT RUN` | |
+| Another authenticated Client opens and verifies an additional stream | `NOT RUN` | |
 | Holder closes one stream and immediately opens one verified replacement | `NOT RUN` | |
 
-The cross-check uses exactly two authenticated identities: one 256-stream holder and one aggregate-257 probe. Deterministic tests cover the topology and 256/257 boundaries, but this physical cross-check remains `NOT RUN` and was prohibited for the capacity implementation. There is no throughput floor.
+The cross-check uses two authenticated identities and configurable paced admission, with no production stream-count ceiling. Record actual run size and exact cleanup. Physical iOS results remain unverified until hardware measurements exist.
 
 ## Exceptions and sign-off
 

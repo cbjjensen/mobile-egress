@@ -1,0 +1,13 @@
+{
+  "name": "mobile-egress-browser-load",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "fixture": "node fixture.mjs",
+    "plan": "node run.mjs --plan",
+    "run": "node run.mjs"
+  },
+  "devDependencies": { "playwright": "1.63.0" }
+}

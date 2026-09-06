@@ -443,15 +443,15 @@ try {
 
 Choose **Copy proxy line** again, paste it directly into a Refract proxy list on that same EC2 node, and run Refract's proxy test. For SOCKS regression coverage, choose **Copy SOCKS5 URL** and repeat the existing `socks5h://` curl check. Repeat with node B's own credentials. While both proxied requests work, run a direct request on each node and confirm it still uses its normal EC2 route. This proves per-application opt-in rather than controller-host, system-wide, VPN, public, UDP, or QUIC proxy behavior.
 
-The two-node run proves simultaneous multi-Client routing, but it does not prove that one Client identity can consume the full 256-stream Agent capacity. Deterministic unit/component tests cover the 256-per-Client/256-total contract. The separate physical definition uses one authenticated holder identity with 256 held-open streams and a second authenticated identity whose only stream attempt probes aggregate stream 257.
+The two-node run proves simultaneous multi-Client routing. Separate paced admission tests hold a configurable number of streams (default 512), admit another Client, and verify exact cleanup. Production admission has no fixed stream-count ceiling.
 
-### 6.4a Pending 256-stream capacity gate on each desktop bridge
+### 6.4a Paced stream admission and browser-load evidence
 
-This change updates the acceptance definition only. Execution is prohibited during the 2026-09-02 capacity implementation, so the Windows-hosted and macOS-hosted rows remain `PENDING`. A future authorized run follows the [authenticated 256-stream acceptance runbook](capacity-acceptance.md) against a dedicated, resettable relay and a WebPKI-valid TLS 1.3 echo target. For each host, one legitimate Client identity must open, verify, and hold all 256 exact 16 KiB echo streams for 15 minutes. While they remain held, a second legitimate identity's first and only stream attempt must be aggregate stream 257 and fail with `agent_stream_limit`; after one held stream closes, the holder must open and verify one replacement. Capture the runbook's sanitized before/during/after process, memory, socket, queue-overflow, and relay-health observations; the final harness JSON alone is insufficient. Fail the gate for corruption, restart, queue overflow, continuously growing memory, or leaked sockets. This is a capacity/liveness gate, not a benchmark: there is no throughput floor. Senders prefer 16 KiB data frames, while valid 32 KiB data frames remain accepted.
+Follow the [paced admission runbook](capacity-acceptance.md) against an isolated relay and controlled TLS echo target. Default to 512 held streams, verify an additional authenticated Client succeeds, then close and replace a held stream. Capture sanitized before/during/after memory, socket, queue and relay-health observations and check for leaks or corruption. The separate [browser throughput report](browser-throughput-measurements.md) records automated evidence and the status of physical paired browser/soak measurements. No production load testing is authorized.
 
 The larger capacity is currently supported only by deterministic unit/component tests and ordinary compile/build checks. It is not load-, soak-, memory-, authenticated-harness-, or physical-device-validated.
 
-iOS 256-stream physical acceptance remains `unverified—no device`; defer TestFlight promotion until it is run on signed hardware. Do not substitute package, unsigned-build, simulator, Archive, or upload evidence.
+iOS physical throughput remains `unverified (no device)`. Native tests and unsigned compilation validate these source changes; physical release acceptance remains a separate gate.
 
 #### 6.5 Prove cellular-only fail-closed behavior
 

@@ -1,0 +1,13 @@
+{
+  "origins": [
+    "https://retail-fixture.example.net:8443",
+    "https://retail-fixture.example.net:8444",
+    "https://retail-fixture.example.net:8445"
+  ],
+  "proxy": "http://127.0.0.2:1081",
+  "phoneId": "lab-phone-1",
+  "buildId": "replace-with-build-commit-and-artifact-hash",
+  "variant": "baseline",
+  "fixtureId": "controlled-fixture-build-id",
+  "outputDirectory": "results"
+}
