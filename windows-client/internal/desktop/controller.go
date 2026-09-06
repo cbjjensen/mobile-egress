@@ -412,8 +412,12 @@ func (app *DesktopApp) ConnectTailscale() (BridgeView, error) {
 	}
 	ctx, cancel := context.WithTimeout(app.operationContext(), 10*time.Minute)
 	defer cancel()
-	if _, err := app.tailscale.Connect(ctx); err != nil {
+	status, err := app.tailscale.Connect(ctx)
+	if err != nil {
 		return BridgeView{}, fmt.Errorf("Unable to connect Tailscale: %w", err)
+	}
+	if app.monitor != nil {
+		app.monitor.publish(componentTailscale, componentResult{tailscale: status}, nil)
 	}
 	return app.GetBridgeStatus(), nil
 }
@@ -496,6 +500,9 @@ func (app *DesktopApp) RepairLocalBridge() (BridgeView, error) {
 	}
 	if app.desktopPlatform() == platformMacOS && app.relayService != nil {
 		observation := app.relayService.WaitForExactHelper(ctx)
+		if app.monitor != nil {
+			app.monitor.publish(componentHelper, componentResult{helper: relayStateFromObservation(observation)}, nil)
+		}
 		if observation.State != relayservice.StateEnabled || !observation.StrictV1 || !observation.ExactHelper || !observation.Initialized {
 			return BridgeView{}, errors.New("macOS did not restart the bundled relay helper before the repair deadline.")
 		}
@@ -728,6 +735,14 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 	if !app.GetBridgeStatus().Ready {
 		return cloud.ManagedNodeView{}, errors.New("Finish local bridge setup before installing an EC2 Client. Open Bridge and use Set up local bridge or Repair, then retry. No EC2 installation was started.")
 	}
+	// Cached display readiness is only a hint. Recheck the bridge before
+	// starting remote installation, without sharing a monitor worker's client.
+	preflightContext, preflightCancel := context.WithTimeout(app.operationContext(), 20*time.Second)
+	preflightErr := app.checkBridgeForNodeInstall(preflightContext)
+	preflightCancel()
+	if preflightErr != nil {
+		return cloud.ManagedNodeView{}, errors.New("The local bridge is not currently ready. Check Bridge and retry. No EC2 installation was started.")
+	}
 
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {
@@ -743,7 +758,7 @@ func (app *DesktopApp) InstallEC2Node(instanceID string) (cloud.ManagedNodeView,
 		return cloud.ManagedNodeView{}, errors.New("At most ten unique EC2 Client nodes can be managed. Use Update or Repair for an existing node.")
 	}
 	defer func() {
-		releaseContext, releaseCancel := context.WithTimeout(app.operationContext(), 10*time.Second)
+		releaseContext, releaseCancel := context.WithTimeout(context.WithoutCancel(app.operationContext()), 10*time.Second)
 		defer releaseCancel()
 		_ = app.cloudRepository.ReleaseNodeReservation(releaseContext, instanceID)
 	}()

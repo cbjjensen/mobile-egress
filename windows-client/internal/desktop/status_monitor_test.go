@@ -135,6 +135,11 @@ func TestMonitorActionCannotRestoreOldReadiness(t *testing.T) {
 	if !m.snapshot().Bridge.Ready {
 		t.Fatal("fixture not ready")
 	}
+	finishMetadata := m.beginAction(componentMetadata)
+	if !m.snapshot().Bridge.Ready {
+		t.Fatal("node metadata refresh blocked bridge admission")
+	}
+	finishMetadata()
 	finish := m.beginAction(componentRelay)
 	finish()
 	if m.snapshot().Bridge.Ready {

@@ -12,7 +12,7 @@ import (
 	"mobile-egress/windows-client/internal/tailscale"
 )
 
-type statusComponent string
+type statusComponent = string
 
 const (
 	componentTailscale statusComponent = "tailscale"
@@ -219,7 +219,7 @@ func (m *statusMonitor) snapshot() ControllerSnapshot {
 	defer m.mu.Unlock()
 	now := m.now()
 	s := ControllerSnapshot{Components: make(map[statusComponent]ComponentStatus), Nodes: []cloud.ManagedNodeView{}, PendingReservations: []string{}}
-	usable := true
+	usable := !m.stopped
 	for _, key := range controllerComponents {
 		c := m.components[key]
 		lastSuccess := c.success
@@ -231,7 +231,9 @@ func (m *statusMonitor) snapshot() ControllerSnapshot {
 			state.LastSuccess = c.success.UTC().Format(time.RFC3339Nano)
 		}
 		s.Components[key] = state
-		if state.Checking || state.Stale || state.Error != "" || !c.valid || c.holds > 0 || c.success.IsZero() {
+		// Managed-node storage has its own freshness; it does not determine
+		// whether the local bridge can forward traffic or admit node setup.
+		if key != componentMetadata && (state.Checking || state.Stale || state.Error != "" || !c.valid || c.holds > 0 || c.success.IsZero()) {
 			usable = false
 		}
 	}

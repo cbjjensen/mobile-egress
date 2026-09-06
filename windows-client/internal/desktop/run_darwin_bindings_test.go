@@ -22,6 +22,7 @@ func TestDarwinBindingsCompositionUsesAnInertDesktopApp(t *testing.T) {
 	}
 
 	application.startup(context.Background())
+	awaitMonitor(t, func() bool { return !application.GetControllerSnapshot().Components[componentHelper].Checking })
 	view := application.GetBridgeStatus()
 	if view.Platform != string(platformMacOS) || view.RelayServiceState != string(relayServiceUnavailable) {
 		t.Fatalf("GetBridgeStatus() = %#v, want inert macOS bindings status", view)

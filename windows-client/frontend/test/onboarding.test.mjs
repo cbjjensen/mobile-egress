@@ -15,3 +15,8 @@ test('setup resumes at the first incomplete dependency', () => {
   assert.equal(canInstallNode({ ready: true }, { ssmOnline: true }, true, ''), false)
   assert.equal(canInstallNode({ ready: true }, { ssmOnline: true }, false, 'install'), false)
 })
+
+test('setup guidance waits for initial and stale bridge checks', () => {
+  assert.equal(nextSetupStep({checking:true},false,[]).label,'Checking bridge status')
+  assert.equal(nextSetupStep({stale:true},false,[]).label,'Waiting for current bridge status')
+})
