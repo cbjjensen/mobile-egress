@@ -67,6 +67,7 @@ The 256-stream/32-frame expansion is covered by deterministic unit/component tes
 - [Mac build server over SSH](docs/ios-build-server.md)
 - [Security model](docs/security-model.md)
 - [Protocol](docs/protocol.md)
+- [Controller status monitoring](docs/controller-status-monitoring.md) and [native measurements](docs/controller-status-measurements.md)
 - [Current status](docs/status.md)
 - [Signed macOS Keychain integration](docs/macos-keychain-integration.md)
 - [Desktop controller and headless Windows Client](windows-client/README.md)
