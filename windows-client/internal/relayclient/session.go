@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"mobile-egress/internal/capacity"
+	"mobile-egress/internal/tunnelwire"
 )
 
 var (
@@ -61,6 +62,7 @@ type Session struct {
 	inboundBudget *inboundBudget
 	bytesUp       atomic.Int64
 	bytesDown     atomic.Int64
+	binaryData    atomic.Bool
 }
 
 type inboundBudget struct {
@@ -164,6 +166,7 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 	webSocketURL := *baseURL
 	webSocketURL.Scheme = "wss"
 	webSocketURL.Path = "/v1/session"
+	webSocketURL.RawQuery = "transport=2"
 	dialer := websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 10 * time.Second}
 	if transport.DialContext != nil {
 		dialer.NetDialContext = transport.DialContext
@@ -277,11 +280,18 @@ func (session *Session) readLoop() {
 		if messageType != websocket.BinaryMessage {
 			return
 		}
+		if tunnelwire.IsData(raw) && !session.binaryData.Load() {
+			return
+		}
 		envelope, err := parseWireEnvelope(raw)
 		if err != nil {
 			return
 		}
 		if envelope.Type == "ping" {
+			payload, err := decodeWirePayload(envelope.Payload)
+			if err == nil && string(payload) == tunnelwire.Capability {
+				session.binaryData.Store(true)
+			}
 			if session.send(wireEnvelope{Version: 1, Type: "pong", StreamID: "", Payload: ""}) != nil {
 				return
 			}
@@ -314,15 +324,14 @@ func (session *Session) readLoop() {
 			if err != nil {
 				return
 			}
-			if code == "agent_unavailable" {
-				session.mu.Lock()
-				session.agent = false
-				session.mu.Unlock()
-			}
 			session.removeStream(stream.id)
 			stream.finish(RelayError{Code: code})
 		case "data":
-			payload, err := decodeWirePayload(envelope.Payload)
+			payload := envelope.Data
+			var err error
+			if payload == nil {
+				payload, err = decodeWirePayload(envelope.Payload)
+			}
 			if err != nil {
 				return
 			}
@@ -376,7 +385,19 @@ func (session *Session) healthLoop(baseURL string) {
 }
 
 func (session *Session) send(envelope wireEnvelope) error {
-	raw, err := marshalWireEnvelope(envelope)
+	var raw []byte
+	var err error
+	if envelope.Type == "data" && session.binaryData.Load() {
+		payload := envelope.Data
+		if payload == nil {
+			payload, err = decodeWirePayload(envelope.Payload)
+		}
+		if err == nil {
+			raw, err = tunnelwire.EncodeData(envelope.StreamID, payload)
+		}
+	} else {
+		raw, err = marshalWireEnvelope(envelope)
+	}
 	if err != nil {
 		return err
 	}
@@ -573,7 +594,7 @@ func (stream *relayStream) Write(value []byte) (int, error) {
 		chunk := value[:length]
 		err := stream.session.send(wireEnvelope{
 			Version: 1, Type: "data", StreamID: stream.id,
-			Payload: base64.RawURLEncoding.EncodeToString(chunk),
+			Data: chunk,
 		})
 		if err == nil {
 			stream.session.bytesUp.Add(int64(length))

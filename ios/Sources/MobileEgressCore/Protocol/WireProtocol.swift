@@ -8,9 +8,9 @@ public struct WireEnvelope: Equatable {
     public let version: Int
     public let type: WireMessageType
     public let streamID: String
-    private let payload: String
+    private let payload: Data
 
-    init(version: Int, type: WireMessageType, streamID: String, payload: String) {
+    init(version: Int, type: WireMessageType, streamID: String, payload: Data) {
         self.version = version
         self.type = type
         self.streamID = streamID
@@ -18,11 +18,12 @@ public struct WireEnvelope: Equatable {
     }
 
     public func decodedPayload() throws -> Data {
-        try WireProtocol.decodePayload(payload)
+        payload
     }
 }
 
 public enum WireProtocol {
+    public static let transportV2Advertisement = Data("mobile-egress.transport.v2".utf8)
     public static let maximumWebSocketMessageBytes = 2 * 1024 * 1024
     public static let maximumPayloadBytes = 1024 * 1024
     private static let maximumDataPayloadBytes = 32 * 1024
@@ -35,8 +36,16 @@ public enum WireProtocol {
         "session_closed", "stream_in_use", "stream_not_found", "target_closed", "target_failure",
     ]
 
-    public static func encode(type: WireMessageType, streamID: String = "", payload: Data = Data()) throws -> Data {
+    public static func encode(type: WireMessageType, streamID: String = "", payload: Data = Data(), transportV2: Bool = false) throws -> Data {
         guard payload.count <= payloadLimit(for: type) else { throw CoreValidationError.invalidJSON }
+        if transportV2 && type == .data {
+            guard isValidStreamID(streamID) else { throw CoreValidationError.invalidJSON }
+            let id = Data(streamID.utf8)
+            var encoded = Data([2, 4, UInt8(id.count >> 8), UInt8(id.count & 255)])
+            encoded.append(id)
+            encoded.append(payload)
+            return encoded
+        }
         let envelope = WireEnvelopeWire(
             version: 1,
             type: type,
@@ -52,12 +61,32 @@ public enum WireProtocol {
         return encoded
     }
 
-    public static func parseAgentInbound(_ raw: Data) throws -> WireEnvelope {
-        try parse(raw, allowing: agentInboundTypes)
+    public static func parseAgentInbound(_ raw: Data, transportV2: Bool = false) throws -> WireEnvelope {
+        if raw.first == 2 {
+            guard transportV2 else { throw CoreValidationError.invalidJSON }
+            return try parseBinaryData(raw)
+        }
+        return try parse(raw, allowing: agentInboundTypes)
     }
 
-    public static func parseAgentOutbound(_ raw: Data) throws -> WireEnvelope {
-        try parse(raw, allowing: agentOutboundTypes)
+    public static func parseAgentOutbound(_ raw: Data, transportV2: Bool = false) throws -> WireEnvelope {
+        if raw.first == 2 {
+            guard transportV2 else { throw CoreValidationError.invalidJSON }
+            return try parseBinaryData(raw)
+        }
+        return try parse(raw, allowing: agentOutboundTypes)
+    }
+
+    private static func parseBinaryData(_ raw: Data) throws -> WireEnvelope {
+        guard raw.count >= 4 else { throw CoreValidationError.invalidJSON }
+        let start = raw.startIndex
+        let length = Int(raw[start + 2]) << 8 | Int(raw[start + 3])
+        guard raw[start + 1] == 4, (1 ... 128).contains(length), raw.count >= 4 + length,
+              raw.count - 4 - length <= maximumDataPayloadBytes,
+              let id = String(data: raw[(start + 4) ..< (start + 4 + length)], encoding: .ascii),
+              isValidStreamID(id)
+        else { throw CoreValidationError.invalidJSON }
+        return WireEnvelope(version: 2, type: .data, streamID: id, payload: Data(raw.dropFirst(4 + length)))
     }
 
     private static func parse(_ raw: Data, allowing types: Set<WireMessageType>) throws -> WireEnvelope {
@@ -69,7 +98,7 @@ public enum WireProtocol {
         let wire = try JSONDecoder().decode(WireEnvelopeWire.self, from: raw)
         try validate(version: wire.version, type: wire.type, streamID: wire.streamID, payload: wire.payload)
         guard types.contains(wire.type) else { throw CoreValidationError.invalidJSON }
-        return WireEnvelope(version: wire.version, type: wire.type, streamID: wire.streamID, payload: wire.payload)
+        return WireEnvelope(version: wire.version, type: wire.type, streamID: wire.streamID, payload: try decodePayload(wire.payload, maximumBytes: payloadLimit(for: wire.type)))
     }
 
     public static func finiteErrorCode(_ value: String) throws -> Data {

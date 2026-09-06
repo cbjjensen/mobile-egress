@@ -4,6 +4,56 @@ These benchmarks measure local transport behavior with controlled peers. They do
 not measure cellular RTT, deployed relay latency, Internet destination response
 time, or user browsing performance.
 
+## Negotiated binary framing and mixed traffic (2026-09-05)
+
+The permanent deployment requirement is Funnel ingress to the owner's personal
+computer relay. Hosted/cloud relay alternatives and their benchmarks are
+prohibited. These measurements use a temporary **local loopback** relay, not an
+external hosted service, and leave the production connection topology unchanged.
+
+`BenchmarkRelayMixedContention` uses one authenticated Client WebSocket and one
+shared Agent WebSocket, carrying a 64-byte probe echo alongside zero, one, or
+eight 32 KiB bulk echo streams. Each bulk stream has at most one echo outstanding.
+The Agent is a controlled echo fixture, with no target sockets or external DNS.
+Both modes use the same current relay implementation; Transport1 uses legacy
+JSON/base64 and Transport2 negotiates raw data. Setup and negotiation are outside
+the measured interval. Samples include fixture codecs, TLS, scheduling, routing,
+and all shared-writer contention. This does not simulate packet loss or prove
+cellular/Funnel head-of-line behavior.
+
+Run from the repository root:
+
+```powershell
+& C:/Users/Chad/AppData/Local/Programs/Go/bin/go.exe test ./relay/internal/service -run '^$' -bench '^BenchmarkRelayMixedContention$' -benchtime=1000x -count=3
+```
+
+Windows/amd64, Ryzen 7 3700X, Go 1.26.3, default GOMAXPROCS=16. The final run
+was performed after concurrent build/test jobs stopped. Each value is
+the median of three 1,000-probe reports. p95 uses sorted index
+`floor((N-1)*0.95)`. This Windows clock reports approximately 0.5 ms granularity;
+zero median samples are reported as a resolution bound, not zero latency.
+
+| Data transport | Bulk streams | Probe median (ms) | Probe p95 (ms) | Bidirectional bulk payload (MiB/s) |
+| --- | ---: | ---: | ---: | ---: |
+| Legacy JSON/base64 | 0 | <0.5 | 0.501 | 0 |
+| Raw binary | 0 | <0.5 | 0.501 | 0 |
+| Legacy JSON/base64 | 1 | 1.501 | 2.502 | 23.48 |
+| Raw binary | 1 | 0.500 | 1.002 | 79.23 |
+| Legacy JSON/base64 | 8 | 8.000 | 11.000 | 53.57 |
+| Raw binary | 8 | 2.500 | 3.500 | 184.00 |
+
+The eight-bulk-stream p95 was about 68% lower with binary framing. Bulk rates
+count completed echoed payload bytes in both directions; they exclude wire
+overhead and are not deployed throughput estimates. Idle measured allocations
+fell from 273 to 30 per echo, including fixture work. A 16 KiB payload with a
+32-byte stream ID uses 16,420 application-message bytes instead of 21,932,
+about 25% fewer bytes before WebSocket/TLS overhead.
+
+These results support simplifying the data framing before adding more transport
+connections. Keep the single-session topology. Physical mixed-traffic and
+packet-loss evidence remains unmeasured; do not infer a cellular latency gain
+from this fixture.
+
 ## Relay fixture and measurements
 
 `relay/internal/service/latency_benchmark_test.go` starts an initialized relay

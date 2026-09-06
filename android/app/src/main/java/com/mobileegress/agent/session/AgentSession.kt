@@ -4,6 +4,7 @@ import android.net.Network
 import android.util.Log
 import com.mobileegress.agent.pairing.PairingBundleParser
 import com.mobileegress.agent.protocol.ProtocolException
+import com.mobileegress.agent.protocol.AgentTransport
 import com.mobileegress.agent.protocol.WireEnvelope
 import com.mobileegress.agent.protocol.WireProtocol
 import com.mobileegress.agent.security.AgentIdentity
@@ -37,6 +38,7 @@ interface AgentSessionListener {
 internal fun agentSessionUrl(relayOrigin: String) =
     relayOrigin.toHttpUrl().newBuilder()
         .addPathSegments("v1/session")
+        .addQueryParameter("transport", "2")
         .build()
 
 internal fun relayFailureDiagnostic(error: Throwable, responseCode: Int?): String =
@@ -70,6 +72,7 @@ class AgentSession internal constructor(
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.IO)
     private val closed = AtomicBoolean(false)
+    private val transport = AgentTransport()
     private val client: OkHttpClient
     private val targetBridge: AgentTargetBridge
     @Volatile private var webSocket: WebSocket? = null
@@ -81,6 +84,7 @@ class AgentSession internal constructor(
         }
         client = clientFactory(network, identity, privateKey)
         targetBridge = AgentTargetBridge(
+            transport = transport,
             outbound = outbound,
             reactorFactory = { reactorListener ->
                 TargetIoReactor(
@@ -143,7 +147,7 @@ class AgentSession internal constructor(
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             try {
-                handleEnvelope(WireProtocol.parseAgentInbound(bytes.toByteArray()))
+                handleEnvelope(transport.parseInbound(bytes.toByteArray()))
             } catch (_: ProtocolException) {
                 protocolFailure(webSocket)
             } catch (_: Exception) {

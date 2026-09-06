@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"mobile-egress/internal/capacity"
+	"mobile-egress/internal/tunnelwire"
 	"mobile-egress/relay/internal/enrollment"
 	"mobile-egress/relay/internal/protocol"
 )
@@ -55,10 +56,11 @@ var relayErrorCodes = map[string]struct{}{
 }
 
 type session struct {
-	service *Service
-	serial  string
-	role    enrollment.Role
-	conn    sessionConnection
+	service    *Service
+	serial     string
+	role       enrollment.Role
+	conn       sessionConnection
+	binaryData bool
 
 	outbound         *outboundMailbox
 	writeMu          sync.Mutex
@@ -114,8 +116,9 @@ type clientOpenRequest struct {
 }
 
 type agentOpenRequest struct {
-	IP   string `json:"ip"`
-	Port int    `json:"port"`
+	IP   string   `json:"ip"`
+	Port int      `json:"port"`
+	IPs  []string `json:"ips,omitempty"`
 }
 
 type streamNotification struct {
@@ -194,7 +197,7 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
 		_ = connection.Close()
 		return
 	}
-	activeSession := newSession(service, serial, role, connection)
+	activeSession := newSession(service, serial, role, connection, request.URL.Query().Get("transport") == "2")
 	activeSession.registered = true
 	service.sessions[serial] = activeSession
 	if role == enrollment.RoleAgent {
@@ -222,7 +225,7 @@ func (service *Service) releasePendingSessionLocked(serial string, role enrollme
 	}
 }
 
-func newSession(service *Service, serial string, role enrollment.Role, connection sessionConnection) *session {
+func newSession(service *Service, serial string, role enrollment.Role, connection sessionConnection, supportsBinary ...bool) *session {
 	dataBudget := service.agentToClientsBudget
 	if role == enrollment.RoleAgent {
 		dataBudget = newOutboundDataBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane)
@@ -233,6 +236,11 @@ func newSession(service *Service, serial string, role enrollment.Role, connectio
 	activeSession := &session{
 		service: service, serial: serial, role: role, conn: connection,
 		outbound: newSessionOutboundMailbox(role, dataBudget), lastInbound: time.Now(),
+	}
+	if len(supportsBinary) > 0 && supportsBinary[0] {
+		activeSession.binaryData = true
+		// Queue the advertisement before registering the session or starting its writer.
+		activeSession.outbound.enqueue(protocol.Envelope{Version: 1, Type: protocol.TypePing, Payload: base64.RawURLEncoding.EncodeToString([]byte(tunnelwire.Capability))})
 	}
 	connection.SetPingHandler(func(payload string) error {
 		activeSession.noteInbound(time.Now())
@@ -262,6 +270,10 @@ func (activeSession *session) readLoop() {
 			return
 		}
 
+		if tunnelwire.IsData(raw) && !activeSession.binaryData {
+			activeSession.service.protocolViolation(activeSession)
+			return
+		}
 		envelope, err := protocol.ParseEnvelope(raw)
 		if err != nil {
 			activeSession.service.protocolViolation(activeSession)
@@ -375,8 +387,7 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
 		if admission != outboundAdmitted {
 			return nil
 		}
-		payload, _ := envelope.DecodePayload()
-		service.metrics.addBytes(int64(len(payload)))
+		service.metrics.addBytes(int64(envelope.PayloadBytes()))
 		return nil
 	}
 	_ = agent.send(envelope)
@@ -455,8 +466,7 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
 		if admission != outboundAdmitted {
 			return nil
 		}
-		payload, _ := envelope.DecodePayload()
-		service.metrics.addBytes(int64(len(payload)))
+		service.metrics.addBytes(int64(envelope.PayloadBytes()))
 		return nil
 	}
 	_ = client.send(envelope)
@@ -745,7 +755,7 @@ func (activeSession *session) writeLoop() {
 		if !ok {
 			return
 		}
-		message, err := json.Marshal(item.envelope)
+		message, err := item.envelope.MarshalForPeer(activeSession.binaryData)
 		if err == nil {
 			activeSession.writeMu.Lock()
 			deadline := time.Now().Add(webSocketWriteTimeout)

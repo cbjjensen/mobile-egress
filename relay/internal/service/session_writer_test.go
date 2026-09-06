@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -408,7 +409,7 @@ func TestSessionWriterPrioritizesControlAndRoundRobinsStreamData(t *testing.T) {
 	}
 	for index, expected := range want {
 		actual := readRecordedEnvelope(t, connection)
-		if actual != expected {
+		if actual.Version != expected.Version || actual.Type != expected.Type || actual.StreamID != expected.StreamID || actual.Payload != expected.Payload || !bytes.Equal(actual.Data, expected.Data) {
 			t.Fatalf("WebSocket write %d = %#v, want %#v", index+1, actual, expected)
 		}
 	}

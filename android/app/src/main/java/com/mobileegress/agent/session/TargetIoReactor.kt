@@ -46,6 +46,7 @@ internal interface TargetReactorListener {
 internal interface TargetReactorPort {
     fun start(): Boolean
     fun open(streamId: String, correlationToken: Long, address: InetSocketAddress): ReactorSubmitResult
+    fun open(streamId: String, correlationToken: Long, addresses: List<InetSocketAddress>): ReactorSubmitResult
     fun write(streamId: String, correlationToken: Long, payload: ByteArray): ReactorSubmitResult
     fun cancel(streamId: String, correlationToken: Long): ReactorSubmitResult
     fun release(streamId: String, correlationToken: Long): ReactorSubmitResult
@@ -89,6 +90,7 @@ internal class TargetIoReactor(
     private val saturatedStreams = HashMap<String, Long>()
     private val terminalSignals = HashMap<String, Long>()
     private val releaseRequests = HashMap<String, Long>()
+    private val cancellationRequests = HashMap<String, Long>()
     private val active = HashMap<String, ReactorStream>()
     private val started = AtomicBoolean(false)
     private val shutdownRequested = AtomicBoolean(false)
@@ -171,7 +173,14 @@ internal class TargetIoReactor(
         streamId: String,
         correlationToken: Long,
         address: InetSocketAddress,
+    ): ReactorSubmitResult = open(streamId, correlationToken, listOf(address))
+
+    override fun open(
+        streamId: String,
+        correlationToken: Long,
+        addresses: List<InetSocketAddress>,
     ): ReactorSubmitResult {
+        require(addresses.size in 1..8)
         var saturationSource: BackpressureSource? = null
         val result = synchronized(lock) {
             if (shutdownRequested.get() || streamId in reservations) {
@@ -188,7 +197,7 @@ internal class TargetIoReactor(
                     streamId = streamId,
                     generation = generation,
                     correlationToken = correlationToken,
-                    address = address,
+                    addresses = addresses.toList(),
                     connectDeadlineNanos = deadlineAfter(nanoTime(), connectTimeoutNanos),
                 ),
             )
@@ -288,6 +297,7 @@ internal class TargetIoReactor(
                 saturationSource = BackpressureSource.RequiredControlSaturation
                 return@synchronized ReactorSubmitResult.SessionSaturated
             }
+            cancellationRequests[streamId] = generation
             enqueueCommand(ReactorCommand.Cancel(streamId, generation))
             ReactorSubmitResult.Accepted
         }
@@ -433,24 +443,46 @@ internal class TargetIoReactor(
         }
     }
 
-    private fun handleOpen(command: ReactorCommand.Open) {
+    private fun handleOpen(command: ReactorCommand.Open, writes: ArrayDeque<ByteBuffer> = ArrayDeque()) {
         if (!reservationMatches(command.streamId, command.generation)) return
+        if (shutdownRequested.get() ||
+            (command.candidateIndex > 0 && cancellationRequested(command.streamId, command.generation))
+        ) {
+            terminatePending(command.streamId, command.generation,
+                if (shutdownRequested.get()) TargetTerminalReason.Shutdown else TargetTerminalReason.Canceled)
+            return
+        }
         if (nanoTime() >= command.connectDeadlineNanos) {
             terminatePending(command.streamId, command.generation, TargetTerminalReason.TargetFailure)
             return
         }
         var openedStream: ReactorStream? = null
+        val attemptDeadlineNanos = if (command.candidateIndex < command.addresses.lastIndex) {
+            minOf(command.connectDeadlineNanos, deadlineAfter(nanoTime(), TimeUnit.SECONDS.toNanos(3)))
+        } else command.connectDeadlineNanos
         try {
             val connection = requireNotNull(activeBackend).open(
                 command.streamId,
                 command.generation,
-                command.address,
+                command.addresses[command.candidateIndex],
                 binder,
             )
             val now = nanoTime()
-            if (now >= command.connectDeadlineNanos) {
+            if (now >= command.connectDeadlineNanos || shutdownRequested.get() ||
+                (command.candidateIndex > 0 && cancellationRequested(command.streamId, command.generation))
+            ) {
                 connection.close()
-                terminatePending(command.streamId, command.generation, TargetTerminalReason.TargetFailure)
+                val reason = when {
+                    shutdownRequested.get() -> TargetTerminalReason.Shutdown
+                    cancellationRequested(command.streamId, command.generation) -> TargetTerminalReason.Canceled
+                    else -> TargetTerminalReason.TargetFailure
+                }
+                terminatePending(command.streamId, command.generation, reason)
+                return
+            }
+            if (now >= attemptDeadlineNanos) {
+                connection.close()
+                handleOpen(command.copy(candidateIndex = command.candidateIndex + 1), writes)
                 return
             }
             val stream = ReactorStream(
@@ -459,7 +491,9 @@ internal class TargetIoReactor(
                 correlationToken = command.correlationToken,
                 connection = connection,
                 connected = connection.connectedImmediately,
-                connectDeadlineNanos = command.connectDeadlineNanos,
+                connectDeadlineNanos = attemptDeadlineNanos,
+                opening = command,
+                writes = writes,
                 idleDeadlineNanos = if (connection.connectedImmediately) {
                     deadlineAfter(now, idleTimeoutNanos)
                 } else {
@@ -479,9 +513,13 @@ internal class TargetIoReactor(
             }
             val stream = openedStream
             if (stream == null) {
-                terminatePending(command.streamId, command.generation, reason)
+                if (command.candidateIndex < command.addresses.lastIndex) {
+                    handleOpen(command.copy(candidateIndex = command.candidateIndex + 1), writes)
+                } else {
+                    terminatePending(command.streamId, command.generation, reason)
+                }
             } else {
-                terminateStream(stream, TargetTerminalReason.TargetFailure)
+                failConnectionAttempt(stream)
             }
         }
     }
@@ -547,10 +585,14 @@ internal class TargetIoReactor(
     private fun handleReady(ready: ReactorReady) {
         val stream = active[ready.connection.streamId] ?: return
         if (stream.generation != ready.connection.generation || stream.connection !== ready.connection) return
+        if (!stream.connected && cancellationRequested(stream.id, stream.generation)) {
+            terminateStream(stream, TargetTerminalReason.Canceled)
+            return
+        }
         try {
             if (!stream.connected && ready.connectable && stream.connection.finishConnect()) {
                 if (nanoTime() >= stream.connectDeadlineNanos) {
-                    terminateStream(stream, TargetTerminalReason.TargetFailure)
+                    failConnectionAttempt(stream)
                     return
                 }
                 stream.connected = true
@@ -567,7 +609,7 @@ internal class TargetIoReactor(
             }
             if (active[stream.id] === stream) updateInterests(stream)
         } catch (_: Exception) {
-            if (active[stream.id] === stream) terminateStream(stream, TargetTerminalReason.TargetFailure)
+            if (active[stream.id] === stream) failConnectionAttempt(stream)
         }
     }
 
@@ -621,7 +663,7 @@ internal class TargetIoReactor(
         active.values.toList().forEach { stream ->
             when {
                 !stream.connected && now >= stream.connectDeadlineNanos -> {
-                    terminateStream(stream, TargetTerminalReason.TargetFailure)
+                    failConnectionAttempt(stream)
                 }
                 stream.connected && now >= stream.idleDeadlineNanos -> {
                     terminateStream(stream, TargetTerminalReason.IdleTimeout)
@@ -638,6 +680,23 @@ internal class TargetIoReactor(
         val remainingNanos = max(0L, nearest - now)
         val roundedUpMillis = (remainingNanos + NANOS_PER_MILLI - 1) / NANOS_PER_MILLI
         return roundedUpMillis.coerceIn(1L, MAX_SELECT_MILLIS)
+    }
+
+    private fun failConnectionAttempt(stream: ReactorStream) {
+        val opening = stream.opening
+        if (stream.connected || opening.candidateIndex >= opening.addresses.lastIndex ||
+            nanoTime() >= opening.connectDeadlineNanos
+        ) {
+            terminateStream(stream, TargetTerminalReason.TargetFailure)
+            return
+        }
+        if (!active.remove(stream.id, stream)) return
+        try {
+            stream.connection.close()
+        } catch (_: Exception) {
+            // The previous attempt is detached before another socket is admitted.
+        }
+        handleOpen(opening.copy(candidateIndex = opening.candidateIndex + 1), stream.writes)
     }
 
     private fun terminateStream(stream: ReactorStream, reason: TargetTerminalReason) {
@@ -713,6 +772,9 @@ internal class TargetIoReactor(
     private fun reservationMatches(streamId: String, generation: Long): Boolean =
         synchronized(lock) { reservations[streamId]?.generation == generation }
 
+    private fun cancellationRequested(streamId: String, generation: Long): Boolean =
+        synchronized(lock) { cancellationRequests[streamId] == generation }
+
     private fun releaseReservation(streamId: String, generation: Long): Reservation? = synchronized(lock) {
         val reservation = reservations[streamId]
         if (reservation?.generation != generation) return@synchronized null
@@ -722,6 +784,7 @@ internal class TargetIoReactor(
         saturatedStreams.remove(streamId)
         terminalSignals.remove(streamId)
         releaseRequests.remove(streamId)
+        cancellationRequests.remove(streamId)
         reservation
     }
 
@@ -789,8 +852,9 @@ internal class TargetIoReactor(
             override val streamId: String,
             override val generation: Long,
             val correlationToken: Long,
-            val address: InetSocketAddress,
+            val addresses: List<InetSocketAddress>,
             val connectDeadlineNanos: Long,
+            val candidateIndex: Int = 0,
         ) : ReactorCommand
 
         data class Write(
@@ -828,6 +892,7 @@ internal class TargetIoReactor(
         val connection: TargetReactorConnection,
         var connected: Boolean,
         val connectDeadlineNanos: Long,
+        val opening: ReactorCommand.Open,
         var idleDeadlineNanos: Long,
         val writes: ArrayDeque<ByteBuffer> = ArrayDeque(),
         val readBuffer: ByteBuffer,

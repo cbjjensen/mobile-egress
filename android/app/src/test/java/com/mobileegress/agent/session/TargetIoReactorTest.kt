@@ -20,6 +20,126 @@ import org.junit.Test
 
 class TargetIoReactorTest {
     @Test
+    fun `time spent starting a candidate counts toward its three second allowance`() {
+        val clock = MutableNanoClock()
+        val first = FakeConnection("s", connectedImmediately = true)
+        val second = FakeConnection("s", connectedImmediately = true)
+        val backend = FakeSelectorBackend(first, second)
+        backend.beforeOpen = { if (backend.openCalls.get() == 1) clock.advanceMillis(3_000) }
+        val listener = RecordingListener(openCount = 1)
+        val reactor = reactor(backend, listener, nanoTime = clock::read)
+        reactor.start()
+        try {
+            reactor.open("s", 1L, listOf(targetAddress(), targetAddress()))
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(2, backend.openCalls.get())
+            assertEquals(1, first.closeCalls.get())
+            assertEquals(listOf("s"), listener.opened)
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `stalled first address falls back at three seconds and ignores late readiness`() {
+        val clock = MutableNanoClock()
+        val first = FakeConnection("s", connectedImmediately = false)
+        val second = FakeConnection("s", connectedImmediately = true)
+        val backend = FakeSelectorBackend(first, second)
+        val listener = RecordingListener(openCount = 1)
+        val reactor = reactor(backend, listener, nanoTime = clock::read)
+        reactor.start()
+        try {
+            reactor.open("s", 1L, listOf(targetAddress(), InetSocketAddress(InetAddress.getLoopbackAddress(), 10)))
+            waitUntil { backend.openCalls.get() == 1 }
+            backend.beforeSelectReturn = { clock.advanceMillis(3_000) }
+            backend.ready("s", connectable = true)
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(2, backend.openCalls.get())
+            assertEquals(1, first.closeCalls.get())
+            assertEquals(0, first.finishConnectCalls.get())
+            assertEquals(listOf("s"), listener.opened)
+            assertTrue(listener.terminalReasons.isEmpty())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `last address receives remaining total deadline`() {
+        val clock = MutableNanoClock()
+        val first = FakeConnection("s", connectedImmediately = false)
+        val second = FakeConnection("s", connectedImmediately = false)
+        val backend = FakeSelectorBackend(first, second)
+        val listener = RecordingListener(terminalCount = 1)
+        val reactor = reactor(backend, listener, connectTimeoutMillis = 10_000, nanoTime = clock::read)
+        reactor.start()
+        try {
+            reactor.open("s", 1L, listOf(targetAddress(), targetAddress()))
+            waitUntil { backend.openCalls.get() == 1 }
+            clock.advanceMillis(3_000)
+            backend.wakeup()
+            waitUntil { backend.openCalls.get() == 2 }
+            clock.advanceMillis(6_999)
+            backend.wakeup()
+            assertEquals(0, second.closeCalls.get())
+            clock.advanceMillis(1)
+            backend.wakeup()
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            assertEquals(listOf(TargetTerminalReason.TargetFailure), listener.terminalReasons["s"])
+            assertEquals(1, second.closeCalls.get())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `immediate dial failure advances without waiting or emitting terminal`() {
+        val second = FakeConnection("s", connectedImmediately = true)
+        val backend = FakeSelectorBackend(second)
+        val listener = RecordingListener(openCount = 1)
+        val reactor = reactor(backend, listener)
+        backend.beforeOpen = { if (backend.openCalls.get() == 1) throw java.net.ConnectException() }
+        reactor.start()
+        try {
+            reactor.open("s", 1L, listOf(targetAddress(), targetAddress()))
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(2, backend.openCalls.get())
+            assertTrue(listener.terminalReasons.isEmpty())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `canceled opening never starts an alternate after its deadline`() {
+        val clock = MutableNanoClock()
+        val first = FakeConnection("s", connectedImmediately = false)
+        val backend = FakeSelectorBackend(first, FakeConnection("s", connectedImmediately = true))
+        val listener = RecordingListener(terminalCount = 1)
+        val reactor = reactor(backend, listener, nanoTime = clock::read)
+        reactor.start()
+        try {
+            reactor.open("s", 1L, listOf(targetAddress(), targetAddress()))
+            waitUntil { backend.openCalls.get() == 1 }
+            reactor.cancel("s", 1L)
+            assertTrue(listener.terminals.await(2, TimeUnit.SECONDS))
+            clock.advanceMillis(30_000)
+            backend.wakeup()
+            assertEquals(listOf(TargetTerminalReason.Canceled), listener.terminalReasons["s"])
+            assertEquals(1, backend.openCalls.get())
+            assertEquals(1, first.closeCalls.get())
+        } finally {
+            reactor.shutdown()
+            assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
     fun `reactor holds more than historical retention capacity without evicting live streams`() {
         val connections = Array(1_100) { FakeConnection("stream-$it", connectedImmediately = true) }
         val backend = FakeSelectorBackend(*connections)

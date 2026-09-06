@@ -3,6 +3,7 @@ package com.mobileegress.agent.session
 import com.mobileegress.agent.network.DestinationRejected
 import com.mobileegress.agent.network.PublicAddressPolicy
 import com.mobileegress.agent.protocol.ProtocolException
+import com.mobileegress.agent.protocol.AgentTransport
 import com.mobileegress.agent.protocol.WireEnvelope
 import com.mobileegress.agent.protocol.WireProtocol
 import com.mobileegress.agent.status.ErrorClass
@@ -38,6 +39,7 @@ internal class AgentTargetBridge(
     retainedStreamCapacity: Int = AgentCapacity.RETAINED_STREAM_CAPACITY,
     private val beforeMailboxCommit: () -> Unit = {},
     private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
+    private val transport: AgentTransport = AgentTransport(),
 ) : TargetReactorListener {
     private val lifecycleLock = Any()
     private val admission = StreamAdmission()
@@ -68,7 +70,7 @@ internal class AgentTargetBridge(
             reject(streamId, "agent_stream_limit")
             return
         }
-        openReserved(streamId, address)
+        openReserved(streamId, listOf(address))
     }
 
     fun open(envelope: WireEnvelope) {
@@ -79,23 +81,28 @@ internal class AgentTargetBridge(
             return
         }
         val target = try {
-            WireProtocol.parseOpen(envelope)
+            WireProtocol.parseOpen(envelope, transport.negotiated)
         } catch (_: ProtocolException) {
             admission.release(streamId)
             reject(streamId, "invalid_target")
             return
         }
-        val address = try {
-            InetSocketAddress(PublicAddressPolicy.validate(target.ip, target.port), target.port)
+        val addresses = try {
+            val primary = PublicAddressPolicy.validate(target.ip, target.port)
+            (target.ips ?: listOf(target.ip)).map {
+                InetSocketAddress(PublicAddressPolicy.validate(it, target.port), target.port)
+            }.also {
+                if (it.first().address != primary || it.distinct().size != it.size) throw DestinationRejected()
+            }
         } catch (_: DestinationRejected) {
             admission.release(streamId)
             reject(streamId, "policy_denied", ErrorClass.TargetPolicy)
             return
         }
-        openReserved(streamId, address)
+        openReserved(streamId, addresses)
     }
 
-    private fun openReserved(streamId: String, address: InetSocketAddress) {
+    private fun openReserved(streamId: String, addresses: List<InetSocketAddress>) {
         var sessionFailure: ErrorClass? = null
         synchronized(lifecycleLock) {
             if (closed.get()) {
@@ -114,7 +121,7 @@ internal class AgentTargetBridge(
                 // Submission only updates the bounded reactor queue and wakes its selector.
                 // Keeping result handling in the same lifecycle critical section prevents any
                 // insertion, release, control, or status mutation after shutdown linearizes.
-                when (targetReactor.open(streamId, stream.correlationToken, address)) {
+                when (targetReactor.open(streamId, stream.correlationToken, addresses)) {
                     ReactorSubmitResult.Accepted -> Unit
                     ReactorSubmitResult.StreamLimit -> {
                         finalizeStream(stream, ErrorClass.None)
@@ -295,7 +302,7 @@ internal class AgentTargetBridge(
                 return false
             }
             beforeMailboxCommit()
-            outbound.offerData(streamId, WireProtocol.encode("data", streamId, payload))
+            outbound.offerData(streamId, transport.encodeData(streamId, payload))
         }
         if (accepted) status.onBytesDown(payload.size)
         return accepted

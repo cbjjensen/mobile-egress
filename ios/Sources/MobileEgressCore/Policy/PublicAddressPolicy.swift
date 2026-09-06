@@ -1,6 +1,10 @@
 import Foundation
 
 public enum PublicAddressPolicy {
+    static func addressIdentity(_ ipLiteral: String) -> [UInt8]? {
+        IPv4Literal.parse(ipLiteral) ?? IPv6Literal.parse(ipLiteral)
+    }
+
     public static func validate(ipLiteral: String, port: Int) throws -> String {
         guard (1 ... 65_535).contains(port), ipLiteral == ipLiteral.trimmingCharacters(in: .whitespacesAndNewlines) else {
             throw CoreValidationError.invalidRelayOrigin

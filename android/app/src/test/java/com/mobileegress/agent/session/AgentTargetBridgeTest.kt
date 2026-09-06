@@ -19,6 +19,59 @@ import org.junit.Test
 
 class AgentTargetBridgeTest {
     @Test
+    fun `first candidate may use equivalent IPv6 spelling but semantic duplicates remain denied`() {
+        val fixture = Fixture()
+        fixture.transport.parseInbound(WireProtocol.encode("ping", payload = "mobile-egress.transport.v2".encodeToByteArray()))
+        fixture.bridge.open(WireProtocol.parseAgentInbound(WireProtocol.encode("open", "alias",
+            """{"ip":"2606:4700:4700::1111","port":443,"ips":["2606:4700:4700:0:0:0:0:1111","1.1.1.1"]}""".encodeToByteArray())))
+        assertEquals(2, fixture.reactor.addresses["alias"]?.size)
+        listOf(
+            """{"ip":"2606:4700:4700::1111","port":443,"ips":["2606:4700:4700::1111","2606:4700:4700:0:0:0:0:1111"]}""",
+            """{"ip":"1.1.1.1","port":443,"ips":["8.8.8.8"]}""",
+            """{"ip":"127.0.0.1","port":443,"ips":["1.1.1.1"]}""",
+        ).forEachIndexed { index, payload ->
+            fixture.bridge.open(WireProtocol.parseAgentInbound(WireProtocol.encode("open", "bad$index", payload.encodeToByteArray())))
+        }
+        assertEquals(setOf("alias"), fixture.reactor.opened.keys)
+        assertEquals(3, fixture.emittedFrames().size)
+    }
+
+    @Test
+    fun `negotiated open passes validated IPv4 and IPv6 in order`() {
+        val fixture = Fixture()
+        fixture.transport.parseInbound(WireProtocol.encode("ping", payload = "mobile-egress.transport.v2".encodeToByteArray()))
+        fixture.bridge.open(WireProtocol.parseAgentInbound(WireProtocol.encode("open", "s",
+            """{"ip":"1.1.1.1","port":443,"ips":["1.1.1.1","2606:4700:4700::1111"]}""".encodeToByteArray())))
+        assertEquals(listOf(InetSocketAddress(InetAddress.getByName("1.1.1.1"), 443),
+            InetSocketAddress(InetAddress.getByName("2606:4700:4700::1111"), 443)), fixture.reactor.addresses["s"])
+    }
+
+    @Test
+    fun `negotiated open validates all candidates before submitting any socket`() {
+        val fixture = Fixture()
+        fixture.transport.parseInbound(WireProtocol.encode("ping", payload = "mobile-egress.transport.v2".encodeToByteArray()))
+        listOf("127.0.0.1", "example.com", "2606:4700:4700::1111%en0").forEachIndexed { index, invalid ->
+            fixture.bridge.open(WireProtocol.parseAgentInbound(WireProtocol.encode("open", "s$index",
+                """{"ip":"1.1.1.1","port":443,"ips":["1.1.1.1","$invalid"]}""".encodeToByteArray())))
+        }
+        assertTrue(fixture.reactor.opened.isEmpty())
+        assertEquals(0, fixture.bridge.activeStreamCount)
+        assertEquals(3, fixture.emittedFrames().size)
+    }
+
+    @Test
+    fun `negotiated data remains raw through bridge mailbox and sender`() {
+        val fixture = Fixture()
+        fixture.transport.parseInbound(WireProtocol.encode("ping", payload = "mobile-egress.transport.v2".encodeToByteArray()))
+        fixture.bridge.open("s", targetAddress())
+        fixture.listener.onOpened("s", fixture.reactor.opened.getValue("s"))
+        assertTrue(fixture.listener.onData("s", fixture.reactor.opened.getValue("s"), byteArrayOf(0, -1)))
+        val frames = fixture.emittedFrames()
+        assertEquals('{'.code.toByte(), frames[0][0])
+        assertEquals(listOf<Byte>(2, 4, 0, 1, 115, 0, -1), frames[1].toList())
+    }
+
+    @Test
     fun `more than historical retention capacity stays live until explicit cancellation`() {
         val fixture = Fixture()
         repeat(1_100) { fixture.bridge.open("stream-$it", targetAddress()) }
@@ -1114,11 +1167,13 @@ class AgentTargetBridgeTest {
         beforeMailboxCommit: () -> Unit = {},
         backpressureReporter: BackpressureReporter = NoOpBackpressureReporter,
     ) {
+        val transport = com.mobileegress.agent.protocol.AgentTransport()
         lateinit var listener: TargetReactorListener
         val reactor = FakeReactor(openResult)
         val failures = Collections.synchronizedList(mutableListOf<ErrorClass>())
         val status = RecordingStatus()
         val bridge = AgentTargetBridge(
+            transport = transport,
             outbound = outbound,
             reactorFactory = {
                 listener = it
@@ -1153,6 +1208,7 @@ class AgentTargetBridgeTest {
         data class Write(val streamId: String, val correlationToken: Long, val payload: ByteArray)
 
         val opened = HashMap<String, Long>()
+        val addresses = HashMap<String, List<InetSocketAddress>>()
         @Volatile var openAction: (() -> ReactorSubmitResult)? = null
         val writes = Collections.synchronizedList(mutableListOf<Write>())
         val cancels = Collections.synchronizedList(mutableListOf<Call>())
@@ -1171,6 +1227,11 @@ class AgentTargetBridgeTest {
         val awaitCalls = AtomicInteger()
 
         override fun start(): Boolean = true
+
+        override fun open(streamId: String, correlationToken: Long, addresses: List<InetSocketAddress>): ReactorSubmitResult {
+            this.addresses[streamId] = addresses
+            return open(streamId, correlationToken, addresses.first())
+        }
 
         override fun open(
             streamId: String,

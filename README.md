@@ -1,5 +1,9 @@
 # Mobile Egress
 
+**Permanent routing requirement:** Traffic must pass through the owner's personal Windows PC or Mac. Cloud-hosted, VPS-hosted, EC2-hosted, and managed Mobile Egress relays are not allowed and must not be suggested as deployment or performance alternatives. Keep Tailscale Funnel and the local relay; optimize within that topology. EC2 nodes remain workload Clients only.
+
+Supporting peers negotiate raw binary data framing and bounded destination-address fallback while remaining compatible with older peers. These optimizations keep the existing personal-computer routing and single-session topology; see [protocol details](docs/protocol.md#negotiated-transport-extensions).
+
 Mobile Egress lets selected applications on Windows Server 2019 EC2 instances use an Android or iOS Agent device's cellular connection. The private relay/controller runs on Windows 10/11 or Apple Silicon macOS 13+; Tailscale Funnel carries raw Mobile Egress TLS to that loopback-only relay.
 
 ```text

@@ -1,5 +1,11 @@
 # Architecture
 
+## Permanent personal-computer routing requirement
+
+All proxy traffic must pass through the owner's personal Windows PC or Mac running the local relay, with the existing Tailscale Funnel ingress. This is an explicit product constraint. Do not propose, benchmark, provision, or implement cloud-hosted, VPS-hosted, EC2-hosted, managed, or otherwise externally hosted Mobile Egress relays as optimizations or deployment alternatives unless the owner explicitly reverses the constraint. EC2 machines are workload Clients only. The Mac build server remains development infrastructure. Performance work must improve the protocol, clients, mobile Agents, and local relay within this topology.
+
+Transport-2 peers negotiate raw binary data while keeping v1 JSON controls and compatibility with older peers. The relay provides a bounded list of validated destination addresses to supporting mobile Agents so a failed address can fall back within the original connection deadline. A single rejected open does not mark the entire Agent unavailable in the Windows Client. The connection topology remains one WebSocket per Client and one for the Agent; local contention measurements precede any proposal to add connections. See [the wire contract](protocol.md#negotiated-transport-extensions) and [latency evidence](latency-benchmarks.md).
+
 ## Accepted topology
 
 Every operator has one independent bridge. Its relay and control plane run on either Windows 10/11 or Apple Silicon macOS 13+, up to ten x86-64 Windows Server 2019 EC2 instances are Clients, and one Android or iOS device is the cellular Agent.

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"mobile-egress/internal/tunnelwire"
 )
 
 const (
@@ -40,10 +42,18 @@ type Envelope struct {
 	Type     MessageType `json:"type"`
 	StreamID string      `json:"streamId"`
 	Payload  string      `json:"payload"`
+	Data     []byte      `json:"-"`
 }
 
 // ParseEnvelope decodes and validates a v1 JSON envelope.
 func ParseEnvelope(raw []byte) (Envelope, error) {
+	if tunnelwire.IsData(raw) {
+		id, data, err := tunnelwire.ParseData(raw)
+		if err != nil {
+			return Envelope{}, err
+		}
+		return Envelope{Version: Version1, Type: TypeData, StreamID: id, Data: data}, nil
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	start, err := decoder.Token()
 	if err != nil || start != json.Delim('{') {
@@ -87,6 +97,13 @@ func ParseEnvelope(raw []byte) (Envelope, error) {
 // Validate confirms that an already-decoded envelope satisfies the v1 wire
 // constraints.
 func (envelope Envelope) Validate() error {
+	if envelope.Data != nil {
+		if envelope.Version != Version1 || envelope.Type != TypeData || envelope.Payload != "" {
+			return ErrInvalidEnvelope
+		}
+		_, err := tunnelwire.EncodeData(envelope.StreamID, envelope.Data)
+		return err
+	}
 	if envelope.Version != Version1 {
 		return fmt.Errorf("%w: unsupported version", ErrInvalidEnvelope)
 	}
@@ -115,7 +132,41 @@ func (envelope Envelope) Validate() error {
 // DecodePayload returns Payload after base64url decoding and enforces the
 // decoded one MiB payload limit.
 func (envelope Envelope) DecodePayload() ([]byte, error) {
+	if envelope.Data != nil {
+		return envelope.Data, nil
+	}
 	return decodePayload(envelope.Payload, MaxDecodedPayloadBytes)
+}
+
+// RetainedPayloadBytes accounts for the representation kept in the mailbox.
+func (envelope Envelope) RetainedPayloadBytes() int {
+	return len(envelope.Payload) + len(envelope.Data)
+}
+
+// PayloadBytes is called only after ParseEnvelope has validated the payload.
+func (envelope Envelope) PayloadBytes() int {
+	if envelope.Data != nil {
+		return len(envelope.Data)
+	}
+	// The legacy Go decoder accepts CR/LF; they consume retained memory, but
+	// contribute no decoded traffic bytes.
+	return base64.RawURLEncoding.DecodedLen(len(envelope.Payload) - strings.Count(envelope.Payload, "\r") - strings.Count(envelope.Payload, "\n"))
+}
+
+// MarshalForPeer translates only when peers use different data representations.
+func (envelope Envelope) MarshalForPeer(binaryData bool) ([]byte, error) {
+	if envelope.Type == TypeData && binaryData && tunnelwire.ValidStreamID(envelope.StreamID) {
+		data, err := envelope.DecodePayload()
+		if err != nil {
+			return nil, err
+		}
+		return tunnelwire.EncodeData(envelope.StreamID, data)
+	}
+	if envelope.Data != nil {
+		envelope.Payload = base64.RawURLEncoding.EncodeToString(envelope.Data)
+		envelope.Data = nil
+	}
+	return json.Marshal(envelope)
 }
 
 func decodePayload(value string, maximumBytes int) ([]byte, error) {

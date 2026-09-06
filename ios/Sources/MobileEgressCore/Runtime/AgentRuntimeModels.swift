@@ -112,6 +112,7 @@ public protocol TargetConnectionFactory: Sendable {
 
 public struct TargetConnectionConfiguration: Equatable, Hashable, Sendable {
     public let ipLiteral: String
+    public let ipLiterals: [String]
     public let port: Int
     public let requiredInterfaceType: TransportInterfaceType = .cellular
     public let prohibitedInterfaceTypes: Set<TransportInterfaceType> = [.wifi, .wiredEthernet]
@@ -123,15 +124,22 @@ public struct TargetConnectionConfiguration: Equatable, Hashable, Sendable {
     public init(
         ipLiteral: String,
         port: Int,
+        ipLiterals: [String]? = nil,
         readChunkBytes: Int = 16 * 1_024,
         inboundQueueCapacity: Int = 32,
         connectTimeout: TimeInterval = 30
     ) throws {
         guard readChunkBytes > 0,
               inboundQueueCapacity > 0,
-              connectTimeout > 0
+              connectTimeout > 0, connectTimeout.isFinite
         else { throw CoreValidationError.invalidPairing }
         self.ipLiteral = try PublicAddressPolicy.validate(ipLiteral: ipLiteral, port: port)
+        let candidates = ipLiterals ?? [ipLiteral]
+        guard (1 ... 8).contains(candidates.count) else { throw CoreValidationError.invalidPairing }
+        self.ipLiterals = try candidates.map { try PublicAddressPolicy.validate(ipLiteral: $0, port: port) }
+        let identities = candidates.compactMap(PublicAddressPolicy.addressIdentity)
+        guard identities.count == candidates.count, identities.first == PublicAddressPolicy.addressIdentity(ipLiteral),
+              Set(identities).count == candidates.count else { throw CoreValidationError.invalidPairing }
         self.port = port
         self.readChunkBytes = readChunkBytes
         self.inboundQueueCapacity = inboundQueueCapacity
@@ -168,6 +176,7 @@ public struct RelayWebSocketConfiguration: Equatable, Sendable {
         }
         components.scheme = "wss"
         components.path = "/v1/session"
+        components.queryItems = [URLQueryItem(name: "transport", value: "2")]
         guard let url = components.url else { throw CoreValidationError.invalidRelayOrigin }
         self.url = url
         hostname = endpoint.hostname

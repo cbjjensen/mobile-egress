@@ -84,7 +84,7 @@ final class AppleProductionAdaptersTests: XCTestCase {
         _ = try XCTUnwrap(
             parameters.defaultProtocolStack.applicationProtocols.first as? NWProtocolWebSocket.Options
         )
-        let expectedURL = try XCTUnwrap(URL(string: "wss://relay.example:8443/v1/session"))
+        let expectedURL = try XCTUnwrap(URL(string: "wss://relay.example:8443/v1/session?transport=2"))
 
         XCTAssertEqual(trustPolicy.hostname, "relay.example")
         XCTAssertEqual(trustPolicy.authorityDER, authority.der)

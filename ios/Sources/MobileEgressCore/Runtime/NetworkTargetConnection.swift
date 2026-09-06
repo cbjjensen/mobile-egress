@@ -7,14 +7,14 @@ enum NetworkTargetConfigurationError: Error {
 }
 
 struct AppleTargetConnectionParameterBuilder {
-    func makeEndpoint(configuration: TargetConnectionConfiguration) throws -> NWEndpoint {
+    func makeEndpoint(configuration: TargetConnectionConfiguration, ipLiteral: String? = nil) throws -> NWEndpoint {
         guard let port = NWEndpoint.Port(rawValue: UInt16(configuration.port)) else {
             throw NetworkTargetConfigurationError.invalidConfiguration
         }
         let host: NWEndpoint.Host
-        if let address = IPv4Address(configuration.ipLiteral) {
+        if let address = IPv4Address(ipLiteral ?? configuration.ipLiteral) {
             host = .ipv4(address)
-        } else if let address = IPv6Address(configuration.ipLiteral) {
+        } else if let address = IPv6Address(ipLiteral ?? configuration.ipLiteral) {
             host = .ipv6(address)
         } else {
             throw NetworkTargetConfigurationError.invalidConfiguration
@@ -54,7 +54,7 @@ public struct NetworkTargetConnectionFactory: TargetConnectionFactory, Sendable 
         }
         let builder = AppleTargetConnectionParameterBuilder()
         return NetworkTargetConnection(
-            endpoint: try builder.makeEndpoint(configuration: configuration),
+            endpoints: try configuration.ipLiterals.map { try builder.makeEndpoint(configuration: configuration, ipLiteral: $0) },
             parameters: builder.makeParameters(configuration: configuration),
             readChunkBytes: configuration.readChunkBytes,
             connectTimeout: configuration.connectTimeout
@@ -63,9 +63,12 @@ public struct NetworkTargetConnectionFactory: TargetConnectionFactory, Sendable 
 }
 
 private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Sendable {
-    private let connection: NWConnection
+    private var connection: NWConnection
+    private let endpoints: [NWEndpoint]
+    private let parameters: NWParameters
+    private var dialSequence: TargetDialSequence
+    private var attemptIndex = 0
     private let readChunkBytes: Int
-    private let connectTimeout: TimeInterval
     private let queue = DispatchQueue(label: "com.mobileegress.agent.target-connection")
     private var eventHandler: TargetConnectionEventHandler?
     private var receiveGate = ReceiveDeliveryGate()
@@ -76,14 +79,16 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
     private var started = false
 
     init(
-        endpoint: NWEndpoint,
+        endpoints: [NWEndpoint],
         parameters: NWParameters,
         readChunkBytes: Int,
         connectTimeout: TimeInterval
     ) {
-        connection = NWConnection(to: endpoint, using: parameters)
+        self.endpoints = endpoints
+        self.parameters = parameters
+        connection = NWConnection(to: endpoints[0], using: parameters)
+        dialSequence = TargetDialSequence(candidateCount: endpoints.count, timeout: connectTimeout)
         self.readChunkBytes = readChunkBytes
-        self.connectTimeout = connectTimeout
     }
 
     func start(eventHandler: @escaping TargetConnectionEventHandler) {
@@ -92,18 +97,43 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
             self.started = true
             self.eventHandler = eventHandler
             self.receiveGeneration = self.receiveGate.beginGeneration()
-            self.connection.stateUpdateHandler = { [weak self] state in
-                self?.handle(state)
+            guard let attempt = self.dialSequence.start(now: ProcessInfo.processInfo.systemUptime) else {
+                self.fail()
+                return
             }
-            let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now() + self.connectTimeout)
-            timer.setEventHandler { [weak self] in
-                self?.fail()
-            }
-            self.timeoutTimer = timer
-            timer.resume()
-            self.connection.start(queue: self.queue)
+            self.startAttempt(attempt)
         }
+    }
+
+    private func startAttempt(_ attempt: TargetDialSequence.Attempt) {
+        attemptIndex = attempt.index
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self, self.attemptIndex == attempt.index else { return }
+            self.handle(state)
+        }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + attempt.timeout)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.attemptIndex == attempt.index, self.dialSequence.isConnecting else { return }
+            self.retryOrFail()
+        }
+        timeoutTimer = timer
+        timer.resume()
+        connection.start(queue: queue)
+    }
+
+    private func retryOrFail() {
+        guard !lifecycle.isTerminal else { return }
+        guard let next = dialSequence.failed(attemptIndex, now: ProcessInfo.processInfo.systemUptime) else {
+            fail()
+            return
+        }
+        timeoutTimer?.cancel()
+        timeoutTimer = nil
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        connection = NWConnection(to: endpoints[next.index], using: parameters)
+        startAttempt(next)
     }
 
     func send(_ data: Data, completion: @escaping TargetConnectionSendCompletion) -> Bool {
@@ -130,6 +160,7 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
     func cancel() {
         queue.async {
             guard self.lifecycle.cancel() else { return }
+            self.dialSequence.cancel()
             if let generation = self.receiveGeneration {
                 self.receiveGate.invalidate(generation)
             }
@@ -145,6 +176,11 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
         guard !lifecycle.isTerminal else { return }
         switch state {
         case .ready:
+            guard dialSequence.isConnecting else { return }
+            guard dialSequence.ready(attemptIndex, now: ProcessInfo.processInfo.systemUptime) else {
+                retryOrFail()
+                return
+            }
             guard lifecycle.markReady(), let generation = receiveGeneration else { return }
             timeoutTimer?.cancel()
             timeoutTimer = nil
@@ -162,7 +198,7 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
                 invalidateAfterDelivery: false
             )
         case .failed, .cancelled:
-            fail()
+            retryOrFail()
         default:
             break
         }
@@ -204,6 +240,7 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
 
     private func fail() {
         guard let event = lifecycle.fail() else { return }
+        dialSequence.cancel()
         timeoutTimer?.cancel()
         timeoutTimer = nil
         connection.stateUpdateHandler = nil

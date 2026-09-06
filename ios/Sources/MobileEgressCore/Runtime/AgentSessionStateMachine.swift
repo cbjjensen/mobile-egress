@@ -71,6 +71,7 @@ struct AgentSessionStateMachine {
     private var nextStreamToken: UInt64 = 1
     private var nextWriteID: UInt64 = 1
     private var terminal = false
+    private var transportV2 = false
     private(set) var terminalFailure: AgentRuntimeErrorClass?
 
     init(limits: AgentRuntimeLimits = .production) {
@@ -123,7 +124,7 @@ struct AgentSessionStateMachine {
         switch message.opcode {
         case .binary:
             guard message.payload.count <= WireProtocol.maximumWebSocketMessageBytes,
-                  let envelope = try? WireProtocol.parseAgentInbound(message.payload)
+                  let envelope = try? WireProtocol.parseAgentInbound(message.payload, transportV2: transportV2)
             else {
                 return protocolFailure()
             }
@@ -170,7 +171,7 @@ struct AgentSessionStateMachine {
         guard let stream = streams[streamID], stream.token == token, stream.phase == .open else { return [] }
         guard !data.isEmpty else { return [] }
         guard data.count <= limits.targetReadChunkBytes,
-              let frame = try? WireProtocol.encode(type: .data, streamID: streamID, payload: data)
+              let frame = try? WireProtocol.encode(type: .data, streamID: streamID, payload: data, transportV2: transportV2)
         else {
             return failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect)
         }
@@ -280,9 +281,9 @@ struct AgentSessionStateMachine {
         case .failed:
             return terminate(error: .relayUnavailable, relay: .cancel)
         case .emitted:
-            guard let streamID = frame.streamID,
+            guard frame.bytes.first != 2, let streamID = frame.streamID,
                   let stream = streams[streamID], stream.phase == .gracefulPending,
-                  let envelope = try? WireProtocol.parseAgentOutbound(frame.bytes), envelope.type == .close
+                  let envelope = try? WireProtocol.parseAgentOutbound(frame.bytes, transportV2: transportV2), envelope.type == .close
             else { return [] }
             return releaseStream(streamID: streamID, token: stream.token, remember: true)
         }
@@ -311,6 +312,9 @@ struct AgentSessionStateMachine {
         case .close:
             return closeFromRelay(envelope)
         case .ping:
+            if (try? envelope.decodedPayload()) == WireProtocol.transportV2Advertisement {
+                transportV2 = true
+            }
             return enqueueRequiredControl(type: .pong, streamID: "")
         case .pong:
             return []
@@ -325,7 +329,7 @@ struct AgentSessionStateMachine {
         }
         let target: AgentOpenTarget
         do {
-            target = try AgentOpenTarget.parse(envelope)
+            target = try AgentOpenTarget.parse(envelope, transportV2: transportV2)
         } catch {
             admission.release(envelope.streamID)
             return reject(streamID: envelope.streamID, code: "invalid_target")
@@ -335,6 +339,7 @@ struct AgentSessionStateMachine {
             configuration = try TargetConnectionConfiguration(
                 ipLiteral: target.ip,
                 port: target.port,
+                ipLiterals: target.ips,
                 readChunkBytes: limits.targetReadChunkBytes,
                 inboundQueueCapacity: limits.targetInbound
             )
@@ -596,16 +601,23 @@ struct AgentSessionStateMachine {
 private struct AgentOpenTarget: Decodable {
     let ip: String
     let port: Int
+    let ips: [String]?
 
-    static func parse(_ envelope: WireEnvelope) throws -> AgentOpenTarget {
+    static func parse(_ envelope: WireEnvelope, transportV2: Bool) throws -> AgentOpenTarget {
         guard envelope.type == .open else { throw CoreValidationError.invalidJSON }
         let payload = try envelope.decodedPayload()
-        try StrictJSONObject.exactKeys(in: payload, expected: ["ip", "port"])
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        let enhanced = object?["ips"] != nil
+        guard !enhanced || transportV2 else { throw CoreValidationError.invalidJSON }
+        try StrictJSONObject.exactKeys(in: payload, expected: enhanced ? ["ip", "port", "ips"] : ["ip", "port"])
         guard let integerPort = StrictJSONObject.integerLiteral(forKey: "port", in: payload) else {
             throw CoreValidationError.invalidJSON
         }
         let target = try JSONDecoder().decode(AgentOpenTarget.self, from: payload)
         guard target.port == integerPort else { throw CoreValidationError.invalidJSON }
+        if enhanced {
+            guard let ips = target.ips, (1 ... 8).contains(ips.count) else { throw CoreValidationError.invalidJSON }
+        }
         return target
     }
 }

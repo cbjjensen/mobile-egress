@@ -128,7 +128,7 @@ func (mailbox *outboundMailbox) enqueue(envelope protocol.Envelope) outboundAdmi
 	if mailbox.streamDataCounts[envelope.StreamID] >= mailbox.perStreamDataCapacity {
 		return outboundDataSaturated
 	}
-	reservation, ok := mailbox.dataBudget.tryReserve(len(envelope.Payload))
+	reservation, ok := mailbox.dataBudget.tryReserve(envelope.RetainedPayloadBytes())
 	if !ok {
 		return outboundDataSaturated
 	}

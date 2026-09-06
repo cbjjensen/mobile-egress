@@ -3,6 +3,15 @@ import XCTest
 @testable import MobileEgressCore
 
 final class RelayRuntimeConfigurationTests: XCTestCase {
+    func testTargetCandidatesValidateAllAddressesAndRejectIPv6Aliases() throws {
+        let configuration = try TargetConnectionConfiguration(ipLiteral: "8.8.8.8", port: 443, ipLiterals: ["8.8.8.8", "2606:4700:4700::1111"])
+        XCTAssertEqual(configuration.ipLiterals, ["8.8.8.8", "2606:4700:4700::1111"])
+        XCTAssertNoThrow(try TargetConnectionConfiguration(ipLiteral: "2606:4700:4700::1111", port: 443, ipLiterals: ["2606:4700:4700:0:0:0:0:1111", "8.8.8.8"]))
+        for candidates in [["8.8.8.8", "10.0.0.1"], ["8.8.8.8", "example.com"], ["8.8.8.8", "2606:4700:4700::1111", "2606:4700:4700:0:0:0:0:1111"]] {
+            XCTAssertThrowsError(try TargetConnectionConfiguration(ipLiteral: "8.8.8.8", port: 443, ipLiterals: candidates))
+        }
+    }
+
     func testProductionAgentLimitsMatchSharedCapacityContract() {
         XCTAssertEqual(
             AgentRuntimeLimits.production,
@@ -24,7 +33,7 @@ final class RelayRuntimeConfigurationTests: XCTestCase {
     func testRelayConfigurationDerivesExactPinnedMTLSCellularSessionEndpoint() throws {
         let configuration = try RelayWebSocketConfiguration(identity: Task2Fixtures.identity())
 
-        XCTAssertEqual(configuration.url.absoluteString, "wss://relay.example:8443/v1/session")
+        XCTAssertEqual(configuration.url.absoluteString, "wss://relay.example:8443/v1/session?transport=2")
         XCTAssertEqual(configuration.hostname, "relay.example")
         XCTAssertEqual(configuration.port, 8443)
         XCTAssertEqual(configuration.pinnedCertificateAuthorityDER, Task2Fixtures.caDER)

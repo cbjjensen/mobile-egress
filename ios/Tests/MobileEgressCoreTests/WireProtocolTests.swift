@@ -3,6 +3,24 @@ import XCTest
 @testable import MobileEgressCore
 
 final class WireProtocolTests: XCTestCase {
+    func testNegotiatedBinaryLiteralAndBounds() throws {
+        let literal = Data([2, 4, 0, 3, 65, 95, 45, 0, 255])
+        XCTAssertEqual(try WireProtocol.encode(type: .data, streamID: "A_-", payload: Data([0, 255]), transportV2: true), literal)
+        let parsed = try WireProtocol.parseAgentInbound(literal, transportV2: true)
+        XCTAssertEqual(parsed.streamID, "A_-")
+        XCTAssertEqual(try parsed.decodedPayload(), Data([0, 255]))
+        XCTAssertThrowsError(try WireProtocol.parseAgentInbound(literal))
+        let max = Data([2, 4, 0, 128]) + Data(repeating: 65, count: 128) + Data(repeating: 255, count: 32768)
+        XCTAssertEqual(try WireProtocol.parseAgentInbound(max, transportV2: true).decodedPayload().count, 32768)
+        XCTAssertEqual(try WireProtocol.parseAgentInbound(Data([2, 4, 0, 1, 115]), transportV2: true).decodedPayload(), Data())
+        for malformed in [Data([2]), Data([2, 4, 0]), Data([2, 3, 0, 1, 115]), Data([2, 4, 0, 0]), Data([2, 4, 0, 2, 115]), Data([2, 4, 0, 1, 255]), Data([2, 4, 0, 1, 32]), Data([2, 4, 0, 129]) + Data(repeating: 65, count: 129), max + Data([1])] {
+            XCTAssertThrowsError(try WireProtocol.parseAgentInbound(malformed, transportV2: true))
+        }
+        XCTAssertThrowsError(try WireProtocol.encode(type: .data, streamID: "s", payload: Data(repeating: 0, count: 32769), transportV2: true))
+        let pong = try WireProtocol.encode(type: .pong, transportV2: true)
+        XCTAssertEqual(try WireProtocol.parseAgentOutbound(pong).version, 1)
+    }
+
     func testBinaryEnvelopeRoundTripsOpaqueStreamData() throws {
         let encoded = try WireProtocol.encode(type: .data, streamID: "opaque_stream-1", payload: Data([0, 1, 2, 255]))
 

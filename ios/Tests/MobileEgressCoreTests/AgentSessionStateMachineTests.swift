@@ -3,6 +3,57 @@ import XCTest
 @testable import MobileEgressCore
 
 final class AgentSessionStateMachineTests: XCTestCase {
+    func testNegotiatedDataUsesLiteralBinaryAndAcceptsLegacyData() throws {
+        var machine = connectedMachine()
+        XCTAssertTrue(machine.receiveRelay(try binary(type: .ping, payload: Data("mobile-egress.transport.v2".utf8))).isEmpty)
+        try assertOutbound(&machine, type: .pong, streamID: "", payload: Data())
+        let target = try openReadyTarget(&machine, streamID: "s")
+        let literal = Data([2, 4, 0, 1, 115, 0, 255])
+        let write = try XCTUnwrap(machine.receiveRelay(.init(opcode: .binary, payload: literal, isComplete: true)).singleTargetWrite)
+        XCTAssertEqual(write.data, Data([0, 255]))
+        _ = machine.targetWriteCompleted(streamID: "s", token: target.token, writeID: write.writeID, succeeded: true)
+        XCTAssertEqual(machine.receiveRelay(try binary(type: .data, streamID: "s", payload: Data([9]))).singleTargetWrite?.data, Data([9]))
+        XCTAssertTrue(machine.targetReceived(streamID: "s", token: target.token, data: Data([0, 255])).isEmpty)
+        XCTAssertEqual(try XCTUnwrap(machine.nextOutbound()).bytes, literal)
+    }
+
+    func testBinaryDataBeforeAdvertisementFailsAndOrdinaryPingKeepsLegacy() throws {
+        var machine = connectedMachine()
+        _ = machine.receiveRelay(try binary(type: .ping))
+        try assertOutbound(&machine, type: .pong, streamID: "", payload: Data())
+        let target = try openReadyTarget(&machine, streamID: "s")
+        _ = machine.targetReceived(streamID: "s", token: target.token, data: Data([8]))
+        try assertOutbound(&machine, type: .data, streamID: "s", payload: Data([8]))
+        XCTAssertEqual(machine.receiveRelay(.init(opcode: .binary, payload: Data([2, 4, 0, 1, 115]), isComplete: true)),
+                       [.closeRelay(code: 1008, reason: "protocol_error"), .cancelTarget(streamID: "s", token: target.token)])
+    }
+
+    func testEnhancedOpenNegotiatesAndRejectsUnsafeAlternateBeforeCreatingTarget() throws {
+        for (addresses, allowed) in [(["8.8.8.8", "1.1.1.1"], true), (["8.8.8.8", "127.0.0.1"], false), (["8.8.8.8", "8.8.8.8"], false), (["1.1.1.1"], false), ([], false)] {
+            var machine = connectedMachine()
+            _ = machine.receiveRelay(try binary(type: .ping, payload: Data("mobile-egress.transport.v2".utf8)))
+            try assertOutbound(&machine, type: .pong, streamID: "", payload: Data())
+            let payload = try JSONSerialization.data(withJSONObject: ["ip": "8.8.8.8", "port": 443, "ips": addresses])
+            let effects = machine.receiveRelay(try binary(type: .open, streamID: "s", payload: payload))
+            XCTAssertEqual(effects.containsTargetCreation, allowed)
+        }
+    }
+
+    func testEnhancedOpenIsRejectedWithoutNegotiationAndListsStayBounded() throws {
+        let payload = Data(#"{"ip":"8.8.8.8","port":443,"ips":["8.8.8.8","1.1.1.1"]}"#.utf8)
+        var legacy = connectedMachine()
+        XCTAssertFalse(legacy.receiveRelay(try binary(type: .open, streamID: "s", payload: payload)).containsTargetCreation)
+        var modern = connectedMachine()
+        _ = modern.receiveRelay(try binary(type: .ping, payload: Data("mobile-egress.transport.v2".utf8)))
+        try assertOutbound(&modern, type: .pong, streamID: "", payload: Data())
+        let eight = ["8.8.8.8", "1.1.1.1", "8.8.4.4", "1.0.0.1", "9.9.9.9", "149.112.112.112", "208.67.222.222", "208.67.220.220"]
+        let allowed = try JSONSerialization.data(withJSONObject: ["ip": "8.8.8.8", "port": 443, "ips": eight])
+        let configuration = try XCTUnwrap(modern.receiveRelay(try binary(type: .open, streamID: "eight", payload: allowed)).singleTargetCreation?.configuration)
+        XCTAssertEqual(configuration.ipLiterals, eight)
+        let oversized = try JSONSerialization.data(withJSONObject: ["ip": "8.8.8.8", "port": 443, "ips": eight + ["4.2.2.2"]])
+        XCTAssertFalse(modern.receiveRelay(try binary(type: .open, streamID: "nine", payload: oversized)).containsTargetCreation)
+    }
+
     func testWebSocketControlPingDoesNotReplaceApplicationWirePingPong() throws {
         var machine = connectedMachine()
 

@@ -12,6 +12,7 @@ class AgentSessionUrlTest {
         assertEquals("relay.example", url.host)
         assertEquals(8443, url.port)
         assertEquals("/v1/session", url.encodedPath)
+        assertEquals("2", url.queryParameter("transport"))
     }
 
     @Test

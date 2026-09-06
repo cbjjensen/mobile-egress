@@ -20,6 +20,52 @@ import org.junit.Test
 
 class TargetIoReactorIntegrationTest {
     @Test
+    fun `failed socket setup advances while applying cellular binding to the alternate`() {
+        LoopbackEchoServer().use { server ->
+            val listener = RecordingTargetListener(expectedOpens = 1)
+            val bindings = AtomicInteger()
+            val reactor = TargetIoReactor(TargetSocketBinder {
+                if (bindings.incrementAndGet() == 1) throw IllegalStateException("first setup failed")
+            }, listener)
+            reactor.start()
+            try {
+                reactor.open("fallback", 1L, listOf(server.address, server.address))
+                assertTrue(listener.opens.await(5, TimeUnit.SECONDS))
+                assertEquals(2, bindings.get())
+                assertTrue(listener.terminalReasons.isEmpty())
+            } finally {
+                reactor.shutdown()
+                assertTrue(reactor.awaitStopped(5, TimeUnit.SECONDS))
+            }
+        }
+    }
+
+    @Test
+    fun `refused first socket falls back and exchanges bytes over the same reactor`() {
+        LoopbackEchoServer().use { server ->
+            val refused = java.net.ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use {
+                InetSocketAddress(InetAddress.getLoopbackAddress(), it.localPort)
+            }
+            val listener = RecordingTargetListener(expectedOpens = 1, expectedData = 1)
+            val bindings = AtomicInteger()
+            val reactor = TargetIoReactor(TargetSocketBinder { bindings.incrementAndGet() }, listener)
+            reactor.start()
+            try {
+                assertEquals(ReactorSubmitResult.Accepted, reactor.open("fallback", 1L, listOf(refused, server.address)))
+                assertTrue(listener.opens.await(5, TimeUnit.SECONDS))
+                assertEquals(2, bindings.get())
+                assertEquals(ReactorSubmitResult.Accepted, reactor.write("fallback", byteArrayOf(0, -1, 4)))
+                assertTrue(listener.data.await(5, TimeUnit.SECONDS))
+                assertEquals(listOf<Byte>(0, -1, 4), listener.received.getValue("fallback").toList())
+                assertTrue(listener.terminalReasons.isEmpty())
+            } finally {
+                reactor.shutdown()
+                assertTrue(reactor.awaitStopped(5, TimeUnit.SECONDS))
+            }
+        }
+    }
+
+    @Test
     fun `three hundred loopback targets exchange data on one reactor thread`() {
         LoopbackEchoServer().use { server ->
             val listener = RecordingTargetListener(expectedOpens = 300, expectedData = 300)

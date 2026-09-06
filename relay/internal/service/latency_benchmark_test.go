@@ -185,7 +185,7 @@ func latencyBenchmarkRead(conn *websocket.Conn) (protocol.Envelope, error) {
 	return protocol.ParseEnvelope(data)
 }
 
-func newLatencyBenchmarkFixture(b *testing.B, count int) (*Service, *httptest.Server, []*websocket.Conn, *websocket.Conn) {
+func newLatencyBenchmarkFixture(b *testing.B, count int, transportVersion ...int) (*Service, *httptest.Server, []*websocket.Conn, *websocket.Conn) {
 	b.Helper()
 	dir := filepath.Join(b.TempDir(), "state")
 	code, err := Initialize(context.Background(), InitOptions{StateDir: dir, PublicName: "127.0.0.1"})
@@ -259,7 +259,11 @@ func newLatencyBenchmarkFixture(b *testing.B, count int) (*Service, *httptest.Se
 		post(owner, "/v1/pairing-codes", map[string]string{"role": role}, &pairing)
 		client := enroll(pairing.Code, role)
 		dialer := websocket.Dialer{TLSClientConfig: client.Transport.(*http.Transport).TLSClientConfig.Clone()}
-		conn, _, err := dialer.Dial("wss"+strings.TrimPrefix(server.URL, "https")+"/v1/session", nil)
+		endpoint := "wss" + strings.TrimPrefix(server.URL, "https") + "/v1/session"
+		if len(transportVersion) > 0 && transportVersion[0] == 2 {
+			endpoint += "?transport=2"
+		}
+		conn, _, err := dialer.Dial(endpoint, nil)
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -81,6 +81,14 @@ func (service *Service) resolvePendingOpen(pending *pendingOpen, target clientOp
 		return
 	}
 	forward := protocol.Envelope{Version: protocol.Version1, Type: protocol.TypeOpen, StreamID: pending.id, Payload: base64.RawURLEncoding.EncodeToString(payload)}
+	// Validate every resolver answer above before bounding the candidate list.
+	// Do not invent DNS TTLs; the system resolver retains ownership of caching.
+	candidates := orderedCandidates(addresses)
+	enhancedPayload, err := json.Marshal(agentOpenRequest{IP: candidates[0], Port: target.Port, IPs: candidates})
+	if err != nil {
+		service.rejectPendingOpen(pending, "invalid_target")
+		return
+	}
 	for {
 		service.mu.Lock()
 		if service.pendingOpens[pending.id] != pending || !service.sessionActiveLocked(pending.client) {
@@ -115,6 +123,9 @@ func (service *Service) resolvePendingOpen(pending *pendingOpen, target clientOp
 		tracked := &stream{id: pending.id, client: pending.client, agent: agent, state: streamOpening, openingDeadline: now.Add(service.openingTimeout), lastActivity: now}
 		service.streams[tracked.id] = tracked
 		service.activeStreams++
+		if agent.binaryData {
+			forward.Payload = base64.RawURLEncoding.EncodeToString(enhancedPayload)
+		}
 		admission := agent.outbound.enqueue(forward)
 		if admission != outboundAdmitted {
 			service.removeStreamLocked(tracked)

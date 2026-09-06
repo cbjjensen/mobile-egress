@@ -3,6 +3,69 @@
   "schemaVersion": 1,
   "features": [
     {
+      "id": "agent.transport-v2",
+      "title": "Negotiated raw data framing with legacy compatibility",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/protocol/AgentTransport.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentTargetBridge.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/protocol/AgentTransportTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionUrlTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Protocol/WireProtocol.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/WireProtocolTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
+            "ios/Tests/MobileEgressCoreTests/RelayRuntimeConfigurationTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.destination-fallback",
+      "title": "Validated destination alternatives within one connection deadline",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/protocol/AgentTransport.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentTargetBridge.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/protocol/AgentTransportTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentTargetBridgeTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Uses sequential Network.framework connections instead of Android selector channels while validating all candidates, preserving the total deadline, closing failed attempts, and never replaying established streams.",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Runtime/TargetDialSequence.swift",
+            "ios/Sources/MobileEgressCore/Runtime/NetworkTargetConnection.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/TargetDialSequenceTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift"
+          ]
+        }
+      }
+    },
+    {
       "id": "agent.enrollment",
       "title": "Strict QR enrollment and retained Agent identity",
       "platforms": {

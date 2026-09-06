@@ -3,7 +3,10 @@ package com.mobileegress.agent.protocol
 import java.util.Base64
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
 
 class ProtocolException(message: String) : Exception(message)
 
@@ -13,12 +16,13 @@ data class WireEnvelope(
     val type: String,
     val streamId: String,
     val payload: String,
+    @Transient val rawPayload: ByteArray? = null,
 ) {
-    fun decodePayload(): ByteArray = WireProtocol.decodePayload(payload)
+    fun decodePayload(): ByteArray = rawPayload ?: WireProtocol.decodePayload(payload)
 }
 
 @Serializable
-data class AgentOpenTarget(val ip: String, val port: Int)
+data class AgentOpenTarget(val ip: String, val port: Int, val ips: List<String>? = null)
 
 object WireProtocol {
     const val MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -50,10 +54,18 @@ object WireProtocol {
         return envelope
     }
 
-    fun parseOpen(envelope: WireEnvelope): AgentOpenTarget {
+    fun parseOpen(envelope: WireEnvelope, negotiated: Boolean = false): AgentOpenTarget {
         if (envelope.type != "open") throw ProtocolException("Expected open envelope")
         return try {
-            json.decodeFromString<AgentOpenTarget>(envelope.decodePayload().decodeToString(throwOnInvalidSequence = true))
+            val value = json.parseToJsonElement(envelope.decodePayload().decodeToString(throwOnInvalidSequence = true))
+            val target = json.decodeFromJsonElement<AgentOpenTarget>(value)
+            if ("ips" in value.jsonObject) {
+                val candidates = target.ips
+                if (!negotiated || candidates == null || candidates.size !in 1..8) {
+                    throw ProtocolException("Invalid target candidates")
+                }
+            }
+            target
         } catch (_: Exception) {
             throw ProtocolException("Invalid Agent open payload")
         }
