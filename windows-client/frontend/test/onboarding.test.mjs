@@ -7,7 +7,7 @@ test('Funnel alone never unlocks node installation', () => {
   assert.equal(nextSetupStep({ ready: false, tailscaleOnline: true }, true, []).tab, 'bridge')
 })
 test('setup resumes at the first incomplete dependency', () => {
-  assert.equal(nextSetupStep({ ready: true, agentConnected: true }, false, []).tab, 'settings')
+  assert.equal(nextSetupStep({ ready: true, agentConnected: true }, false, []).tab, 'nodes')
   assert.equal(nextSetupStep({ ready: true, agentConnected: true }, true, []).tab, 'nodes')
   assert.equal(nextSetupStep({ ready: true, agentConnected: true }, true, [{ health: 'installed' }]).label, 'Verify connectivity')
   assert.equal(canInstallNode({ ready: true }, { ssmOnline: true }, false, ''), true)
@@ -32,8 +32,12 @@ test('next action performs setup and completion requires a confirmed application
   assert.equal(nextSetupStep({ ...bridge, agentConnected: false }, true, nodes, { verified: true }).complete, undefined)
 })
 
-test('saved AWS validation is displayed without demanding new credentials', () => {
-  assert.equal(nextSetupStep({ ready: true, agentConnected: true }, false, [], { awsChecking: true }).label, 'Checking saved AWS connection')
+test('AWS validation only gates the explicitly selected AWS setup path', () => {
+  const bridge = { ready: true, agentConnected: true }
+  assert.equal(nextSetupStep(bridge, false, [], { awsChecking: true }).label, 'Add your Client')
+  assert.equal(nextSetupStep(bridge, false, [], { awsChecking: true, clientMethod: 'aws' }).label, 'Checking saved AWS connection')
+  assert.equal(nextSetupStep(bridge, false, [], { clientMethod: 'aws' }).label, 'Connect AWS')
+  assert.equal(nextSetupStep(bridge, false, [{health:'installed',management:'paired'}], {awsChecking:true,verified:true}).complete,true)
 })
 
 test('setup guidance waits for initial and stale bridge checks', () => {

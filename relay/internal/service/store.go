@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const adminMutationReplaySchema = `CREATE TABLE IF NOT EXISTS admin_mutation_replay (
     request_id TEXT PRIMARY KEY,
@@ -144,6 +144,12 @@ func openStore(path string) (*store, error) {
 				return nil, err
 			}
 			version = 3
+		case 3:
+			if err := state.migrateFromVersionThree(context.Background()); err != nil {
+				state.Close()
+				return nil, err
+			}
+			version = 4
 		default:
 			state.Close()
 			return nil, fmt.Errorf("unsupported SQLite schema version %d", version)
@@ -197,6 +203,7 @@ func (state *store) initialize(ctx context.Context) error {
             consumed_at INTEGER
         ) STRICT`,
 		adminMutationReplaySchema,
+		standaloneEnrollmentSchema,
 	}
 	transaction, err := state.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -259,6 +266,9 @@ func (state *store) migrateFromVersionTwo(ctx context.Context) error {
 	if _, err := transaction.ExecContext(ctx, adminMutationReplaySchema); err != nil {
 		return fmt.Errorf("migrate SQLite admin replay journal: %w", err)
 	}
+	if _, err := transaction.ExecContext(ctx, standaloneEnrollmentSchema); err != nil {
+		return fmt.Errorf("migrate SQLite Client enrollment: %w", err)
+	}
 	if err := validSchemaFromQuery(ctx, transaction); err != nil {
 		return fmt.Errorf("validate migrated SQLite state: %w", err)
 	}
@@ -315,10 +325,8 @@ func (state *store) createIdentity(ctx context.Context, serial string, role enro
 	}
 	defer transaction.Rollback()
 	if role == enrollment.RoleClient {
-		var count int
-		if err := transaction.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM identities WHERE role = ? AND revoked_at IS NULL`, string(role),
-		).Scan(&count); err != nil {
+		count, err := countClientAdmissions(ctx, transaction, now)
+		if err != nil {
 			return fmt.Errorf("count active Client identities: %w", err)
 		}
 		if count >= maximumClientIdentities {
@@ -435,10 +443,8 @@ func (state *store) redeemCapabilityAndCreateIdentity(
 		return errCapabilityExpired
 	}
 	if role == enrollment.RoleClient {
-		var count int
-		if err := transaction.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM identities WHERE role = ? AND revoked_at IS NULL`, string(role),
-		).Scan(&count); err != nil {
+		count, err := countClientAdmissions(ctx, transaction, now)
+		if err != nil {
 			return fmt.Errorf("count active Client identities: %w", err)
 		}
 		if count >= maximumClientIdentities {
@@ -542,6 +548,7 @@ func validSchemaFromQuery(ctx context.Context, queryer schemaQueryer) error {
 	required := map[string]bool{
 		"identities": false, "pairing_capabilities": false, "metrics": false, "error_metrics": false,
 		"settings": false, "endpoint_migrations": false, "admin_mutation_replay": false,
+		"client_enrollments": false,
 	}
 	requiredAutoindexes := map[string]string{
 		"sqlite_autoindex_identities_1":            "identities",
@@ -550,6 +557,7 @@ func validSchemaFromQuery(ctx context.Context, queryer schemaQueryer) error {
 		"sqlite_autoindex_settings_1":              "settings",
 		"sqlite_autoindex_endpoint_migrations_1":   "endpoint_migrations",
 		"sqlite_autoindex_admin_mutation_replay_1": "admin_mutation_replay",
+		"sqlite_autoindex_client_enrollments_1":    "client_enrollments",
 	}
 	seenAutoindexes := make(map[string]bool, len(requiredAutoindexes))
 	rows, err := queryer.QueryContext(ctx, `SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name`)
@@ -654,6 +662,12 @@ func validSchemaFromQuery(ctx context.Context, queryer schemaQueryer) error {
 	if normalizeAdminReplaySchema(createSQL) != normalizeAdminReplaySchema(adminMutationReplaySchema) {
 		return errors.New("SQLite admin replay journal has invalid definition")
 	}
+	if err := queryer.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'client_enrollments'`).Scan(&createSQL); err != nil {
+		return err
+	}
+	if normalizeAdminReplaySchema(createSQL) != normalizeAdminReplaySchema(standaloneEnrollmentSchema) {
+		return errors.New("SQLite Client enrollment store has invalid definition")
+	}
 	return nil
 }
 
@@ -696,8 +710,8 @@ func normalizeAdminReplaySchema(statement string) string {
 		return ""
 	}
 	value := normalized.String()
-	const withOptionalClause = "createtableifnotexistsadmin_mutation_replay"
-	const withoutOptionalClause = "createtableadmin_mutation_replay"
+	const withOptionalClause = "createtableifnotexists"
+	const withoutOptionalClause = "createtable"
 	if strings.HasPrefix(value, withOptionalClause) {
 		value = withoutOptionalClause + strings.TrimPrefix(value, withOptionalClause)
 	}

@@ -3,14 +3,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
-
-	"mobile-egress/windows-client/internal/nodeservice"
 )
 
-func runNodeService(repository *nodeservice.Repository, stderr io.Writer) int {
-	if err := runForegroundNodeService(repository); err != nil {
+func runNodeService(run func(context.Context) error, stderr io.Writer) int {
+	if err := runForegroundNodeService(run); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-client serve:", err)
 		return 1
 	}

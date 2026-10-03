@@ -163,6 +163,7 @@ nav button.active {
 }
 
 .stack { display: grid; gap: 14px; }
+.stack[hidden] { display: none; }
 .hero-card { border-color: var(--ip-line-strong); background: var(--ip-surface); }
 
 .card, .metric {

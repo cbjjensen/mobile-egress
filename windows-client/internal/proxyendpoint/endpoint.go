@@ -7,7 +7,6 @@ import (
 )
 
 const (
-	Host            = "127.0.0.2"
 	SOCKSPort       = uint16(1080)
 	HTTPConnectPort = uint16(1081)
 )

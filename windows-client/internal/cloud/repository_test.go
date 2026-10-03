@@ -35,7 +35,7 @@ func TestEncryptedRepositoryPersistsAccessKeysAndManagedNodes(t *testing.T) {
 		t.Fatalf("NodeViews() = %#v/%v", views, err)
 	}
 	encodedView, err := json.Marshal(views[0])
-	if err != nil || string(encodedView) != `{"instanceId":"i-0123456789abcdef0","clientSerial":"A1","serviceVersion":"1.2.3","health":"healthy","proxy":"127.0.0.2:1081:***:***","proxyReady":true}` {
+	if err != nil || string(encodedView) != `{"nodeId":"i-0123456789abcdef0","displayName":"i-0123456789abcdef0","platform":"windows","architecture":"amd64","management":"aws-ssm","connected":false,"connectionKnown":false,"instanceId":"i-0123456789abcdef0","clientSerial":"A1","serviceVersion":"1.2.3","health":"healthy","proxy":"127.0.0.2:1081:***:***","proxyReady":true}` {
 		t.Fatalf("managed node JSON = %s/%v", encodedView, err)
 	}
 	proxy, err := repository.ProxyLine(context.Background(), node.InstanceID)
@@ -131,8 +131,8 @@ func TestRepositoryMigratesVersionOneManagedNodeGeneration(t *testing.T) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Version != 2 {
-		t.Fatalf("persisted migrated version = %d, want 2", state.Version)
+	if state.Version != 3 {
+		t.Fatalf("persisted migrated version = %d, want 3", state.Version)
 	}
 }
 

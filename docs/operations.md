@@ -2,6 +2,8 @@
 
 ## Normal use
 
+AWS is optional for paired Windows and Mac workload Clients. Use [standalone Client installation and recovery](standalone-clients.md) for graphical pairing, native service storage, endpoint imports, and local installer maintenance. A workload Mac's Client LaunchDaemon is separate from the personal Mac relay: it is designed to continue after logout once macOS is booted and networking is available.
+
 On Windows, `MobileEgressRelay` and each `MobileEgressClient` run as automatic LocalSystem services. Closing the controller window leaves it in the tray; quitting does not stop those services. On macOS, the root `com.cbjjensen.mobile-egress.relay` LaunchDaemon survives window close and controller quit, while the controller remains available from the menu bar. The supported Tailscale app is per-user, so quitting is not the same as logging out: logout of the controlling administrator makes the bridge unavailable and proxy traffic must fail closed. Start or stop a mobile Agent only through its visible app UI; Android also provides its foreground notification.
 
 For a best-effort cellular address change, use **Rotate cellular IP** while the Agent is enrolled, running, and cellular is available. Confirm the warning if active streams must be disconnected. A normal attempt uses a 10-second reset; an unchanged result means the carrier reused the comparable address and offers one 30-second retry. Record only changed, unchanged, or unverified—never the addresses themselves.
@@ -27,7 +29,7 @@ Relay aggregate stream, byte, and finite error counters are maintained in memory
 - **Update** repeats the same release/trust checks and replaces the executable while retaining node keys, certificate, and proxy credentials. Both copy actions remain disabled for nodes older than Client `1.1.1`; after updating, wait for the refreshed version and copy the `.2` value again.
 - **Repair** performs the signed update and sends a fresh sealed copy of the existing configuration.
 - **Copy proxy line** reveals the authenticated HTTP forward/CONNECT line for Refract; **Copy SOCKS5 URL** reveals the alternate SOCKS form. Neither copied value is written to activity logs.
-- **Rotate endpoint safely** appears when the Tailscale Funnel origin differs from the encrypted Owner origin. Connect AWS first whenever managed nodes exist.
+- **Rotate endpoint safely** appears when the Tailscale Funnel origin differs from the encrypted Owner origin. AWS is optional. Desired endpoints are saved first; EC2 delivery retries separately, and paired Clients import sealed connection updates. See [standalone recovery](standalone-clients.md#funnel-changes-and-aws-outages).
 - **Repair local relay** re-verifies the bundled relay and reapplies the platform service/state protections without changing the CA or identities. Windows repairs the LocalSystem service. macOS uses authenticated relay-admin IPC; `version-mismatch` is repaired without unregistering/reregistering, and a successful response can be followed by a short launchd restart before exact initialized-v1 health returns.
 
 Client installation reserves one of the ten encrypted controller slots before provisioning. The controller writes a recoverable `configuring` record before sending the sealed configuration and commits it to `installed` only after the node service restarts successfully. Endpoint rotation uses the same write-before-apply rule for its desired URL and generation. If either action times out and the node appears in the managed list, use **Repair**; it safely reapplies that desired generation and credentials. If the controller itself exited before the node appeared, choose **Install Client** for that same instance again to resume its durable reservation. A different instance cannot consume the reserved slot.
@@ -45,9 +47,9 @@ The public publisher DER/fingerprints and signed-release URL/hash may appear in 
 ## Endpoint rotation runbook
 
 1. Restore Tailscale login. The controller verifies that Funnel has an enabled `*.ts.net:8443` raw-TCP mapping to `127.0.0.1:8443`; use **Repair Funnel and local relay** if that mapping was reset.
-2. Connect AWS in the controller if any nodes are managed.
+2. Keep the controller open. AWS can be unavailable; reconnect it when EC2 management is needed.
 3. Choose **Rotate endpoint safely**. On Windows, approve UAC. On macOS, the controller first requires exact enabled-helper proof and then uses authenticated relay-admin IPC. The relay rotates only its leaf certificate under the existing CA; a Mac repair/rotation restart is launchd-managed.
-4. Review the returned updated/failed node list. Use **Repair** for failures after SSM is online.
+4. For each paired Client, choose **Copy connection update** and import it in that Client app. EC2 updates retry separately through SSM and remain visibly pending until applied; **Repair** replays their retained endpoint history after AWS/SSM returns.
 5. On the existing Android or iOS app, stop the Agent, choose **Scan QR**, and scan the displayed endpoint-migration QR. Restart the Agent.
 6. Confirm workloads reconnect. No device key, Client serial, Agent certificate, or SOCKS credential should change.
 
@@ -72,7 +74,7 @@ The QR is one-use and expires after ten minutes. It is distinct from enrollment 
 | New SSM profile cannot be attached | Activity remains in **Preparing SSM** while AWS propagates the new IAM profile | Wait for the controller's automatic bounded retries. It rechecks the instance before each attempt and stops rather than replacing an unrelated profile. If it reports AWS permission denied, verify `iam:PassRole` and `ec2:AssociateIamInstanceProfile`; do not delete or replace profiles manually. |
 | Bridge setup required after Tailscale is online | Check the automatically opened Funnel approval page, WebView2, and signed sibling binaries | Approve the official `login.tailscale.com/f/funnel` page and subsequent relay UAC prompt. If no page opens, preserve the app error and controller version for diagnosis; do not run a manual Funnel script or expose port 8443. |
 | Tailscale reports Windows Installer code 1632 | Verify the user/System temp directories and `%windir%\Installer` exist and are writable; preserve the MSI verbose log | Treat a missing Windows Installer cache as an operating-system repair issue. Do not have Mobile Egress silently recreate or repopulate it; cached packages are machine-specific and require supported recovery or system-state restoration. |
-| Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Connect AWS, rotate, repair failed nodes; Repair reuses the persisted desired endpoint/generation. Scan the migration QR. |
+| Rotation required | Current `*.ts.net` name differs from stored Owner endpoint | Rotate, scan the Agent migration QR, and import paired Client connection updates. EC2 repair/retry replays saved generations when AWS returns. |
 | Interrupted reservation | Controller exited before recoverable node metadata was committed | Retry Install on the same instance, or explicitly cancel the reservation only if that instance is gone/unrecoverable. |
 | Agent offline | Android foreground service or iOS packet-tunnel status; cellular availability; platform background restrictions | Start from visible UI and restore cellular. Wi-Fi is intentionally not a fallback. |
 | Cellular IP unchanged | Rotation completed but the carrier reused the comparable IPv4/IPv6 address | Use the offered 30-second retry. Reassignment is carrier-controlled and cannot be guaranteed. |

@@ -471,7 +471,7 @@ func adminSetupDatabaseTablesExact(database *sql.DB) bool {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).Scan(&count); err != nil {
 		return false
 	}
-	return count == 7
+	return count == 8
 }
 
 func adminSetupStagePresent(stateDir string) (bool, error) {

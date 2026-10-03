@@ -2,6 +2,10 @@
 
 ## Boundaries
 
+Standalone Windows/Mac Clients use the same relay and traffic identities without AWS. Ten-minute invitations carry only a scoped pairing capability, pinned CA, origin, and stable Client identity. The workload persists its private keys before bootstrap; the controller saves encrypted metadata before sealed delivery, and setup completes only after receipt. Exact already-bound recovery can continue after expiry, but an expired invitation cannot bind a new Client. See [standalone Client security and recovery](standalone-clients.md).
+
+The Windows Client service uses LocalSystem DPAPI and an owner-restricted local named pipe; the GUI verifies its SYSTEM owner. The Mac Client uses the explicitly selected file-based System Keychain with a signed-daemon ACL and root LaunchDaemon. Its local Unix socket authenticates the recorded workload owner UID or root. Neither service exposes a network administration listener or plaintext secure-storage fallback.
+
 - Tailscale Funnel makes the local relay reachable but does not authorize Mobile Egress roles. Relay-issued mTLS certificates do.
 - The controller user is the Owner. Windows protects its private key and AWS fallback credentials with user DPAPI; macOS uses Security.framework data-protection Keychain items for the signed controlling app.
 - Windows uses the existing narrow elevated helper. macOS uses a root LaunchDaemon and strict local relay-admin socket; Service Management authorization is not reported healthy until authenticated strict-v1 status proves the exact helper.

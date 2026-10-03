@@ -618,11 +618,23 @@ function Get-MobileEgressReleaseArtifactDefinitions {
             Name = 'mobile-egress-client.exe'
             Path = Join-Path $RepositoryRoot 'windows-client\build\bin\mobile-egress-client.exe'
         }
+        if ($Version -notmatch '^1\.1\.[0-6]$') {
+            [pscustomobject]@{
+                Name = 'MobileEgressClientSetup.exe'
+                Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version\MobileEgressClientSetup.exe"
+            }
+        }
     }
     if ($resolvedComponents -contains 'Desktop') {
         [pscustomobject]@{
             Name = "mobile-egress-macos-$Version-arm64.pkg"
             Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-macos-$Version-arm64.pkg"
+        }
+        if ($Version -notmatch '^1\.1\.[0-6]$') {
+            [pscustomobject]@{
+                Name = "mobile-egress-client-macos-$Version-arm64.pkg"
+                Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-macos-$Version-arm64.pkg"
+            }
         }
     }
     if ($resolvedComponents -contains 'Android') {
@@ -647,6 +659,10 @@ function Get-MobileEgressReleaseDownloadItemDefinitions {
         [string]$Version
     )
 
+    if ($Version -notmatch '^1\.1\.[0-6]$') {
+        [pscustomobject]@{ Key = 'client-windows'; Label = 'Windows Client installer'; CurrentName = 'MobileEgressClientSetup.exe' }
+        [pscustomobject]@{ Key = 'client-macos'; Label = 'macOS Client PKG (Apple Silicon)'; CurrentName = "mobile-egress-client-macos-$Version-arm64.pkg" }
+    }
     return @(
         [pscustomobject]@{
             Key = 'windows'
@@ -680,6 +696,8 @@ function Test-MobileEgressReleaseDownloadAssetName {
     )
 
     switch ($Key) {
+        'client-windows' { return $Name -ceq 'MobileEgressClientSetup.exe' }
+        'client-macos' { return $Name -match '^mobile-egress-client-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
         'windows' { return $Name -ceq 'MobileEgressSetup.exe' -or $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
         'client' { return $Name -ceq 'mobile-egress-client.exe' }
         'macos' { return $Name -match '^mobile-egress-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
@@ -777,7 +795,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
             Tag = if ($null -ne $fallback) { $fallback.Tag } else { '' }
             Name = if ($null -ne $fallback) { $fallback.Name } else { '' }
             Url = if ($null -ne $fallback) { New-MobileEgressReleaseDownloadUrl -Tag $fallback.Tag -Name $fallback.Name } else { '' }
-            UnavailableReason = if ($null -eq $fallback -and $item.Key -eq 'macos' -and $currentWindowsReleased) {
+            UnavailableReason = if ($null -eq $fallback -and $item.Key -in @('macos', 'client-macos') -and $currentWindowsReleased) {
                 $policy.MacUnavailableReason
             } else {
                 ''
@@ -1026,6 +1044,22 @@ function Assert-MobileEgressReleaseArtifacts {
                 if ($entry.Key.StartsWith('payload/')) { $payloadSources[$entry.Key.Substring(8)] = $entry.Value }
             }
             Assert-MobileEgressInstallerPayload -InstallerPath $installerPath -PayloadPath (Join-Path $packageRoot 'payload-verification.zip') -ExpectedSources $payloadSources
+        }
+
+        if ($Version -notmatch '^1\.1\.[0-6]$') {
+            $clientRoot = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version"
+            $clientSetup = Join-Path $clientRoot 'MobileEgressClientSetup.exe'
+            $clientSources = [ordered]@{}
+            foreach ($name in @('mobile-egress-client.exe', 'mobile-egress-client-app.exe', 'MobileEgressClientSetup.exe')) {
+                $path = Join-Path $clientRoot $name
+                $signature = Get-AuthenticodeSignature -LiteralPath $path
+                if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $expectedThumbprint -or $null -eq $signature.TimeStamperCertificate) { throw "Client signature validation failed for $name." }
+                if ($name -ne 'MobileEgressClientSetup.exe') { $clientSources[$name] = $path }
+            }
+            if ((Get-FileHash -LiteralPath $clientSources['mobile-egress-client.exe'] -Algorithm SHA256).Hash.ToLowerInvariant() -cne $clientHash) { throw 'Standalone and EC2 Client service artifacts must be identical.' }
+            $clientSources['mobile-egress-code-signing.cer'] = Join-Path $RepositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
+            $clientSources['release-signing-certificate.txt'] = Join-Path $RepositoryRoot 'windows-signing\release-signing-certificate.txt'
+            Assert-MobileEgressInstallerPayload -InstallerPath $clientSetup -PayloadPath (Join-Path $clientRoot 'payload-verification.zip') -ExpectedSources $clientSources
         }
 
     }

@@ -177,6 +177,9 @@ func DialSession(ctx context.Context, identity Identity) (*Session, error) {
 	}
 	if err != nil {
 		transport.CloseIdleConnections()
+		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+			return nil, ErrClientUnauthorized
+		}
 		return nil, fmt.Errorf("connect relay session: %w", err)
 	}
 	sessionContext, cancel := context.WithCancel(context.Background())

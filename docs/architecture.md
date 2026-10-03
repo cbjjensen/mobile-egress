@@ -8,19 +8,21 @@ Transport-2 peers negotiate raw binary data while keeping v1 JSON controls and c
 
 ## Accepted topology
 
-Every operator has one independent bridge. Its relay and control plane run on either Windows 10/11 or Apple Silicon macOS 13+, up to ten x86-64 Windows Server 2019 EC2 instances are Clients, and one Android or iOS device is the cellular Agent.
+Every operator has one independent bridge. Its relay and control plane run on either Windows 10/11 or Apple Silicon macOS 13+, up to ten Windows or Apple Silicon Mac workload machines are Clients (paired locally or managed as EC2 through SSM), and one Android or iOS device is the cellular Agent.
 
 ```text
-EC2 Refract -> loopback HTTP forward/CONNECT -> Client service --+
+Workload HTTP/CONNECT -> loopback proxy -> Client service --+
                                                         +-> public *.ts.net:8443 -> Funnel raw TCP -> 127.0.0.1:8443 relay -> Agent -> cellular target
-EC2 workload -> loopback SOCKS5 -> Client service -------+
+Workload SOCKS5 -> loopback proxy -> Client service --------+
 ```
 
 Tailscale passes Mobile Egress TLS bytes without replacing the relay certificate. The public Funnel name is the certificate server name. The local Owner uses `127.0.0.1:8443` as a dial override while still validating the public name.
 
-Managed nodes remain Windows Server 2019; there is no Mac headless Client. The first Mac release does not migrate Windows private state. A Mac bridge additionally depends on its controlling administrator remaining logged in with the per-user Tailscale app and Keychain available; logout makes traffic fail closed.
+Standalone Clients support x64 Windows 10/11 and Server 2019+, plus Apple Silicon macOS 13+. AWS inventory retains its existing Windows Server 2019 restriction. The first Mac release does not migrate Windows private state. A Mac bridge additionally depends on its controlling administrator remaining logged in with the per-user Tailscale app and Keychain available; logout makes traffic fail closed.
 
 ## Components
+
+Provider-independent Client schema, standalone enrollment, workload service/IPC boundaries, and endpoint recovery are described in [Windows and Mac workload Clients](standalone-clients.md). The combined ten-Client limit includes AWS and paired records plus pending reservations. AWS login is optional and does not gate standalone pairing or recovery.
 
 The Go relay and Client share the tunnel envelope codec in `internal/tunnelwire`, including JSON validation, payload limits, binary framing, and mixed-version serialization. Session negotiation and role checks remain in their callers. SOCKS and HTTP CONNECT share the Client's `internal/preopen` reader lifecycle, so buffering, cancellation, and deadline cleanup follow one implementation.
 
@@ -61,7 +63,7 @@ The relay permits multiple simultaneous Clients and one active Agent session, wi
 
 Every retained data mailbox is bounded at 32 frames per stream. Client-to-Agent data has its own 8,192-frame/64-MiB lane, and Agent-to-Client data shares a separate 8,192-frame/64-MiB lane across all Client sessions. Queued and in-flight data remain charged until completion or discard. Per-stream, aggregate-frame, or aggregate-byte saturation is stream-local; required-control saturation and writer failure are session-fatal.
 
-### Headless EC2 Client
+### Workload Client (paired or EC2-managed)
 
 `MobileEgressClient` is a LocalSystem service installed under `C:\Program Files\MobileEgress`; state is under ACL-protected `C:\ProgramData\MobileEgress\Client`. It generates and retains:
 
@@ -69,7 +71,7 @@ Every retained data mailbox is bounded at 32 frames per stream. Client-to-Agent 
 - a durable X25519 sealed-configuration private key; and
 - its authenticated proxy username and password after decrypting the Owner-supplied configuration.
 
-This role remains Windows Server 2019-only. Both same-version desktop controllers embed the same raw Windows Client manifest; no Mac Client service is included.
+The AWS management path retains the same raw Windows Client manifest. Standalone Clients share this service core with graphical installation/pairing; macOS uses its own LaunchDaemon and file-based System Keychain. See [Client architecture and recovery](standalone-clients.md).
 
 Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.2:1080` and an HTTP forward/CONNECT proxy to `127.0.0.2:1081`, so a browser or application on that same EC2 node must explicitly opt in. There is no `.1` compatibility listener. The controller exposes either copy value only after the managed node reports Client `1.1.1` or later; an older node requires a signed **Update** followed by a fresh copy. These are not controller-host, system-wide, VPN, public, UDP, or QUIC proxies. Both listeners use the same retained credentials and one relay session without a fixed active-stream ceiling. Ordinary HTTP requests are rewritten to origin form and carried through a relay stream to the destination; repeat requests to the same destination can reuse that stream through a bounded keep-alive pool. SOCKS, active HTTP requests, HTTPS CONNECT, and the pool's at most 16 idle streams (four per host) all remain tracked until closed. Idle streams expire after 60 seconds, leaving capacity for other destinations while avoiding a full mobile connection setup for every request. HTTPS clients establish end-to-end TLS through CONNECT, and Mobile Egress does not decrypt that traffic. Proxy credentials and hop-by-hop proxy headers are removed before an ordinary HTTP request reaches the destination. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
 
@@ -87,7 +89,7 @@ The expanded stream and queue limits are covered by deterministic unit/component
 
 The versioned [mobile feature manifest](mobile-feature-manifest.json) is the tracked parity ledger for user-facing Android and iOS behavior. Every entry cites tracked source and test evidence; Apple-specific mechanisms are identified as native equivalents rather than treated as missing Android behavior.
 
-## Provisioning sequence
+## Optional AWS provisioning sequence
 
 1. The controller independently models Tailscale as absent, installed/offline, or online. Windows uses verified MSI installation plus browser/unattended setup. macOS verifies the official app/PKG, opens Apple Installer when needed, guides system-extension/VPN approval and browser login, then obtains the stable Funnel FQDN.
 2. Windows generates the Owner key/CSR and initializes the elevated relay as before. macOS first registers the LaunchDaemon. If Login Items approval is pending, setup returns without generating an Owner key. An ordinary status poll must prove the exact helper `enabled`; a later explicit Setup invocation generates the Keychain Owner identity and initializes relay state.

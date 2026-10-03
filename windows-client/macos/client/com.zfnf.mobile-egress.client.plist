@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.zfnf.mobile-egress.client</string>
+<key>ProgramArguments</key><array>
+<string>/Library/Application Support/MobileEgressClient/bin/mobile-egress-client</string>
+<string>serve</string><string>--standalone</string>
+<string>--state-dir</string><string>/Library/Application Support/MobileEgressClient</string>
+</array>
+<key>UserName</key><string>root</string>
+<key>GroupName</key><string>wheel</string>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+<key>ThrottleInterval</key><integer>10</integer>
+<key>ProcessType</key><string>Background</string>
+<key>Umask</key><integer>63</integer>
+</dict></plist>

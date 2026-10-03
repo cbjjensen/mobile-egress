@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 )
 
-var payloadNames = []string{ControllerExecutableName, AdminExecutableName, RelayExecutableName, ClientExecutableName, ManifestName, PublicCertificateName, PublicIdentityRecordName}
-
 // Validate the whole archive before writing anything. Only fixed, flat release
 // files are accepted, with bounded expansion and exclusive creation.
 func extractPayload(data []byte, directory string) error {

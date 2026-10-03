@@ -14,7 +14,11 @@ func PrepareEmbeddedPayload() (string, func(), error) {
 	}
 	// Use the protected installation volume, not the user's writable temp parent,
 	// so an unelevated process cannot replace the staging directory itself.
-	directory, err := os.MkdirTemp(filepath.Dir(filepath.Dir(InstallRoot)), "MobileEgressSetup-")
+	parent := filepath.Dir(filepath.Dir(InstallRoot))
+	if clientProduct {
+		parent = filepath.Dir(InstallRoot)
+	}
+	directory, err := os.MkdirTemp(parent, "MobileEgressSetup-")
 	if err != nil {
 		return "", nil, errors.New("create setup payload staging")
 	}

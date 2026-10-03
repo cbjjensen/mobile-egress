@@ -192,3 +192,8 @@ done
 trap - EXIT HUP INT TERM
 /bin/rm -rf "$WORK"
 printf 'Notarized PKG: %s\nVerification record: %s\nSHA-256: %s\n' "$FINAL_PKG" "$FINAL_RECORD" "$ARTIFACT_SHA"
+
+# Historical releases keep their immutable three-asset Desktop contract.
+case "$RELEASE_VERSION" in 1.1.[0-6]) ;; *)
+    /bin/sh "$SCRIPT_DIR/release-client-macos.sh" --release-version "$RELEASE_VERSION" --source-commit "$SOURCE_COMMIT" --team-id "$TEAM_ID" --application-identity "$APPLICATION_IDENTITY" --installer-identity "$INSTALLER_IDENTITY" --notary-api-key "$NOTARY_API_KEY" --notary-api-key-id "$NOTARY_API_KEY_ID" --notary-api-issuer-id "$NOTARY_API_ISSUER_ID"
+;; esac

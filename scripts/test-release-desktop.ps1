@@ -248,6 +248,49 @@ try {
     }
     Assert-Condition $wrongCommitRejected 'The Windows orchestrator must use Task 5 validation to reject a record from a different source commit.'
 
+    foreach ($clientCase in @('success', 'hash-mismatch', 'record-rejected')) {
+        $clientCaseRoot = Join-Path $fixtureRoot $clientCase
+        $clientValidationCount = 0
+        $clientRejected = $false
+        try {
+            $null = Invoke-MobileEgressDesktopBuild -RepositoryRoot $clientCaseRoot -Version '1.2.3' -SourceCommit $sourceCommit -Config $config -BuildWindows {
+                param($Context)
+                $null = New-Item -ItemType Directory -Path (Split-Path -Parent $Context.ManifestPath) -Force
+                [IO.File]::WriteAllText($Context.ManifestPath, $manifestContent)
+            } -CreateSourceBundle {
+                param($Context)
+                [IO.File]::WriteAllText($Context.LocalSourceBundlePath, 'source-fixture')
+            } -InvokeMacAction {
+                param($Action, $Context)
+                if ($Action -eq 'remote-hash') {
+                    if ($Context.ClientArtifact -and $clientCase -eq 'hash-mismatch') { return ('0' * 64) }
+                    return $expectedPkgHash
+                }
+                if ($Action -eq 'download-pkg') { [IO.File]::WriteAllText($Context.LocalPkgPath, 'mac-pkg-fixture', [Text.UTF8Encoding]::new($false)) }
+                if ($Action -eq 'download-record') { [IO.File]::WriteAllText($Context.LocalRecordPath, '{}') }
+            } -ValidateRecord {
+                param($Context)
+                Assert-Condition ($Context.SourceCommit -ceq $sourceCommit) 'Both Mac artifacts must use the same source commit.'
+                if ($Context.ClientArtifact) {
+                    Assert-Condition ($Context.ArtifactName -ceq 'mobile-egress-client-macos-1.2.3-arm64.pkg') 'Client validation must use the separate package identity.'
+                    Assert-Condition (-not (Test-Path -LiteralPath $Context.FinalPkgPath)) 'A Client PKG must not be promoted before verification.'
+                    if ($clientCase -eq 'record-rejected') { throw 'Client record deliberately rejected' }
+                }
+            }
+        } catch {
+            if ($clientCase -eq 'success') { throw }
+            $clientRejected = $true
+        }
+        $clientFinal = Join-Path $clientCaseRoot 'windows-client\build\release\mobile-egress-client-macos-1.2.3-arm64.pkg'
+        $clientRecordFinal = Join-Path $clientCaseRoot 'windows-client\build\release\mobile-egress-client-macos-1.2.3-arm64.verification.json'
+        if ($clientCase -eq 'success') {
+            Assert-Condition ((Test-Path -LiteralPath $clientFinal) -and (Test-Path -LiteralPath $clientRecordFinal)) 'A next Desktop release must retrieve and validate the separate Client package and record.'
+        } else {
+            Assert-Condition $clientRejected 'Mismatched Client transfer or verification evidence must stop the Desktop release.'
+            Assert-Condition (-not (Test-Path -LiteralPath $clientFinal) -and -not (Test-Path -LiteralPath $clientRecordFinal)) 'A rejected Client artifact must not retain a final-looking package or record.'
+        }
+    }
+
     $desktopScriptSource = Get-Content -Raw $releaseDesktopScript
     $macScriptSource = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\release-macos.sh')
     Assert-Condition ($desktopScriptSource -match 'NotaryApiKeyPath') 'The Desktop release config must support a notary API key path.'

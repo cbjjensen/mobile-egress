@@ -134,6 +134,7 @@ func TestDesktopAppPreservesEveryExistingWailsBinding(t *testing.T) {
 		"OpenAWSIdentityCenterConsole", "PendingEC2NodeReservations", "ProxyLine", "Quit", "RebootEC2Instance",
 		"RepairEC2Node", "RepairLocalBridge", "ReplaceClient", "RetryClientSetup", "Revoke", "RotateLocalBridge",
 		"SaveAWSAccessKeys", "SelectAWSIdentityCenterRole", "SetupLocalBridge", "StartProxy", "StopProxy", "UpdateEC2Node",
+		"IssueClientInvitation", "ClientInvitation", "CancelClientInvitation", "RefreshClients", "ExportClientEndpointUpdate", "RevokeClient", "ClientProxyLine", "ClientSOCKSProxyURL",
 	} {
 		if !slices.Contains(methods, binding) {
 			t.Errorf("DesktopApp binding %s is missing; methods = %#v", binding, methods)

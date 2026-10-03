@@ -14,9 +14,9 @@ import (
 	"runtime"
 	"syscall"
 
+	"mobile-egress/windows-client/internal/clientapp"
 	"mobile-egress/windows-client/internal/nodeservice"
 	"mobile-egress/windows-client/internal/sealedconfig"
-	"mobile-egress/windows-client/internal/securestore"
 )
 
 const maximumEnvelopeFileBytes = 2 << 20
@@ -116,7 +116,8 @@ func runApplyConfiguration(arguments []string, stdout, stderr io.Writer, open re
 func runServe(arguments []string, stderr io.Writer, open repositoryOpener) int {
 	flags := flag.NewFlagSet("mobile-egress-client serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	stateDir := flags.String("state-dir", defaultStateDirectory(), "protected Client service state directory")
+	stateDir := flags.String("state-dir", "", "protected Client service state directory")
+	standalone := flags.Bool("standalone", false, "enable installed standalone Client pairing")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -124,18 +125,53 @@ func runServe(arguments []string, stderr io.Writer, open repositoryOpener) int {
 		fmt.Fprintln(stderr, "mobile-egress-client serve: unexpected positional arguments")
 		return 2
 	}
+	if *stateDir == "" {
+		*stateDir = defaultStateDirectory()
+		if *standalone {
+			*stateDir = standaloneStateDirectory()
+		}
+	}
 	repository, err := open(*stateDir)
 	if err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-client serve: open protected state:", err)
 		return 1
 	}
-	return runNodeService(repository, stderr)
+	return runNodeService(func(ctx context.Context) error {
+		if *standalone {
+			return runStandalone(ctx, repository, *stateDir)
+		}
+		return nodeservice.NewService(repository, nodeservice.DefaultDialer{}).Run(ctx)
+	}, stderr)
 }
 
-func runForegroundNodeService(repository *nodeservice.Repository) error {
+func runForegroundNodeService(run func(context.Context) error) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return nodeservice.NewService(repository, nodeservice.DefaultDialer{}).Run(ctx)
+	return run(ctx)
+}
+
+func runStandalone(ctx context.Context, repository *nodeservice.Repository, stateDir string) error {
+	listener, err := clientapp.ListenLocal(stateDir)
+	if err != nil {
+		return err
+	}
+	platform := runtime.GOOS
+	if platform == "darwin" {
+		platform = "macos"
+	}
+	manager := nodeservice.NewStandalone(repository, nodeservice.DefaultDialer{}, nodeservice.RelayEnrollmentTransport{}, platform, runtime.GOARCH, version)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 2)
+	go func() { done <- manager.Run(ctx) }()
+	go func() { done <- clientapp.Serve(ctx, listener, manager) }()
+	err = <-done
+	cancel()
+	other := <-done
+	if err != nil {
+		return err
+	}
+	return other
 }
 
 func openNodeRepository(stateDir string) (*nodeservice.Repository, error) {
@@ -143,7 +179,7 @@ func openNodeRepository(stateDir string) (*nodeservice.Repository, error) {
 	if stateDir == "." || stateDir == "" {
 		return nil, errors.New("state directory is required")
 	}
-	store, err := securestore.NewDPAPIStore(filepath.Join(stateDir, "secure"))
+	store, err := openServiceStore(stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +217,16 @@ func defaultStateDirectory() string {
 		return `C:\ProgramData\MobileEgress\Client`
 	}
 	return "/var/lib/mobile-egress-client"
+}
+
+func standaloneStateDirectory() string {
+	if runtime.GOOS == "darwin" {
+		return "/Library/Application Support/MobileEgressClient"
+	}
+	if programData := os.Getenv("ProgramData"); programData != "" {
+		return filepath.Join(programData, "MobileEgressClient")
+	}
+	return `C:\ProgramData\MobileEgressClient`
 }
 
 func writeUsage(writer io.Writer) {

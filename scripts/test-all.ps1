@@ -117,6 +117,7 @@ try {
         }
 
         Invoke-RequiredCommand -Name 'Go tests' -Command { go test ./... }
+        Invoke-RequiredCommand -Name 'Client installer product and payload contracts' -Command { go test -tags client_setup ./windows-client/internal/setup -run 'TestClientProduct|TestEmbeddedPayload|TestServiceFinalization|TestClientServiceRepair' }
         Invoke-RequiredCommand -Name 'Go vet' -Command { go vet ./... }
         Invoke-RequiredCommand -Name 'Go build' -Command { go build ./... }
 

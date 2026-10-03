@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestStoreSchemaV3FreshAndConstraints(t *testing.T) {
+func TestStoreSchemaV4FreshAndConstraints(t *testing.T) {
 	path := filepath.Join(t.TempDir(), databaseFilename)
 	state, err := createStore(path)
 	if err != nil {
@@ -22,8 +22,8 @@ func TestStoreSchemaV3FreshAndConstraints(t *testing.T) {
 	if err := state.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("user_version = %d, want 3", version)
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
 	if err := state.validSchema(context.Background()); err != nil {
 		t.Fatalf("validSchema() error = %v", err)
@@ -61,8 +61,8 @@ func TestStoreSchemaV3FreshAndConstraints(t *testing.T) {
 }
 
 func TestStoreMigrationChainsPreserveLegacyData(t *testing.T) {
-	for _, fromVersion := range []int{1, 2} {
-		t.Run(strconv.Itoa(fromVersion)+"_to_3", func(t *testing.T) {
+	for _, fromVersion := range []int{1, 2, 3} {
+		t.Run(strconv.Itoa(fromVersion)+"_to_4", func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), databaseFilename)
 			createLegacyStoreFixture(t, path, fromVersion)
 
@@ -75,8 +75,8 @@ func TestStoreMigrationChainsPreserveLegacyData(t *testing.T) {
 			if err := state.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 				t.Fatalf("read user_version: %v", err)
 			}
-			if version != 3 {
-				t.Fatalf("user_version = %d, want 3", version)
+			if version != schemaVersion {
+				t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 			}
 			var role string
 			if err := state.db.QueryRow(`SELECT role FROM identities WHERE serial = 'LEGACY'`).Scan(&role); err != nil {
@@ -93,7 +93,7 @@ func TestStoreMigrationChainsPreserveLegacyData(t *testing.T) {
 }
 
 func TestStoreMigrationRejectsUnsupportedVersions(t *testing.T) {
-	for _, version := range []int{-1, 0, 4} {
+	for _, version := range []int{-1, 0, schemaVersion + 1} {
 		t.Run(strconv.Itoa(version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), databaseFilename)
 			database, err := sql.Open("sqlite", path)
@@ -440,6 +440,9 @@ func createLegacyStoreFixture(t *testing.T, path string, version int) {
 			`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT`,
 			`CREATE TABLE endpoint_migrations (capability_hash BLOB PRIMARY KEY, relay_url TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER) STRICT`,
 		)
+	}
+	if version >= 3 {
+		statements = append(statements, adminMutationReplaySchema)
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement); err != nil {

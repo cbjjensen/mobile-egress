@@ -95,6 +95,9 @@ func (service *Service) Run(ctx context.Context) error {
 			return nil
 		}
 		tunnel, err := service.dialer.Dial(ctx, runtime.Identity)
+		if errors.Is(err, relayclient.ErrClientUnauthorized) {
+			return relayclient.ErrClientUnauthorized
+		}
 		if err == nil {
 			opener.swap(tunnel)
 			service.updateConnected(true)

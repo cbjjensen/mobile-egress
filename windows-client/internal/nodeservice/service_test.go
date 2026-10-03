@@ -5,10 +5,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 	"mobile-egress/windows-client/internal/securestore"
 )
@@ -26,7 +28,7 @@ func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		status := service.Status()
-		if status.Running && status.Address == "127.0.0.2:1080" && status.HTTPAddress == "127.0.0.2:1081" && status.Connected {
+		if status.Running && status.Address == proxyendpoint.SOCKSAddress() && status.HTTPAddress == proxyendpoint.HTTPConnectAddress() && status.Connected {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -35,19 +37,23 @@ func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	connection, err := net.DialTimeout("tcp4", "127.0.0.2:1080", time.Second)
+	connection, err := net.DialTimeout("tcp4", proxyendpoint.SOCKSAddress(), time.Second)
 	if err != nil {
 		cancel()
 		t.Fatalf("application SOCKS listener is unavailable: %v", err)
 	}
 	_ = connection.Close()
-	connection, err = net.DialTimeout("tcp4", "127.0.0.2:1081", time.Second)
+	connection, err = net.DialTimeout("tcp4", proxyendpoint.HTTPConnectAddress(), time.Second)
 	if err != nil {
 		cancel()
 		t.Fatalf("application HTTP CONNECT listener is unavailable: %v", err)
 	}
 	_ = connection.Close()
-	for _, address := range []string{"127.0.0.1:1080", "127.0.0.1:1081"} {
+	otherHost := "127.0.0.1"
+	if runtime.GOOS == "darwin" {
+		otherHost = "127.0.0.2"
+	}
+	for _, address := range []string{otherHost + ":1080", otherHost + ":1081"} {
 		if connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond); err == nil {
 			_ = connection.Close()
 			cancel()
@@ -67,16 +73,16 @@ func TestServiceOwnsLoopbackSOCKSAndHTTPConnectAndStopsCleanly(t *testing.T) {
 	if !tunnel.closed {
 		t.Fatal("Service.Run() did not close the relay tunnel")
 	}
-	if _, err := net.DialTimeout("tcp4", "127.0.0.2:1080", 100*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp4", proxyendpoint.SOCKSAddress(), 100*time.Millisecond); err == nil {
 		t.Fatal("SOCKS listener remained open after service stop")
 	}
-	if _, err := net.DialTimeout("tcp4", "127.0.0.2:1081", 100*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp4", proxyendpoint.HTTPConnectAddress(), 100*time.Millisecond); err == nil {
 		t.Fatal("HTTP CONNECT listener remained open after service stop")
 	}
 }
 
 func TestServiceRollsBackSOCKSWhenHTTPConnectPortIsUnavailable(t *testing.T) {
-	occupied, err := net.Listen("tcp4", "127.0.0.2:1081")
+	occupied, err := net.Listen("tcp4", proxyendpoint.HTTPConnectAddress())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +98,7 @@ func TestServiceRollsBackSOCKSWhenHTTPConnectPortIsUnavailable(t *testing.T) {
 	if status := service.Status(); status.Running || status.Address != "" || status.HTTPAddress != "" {
 		t.Fatalf("status after partial startup = %#v, want stopped", status)
 	}
-	if _, err := net.DialTimeout("tcp4", "127.0.0.2:1080", 100*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp4", proxyendpoint.SOCKSAddress(), 100*time.Millisecond); err == nil {
 		t.Fatal("SOCKS listener remained open after HTTP CONNECT startup failed")
 	}
 }
@@ -107,6 +113,18 @@ func TestServiceRejectsMissingConfiguration(t *testing.T) {
 	service := NewService(repository, &fakeDialer{})
 	if err := service.Run(context.Background()); err == nil {
 		t.Fatal("Service.Run() accepted an unconfigured node")
+	}
+}
+
+func TestServiceClosesLocalProxiesWhenRelayRejectsIdentity(t *testing.T) {
+	service := NewService(configuredRepository(t), &fakeDialer{results: []dialResult{{err: relayclient.ErrClientUnauthorized}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := service.Run(ctx); !errors.Is(err, relayclient.ErrClientUnauthorized) {
+		t.Fatalf("revoked service returned %v", err)
+	}
+	if service.Status().Running {
+		t.Fatal("revoked proxy listeners remained running")
 	}
 }
 

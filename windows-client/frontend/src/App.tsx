@@ -5,12 +5,11 @@ import awsPermissionsPolicy from './aws-permissions-policy.json'
 import { BrandIdentity } from './brand-identity.js'
 import { productDisplayName } from './branding.js'
 import { bridgePlatformCopy, relayServicePresentation } from './bridge-platform.js'
-import { managedNodeIdentity } from './managed-node.js'
+import { ClientsPanel } from './ClientsPanel'
 import { canInstallNode, nextSetupStep } from './onboarding.js'
 import { runSetupWorkflow } from './setup-workflow.js'
 import { createRefreshController } from './refresh.js'
 import { componentPresentation } from './controller-status.js'
-import { copyProxyLine, copySOCKS5URL, nodeProxyActions } from './proxy-actions.js'
 import { formatSSMCheckActivity, requiresSSMRoleConfirmation, runConfirmedSSMRestart, shouldSkipSSMProfileSetup, ssmStatusState, ssmWaitingLiveText, ssmWaitingStatusText, waitForSSMCredentialRefresh, waitForSSMOnline } from './ssm-progress.js'
 
 const initialPlatform = navigator.userAgent.includes('Mac') ? 'macos' : 'windows'
@@ -46,6 +45,8 @@ export default function App() {
   const [nodes, setNodes] = useState<ManagedNode[]>([])
   const [pendingNodes, setPendingNodes] = useState<string[]>([])
   const [awsReady, setAWSReady] = useState(false)
+  const [showAWSNodes, setShowAWSNodes] = useState(false)
+  const [awsWarning, setAWSWarning] = useState('')
   const [awsConfigured, setAWSConfigured] = useState<boolean | null>(null)
   const [awsChecking, setAWSChecking] = useState(true)
   const awsRestoreAttempted = useRef(false)
@@ -99,18 +100,18 @@ export default function App() {
   }, [refresh])
 
   useEffect(() => {
-    if (awsConfigured === null || awsRestoreAttempted.current || busy) return
+    if (awsConfigured === null || awsRestoreAttempted.current) return
     awsRestoreAttempted.current = true
     if (!awsConfigured) { setAWSChecking(false); return }
-    void action('aws-restore', async () => {
+    void (async () => {
       try {
         const inventory = await api().ListEC2Instances()
         setInstances(inventory ?? []); setAWSReady(true)
       } catch {
-        throw new Error('Could not verify your saved AWS connection. Check your connection or update the saved credentials in AWS Login.')
+        setAWSWarning('Your saved AWS connection could not be verified. Update the credentials here to manage EC2 Clients. Paired Clients remain available.')
       } finally { setAWSChecking(false) }
-    })
-  }, [awsConfigured, busy])
+    })()
+  }, [awsConfigured])
 
   useEffect(() => {
     if (!bridge.ready || !bridge.agentConnected || nodes.some(node => node.health === 'configuring')) setVerified(false)
@@ -410,27 +411,6 @@ export default function App() {
     recordActivity(instance.id, instance.name, 'Client install', installed ? 'success' : 'error', installed ? 'Client installed successfully.' : 'Installation failed. See the error banner.')
   }
 
-  async function copyNodeProxy(instanceId: string) {
-    const copied = await action(`copy-http-${instanceId}`, async () => { await copyProxyLine(api(), navigator.clipboard, instanceId) })
-    recordActivity(instanceId, instanceName(instanceId), 'HTTP proxy', copied ? 'success' : 'error', copied ? 'HTTP proxy line copied.' : 'Copy failed. See the error banner.')
-  }
-
-  async function copyNodeSOCKS(instanceId: string) {
-    const copied = await action(`copy-socks-${instanceId}`, async () => { await copySOCKS5URL(api(), navigator.clipboard, instanceId) })
-    recordActivity(instanceId, instanceName(instanceId), 'SOCKS5 proxy', copied ? 'success' : 'error', copied ? 'SOCKS5 URL copied.' : 'Copy failed. See the error banner.')
-  }
-
-  async function maintainNode(instanceId: string, repair: boolean) {
-    const actionName = repair ? 'Client repair' : 'Client update'
-    recordActivity(instanceId, instanceName(instanceId), actionName, 'info', repair ? 'Repair started.' : 'Update started.')
-    const completed = await action(`${repair ? 'repair' : 'update'}-${instanceId}`, async () => {
-      if (repair) await api().RepairEC2Node(instanceId)
-      else await api().UpdateEC2Node(instanceId)
-      setNodes(await api().ManagedNodes() ?? [])
-    })
-    recordActivity(instanceId, instanceName(instanceId), actionName, completed ? 'success' : 'error', completed ? `${repair ? 'Repair' : 'Update'} completed.` : `${repair ? 'Repair' : 'Update'} failed. See the error banner.`)
-  }
-
   async function cancelPendingNode(instanceId: string) {
     if (!window.confirm(`Cancel the interrupted install reservation for ${instanceId}? Do this only when no installation is still running.`)) return
     const cancelled = await action(`cancel-${instanceId}`, async () => {
@@ -453,11 +433,11 @@ export default function App() {
   const activityInstanceOptions = [...activitySubjects].sort((left, right) => (left[1] || left[0]).localeCompare(right[1] || right[0]))
   const platformCopy = bridgePlatformCopy(bridge)
   const relayService = relayServicePresentation(bridge.platform, bridge.relayServiceState)
-  const nextStep = nextSetupStep(bridge, awsReady, nodes, { awsChecking, verified })
+  const nextStep = nextSetupStep(bridge, awsReady, nodes, { awsChecking, verified, clientMethod: showAWSNodes ? 'aws' : 'paired' })
 
   return <main className="shell">
     <header><BrandIdentity eyebrow="Personal cellular bridge" name={productDisplayName} /><div className={`health ${bridge.ready ? 'ready' : ''}`}><span />{bridge.checking ? 'Checking' : bridge.stale ? 'Status stale' : bridge.ready ? 'Bridge ready' : bridge.tailscaleOnline ? 'Relay setup needed' : bridge.tailscaleError ? 'Tailscale check needed' : bridge.tailscaleInstalled ? 'Tailscale connection needed' : 'Setup needed'}</div></header>
-    <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Agent</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>EC2 Nodes</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS Login</button></nav>
+    <nav><button className={tab === 'bridge' ? 'active' : ''} onClick={() => setTab('bridge')}>Bridge</button><button className={tab === 'phone' ? 'active' : ''} onClick={() => setTab('phone')}>Agent</button><button className={tab === 'nodes' ? 'active' : ''} onClick={() => setTab('nodes')}>Clients</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>AWS (optional)</button></nav>
     {error && <div className="error" role="alert">{error}</div>}
     <article className="card setup-next" aria-label="Setup progress">
       <p className="step-label">{nextStep.complete ? 'Ready to use' : 'Next step'}</p><h2>{nextStep.label}</h2>
@@ -467,15 +447,15 @@ export default function App() {
 
     {tab === 'bridge' && <section className="stack">
       <article className="card hero-card"><h2>{bridge.ready ? 'This computer is connected' : 'Connect this computer'}</h2>
-        <p>Tailscale connects your phone and EC2 applications through this computer. Setup installs it if needed, opens sign-in, and prepares your background relay.</p>
+        <p>Tailscale connects your phone and workload applications through this computer. Setup installs it if needed, opens sign-in, and prepares your background relay.</p>
         <p>{bridge.platform === 'macos' ? 'Allow Tailscale network extension and VPN configuration when macOS asks. Allow ZFNF Mobile Egress in Login Items so the relay can run in the background. Stay logged in to keep the connection available.' : 'Windows will ask permission to install Tailscale if needed and to run the background relay. Approve the browser prompt to make the bridge reachable.'}</p>
         {relayService.guidance && <p className="note">{relayService.guidance}</p>}
         {bridge.tailscaleError && <p className="note" role="status">{bridge.tailscaleError}</p>}
-        {bridge.needsRotation && <><p className="note">Your Tailscale address changed. Connect AWS first if you manage nodes, then update the endpoint and scan the migration QR in your Agent.</p><button className="primary" onClick={() => void rotateBridge()} disabled={!!busy}>Rotate endpoint safely</button></>}
+        {bridge.needsRotation && <><p className="note">Your Tailscale address changed. Rotate the endpoint, scan the migration QR in your Agent, and import a connection update on each paired Client. EC2 updates remain pending while AWS is unavailable.</p><button className="primary" onClick={() => void rotateBridge()} disabled={!!busy}>Rotate endpoint safely</button></>}
       </article>
       <details className="card"><summary>Connection details and troubleshooting</summary>
         <p>{platformCopy.tailscaleDescription}</p><p>{platformCopy.relayDescription}</p>
-        <div className="row actions" role="status" aria-label="Status checks">{(['tailscale', 'helper', 'relay', 'metadata'] as const).filter(key => key !== 'helper' || bridge.platform === 'macos').map(key => <span className="pill" key={key}>{({tailscale:'Tailscale',helper:'Relay service',relay:'Relay health',metadata:'Managed nodes'})[key]}: {componentPresentation(components[key])}</span>)}</div>
+        <div className="row actions" role="status" aria-label="Status checks">{(['tailscale', 'helper', 'relay', 'metadata'] as const).filter(key => key !== 'helper' || bridge.platform === 'macos').map(key => <span className="pill" key={key}>{({tailscale:'Tailscale',helper:'Relay service',relay:'Relay health',metadata:'Clients'})[key]}: {componentPresentation(components[key])}</span>)}</div>
         {bridge.publicUrl && <div className="serialline"><span>Public Funnel origin</span><code>{bridge.publicUrl}</code></div>}
         <p>{bridge.tailscaleOnline ? 'Tailscale online' : bridge.tailscaleInstalled ? 'Tailscale installed; sign-in needed' : 'Tailscale not installed'} ? {bridge.funnelReady ? 'Funnel active' : 'Funnel not ready'} ? {bridge.relayReady ? 'Relay healthy' : 'Relay not ready'}</p>
         {relayService.label && <p>{relayService.label}</p>}
@@ -485,20 +465,20 @@ export default function App() {
     </section>}
 
     {tab === 'phone' && <section className="stack">{!bridge.ownerReady ? <article className="card"><h2>Set up this computer first</h2><p>Your bridge must be ready before pairing a phone.</p></article> : <>
-      {migrationQr && <article className="card"><h2>Move the existing Agent</h2><p>Stop the Agent, choose Scan QR, and scan this one-use migration code. Its enrolled identity stays unchanged.</p><div className="qr-card"><img src={migrationQr.imageDataUrl} alt="Agent endpoint migration QR" /><p>Expires {new Date(migrationQr.expiresAt).toLocaleTimeString()}.</p>{migrationQr.failedNodes.length > 0 && <p className="error">Repair these nodes after reconnecting AWS: {migrationQr.failedNodes.join(', ')}</p>}</div></article>}
+      {migrationQr && <article className="card"><h2>Move the existing Agent</h2><p>Stop the Agent, choose Scan QR, and scan this one-use migration code. Its enrolled identity stays unchanged.</p><div className="qr-card"><img src={migrationQr.imageDataUrl} alt="Agent endpoint migration QR" /><p>Expires {new Date(migrationQr.expiresAt).toLocaleTimeString()}.</p>{(migrationQr.manualNodes?.length ?? 0) > 0 && <p className="note">Copy a connection update from Clients and import it on each paired machine: {migrationQr.manualNodes?.join(', ')}</p>}{migrationQr.failedNodes.length > 0 && <p className="error">Repair these EC2 Clients after reconnecting AWS: {migrationQr.failedNodes.join(', ')}</p>}</div></article>}
       <article className="card"><h2>{bridge.agentConnected ? 'Agent is sharing cellular data' : bridge.agentPaired ? 'Paired - start cellular sharing' : 'Connect your phone'}</h2>
-        <p>{bridge.agentConnected ? 'Keep the Agent running on cellular while using your EC2 application.' : bridge.agentPaired ? 'Open the Agent on your phone and start sharing. You can keep its existing pairing.' : 'Open the Android or iOS Agent. If already paired, start sharing. For a new phone, generate a QR and scan it in the Agent, then start sharing.'}</p>
+        <p>{bridge.agentConnected ? 'Keep the Agent running on cellular while using your workload application.' : bridge.agentPaired ? 'Open the Agent on your phone and start sharing. You can keep its existing pairing.' : 'Open the Android or iOS Agent. If already paired, start sharing. For a new phone, generate a QR and scan it in the Agent, then start sharing.'}</p>
         <p className="note">{bridge.agentConnected ? 'Cellular sharing connected' : bridge.agentPaired ? 'Pairing saved - cellular sharing disconnected' : bridge.agentPaired === false ? 'No paired Agent yet' : 'Pairing status unavailable - waiting for cellular sharing'}</p>
         {phoneQr ? <div className="qr-card"><img src={phoneQr.imageDataUrl} alt="Agent pairing QR" /><p>Expires {new Date(phoneQr.expiresAt).toLocaleTimeString()}.</p><p>After scanning, start sharing on your phone. This screen updates automatically.</p><button onClick={() => void issueAgentQr()} disabled={!!busy}>Replace QR</button></div> : <button className="primary" onClick={() => void issueAgentQr()} disabled={!!busy || !!migrationQr}>{bridge.agentPaired || bridge.agentConnected ? 'Pair another phone' : 'Generate Agent QR'}</button>}
       </article>
     </>}</section>}
 
     {tab === 'settings' && <section className="stack aws-wizard">
-      <article className="card aws-connect-card">
-        {awsReady ? <><h2>AWS connected</h2><p>Your saved connection is ready. Found {instances.length} supported EC2 instances in us-east-1.</p><div className="actions"><button className="primary" onClick={() => setTab('nodes')}>Open EC2 Nodes</button><button onClick={() => setAWSReady(false)} disabled={!!busy}>Change AWS credentials</button></div></> : <>
+      <article className="card aws-connect-card">{awsWarning && !awsReady && <p className="note" role="status">{awsWarning}</p>}<p>AWS is only needed to provision or maintain EC2 Clients. <button className="link-button" onClick={() => { setShowAWSNodes(false); setTab('nodes') }}>Add a Windows/Mac Client</button></p>
+        {awsReady ? <><h2>AWS connected</h2><p>Your saved connection is ready. Found {instances.length} supported EC2 instances in us-east-1.</p><div className="actions"><button className="primary" onClick={() => setTab('nodes')}>Open Clients</button><button onClick={() => setAWSReady(false)} disabled={!!busy}>Change AWS credentials</button></div></> : <>
         <div className="aws-wizard-header">
           <div>
-            <h2>Connect AWS</h2>
+            <h2>Connect AWS (optional)</h2>
             <p>Connect the AWS account where you normally see your EC2 instances.</p>
           </div>
         </div>
@@ -576,9 +556,11 @@ export default function App() {
       <details className="card advanced-identity-card"><summary>Advanced: IAM Identity Center</summary><p>Use this if your AWS account already has IAM Identity Center. If you only have the AWS root login, root can enable Identity Center in the browser, but {productDisplayName} signs in as the Identity Center user you create.</p><div className="setup-callout"><div><strong>Need a Start URL?</strong><p>Open IAM Identity Center, choose Enable, then choose Single-Region instance in US East (N. Virginia). Create a user for yourself, assign it access to this AWS account, and copy the AWS access portal URL into the Start URL field.</p></div><button onClick={() => void openIdentityCenterConsole()} disabled={!!busy}>{busy === 'sso-console' ? 'Opening AWS…' : 'Open setup page'}</button></div><form onSubmit={beginIdentityCenter} className="form-grid"><label>Start URL<input name="startUrl" required placeholder="https://d-xxxxxxxxxx.awsapps.com/start" /></label><label>SSO region<input name="region" required defaultValue="us-east-1" /></label><button className="primary" disabled={!!busy}>Open AWS login</button></form>{authorization && <div className="issued"><code>{authorization.userCode}</code><button onClick={() => window.open(authorization.verificationUrl, '_blank')}>Open browser again</button><small>Approve in the browser, then continue.</small><button className="primary" onClick={() => void completeIdentityCenter()} disabled={!!busy}>I approved the login</button></div>}{accounts.length > 0 && <form onSubmit={selectRole} className="form-grid"><label>AWS account<select value={selectedAccount} onChange={event => void chooseAccount(event.target.value)} required><option value="">Choose account</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name || account.id}</option>)}</select></label><label>Role<select name="role" required><option value="">Choose role</option>{roles.map(role => <option key={role} value={role}>{role}</option>)}</select></label><button className="primary" disabled={!!busy}>Use this role</button></form>}</details>
     </section>}
 
-    {tab === 'nodes' && <section className="stack">
-      {showVerification && <article className="card"><h2>Verify your application connection</h2><p>Copy the proxy line from a managed node below into the intended application on that same EC2 instance. Send a request with cellular sharing running on your phone.</p><button className="primary" disabled={!!busy || !bridge.ready || !bridge.agentConnected || !nodes.length || nodes.some(node => node.health === 'configuring')} onClick={() => { setVerified(true); setShowVerification(false) }}>My application request succeeded</button></article>}
-      <article className="card"><div className="row"><div><p className="step-label">Step 4</p><h2>Windows Server 2019 nodes</h2></div><button onClick={() => void refreshInstances()} disabled={!!busy}>Refresh us-east-1</button></div><p>Only running x86-64 Windows Server 2019 instances appear. They need outbound HTTPS and SSM; public IPs and inbound security-group rules are not used.</p>{!awsReady && <p className="note">Connect AWS on the AWS Login tab, then refresh.</p>}</article>
+    <section className="stack" hidden={tab !== 'nodes'}>
+      <ClientsPanel bridgeReady={bridge.ready} disabled={!!busy} awsReservations={pendingNodes} onAddAWS={() => { setShowAWSNodes(true); if (!awsReady) setTab('settings') }} onNodes={setNodes} />
+      {showVerification && <article className="card"><h2>Verify your application connection</h2><p>Copy a Client's proxy line into the intended application on that same workload machine. Send a request with cellular sharing running on your phone.</p><button className="primary" disabled={!!busy || !bridge.ready || !bridge.agentConnected || !nodes.length || nodes.some(node => node.health === 'configuring')} onClick={() => { setVerified(true); setShowVerification(false) }}>My application request succeeded</button></article>}
+      {showAWSNodes && <>
+      <article className="card"><div className="row"><div><p className="step-label">Step 4</p><h2>Add EC2 Clients</h2></div><button onClick={() => void refreshInstances()} disabled={!!busy}>Refresh us-east-1</button></div><p>Only running x86-64 Windows Server 2019 instances appear. They need outbound HTTPS and SSM; public IPs and inbound security-group rules are not used.</p>{!awsReady && <p className="note">Connect AWS on the AWS (optional) tab, then refresh.</p>}</article>
       <div className="node-grid">{instances.map(instance => {
         const managed = nodes.some(node => node.instanceId === instance.id)
         const progress = ssmProgress[instance.id]
@@ -606,21 +588,8 @@ export default function App() {
         {visibleActivityEvents.length === 0 ? <p className="activity-empty">No activity for this filter yet.</p> : <div className="activity-list">{visibleActivityEvents.map(event => <div className="activity-entry" key={event.id}><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`activity-level ${event.severity}`}>{event.severity}</span><div><strong>{event.instanceId ? `${event.instanceName || event.instanceId} · ${event.instanceId}` : productDisplayName}</strong><small>{event.action}</small><p>{event.message}</p></div></div>)}</div>}
       </details>
       {pendingNodes.length > 0 && <article className="card"><h2>Interrupted install reservations</h2><p>Retry Install Client for the same available instance. If that instance was terminated or cannot be recovered, explicitly cancel its reservation to release the slot.</p><div className="managed-list">{pendingNodes.map(instanceId => <div className="managed" key={instanceId}><div><strong>{instanceId}</strong><small>Reserved before remote provisioning</small></div><div className="actions"><button onClick={() => void cancelPendingNode(instanceId)} disabled={!!busy}>{busy === `cancel-${instanceId}` ? 'Cancelling…' : 'Cancel reservation'}</button></div></div>)}</div></article>}
-      {nodes.length > 0 && <article className="card"><h2>Managed nodes ({nodes.length} / 10)</h2><div className="managed-list">{nodes.map(node => {
-        const proxyActions = nodeProxyActions(node)
-        const identity = managedNodeIdentity(node.instanceId, instances)
-        return <div className="managed" key={node.instanceId}>
-          <div><strong>{identity.title}</strong>{identity.instanceId && <code>{identity.instanceId}</code>}<small>Client {node.clientSerial} · v{node.serviceVersion} · {node.health}</small></div>
-          <div><code>{node.proxy}</code>{proxyActions.guidance && <small>{proxyActions.guidance}</small>}</div>
-          <div className="actions">
-            <button className="primary" onClick={() => void copyNodeProxy(node.instanceId)} disabled={!!busy || proxyActions.primaryDisabled}>{proxyActions.primaryLabel}</button>
-            <button onClick={() => void copyNodeSOCKS(node.instanceId)} disabled={!!busy || proxyActions.secondaryDisabled}>Copy SOCKS5 URL</button>
-            <button onClick={() => void maintainNode(node.instanceId, false)} disabled={!!busy}>{busy === `update-${node.instanceId}` ? 'Updating…' : 'Update'}</button>
-            <button onClick={() => void maintainNode(node.instanceId, true)} disabled={!!busy}>{busy === `repair-${node.instanceId}` ? 'Repairing…' : 'Repair'}</button>
-          </div>
-        </div>
-      })}</div></article>}
-    </section>}
+      </>}
+    </section>
     <footer>{platformCopy.footer}</footer>
   </main>
 }

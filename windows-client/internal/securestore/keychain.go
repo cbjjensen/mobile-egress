@@ -33,6 +33,7 @@ type keychainNative interface {
 type KeychainStore struct {
 	native      keychainNative
 	accessGroup string
+	service     string
 }
 
 func NewKeychainStore() (*KeychainStore, error) {
@@ -48,7 +49,7 @@ func newKeychainStore(native keychainNative, applicationIdentifier, teamIdentifi
 	if err != nil {
 		return nil, err
 	}
-	return &KeychainStore{native: native, accessGroup: accessGroup}, nil
+	return &KeychainStore{native: native, accessGroup: accessGroup, service: keychainService}, nil
 }
 
 func (store *KeychainStore) Put(ctx context.Context, key string, value []byte) error {
@@ -60,17 +61,17 @@ func (store *KeychainStore) Put(ctx context.Context, key string, value []byte) e
 	}
 
 	account := keychainAccountName(key)
-	status := store.native.Update(store.accessGroup, keychainService, account, value)
+	status := store.native.Update(store.accessGroup, store.service, account, value)
 	switch status {
 	case keychainStatusSuccess:
 		return nil
 	case keychainStatusItemNotFound:
-		status = store.native.Add(store.accessGroup, keychainService, account, value)
+		status = store.native.Add(store.accessGroup, store.service, account, value)
 		if status == keychainStatusSuccess {
 			return nil
 		}
 		if status == keychainStatusDuplicateItem {
-			status = store.native.Update(store.accessGroup, keychainService, account, value)
+			status = store.native.Update(store.accessGroup, store.service, account, value)
 			if status == keychainStatusSuccess {
 				return nil
 			}
@@ -90,7 +91,7 @@ func (store *KeychainStore) Get(ctx context.Context, key string) ([]byte, error)
 		return nil, errors.New("secure store key is required")
 	}
 
-	value, status := store.native.Get(store.accessGroup, keychainService, keychainAccountName(key))
+	value, status := store.native.Get(store.accessGroup, store.service, keychainAccountName(key))
 	switch status {
 	case keychainStatusSuccess:
 		return append([]byte(nil), value...), nil
@@ -109,7 +110,7 @@ func (store *KeychainStore) Delete(ctx context.Context, key string) error {
 		return errors.New("secure store key is required")
 	}
 
-	status := store.native.Delete(store.accessGroup, keychainService, keychainAccountName(key))
+	status := store.native.Delete(store.accessGroup, store.service, keychainAccountName(key))
 	switch status {
 	case keychainStatusSuccess, keychainStatusItemNotFound:
 		return nil

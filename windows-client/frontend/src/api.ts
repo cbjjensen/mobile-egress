@@ -15,7 +15,7 @@ export type Status = {
 }
 
 export type AgentQr = { imageDataUrl: string; expiresAt: string }
-export type EndpointMigration = AgentQr & { updatedNodes: string[]; failedNodes: string[] }
+export type EndpointMigration = AgentQr & { updatedNodes: string[]; failedNodes: string[]; manualNodes?: string[] }
 
 export type DesktopPlatform = 'windows' | 'macos'
 export type RelayServiceState = 'not-required' | 'not-registered' | 'approval-required' | 'enabled' | 'version-mismatch' | 'unavailable'
@@ -53,6 +53,13 @@ export type EC2Instance = {
   ssmOnline: boolean
 }
 export type ManagedNode = {
+	 nodeId: string
+	 displayName: string
+	 platform: 'windows' | 'macos'
+	 architecture: 'amd64' | 'arm64'
+	 management: 'aws-ssm' | 'paired'
+	 connected: boolean
+	 connectionKnown: boolean
   instanceId: string
   clientSerial: string
   serviceVersion: string
@@ -60,6 +67,9 @@ export type ManagedNode = {
   proxy: string
   proxyReady: boolean
 }
+export type ClientInvitation = { nodeId: string; invitation: string; expiresAt: string; resuming: boolean }
+export type PendingClient = { nodeId: string; displayName: string; expiresAt: string }
+export type ClientFleet = { nodes: ManagedNode[]; pending: PendingClient[]; connectionError?: string }
 export type SSMProfileResult = { changed: boolean; roleName: string }
 export type SSMInstanceStatus = {
   registered: boolean
@@ -73,6 +83,13 @@ export type ComponentStatus = { checking: boolean; stale: boolean; error?: strin
 export type ControllerSnapshot = { bridge: BridgeStatus; awsConfigured?: boolean; nodes: ManagedNode[]; pendingReservations: string[]; components: Record<'tailscale' | 'helper' | 'relay' | 'metadata', ComponentStatus> }
 
 type DesktopAPI = {
+	OpenClientDownloads(): Promise<void>
+	IssueClientInvitation(displayName: string): Promise<ClientInvitation>
+	ClientInvitation(nodeId: string): Promise<ClientInvitation>
+	CancelClientInvitation(nodeId: string): Promise<void>
+	RefreshClients(): Promise<ClientFleet>
+	ExportClientEndpointUpdate(nodeId: string): Promise<string>
+	RevokeClient(nodeId: string): Promise<void>
   GetControllerSnapshot(): Promise<ControllerSnapshot>
   GetStatus(): Promise<Status>
   GetBridgeStatus(): Promise<BridgeStatus>
@@ -103,6 +120,8 @@ type DesktopAPI = {
   CancelEC2NodeReservation(instanceId: string, confirmed: boolean): Promise<void>
   NodeProxyLine(instanceId: string): Promise<string>
   NodeSOCKSProxyURL(instanceId: string): Promise<string>
+  ClientProxyLine(nodeId: string): Promise<string>
+  ClientSOCKSProxyURL(nodeId: string): Promise<string>
   BootstrapOwner(encodedBundle: string): Promise<void>
   RetryClientSetup(): Promise<void>
   ReplaceClient(): Promise<void>

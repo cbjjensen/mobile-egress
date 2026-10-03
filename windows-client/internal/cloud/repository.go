@@ -18,7 +18,7 @@ import (
 
 const (
 	controllerStateKey     = "local-bridge-controller-state-v1"
-	controllerStateVersion = 2
+	controllerStateVersion = 3
 )
 
 type StoredAccessKeys struct {
@@ -28,12 +28,19 @@ type StoredAccessKeys struct {
 }
 
 type ManagedNodeView struct {
-	InstanceID     string `json:"instanceId"`
-	ClientSerial   string `json:"clientSerial"`
-	ServiceVersion string `json:"serviceVersion"`
-	Health         string `json:"health"`
-	Proxy          string `json:"proxy"`
-	ProxyReady     bool   `json:"proxyReady"`
+	NodeID          string `json:"nodeId"`
+	DisplayName     string `json:"displayName"`
+	Platform        string `json:"platform"`
+	Architecture    string `json:"architecture"`
+	Management      string `json:"management"`
+	Connected       bool   `json:"connected"`
+	ConnectionKnown bool   `json:"connectionKnown"`
+	InstanceID      string `json:"instanceId"`
+	ClientSerial    string `json:"clientSerial"`
+	ServiceVersion  string `json:"serviceVersion"`
+	Health          string `json:"health"`
+	Proxy           string `json:"proxy"`
+	ProxyReady      bool   `json:"proxyReady"`
 }
 
 type controllerState struct {
@@ -41,6 +48,7 @@ type controllerState struct {
 	AccessKeys       *StoredAccessKeys `json:"accessKeys,omitempty"`
 	Nodes            []ManagedNode     `json:"nodes,omitempty"`
 	NodeReservations []string          `json:"nodeReservations,omitempty"`
+	PendingClients   []PendingClient   `json:"pendingClients,omitempty"`
 }
 
 type Repository struct {
@@ -78,6 +86,7 @@ func (repository *Repository) AccessKeys(ctx context.Context) (StoredAccessKeys,
 }
 
 func (repository *Repository) SaveNode(ctx context.Context, node ManagedNode) error {
+	node = normalizeManagedNode(node)
 	if err := validateManagedNode(node); err != nil {
 		return err
 	}
@@ -89,7 +98,7 @@ func (repository *Repository) SaveNode(ctx context.Context, node ManagedNode) er
 	}
 	replaced := false
 	for index := range state.Nodes {
-		if state.Nodes[index].InstanceID == node.InstanceID {
+		if state.Nodes[index].NodeID == node.NodeID {
 			state.Nodes[index] = node
 			replaced = true
 			break
@@ -103,8 +112,8 @@ func (repository *Repository) SaveNode(ctx context.Context, node ManagedNode) er
 		}
 	}
 	if !replaced {
-		if reservationIndex < 0 && len(state.Nodes)+len(state.NodeReservations) >= MaximumManagedNodes {
-			return fmt.Errorf("at most %d EC2 nodes can be managed", MaximumManagedNodes)
+		if reservationIndex < 0 && !stateHasPendingClient(state, node.NodeID) && clientSlotCount(state) >= MaximumManagedNodes {
+			return fmt.Errorf("at most %d Clients can be managed", MaximumManagedNodes)
 		}
 		state.Nodes = append(state.Nodes, node)
 	}
@@ -137,8 +146,8 @@ func (repository *Repository) ReserveNode(ctx context.Context, instanceID string
 			return nil
 		}
 	}
-	if len(state.Nodes)+len(state.NodeReservations) >= MaximumManagedNodes {
-		return fmt.Errorf("at most %d EC2 Client nodes can be managed", MaximumManagedNodes)
+	if clientSlotCount(state) >= MaximumManagedNodes {
+		return fmt.Errorf("at most %d Clients can be managed", MaximumManagedNodes)
 	}
 	state.NodeReservations = append(state.NodeReservations, instanceID)
 	return repository.save(ctx, state)
@@ -183,7 +192,7 @@ func (repository *Repository) Nodes(ctx context.Context) ([]ManagedNode, error) 
 		return nil, err
 	}
 	nodes := append([]ManagedNode(nil), state.Nodes...)
-	sort.Slice(nodes, func(left, right int) bool { return nodes[left].InstanceID < nodes[right].InstanceID })
+	sort.Slice(nodes, func(left, right int) bool { return nodes[left].NodeID < nodes[right].NodeID })
 	return nodes, nil
 }
 
@@ -204,7 +213,7 @@ func (repository *Repository) ControllerMetadata(ctx context.Context) ([]Managed
 		return nil, nil, err
 	}
 	views := managedNodeViews(state.Nodes)
-	sort.Slice(views, func(left, right int) bool { return views[left].InstanceID < views[right].InstanceID })
+	sort.Slice(views, func(left, right int) bool { return views[left].NodeID < views[right].NodeID })
 	reservations := append([]string(nil), state.NodeReservations...)
 	sort.Strings(reservations)
 	return views, reservations, nil
@@ -213,9 +222,11 @@ func (repository *Repository) ControllerMetadata(ctx context.Context) ([]Managed
 func managedNodeViews(nodes []ManagedNode) []ManagedNodeView {
 	views := make([]ManagedNodeView, 0, len(nodes))
 	for _, node := range nodes {
+		node = normalizeManagedNode(node)
 		views = append(views, ManagedNodeView{
+			NodeID: node.NodeID, DisplayName: node.DisplayName, Platform: node.Platform, Architecture: node.Architecture, Management: node.Management,
 			InstanceID: node.InstanceID, ClientSerial: node.ClientSerial, ServiceVersion: node.ServiceVersion,
-			Health: node.Health, Proxy: proxyendpoint.HTTPConnectAddress() + ":***:***", ProxyReady: supportsManagedNodeProxy(node.ServiceVersion),
+			Health: node.Health, Proxy: nodeProxyAddress(node, proxyendpoint.HTTPConnectPort) + ":***:***", ProxyReady: nodeProxyReady(node),
 		})
 	}
 	return views
@@ -227,11 +238,11 @@ func (repository *Repository) ProxyLine(ctx context.Context, instanceID string) 
 		return "", err
 	}
 	for _, node := range nodes {
-		if node.InstanceID == instanceID {
-			if !supportsManagedNodeProxy(node.ServiceVersion) {
-				return "", errors.New("managed EC2 Client must be updated before proxy copying")
+		if node.NodeID == instanceID {
+			if !nodeProxyReady(node) {
+				return "", errors.New("Client must finish configuration or be updated before proxy copying")
 			}
-			return fmt.Sprintf("%s:%s:%s", proxyendpoint.HTTPConnectAddress(), node.SOCKSUsername, node.SOCKSPassword), nil
+			return fmt.Sprintf("%s:%s:%s", nodeProxyAddress(node, proxyendpoint.HTTPConnectPort), node.SOCKSUsername, node.SOCKSPassword), nil
 		}
 	}
 	return "", errors.New("managed EC2 node was not found")
@@ -243,11 +254,11 @@ func (repository *Repository) SOCKSProxyURL(ctx context.Context, instanceID stri
 		return "", err
 	}
 	for _, node := range nodes {
-		if node.InstanceID == instanceID {
-			if !supportsManagedNodeProxy(node.ServiceVersion) {
-				return "", errors.New("managed EC2 Client must be updated before proxy copying")
+		if node.NodeID == instanceID {
+			if !nodeProxyReady(node) {
+				return "", errors.New("Client must finish configuration or be updated before proxy copying")
 			}
-			return fmt.Sprintf("socks5://%s:%s@%s", node.SOCKSUsername, node.SOCKSPassword, proxyendpoint.SOCKSAddress()), nil
+			return fmt.Sprintf("socks5://%s:%s@%s", node.SOCKSUsername, node.SOCKSPassword, nodeProxyAddress(node, proxyendpoint.SOCKSPort)), nil
 		}
 	}
 	return "", errors.New("managed EC2 node was not found")
@@ -306,10 +317,10 @@ func (repository *Repository) load(ctx context.Context) (controllerState, error)
 		if err := validateManagedNode(node); err != nil {
 			return controllerState{}, errors.New("encrypted controller state is invalid")
 		}
-		if _, exists := seen[node.InstanceID]; exists {
+		if _, exists := seen[node.NodeID]; exists {
 			return controllerState{}, errors.New("encrypted controller state is invalid")
 		}
-		seen[node.InstanceID] = struct{}{}
+		seen[node.NodeID] = struct{}{}
 	}
 	for _, instanceID := range state.NodeReservations {
 		if !validInstanceID(instanceID) {
@@ -319,6 +330,14 @@ func (repository *Repository) load(ctx context.Context) (controllerState, error)
 			return controllerState{}, errors.New("encrypted controller state is invalid")
 		}
 		seen[instanceID] = struct{}{}
+	}
+	pendingSeen := make(map[string]bool)
+	for _, pending := range state.PendingClients {
+		if !validPairedNodeID(pending.NodeID) || !validClientName(pending.DisplayName) || pendingSeen[pending.NodeID] {
+			return controllerState{}, errors.New("encrypted pending Client state is invalid")
+		}
+		pendingSeen[pending.NodeID] = true
+		seen[pending.NodeID] = struct{}{}
 	}
 	if len(seen) > MaximumManagedNodes {
 		return controllerState{}, errors.New("encrypted controller state is invalid")
@@ -341,23 +360,32 @@ func (repository *Repository) save(ctx context.Context, state controllerState) e
 }
 
 func validateManagedNode(node ManagedNode) error {
-	if !validInstanceID(node.InstanceID) || node.ClientSerial == "" || node.ConfigurationPublicKey == "" || node.ConfigurationGeneration == 0 || node.ServiceVersion == "" ||
+	node = normalizeManagedNode(node)
+	validMetadata := node.Management == ManagementAWS && validInstanceID(node.InstanceID) && node.NodeID == node.InstanceID && node.Platform == "windows" && node.Architecture == "amd64" ||
+		node.Management == ManagementPaired && validPairedNodeID(node.NodeID) && node.InstanceID == "" && node.EnrollmentID != "" &&
+			(node.Platform == "windows" && node.Architecture == "amd64" || node.Platform == "macos" && node.Architecture == "arm64")
+	if !validMetadata || !validClientName(node.DisplayName) || node.AppliedGeneration > node.ConfigurationGeneration || node.ClientSerial == "" || node.ConfigurationPublicKey == "" || node.ConfigurationGeneration == 0 || node.ServiceVersion == "" ||
 		node.SOCKSUsername == "" || node.SOCKSPassword == "" || node.SOCKSPort != proxyendpoint.SOCKSPort || node.RelayURL == "" ||
 		node.CertificatePEM == "" || node.CACertificatePEM == "" {
 		return errors.New("managed EC2 node metadata is incomplete")
+	}
+	if _, err := endpointQueue(node); err != nil {
+		return err
 	}
 	return nil
 }
 
 func migrateControllerState(state *controllerState) bool {
-	if state == nil || state.Version != 1 {
+	if state == nil || (state.Version != 1 && state.Version != 2) {
 		return false
 	}
+	oldVersion := state.Version
 	state.Version = controllerStateVersion
 	for index := range state.Nodes {
-		if state.Nodes[index].ConfigurationGeneration == 0 {
+		if oldVersion == 1 && state.Nodes[index].ConfigurationGeneration == 0 {
 			state.Nodes[index].ConfigurationGeneration = 1
 		}
+		state.Nodes[index] = normalizeManagedNode(state.Nodes[index])
 	}
 	return true
 }

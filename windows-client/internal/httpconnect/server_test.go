@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"mobile-egress/windows-client/internal/proxyendpoint"
 	"mobile-egress/windows-client/internal/relayclient"
 )
 
@@ -83,16 +85,23 @@ func TestServerBindsOnlyApplicationProxyLoopbackAddress(t *testing.T) {
 	t.Cleanup(func() { _ = server.Stop() })
 
 	address := server.Addr()
-	if address == nil || address.IP.String() != "127.0.0.2" {
-		t.Fatalf("listener address = %v, want 127.0.0.2", address)
+	if address == nil || address.IP.String() != proxyendpoint.Host {
+		t.Fatalf("listener address = %v, want %s", address, proxyendpoint.Host)
 	}
-	if _, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(address.Port)), 100*time.Millisecond); err == nil {
-		t.Fatal("HTTP proxy listener was reachable through 127.0.0.1")
+	otherHost := "127.0.0.1"
+	if runtime.GOOS == "darwin" {
+		otherHost = "127.0.0.2"
+	}
+	if _, err := net.DialTimeout("tcp4", net.JoinHostPort(otherHost, strconv.Itoa(address.Port)), 100*time.Millisecond); err == nil {
+		t.Fatal("HTTP proxy listener was reachable through another loopback address")
 	}
 }
 
 func TestServerCanBindApplicationProxyAddressWhenSamePortIsOccupiedOn127001(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS intentionally uses 127.0.0.1")
+	}
 
 	occupied, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {

@@ -36,6 +36,8 @@ const (
 	maximumRetryEnvelopes = 32
 )
 
+var ErrNotConfigured = errors.New("node configuration has not been applied")
+
 type BootstrapResponse struct {
 	CSRPEM                 string `json:"csrPem"`
 	ConfigurationPublicKey string `json:"configurationPublicKey"`
@@ -55,13 +57,15 @@ type Configuration struct {
 }
 
 type Runtime struct {
-	Identity relayclient.Identity
-	Username string
-	Password string
-	Port     uint16
+	Generation uint64
+	Identity   relayclient.Identity
+	Username   string
+	Password   string
+	Port       uint16
 }
 
 type persistedState struct {
+	Pairing                       *PairingState  `json:"pairing,omitempty"`
 	Version                       int            `json:"version"`
 	IdentityPrivateKeyPEM         string         `json:"identityPrivateKeyPem"`
 	CSRPEM                        string         `json:"csrPem"`
@@ -101,6 +105,16 @@ func (repository *Repository) Bootstrap(ctx context.Context) (BootstrapResponse,
 }
 
 func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.Envelope) error {
+	return repository.apply(ctx, envelope, false)
+}
+
+// ApplyPaired accepts missed endpoint generations only after a durable standalone
+// enrollment. Identity, CA, certificate and credentials must remain unchanged.
+func (repository *Repository) ApplyPaired(ctx context.Context, envelope sealedconfig.Envelope) error {
+	return repository.apply(ctx, envelope, true)
+}
+
+func (repository *Repository) apply(ctx context.Context, envelope sealedconfig.Envelope, paired bool) error {
 	if repository == nil || repository.store == nil {
 		return errors.New("node secure store is required")
 	}
@@ -110,11 +124,20 @@ func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.E
 	if err != nil {
 		return err
 	}
+	if paired && state.Pairing == nil {
+		return errors.New("this Client was not paired locally")
+	}
+	if paired && state.Pairing.Revoked {
+		return errors.New("Client has been revoked")
+	}
 	fingerprint, err := envelope.Fingerprint()
 	if err != nil {
 		return errors.New("sealed node configuration is malformed")
 	}
 	if containsFingerprint(state.CurrentConfigurationEnvelopes, fingerprint) {
+		if paired {
+			return nil
+		}
 		return errors.New("sealed node configuration was already applied")
 	}
 	configurationPrivateKey, err := base64.RawURLEncoding.Strict().DecodeString(state.ConfigurationPrivateKey)
@@ -140,6 +163,12 @@ func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.E
 		return errors.New("sealed node configuration is invalid")
 	}
 	if state.Configuration == nil {
+		// The invitation origin may have moved while the original sealed
+		// configuration was in flight. CA and local key still pin authority;
+		// a later sealed endpoint update moves the configured origin explicitly.
+		if paired && (state.Pairing.Invitation == nil || configuration.CACertificatePEM != state.Pairing.Invitation.CACertificatePEM) {
+			return errors.New("configuration does not match the pinned invitation")
+		}
 		if configuration.Generation != 1 {
 			return errors.New("sealed node configuration has an invalid initial generation")
 		}
@@ -160,7 +189,7 @@ func (repository *Repository) Apply(ctx context.Context, envelope sealedconfig.E
 				return fmt.Errorf("persist sealed node configuration retry: %w", err)
 			}
 			return nil
-		case configuration.Generation != current.Generation+1:
+		case !paired && configuration.Generation != current.Generation+1:
 			return errors.New("sealed node configuration is stale or out of sequence")
 		case !validEndpointOnlyUpdate(current, configuration):
 			return errors.New("sealed node configuration attempted to replace node secrets")
@@ -186,13 +215,14 @@ func (repository *Repository) Runtime(ctx context.Context) (Runtime, error) {
 		return Runtime{}, err
 	}
 	if state.Configuration == nil {
-		return Runtime{}, errors.New("node configuration has not been applied")
+		return Runtime{}, ErrNotConfigured
 	}
 	configuration := *state.Configuration
 	if err := validateConfiguration(state.IdentityPrivateKeyPEM, configuration); err != nil {
 		return Runtime{}, errors.New("stored node configuration is invalid")
 	}
 	return Runtime{
+		Generation: configuration.Generation,
 		Identity: relayclient.Identity{
 			RelayURL: configuration.RelayURL, Role: configuration.Role, Serial: configuration.Serial,
 			PrivateKeyPEM: state.IdentityPrivateKeyPEM, CertificatePEM: configuration.CertificatePEM,

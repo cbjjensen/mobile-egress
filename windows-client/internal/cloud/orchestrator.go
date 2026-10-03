@@ -37,6 +37,15 @@ type NodeRelease struct {
 var ErrClientIdentity = errors.New("local bridge could not issue the Client identity")
 
 type ManagedNode struct {
+	NodeID                  string `json:"nodeId,omitempty"`
+	DisplayName             string `json:"displayName,omitempty"`
+	Platform                string `json:"platform,omitempty"`
+	Architecture            string `json:"architecture,omitempty"`
+	Management              string `json:"management,omitempty"`
+	EnrollmentID            string `json:"enrollmentId,omitempty"`
+	AppliedGeneration       uint64 `json:"appliedGeneration,omitempty"`
+	SealedConfiguration     string `json:"sealedConfiguration,omitempty"`
+	PendingEndpointUpdates  string `json:"pendingEndpointUpdates,omitempty"`
 	InstanceID              string `json:"instanceId"`
 	ClientSerial            string `json:"clientSerial"`
 	ConfigurationPublicKey  string `json:"configurationPublicKey"`
@@ -124,6 +133,7 @@ func (orchestrator *Orchestrator) Install(ctx context.Context, instanceID string
 		return ManagedNode{}, err
 	}
 	node.Health = "installed"
+	node.AppliedGeneration = 1
 	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
 		return ManagedNode{}, errors.New("save installed managed-node health")
 	}
@@ -141,26 +151,17 @@ func (orchestrator *Orchestrator) UpdateEndpoint(ctx context.Context, node Manag
 	if err != nil {
 		return ManagedNode{}, errors.New("new relay endpoint is invalid")
 	}
-	configuration := nodeservice.Configuration{
-		Version: 1, Generation: node.ConfigurationGeneration + 1, RelayURL: origin.String(), Role: "client", Serial: node.ClientSerial,
-		CertificatePEM: node.CertificatePEM, CACertificatePEM: node.CACertificatePEM,
-		SOCKSUsername: node.SOCKSUsername, SOCKSPassword: node.SOCKSPassword, SOCKSPort: node.SOCKSPort,
+	desired, err := stageClientEndpoint(node, origin.String())
+	if err != nil {
+		return ManagedNode{}, err
 	}
-	desired := node
-	desired.RelayURL = origin.String()
-	desired.ConfigurationGeneration++
-	desired.Health = "configuring"
+	if desired.Management != ManagementAWS {
+		return ManagedNode{}, errors.New("AWS endpoint delivery requires an AWS Client")
+	}
 	if err := orchestrator.store.SaveNode(ctx, desired); err != nil {
 		return ManagedNode{}, errors.New("save recoverable endpoint metadata before configuration")
 	}
-	if err := orchestrator.applyConfiguration(ctx, desired, configuration); err != nil {
-		return ManagedNode{}, err
-	}
-	desired.Health = "installed"
-	if err := orchestrator.store.SaveNode(ctx, desired); err != nil {
-		return ManagedNode{}, errors.New("save rotated managed-node metadata")
-	}
-	return desired, nil
+	return orchestrator.ReapplyConfiguration(ctx, desired)
 }
 
 func (orchestrator *Orchestrator) Update(ctx context.Context, node ManagedNode, release NodeRelease) (ManagedNode, error) {
@@ -198,9 +199,9 @@ func (orchestrator *Orchestrator) Repair(ctx context.Context, node ManagedNode, 
 	return orchestrator.ReapplyConfiguration(ctx, updated)
 }
 
-// ReapplyConfiguration delivers the controller's current generation. The node
-// accepts this only when it is either the missing initial configuration or an
-// authenticated byte-for-byte match for the configuration already persisted.
+// ReapplyConfiguration replays pending legacy generations in order, saving each
+// receipt before sending the next one. A lost response retries identical public
+// configuration content at the current generation without changing secrets.
 func (orchestrator *Orchestrator) ReapplyConfiguration(ctx context.Context, node ManagedNode) (ManagedNode, error) {
 	if orchestrator == nil || orchestrator.runner == nil || orchestrator.store == nil {
 		return ManagedNode{}, errors.New("node orchestration dependencies are required")
@@ -208,17 +209,38 @@ func (orchestrator *Orchestrator) ReapplyConfiguration(ctx context.Context, node
 	if err := validateManagedNode(node); err != nil {
 		return ManagedNode{}, err
 	}
-	configuration := nodeservice.Configuration{
-		Version: 1, Generation: node.ConfigurationGeneration, RelayURL: node.RelayURL, Role: "client", Serial: node.ClientSerial,
-		CertificatePEM: node.CertificatePEM, CACertificatePEM: node.CACertificatePEM,
-		SOCKSUsername: node.SOCKSUsername, SOCKSPassword: node.SOCKSPassword, SOCKSPort: node.SOCKSPort,
+	node = normalizeManagedNode(node)
+	if node.Management != ManagementAWS {
+		return ManagedNode{}, errors.New("AWS endpoint delivery requires an AWS Client")
 	}
-	if err := orchestrator.applyConfiguration(ctx, node, configuration); err != nil {
+	pending, err := endpointQueue(node)
+	if err != nil {
 		return ManagedNode{}, err
 	}
-	node.Health = "installed"
-	if err := orchestrator.store.SaveNode(ctx, node); err != nil {
-		return ManagedNode{}, errors.New("save repaired managed-node metadata")
+	if len(pending) == 0 {
+		pending = []EndpointUpdate{{Generation: node.ConfigurationGeneration, RelayURL: node.RelayURL}}
+	}
+	for index, update := range pending {
+		configuration := nodeservice.Configuration{
+			Version: 1, Generation: update.Generation, RelayURL: update.RelayURL, Role: "client", Serial: node.ClientSerial,
+			CertificatePEM: node.CertificatePEM, CACertificatePEM: node.CACertificatePEM,
+			SOCKSUsername: node.SOCKSUsername, SOCKSPassword: node.SOCKSPassword, SOCKSPort: node.SOCKSPort,
+		}
+		if err := orchestrator.applyConfiguration(ctx, node, configuration); err != nil {
+			return ManagedNode{}, err
+		}
+		node.AppliedGeneration = update.Generation
+		node.PendingEndpointUpdates, err = encodeEndpointQueue(pending[index+1:])
+		if err != nil {
+			return ManagedNode{}, err
+		}
+		node.Health = "configuring"
+		if index == len(pending)-1 {
+			node.Health = "installed"
+		}
+		if err := orchestrator.store.SaveNode(ctx, node); err != nil {
+			return ManagedNode{}, errors.New("save applied Client endpoint generation")
+		}
 	}
 	return node, nil
 }

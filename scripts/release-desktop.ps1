@@ -313,7 +313,8 @@ function Invoke-MobileEgressTask5RecordVerifier {
         [Parameter(Mandatory)][string]$ManifestSha256,
         [Parameter(Mandatory)][string]$ArtifactSha256,
         [Parameter(Mandatory)][string]$ApplicationIdentity,
-        [Parameter(Mandatory)][string]$InstallerIdentity
+        [Parameter(Mandatory)][string]$InstallerIdentity,
+        [switch]$ClientArtifact
     )
 
     $goCommand = Get-Command 'go' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -339,7 +340,7 @@ function Invoke-MobileEgressTask5RecordVerifier {
     try {
         $null = Invoke-MobileEgressDesktopNativeCommand -FilePath $goExecutable -Arguments @(
             'run', './windows-client/cmd/mobile-egress-macos-release',
-            'validate-record',
+            $(if ($ClientArtifact) { 'validate-client-record' } else { 'validate-record' }),
             $RecordPath,
             $Version,
             $SourceCommit,
@@ -381,6 +382,13 @@ function Assert-MobileEgressDesktopMacArtifacts {
         -ArtifactSha256 $artifactHash `
         -ApplicationIdentity $Config.ApplicationIdentity `
         -InstallerIdentity $Config.InstallerIdentity
+    if ($Version -notmatch '^1\.1\.[0-6]$') {
+        $clientPkg = Join-Path $releaseDirectory "mobile-egress-client-macos-$Version-arm64.pkg"
+        $clientRecord = Join-Path $releaseDirectory "mobile-egress-client-macos-$Version-arm64.verification.json"
+        foreach ($path in @($clientPkg, $clientRecord)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'The native Mac Client package and verification record are required.' } }
+        $clientHash = (Get-FileHash -LiteralPath $clientPkg -Algorithm SHA256).Hash.ToLowerInvariant()
+        Invoke-MobileEgressTask5RecordVerifier -RepositoryRoot $RepositoryRoot -RecordPath $clientRecord -Version $Version -SourceCommit $SourceCommit -ManifestSha256 $manifestHash -ArtifactSha256 $clientHash -ApplicationIdentity $Config.ApplicationIdentity -InstallerIdentity $Config.InstallerIdentity -ClientArtifact
+    }
     return [pscustomobject]@{
         ArtifactName = [System.IO.Path]::GetFileName($pkgPath)
         ArtifactPath = $pkgPath
@@ -440,10 +448,16 @@ function Invoke-MobileEgressDesktopBuild {
         RemotePkgPath = $Config.RepositoryPath.TrimEnd('/') + "/windows-client/build/release/$artifactName"
         RemoteRecordPath = $Config.RepositoryPath.TrimEnd('/') + "/windows-client/build/release/$recordName"
         ArtifactSha256 = ''
+        ClientArtifact = $false
     }
     foreach ($path in @($context.FinalPkgPath, $context.FinalRecordPath)) {
         if (Test-Path -LiteralPath $path) {
             throw "Desktop release output already exists and will not be overwritten: $path"
+        }
+    }
+    if ($Version -notmatch '^1\.1\.[0-6]$') {
+        foreach ($name in @("mobile-egress-client-macos-$Version-arm64.pkg", "mobile-egress-client-macos-$Version-arm64.verification.json")) {
+            if (Test-Path -LiteralPath (Join-Path $releaseDirectory $name)) { throw 'Existing Mac Client output will not be overwritten.' }
         }
     }
     $null = New-Item -ItemType Directory -Path $releaseDirectory -Force
@@ -486,7 +500,8 @@ function Invoke-MobileEgressDesktopBuild {
                 -ManifestSha256 $ValidationContext.ManifestSha256 `
                 -ArtifactSha256 $ValidationContext.ArtifactSha256 `
                 -ApplicationIdentity $ValidationContext.ApplicationIdentity `
-                -InstallerIdentity $ValidationContext.InstallerIdentity
+                -InstallerIdentity $ValidationContext.InstallerIdentity `
+                -ClientArtifact:$ValidationContext.ClientArtifact
         }
     }
 
@@ -531,6 +546,33 @@ function Invoke-MobileEgressDesktopBuild {
                 [System.IO.File]::Delete($context.FinalPkgPath)
             }
             throw
+        }
+        if ($Version -notmatch '^1\.1\.[0-6]$') {
+            $clientContext = $context.PSObject.Copy()
+            $clientContext.ClientArtifact = $true
+            $clientContext.ArtifactName = "mobile-egress-client-macos-$Version-arm64.pkg"
+            $clientContext.RecordName = "mobile-egress-client-macos-$Version-arm64.verification.json"
+            $clientContext.RemotePkgPath = $context.RemoteReleaseDirectory + '/' + $clientContext.ArtifactName
+            $clientContext.RemoteRecordPath = $context.RemoteReleaseDirectory + '/' + $clientContext.RecordName
+            $clientContext.FinalPkgPath = Join-Path $releaseDirectory $clientContext.ArtifactName
+            $clientContext.FinalRecordPath = Join-Path $releaseDirectory $clientContext.RecordName
+            $clientContext.LocalPkgPath = Join-Path $releaseDirectory ('.' + $clientContext.ArtifactName + ".$transferID.partial")
+            $clientContext.LocalRecordPath = Join-Path $releaseDirectory ('.' + $clientContext.RecordName + ".$transferID.partial")
+            foreach ($path in @($clientContext.FinalPkgPath, $clientContext.FinalRecordPath)) { if (Test-Path -LiteralPath $path) { throw 'Existing Mac Client output will not be overwritten.' } }
+            try {
+                $remoteClientHash = (& $InvokeMacAction 'remote-hash' $clientContext | Out-String).Trim()
+                if ($remoteClientHash -notmatch '^[0-9a-f]{64}$') { throw 'Mac Client remote hash is invalid.' }
+                & $InvokeMacAction 'download-pkg' $clientContext
+                & $InvokeMacAction 'download-record' $clientContext
+                $clientContext.ArtifactSha256 = (Get-FileHash -LiteralPath $clientContext.LocalPkgPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($clientContext.ArtifactSha256 -cne $remoteClientHash) { throw 'Mac Client transfer hash mismatch.' }
+                & $ValidateRecord $clientContext
+                [System.IO.File]::Move($clientContext.LocalPkgPath, $clientContext.FinalPkgPath)
+                try { [System.IO.File]::Move($clientContext.LocalRecordPath, $clientContext.FinalRecordPath) }
+                catch { [System.IO.File]::Delete($clientContext.FinalPkgPath); throw }
+            } finally {
+                foreach ($path in @($clientContext.LocalPkgPath, $clientContext.LocalRecordPath)) { if (Test-Path -LiteralPath $path -PathType Leaf) { [System.IO.File]::Delete($path) } }
+            }
         }
     } finally {
         foreach ($transientPath in @($context.LocalSourceBundlePath, $context.LocalPkgPath, $context.LocalRecordPath)) {

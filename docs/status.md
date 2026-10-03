@@ -1,5 +1,17 @@
 # Current status
 
+## 2026-10-03: AWS-optional Client source implementation
+
+Windows/Mac standalone Client pairing, provider-independent encrypted registry, native services and secure storage, local maintenance/installers, and endpoint recovery are implemented on `main`. AWS/SSM remains optional; all traffic still crosses the owner's personal relay and Tailscale Funnel. See [setup and operations](standalone-clients.md) and the [implementation/validation record](superpowers/plans/2026-10-03-aws-optional-windows-mac-clients.md).
+
+The complete Windows/frontend/release-contract gate and Android unit/lint/debug-build gate pass. Native Mac cgo tests and unsigned ARM64 daemon/GUI builds pass, including the Mac IPC umask and repeated-build regressions. Mobile feature-manifest validation passes; Agent wire behavior and parity evidence are unchanged.
+
+Native Mac race checks pass across the six affected Go packages. Both portable Swift package runs (normal and warnings-as-errors) pass with 308 tests, two acceptance skips, and zero failures each. These are source/component checks; the implementation record retains their exact commands and limits.
+
+New signed/notarized Client artifacts have not been produced or published, and real no-AWS installation/traffic, reboot/logout, signed upgrade/repair, System Keychain ACL acceptance, and live mixed-fleet/mobile checks remain pending. Historical release information below is dated evidence, not a new publication claim.
+
+## Earlier source and release record
+
 Reconciled on 2026-09-06 against source commit `209171a`, the recorded validation evidence, and GitHub's published release list. Source metadata, source validation, and released artifacts are reported separately below.
 
 Personal-computer routing is a permanent requirement: keep the owner's local relay and Tailscale Funnel. Hosted/cloud relay alternatives and benchmarks are prohibited; see [AGENTS.md](../AGENTS.md) and [architecture](architecture.md#permanent-personal-computer-routing-requirement).

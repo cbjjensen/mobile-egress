@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+[ "$(/usr/bin/id -u)" = 0 ] || exit 1
+# Installation on other volumes cannot register a running system daemon.
+[ "${3:-/}" = / ] || exit 1
+STATE='/Library/Application Support/MobileEgressClient'
+if [ -e "$STATE" ]; then
+    [ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 1
+    [ "$(/usr/bin/stat -f %u "$STATE")" = 0 ] || exit 1
+    [ "$(/usr/bin/stat -f %Lp "$STATE")" = 700 ] || exit 1
+fi
+if [ -e "$STATE/owner.uid" ]; then
+    [ -f "$STATE/owner.uid" ] && [ ! -L "$STATE/owner.uid" ] || exit 1
+    [ "$(/usr/bin/stat -f %u "$STATE/owner.uid")" = 0 ] || exit 1
+else
+    OWNER_UID=$(/usr/bin/stat -f %u /dev/console)
+    [ "$OWNER_UID" -ge 501 ] || { printf 'Install while the intended Client owner is logged in.\n' >&2; exit 1; }
+    /bin/mkdir -p "$STATE"
+    /usr/sbin/chown root:wheel "$STATE"
+    /bin/chmod 700 "$STATE"
+    (umask 077; set -C; printf '%s\n' "$OWNER_UID" > "$STATE/owner.uid")
+    /usr/sbin/chown root:wheel "$STATE/owner.uid"
+fi
+if /bin/launchctl print system/com.zfnf.mobile-egress.client >/dev/null 2>&1; then
+    /bin/launchctl bootout system/com.zfnf.mobile-egress.client
+fi

@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+[ "$(/usr/bin/id -u)" = 0 ] || exit 1
+[ "${3:-/}" = / ] || exit 1
+STATE='/Library/Application Support/MobileEgressClient'
+PLIST='/Library/LaunchDaemons/com.zfnf.mobile-egress.client.plist'
+[ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 1
+/usr/sbin/chown root:wheel "$STATE" "$STATE/bin" "$PLIST"
+/bin/chmod 700 "$STATE"
+/bin/chmod 755 "$STATE/bin" "$STATE/bin/mobile-egress-client"
+/bin/chmod 644 "$PLIST"
+[ -f "$STATE/owner.uid" ] && [ ! -L "$STATE/owner.uid" ] || exit 1
+OWNER_UID=$(/bin/cat "$STATE/owner.uid")
+case "$OWNER_UID" in ''|*[!0-9]*) exit 1;; esac
+[ "$OWNER_UID" -ge 501 ] || exit 1
+/usr/sbin/chown root:wheel "$STATE/owner.uid"
+/bin/chmod 600 "$STATE/owner.uid"
+/usr/bin/codesign --verify --strict "$STATE/bin/mobile-egress-client"
+/bin/launchctl enable system/com.zfnf.mobile-egress.client
+/bin/launchctl bootstrap system "$PLIST"
+/bin/launchctl kickstart system/com.zfnf.mobile-egress.client
+# Configuration and keychain items are deliberately retained for update/repair.

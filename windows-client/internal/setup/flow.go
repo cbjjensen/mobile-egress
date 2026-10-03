@@ -10,15 +10,12 @@ import (
 )
 
 const (
-	SetupExecutableName      = "MobileEgressSetup.exe"
-	ControllerExecutableName = "mobile-egress-windows.exe"
 	AdminExecutableName      = "mobile-egress-admin.exe"
 	RelayExecutableName      = "mobile-egress-relay.exe"
 	ClientExecutableName     = "mobile-egress-client.exe"
 	ManifestName             = "release-manifest.json"
 	PublicCertificateName    = "mobile-egress-code-signing.cer"
 	PublicIdentityRecordName = "release-signing-certificate.txt"
-	InstallRoot              = `C:\Program Files\MobileEgress\Controller`
 )
 
 var (
@@ -26,13 +23,6 @@ var (
 	ErrInstallRollback         = errors.New("installation rollback failed")
 	ErrSetupTransactionTimeout = errors.New("another Mobile Egress setup transaction is already running")
 	ErrTrustRollback           = errors.New("publisher trust rollback failed")
-
-	verifiedReleaseExecutables = [...]string{
-		SetupExecutableName,
-		ControllerExecutableName,
-		AdminExecutableName,
-		RelayExecutableName,
-	}
 )
 
 type ParentOptions struct {
@@ -251,10 +241,9 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 			return fmt.Errorf("verify signed release file %s: %w", name, err)
 		}
 	}
-	files := []InstallFile{
-		{Source: releasePath(ControllerExecutableName), Destination: filepath.Join(InstallRoot, ControllerExecutableName)},
-		{Source: releasePath(AdminExecutableName), Destination: filepath.Join(InstallRoot, AdminExecutableName)},
-		{Source: releasePath(RelayExecutableName), Destination: filepath.Join(InstallRoot, RelayExecutableName)},
+	files := make([]InstallFile, 0, len(installedExecutableNames))
+	for _, name := range installedExecutableNames {
+		files = append(files, InstallFile{Source: releasePath(name), Destination: filepath.Join(InstallRoot, name)})
 	}
 	reportProgress(options.Progress, "Installing Mobile Egress and its Start Menu shortcut…")
 	if err := platform.Install(files, options.Identity); err != nil {

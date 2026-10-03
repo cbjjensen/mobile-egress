@@ -259,6 +259,11 @@ try {
     Write-Host "Signed headless Client release: $(Join-Path $binRoot 'mobile-egress-client.exe')"
     Write-Host "Client SHA-256: $clientDigest"
     Write-Host "Publisher SHA-256 fingerprint: $($identity.Fingerprint)"
+
+    if ($ReleaseVersion -notmatch '^1\.1\.[0-6]$') {
+        & (Join-Path $PSScriptRoot 'build-client-windows.ps1') -ReleaseVersion $ReleaseVersion -ServicePath (Join-Path $binRoot 'mobile-egress-client.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Signed standalone Client installer build failed.' }
+    }
 } finally {
     $identity.Certificate.Dispose()
     $identity.PublicCertificate.Dispose()

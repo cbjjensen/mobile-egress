@@ -53,17 +53,21 @@ type DesktopApp struct {
 	ownerRepository  *client.Repository
 	browserOpenURL   func(context.Context, string)
 
-	mu              sync.RWMutex
-	provisioning    sync.Mutex
-	bridgeWorkflow  chan struct{}
-	ctx             context.Context
-	awsClient       *awssdk.Client
-	setup           *setupAction
-	identityLogin   *awssdk.IdentityCenterLogin
-	identitySession *awssdk.IdentityCenterSession
-	awsInventory    []cloud.Instance
-	quitting        atomic.Bool
-	shutdown        sync.Once
+	mu                 sync.RWMutex
+	provisioning       sync.Mutex
+	pairedMu           sync.Mutex
+	pairedAPI          *pairedControlAPI
+	endpointJobRunning bool
+	endpointJobNext    time.Time
+	bridgeWorkflow     chan struct{}
+	ctx                context.Context
+	awsClient          *awssdk.Client
+	setup              *setupAction
+	identityLogin      *awssdk.IdentityCenterLogin
+	identitySession    *awssdk.IdentityCenterSession
+	awsInventory       []cloud.Instance
+	quitting           atomic.Bool
+	shutdown           sync.Once
 }
 
 type tailscaleInstaller interface {
@@ -138,6 +142,7 @@ type EndpointMigrationView struct {
 	ExpiresAt    string   `json:"expiresAt"`
 	UpdatedNodes []string `json:"updatedNodes"`
 	FailedNodes  []string `json:"failedNodes"`
+	ManualNodes  []string `json:"manualNodes,omitempty"`
 }
 
 type BridgeView struct {
@@ -319,6 +324,10 @@ func (app *DesktopApp) acquireBridgeWorkflow(ctx context.Context) (func(), error
 }
 
 func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
+	app.pairedMu.Lock()
+	defer app.pairedMu.Unlock()
+	app.provisioning.Lock()
+	defer app.provisioning.Unlock()
 	defer app.monitorAction(componentTailscale, componentHelper, componentRelay, componentMetadata)()
 	ctx, cancel := context.WithTimeout(app.operationContext(), 20*time.Minute)
 	defer cancel()
@@ -339,14 +348,6 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 	if err != nil {
 		return EndpointMigrationView{}, errors.New("Set up the local Owner before rotating the Funnel endpoint.")
 	}
-	nodes, err := app.cloudRepository.Nodes(ctx)
-	if err != nil {
-		return EndpointMigrationView{}, errors.New("Unable to load encrypted managed-node metadata.")
-	}
-	awsClient := app.currentAWSClient()
-	if len(nodes) > 0 && awsClient == nil {
-		return EndpointMigrationView{}, errors.New("Connect AWS before rotation so every managed EC2 node can receive the new endpoint.")
-	}
 	_, rotatedOwner, err := app.bridge.Rotate(ctx, owner)
 	if err != nil {
 		if app.desktopPlatform() == platformMacOS {
@@ -354,20 +355,29 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 		}
 		return EndpointMigrationView{}, errors.New("Unable to rotate the local relay endpoint. Approve browser and UAC prompts, then try again.")
 	}
+	nodes, err := app.cloudRepository.StageClientEndpoints(ctx, rotatedOwner.RelayURL)
+	if err != nil {
+		return EndpointMigrationView{}, errors.New("The relay rotated, but Client endpoint updates could not be saved. Keep the controller open and restore secure storage to resume.")
+	}
+	// AWS delivery runs independently so expired credentials cannot delay the
+	// Agent migration QR or a paired Client's connection-update export.
+	app.startAWSEndpointUpdates()
 	migration, err := relayclient.IssueEndpointMigration(ctx, rotatedOwner)
 	if err != nil {
-		return EndpointMigrationView{}, errors.New("The relay rotated, but an Android migration QR could not be issued.")
+		return EndpointMigrationView{}, errors.New("The relay rotated and Client updates were saved, but an Agent migration QR could not be issued. Retry endpoint rotation to issue it.")
 	}
 	updated := make([]string, 0, len(nodes))
 	failed := make([]string, 0)
-	if awsClient != nil {
-		orchestrator := cloud.NewOrchestrator(awsClient, nil, app.cloudRepository)
-		for _, node := range nodes {
-			if _, updateErr := orchestrator.UpdateEndpoint(ctx, node, rotatedOwner.RelayURL); updateErr != nil {
-				failed = append(failed, node.InstanceID)
-			} else {
-				updated = append(updated, node.InstanceID)
-			}
+	manual := make([]string, 0)
+	for _, node := range nodes {
+		if node.Health != "configuring" {
+			updated = append(updated, node.NodeID)
+			continue
+		}
+		if node.Management == cloud.ManagementPaired {
+			manual = append(manual, node.DisplayName)
+		} else {
+			failed = append(failed, node.InstanceID)
 		}
 	}
 	encodedMigration, err := json.Marshal(migration)
@@ -382,7 +392,7 @@ func (app *DesktopApp) RotateLocalBridge() (EndpointMigrationView, error) {
 	}
 	return EndpointMigrationView{
 		ImageDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
-		ExpiresAt:    migration.ExpiresAt.UTC().Format(time.RFC3339), UpdatedNodes: updated, FailedNodes: failed,
+		ExpiresAt:    migration.ExpiresAt.UTC().Format(time.RFC3339), UpdatedNodes: updated, FailedNodes: failed, ManualNodes: manual,
 	}, nil
 }
 
@@ -860,6 +870,8 @@ func (app *DesktopApp) RepairEC2Node(instanceID string) (cloud.ManagedNodeView, 
 }
 
 func (app *DesktopApp) updateOrRepairNode(instanceID string, repair bool) (cloud.ManagedNodeView, error) {
+	app.provisioning.Lock()
+	defer app.provisioning.Unlock()
 	defer app.monitorAction(componentMetadata)()
 	awsClient := app.currentAWSClient()
 	if awsClient == nil {
@@ -949,11 +961,19 @@ func (app *DesktopApp) CancelEC2NodeReservation(instanceID string, confirmed boo
 }
 
 func (app *DesktopApp) NodeProxyLine(instanceID string) (string, error) {
-	return app.cloudRepository.ProxyLine(context.Background(), instanceID)
+	return app.ClientProxyLine(instanceID)
 }
 
 func (app *DesktopApp) NodeSOCKSProxyURL(instanceID string) (string, error) {
-	return app.cloudRepository.SOCKSProxyURL(context.Background(), instanceID)
+	return app.ClientSOCKSProxyURL(instanceID)
+}
+
+func (app *DesktopApp) ClientProxyLine(nodeID string) (string, error) {
+	return app.cloudRepository.ProxyLine(app.operationContext(), nodeID)
+}
+
+func (app *DesktopApp) ClientSOCKSProxyURL(nodeID string) (string, error) {
+	return app.cloudRepository.SOCKSProxyURL(app.operationContext(), nodeID)
 }
 
 func (app *DesktopApp) BootstrapOwner(encodedBundle string) error {

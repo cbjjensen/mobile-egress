@@ -34,7 +34,6 @@ const (
 	seeMaskNoCloseProcess   = 0x00000040
 	showNormal              = 1
 	waitObject0             = 0x00000000
-	commonShortcutPath      = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress.lnk`
 	certEUntrustedRoot      = uint32(0x800B0109)
 	trustEBadDigest         = uint32(0x80096010)
 	trustENoSignature       = uint32(0x800B0100)
@@ -393,8 +392,8 @@ $result = [ordered]@{
 	return output, nil
 }
 
-func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity) error {
-	wantNames := []string{ControllerExecutableName, AdminExecutableName, RelayExecutableName}
+func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity) (resultErr error) {
+	wantNames := installedExecutableNames
 	if len(files) != len(wantNames) {
 		return errors.New("install file set is invalid")
 	}
@@ -403,9 +402,7 @@ func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity)
 			return errors.New("install file set is invalid")
 		}
 	}
-	return installVerifiedFiles(files, func(path string) error {
-		return platform.VerifyAuthenticode(path, identity)
-	}, installTransactionOps{
+	ops := installTransactionOps{
 		rename:          windows.Rename,
 		remove:          os.Remove,
 		protectRecovery: restrictRecoveryDirectory,
@@ -413,7 +410,24 @@ func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity)
 		controllerPath:  filepath.Join(InstallRoot, ControllerExecutableName),
 		stopController:  stopInstalledController,
 		createShortcut:  platform.writeShortcut,
-	})
+	}
+	if clientProduct {
+		service, err := prepareClientService()
+		if err != nil {
+			return err
+		}
+		defer func() { resultErr = errors.Join(resultErr, service.close(resultErr != nil)) }()
+		ops.stopController = func(path string) error {
+			if err := stopInstalledController(path); err != nil {
+				return err
+			}
+			return service.stop()
+		}
+		ops.finalize = service.install
+	}
+	return installVerifiedFiles(files, func(path string) error {
+		return platform.VerifyAuthenticode(path, identity)
+	}, ops)
 }
 
 type runningProcess struct {
@@ -592,13 +606,13 @@ func (platform *WindowsPlatform) writeShortcut(controllerPath string) error {
 		return errors.New("shortcut target is invalid")
 	}
 	const script = `$ErrorActionPreference = 'Stop'
-$shortcutPath = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress.lnk'
-$targetPath = 'C:\Program Files\MobileEgress\Controller\mobile-egress-windows.exe'
+$shortcutPath = $env:MOBILE_EGRESS_SHORTCUT
+$targetPath = $env:MOBILE_EGRESS_SHORTCUT_TARGET
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $targetPath
-$shortcut.WorkingDirectory = 'C:\Program Files\MobileEgress\Controller'
-$shortcut.Description = 'Mobile Egress Controller'
+$shortcut.WorkingDirectory = [System.IO.Path]::GetDirectoryName($targetPath)
+$shortcut.Description = 'Mobile Egress'
 $shortcut.Save()`
 	powershellPath, err := systemPowerShellPath()
 	if err != nil {
@@ -606,7 +620,9 @@ $shortcut.Save()`
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, powershellPath, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script).Run(); err != nil {
+	command := exec.CommandContext(ctx, powershellPath, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+	command.Env = append(os.Environ(), "MOBILE_EGRESS_SHORTCUT="+commonShortcutPath, "MOBILE_EGRESS_SHORTCUT_TARGET="+want)
+	if err := command.Run(); err != nil {
 		return errors.New("write Start Menu shortcut")
 	}
 	if _, err := os.Stat(commonShortcutPath); err != nil {
@@ -842,6 +858,7 @@ func winVerifyTrustStatus(path string) (uint32, error) {
 }
 
 type installTransactionOps struct {
+	finalize        func() error
 	rename          func(oldPath, newPath string) error
 	remove          func(path string) error
 	removeAll       func(path string) error
@@ -1003,6 +1020,11 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 	if operations.createShortcut != nil {
 		if err := operations.createShortcut(operations.controllerPath); err != nil {
 			return rollback(err, promoted, shortcutBackup, shortcutExisted, true)
+		}
+	}
+	if operations.finalize != nil {
+		if err := operations.finalize(); err != nil {
+			return rollback(err, promoted, shortcutBackup, shortcutExisted, operations.createShortcut != nil)
 		}
 	}
 	_ = operations.removeAll(backupRoot)

@@ -124,9 +124,9 @@ $androidGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('
 Assert-Condition (($androidGateComponents -join ',') -eq 'Android') 'An Android-only release must not resolve Windows or macOS build prerequisites.'
 
 $desktopDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop'))
-Assert-Condition (($desktopDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg') 'A Desktop release must publish the self-contained Windows installer, EC2 Client, and macOS PKG together.'
+Assert-Condition (($desktopDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,MobileEgressClientSetup.exe,mobile-egress-macos-1.2.3-arm64.pkg,mobile-egress-client-macos-1.2.3-arm64.pkg') 'A Desktop release must publish the self-contained Windows installer, EC2 Client, and macOS PKG together.'
 $windowsDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows'))
-Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe') 'A Windows release must publish only the self-contained signed installer and EC2 Client.'
+Assert-Condition (($windowsDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,MobileEgressClientSetup.exe') 'A Windows release must publish only the self-contained signed installer and EC2 Client.'
 Assert-Condition ($windowsDefinitions[0].Path -eq 'C:\fixture\windows-client\build\release\mobile-egress-windows-1.2.3\MobileEgressSetup.exe') 'The single installer must come from its version-specific verified release directory.'
 $hotfixDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.1.1' -Components @('Windows'))
 Assert-Condition (($hotfixDefinitions.Name -join ',') -ceq 'mobile-egress-windows-1.1.1.zip,mobile-egress-client.exe') 'The v1.1.1 Windows-only hotfix must contain only the Windows ZIP and EC2 Client.'
@@ -139,9 +139,9 @@ Assert-Condition ((Get-MobileEgressWindowsDownloadName -Version '1.1.7') -ceq 'M
 $androidDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Android'))
 Assert-Condition (($androidDefinitions.Name -join ',') -eq 'zfnf-mobile-egress-android-1.2.3.apk') 'An Android release must publish only the versioned ZFNF APK.'
 $interimDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Windows', 'Android'))
-Assert-Condition (($interimDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,zfnf-mobile-egress-android-1.2.3.apk') 'The interim release must contain exactly Windows, EC2 Client, and Android artifacts.'
+Assert-Condition (($interimDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,MobileEgressClientSetup.exe,zfnf-mobile-egress-android-1.2.3.apk') 'The interim release must contain exactly Windows, EC2 Client, and Android artifacts.'
 $allDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop', 'Android'))
-Assert-Condition (($allDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,mobile-egress-macos-1.2.3-arm64.pkg,zfnf-mobile-egress-android-1.2.3.apk') 'The full release must contain the coupled Desktop assets followed by Android.'
+Assert-Condition (($allDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,MobileEgressClientSetup.exe,mobile-egress-macos-1.2.3-arm64.pkg,mobile-egress-client-macos-1.2.3-arm64.pkg,zfnf-mobile-egress-android-1.2.3.apk') 'The full release must contain the coupled Desktop assets followed by Android.'
 
 $desktopDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v1.2.3' -Version '1.2.3' -ReleasedArtifacts $desktopDefinitions -PublishedReleases @(
     [pscustomobject]@{
@@ -155,7 +155,7 @@ $desktopDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag '
         )
     }
 ))
-Assert-Condition ($desktopDownloadLinks.Count -eq 4) 'Release notes must cover Windows, macOS, Client, and Android downloads even for scoped releases.'
+Assert-Condition ($desktopDownloadLinks.Count -eq 6) 'Release notes must cover Windows, macOS, Client, and Android downloads even for scoped releases.'
 Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'windows' }).Tag -eq 'v1.2.3') 'A scoped Desktop release must link its new Windows bundle from the current tag.'
 Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'client' }).Tag -eq 'v1.2.3') 'A scoped Desktop release must link its new EC2 Client from the current tag.'
 Assert-Condition (($desktopDownloadLinks | Where-Object { $_.Key -eq 'macos' }).Name -eq 'mobile-egress-macos-1.2.3-arm64.pkg') 'A scoped Desktop release must link its same-version macOS PKG.'

@@ -8,7 +8,6 @@ import (
 	"io"
 
 	"golang.org/x/sys/windows/svc"
-	"mobile-egress/windows-client/internal/nodeservice"
 )
 
 const clientWindowsServiceName = "MobileEgressClient"
@@ -48,22 +47,20 @@ func (service clientWindowsService) Execute(_ []string, requests <-chan svc.Chan
 	}
 }
 
-func runNodeService(repository *nodeservice.Repository, stderr io.Writer) int {
+func runNodeService(run func(context.Context) error, stderr io.Writer) int {
 	isService, err := svc.IsWindowsService()
 	if err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-client serve: detect Windows service:", err)
 		return 1
 	}
 	if !isService {
-		if err := runForegroundNodeService(repository); err != nil {
+		if err := runForegroundNodeService(run); err != nil {
 			fmt.Fprintln(stderr, "mobile-egress-client serve:", err)
 			return 1
 		}
 		return 0
 	}
-	handler := clientWindowsService{run: func(ctx context.Context) error {
-		return nodeservice.NewService(repository, nodeservice.DefaultDialer{}).Run(ctx)
-	}}
+	handler := clientWindowsService{run: run}
 	if err := svc.Run(clientWindowsServiceName, handler); err != nil {
 		fmt.Fprintln(stderr, "mobile-egress-client serve: Windows service:", err)
 		return 1
