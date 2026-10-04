@@ -4,6 +4,8 @@
 
 > DNS follow-up 2026-10-04: the owner saved the broker (`mobile-gateway`) and phone-route (`*.mobile`) CNAME records in Namecheap. Read-only checks confirmed both against the existing Core NLB target through both authoritative nameservers and Google/Cloudflare, with the existing `core` record unchanged. Certificate issuance, service deployment, entitlement activation and physical traffic remain pending; no agent deployment or production-secret publication occurred.
 
+> Pilot deployment approval 2026-10-04: after DNS verification, the owner approved deploying the owner-only pilot, issuing the Caddy certificate, enabling the independent Mobile gateway and activating the installed Windows Client for Android testing. This supersedes the earlier deployment restriction for that scope and its required production environment/image publication. The owner subsequently approved merging into main so Inevitable's existing main-only production Environment policy can remain intact. Reconcile and validate current main before merging the reviewed feature. Do not publish public app releases, enable broad customer access or roll Core solely for Mobile. Physical acceptance remains pending until demonstrated.
+
 Approved 2026-10-03. Implement in the existing checkouts on `feature/mobile-egress-inevitable-gateway`; do not merge, deploy, or publish releases. Inevitable requirements and implementation records live under `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/` in the sibling repository. Keep both records synchronized.
 
 ## Contract
