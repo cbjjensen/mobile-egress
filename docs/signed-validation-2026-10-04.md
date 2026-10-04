@@ -18,6 +18,20 @@ Local directory: `windows-client/build/release/mobile-egress-client-windows-2.0.
 
 The private `payload-verification.zip` remains local verification evidence. A subsequent owner-approved installation placed these service/GUI binaries under `C:\Program Files\Mobile Egress Client`. Read-only verification on 2026-10-04 confirmed both installed SHA-256 values match the table and both Authenticode signatures are valid. `MobileEgressClient` is running with automatic startup as LocalSystem. This completes the local fresh-install check only; repair/upgrade/service-account DPAPI recovery, reboot, logout and physical cellular tests remain unperformed. The legacy relay service was not changed.
 
+### Windows IPC repair artifact
+
+The later owner pilot exposed missing named-pipe read-attributes access. The [repair plan](superpowers/plans/2026-10-04-windows-client-pipe-access.md) records the native failing/passing regression, full Windows gate and independent review. The guarded local build from clean source `b4eb10b` produced version `2.0.0-hosted-validation.20261004.1`; full artifact verification passed the same publisher, timestamps, clean source/platform provenance, versions and embedded payload equality. The original validation files above remain unchanged.
+
+Local directory: `windows-client/build/release/mobile-egress-client-windows-2.0.0-hosted-validation.20261004.1/`.
+
+| File | SHA-256 |
+|---|---|
+| `MobileEgressClientSetup.exe` | `E3FDBA85B935F48805B852CBE165A741D061E7792F2BC19642A690F0FC65344A` |
+| `mobile-egress-client.exe` | `0B8872737EB26F3A3E76F598DDC9C88B6AB3A4D98CEF5D833B879C112A744666` |
+| `mobile-egress-client-app.exe` | `CD1E5B3005EC0D6FC6CC5AC880A0603622B7111F572E1E14C30ECC028A6A1A9E` |
+
+The supported installer was launched for the owner's confirmation. Installed repair, activation and phone traffic are not established by signing alone. No application release was published.
+
 ## Android
 
 The low-level guarded `scripts/release-android.ps1 -ValidateOnly` verified ignored/untracked signing inputs; the unversioned build command then reused the established key and verified the signed release APK against the tracked public certificate. No version bump, release tag or publication occurred.

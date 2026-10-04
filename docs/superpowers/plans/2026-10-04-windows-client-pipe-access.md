@@ -12,7 +12,7 @@ An isolated native Windows pipe reproduced `ERROR_ACCESS_DENIED` with owner righ
 - [x] Add a native Windows regression using the production access mask and an isolated first pipe instance; record failure before repair.
 - [x] Grant the installation owner the required read-attributes right. Preserve the SYSTEM owner check and deny pipe-instance creation, broad write rights, and unrelated access.
 - [x] Run the relevant Go, Windows/frontend, installer and signing checks; review the minimal fix.
-- [ ] Commit the source on the existing hosted feature branch and build a new signed local validation installer using the established publisher identity.
+- [x] Commit the source on the existing hosted feature branch and build a new signed local validation installer using the established publisher identity.
 - [ ] Repair the existing installation through the supported installer, preserving owner, protected state and service identity. Verify ordinary unelevated IPC before activation.
 - [ ] Activate the Client through the owner's already-approved pilot account and prepare one time-limited pairing QR. Record phone installation/traffic separately if hardware is unavailable.
 
@@ -33,3 +33,5 @@ The native Windows regression was added against the unchanged production mask (`
 Independent review found no unresolved findings after correcting the test to attempt actual server-instance creation. Its uncached native IPC and focused installer repair tests passed. The existing Windows signing identity also passed `setup-windows-signing.ps1 -ValidateOnly`; it was not replaced.
 
 The root-owned `scripts/test-all.ps1 -Components Windows` completed successfully: all Go tests, vet/build, installer/payload and release contract checks, manifest/schema checks, all 40 frontend tests and syntax validation passed. Full output is retained in the ignored `G:/codex-build-cache/mobile-egress-hosted-20261004/windows-ipc-repair-gate.log`. Signed repair and installed acceptance are the next steps.
+
+Source commit `b4eb10b` was pushed to the existing hosted feature branch. The guarded build produced local validation version `2.0.0-hosted-validation.20261004.1` from that clean committed tree. Full `Assert-MobileEgressDirectWindowsArtifacts` verification passed all three timestamped signatures, the exact established publisher, clean source/platform provenance, executable versions and embedded payload equality. The supported installer was opened for owner confirmation; installed repair and activation remain pending at this checkpoint. No tag or public release was created.
