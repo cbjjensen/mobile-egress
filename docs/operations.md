@@ -16,6 +16,10 @@ Status is deliberately secret-safe. Copy proxy credentials or invitations only t
 
 Check Inevitable access and the workload's outbound Internet connection. Resume pending browser activation from the Client app; its proof stays in the service. Expired/denied activation requires a new request. If the one-time authorization response is lost before durable storage, reactivate the same Client. Account device revocation stops hosted access; local pairing is retained. A gateway outage never silently changes mode or opens a public workload listener. Only an authenticated phone connection completes verification.
 
+Removing the computer in Inevitable and activating it again can change its gateway address. The phone keeps its pairing but may still have the retired address. After browser activation completes, use **Reconnect your phone → Show connection update** in the Client and scan that QR in the phone app. Keep the saved Client enabled and start sharing if stopped. The update preserves pairing and remains pending until the phone acknowledges it; do not remove the phone or create another invitation for an address update. If another account removal interrupts recovery, complete browser activation again before exporting the new update.
+
+If the Client was also removed from the phone app, its pairing key is gone and a connection update cannot restore it. On the desktop dashboard, choose **Remove paired phone**, create a fresh invitation and scan it on the phone. This replaces the phone association while retaining Inevitable activation and proxy settings.
+
 On Inevitable, use the separate Mobile health/readiness and sanitized connection/error/resource indicators. Keep existing Core traffic and accounting enabled. Mobile gateway deployment/drain/rollback uses its own service and target registrations; disabling it must not replace healthy Core ASG nodes. Follow the sibling Inevitable requirements/runbook for certificates, fleet scope, signed configuration expiry and route-owner recovery. No Mobile usage dispatch is part of recovery.
 
 ## Unreachable endpoint in Advanced direct mode

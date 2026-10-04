@@ -163,6 +163,60 @@ test('phone instructions wait for pairing and preserve unrelated action errors',
  assert.equal(h.get('feedback').textContent,'Connection update could not be copied.');
  assert.equal(visible(h,'phoneStartInstructions'),true);
 });
+
+test('reactivated paired Client presents connection recovery on dashboard and in setup',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true,generation:2,updatePending:true,connected:false},api:{ExportEndpointUpdate:async()=>{h.calls.push(['export-update']);return {bundle:'signed-update',qrDataUrl:'data:image/png;base64,aA=='};}}});
+ assert.equal(visible(h,'dashboardHeader'),true);assert.equal(visible(h,'recoveryPanel'),true);
+ assert.equal(h.get('recoveryPanel').open,true);assert.equal(h.get('recoveryHeading').textContent,'Reconnect your phone');
+ await h.get('reviewSetup').onclick();await h.get('stepVerify').onclick();
+ assert.equal(visible(h,'recoveryPanel'),true);assert.equal(h.get('stepTitle').textContent,'Reconnect your phone');
+ assert.equal(visible(h,'phoneStartInstructions'),false);assert.match(h.get('verificationMessage').textContent,/update/i);
+ await h.get('exportUpdate').onclick();assert.equal(h.get('update').value,'signed-update');
+ assert.deepEqual(operations(h),[['export-update']]);assert.equal(h.status.generation,2);assert.equal(h.status.paired,true);
+});
+
+test('pending update cannot complete setup and acknowledgement clears exported recovery QR',async()=>{
+ const h=await harness({status:{paired:true,updatePending:true,generation:2}});
+ await h.get('reviewSetup').onclick();await h.get('stepVerify').onclick();await h.get('exportUpdate').onclick();
+ h.status.connected=true;await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Reconnect your phone');assert.equal(h.get('verifyNext').disabled,true);
+ await h.get('stepProxy').onclick();assert.equal(h.get('stepTitle').textContent,'Reconnect your phone');
+ h.status.updatePending=false;await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Use your proxy');assert.equal(h.get('update').value,'');
+ assert.equal(h.get('updateQR').src,'');assert.equal(h.get('feedback').textContent,'');
+});
+
+test('recovery stays available for direct mode and manual exports after acknowledgement',async()=>{
+ const h=await harness({status:{transport:'direct',paired:true,updatePending:true}});
+ assert.equal(visible(h,'recoveryPanel'),true);assert.equal(h.get('recoveryPanel').open,true);
+ h.status.updatePending=false;await h.refresh();
+ assert.equal(h.get('recoveryPanel').open,false);assert.equal(visible(h,'recoveryPanel'),true);
+ h.get('recoveryPanel').open=true;await h.get('exportUpdate').onclick();await h.refresh();
+ assert.equal(h.get('recoveryPanel').open,true);assert.equal(h.get('update').value,'signed-update');
+});
+
+test('hosted recovery prioritizes activation before exporting a pending route update',async()=>{
+ const h=await harness({status:{transport:'hosted',paired:true,updatePending:true,activationState:'access_rejected',gatewayState:'authorization_rejected'}});
+ assert.equal(h.get('exportUpdate').disabled,true);assert.equal(h.get('copyUpdate').disabled,true);
+ assert.match(h.get('pending').textContent,/activation.*browser/i);assert.match(h.get('recoveryMessage').textContent,/activation.*browser/i);
+ assert.equal(h.get('activateHosted').textContent,'Reactivate in browser');
+ h.status.activationState='pending';await h.refresh();assert.equal(h.get('exportUpdate').disabled,true);
+ h.status.activationState='authorized';await h.refresh();
+ assert.equal(h.get('exportUpdate').disabled,false);assert.equal(h.get('recoveryPanel').open,true);
+ await h.get('exportUpdate').onclick();assert.equal(h.get('update').value,'signed-update');
+ h.status.activationState='access_rejected';await h.refresh();
+ assert.equal(h.get('update').value,'');assert.equal(h.get('updateQR').src,'');assert.equal(h.get('exportUpdate').disabled,true);
+});
+
+for (const change of ['generation','removed','unavailable']) test(`connection recovery clears a stale QR when ${change}`,async()=>{
+ const h=await harness({status:{paired:true,updatePending:true,generation:2}});
+ await h.get('exportUpdate').onclick();
+ if(change==='generation'){h.status.generation++;h.status.endpoint='https://changed.example';}
+ if(change==='removed'){h.status.paired=false;h.status.updatePending=false;}
+ if(change==='unavailable')h.api.Status=async()=>{throw new Error('Service unavailable');};
+ await h.refresh();assert.equal(h.get('update').value,'');assert.equal(h.get('updateQR').src,'');
+ if(change==='unavailable')assert.equal(h.get('exportUpdate').disabled,true);
+});
 test('finish later and review preserve invitation and service configuration',async()=>{
  const h=await harness();await h.get('networkNext').onclick();await h.get('issue').onclick();
  const before=JSON.stringify(h.status);await h.get('finishLater').onclick();assert.equal(visible(h,'dashboardHeader'),true);

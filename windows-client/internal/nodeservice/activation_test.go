@@ -1,10 +1,15 @@
 package nodeservice
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -206,6 +211,152 @@ func TestAuthorizedActivationSeparatesBrokerAndRouteAndRetainsPhone(t *testing.T
 	}
 	if restored.state.Hosted.DeviceToken != token || restored.Status().Transport != "hosted" {
 		t.Fatal("lost protected activation")
+	}
+}
+
+func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
+	ctx := context.Background()
+	m, _, csr := directTestConfigured(t)
+	proof := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	m.state.Hosted = &hostedState{DeviceID: "12345678-1234-4234-8234-123456789012", DeviceToken: "med1." + proof, BrokerEndpoint: "https://broker.example", GatewayHostname: "old-route.example", GatewayPort: 443}
+	if err := m.configureHostedLocked(ctx, "Workload"); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := m.IssueInvitation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(bundle)
+	var invitation directInvitation
+	if err != nil || json.Unmarshal(raw, &invitation) != nil {
+		t.Fatal("invalid hosted invitation")
+	}
+	identity := directTestEnroll(t, m, invitation, csr)
+	block, _ := pem.Decode([]byte(identity.CertificatePEM))
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackAt := func(manager *Direct, endpoint string, generation uint64) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]any{"clientId": identity.ClientID, "pairingId": identity.PairingID, "generation": generation})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, endpoint+"/v2/direct/ack", bytes.NewReader(body))
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}
+		response := httptest.NewRecorder()
+		manager.handler().ServeHTTP(response, request)
+		return response
+	}
+	if response := ackAt(m, "https://old-route.example", identity.Generation); response.Code != http.StatusOK {
+		t.Fatal("initial hosted pairing acknowledgement failed", response.Code)
+	}
+	before := m.cloneLocked()
+	if !m.Status().Paired || m.Status().UpdatePending || m.opener.current() != nil {
+		t.Fatal("fixture must have an acknowledged but offline hosted phone")
+	}
+
+	// Removing the device in Inevitable retires its route. Browser approval
+	// returns a replacement route for the same locally paired Client identity.
+	verifier, err := directRandom()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.state.Activation = &activationState{RequestID: "23456789-1234-4234-8234-123456789012", PollSecret: proof, CodeVerifier: verifier, DisplayName: "Workload", Status: "pending", ExpiresAt: time.Now().Add(time.Hour), PollIntervalSeconds: 5}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "authorized", "deviceId": "34567890-1234-4234-8234-123456789012", "clientId": before.ClientID, "deviceToken": "med1." + proof, "routeId": "45678901-1234-4234-8234-123456789012", "brokerEndpoint": "https://broker.example", "gatewayHostname": "new-route.example", "gatewayPort": 443}})
+	}))
+	defer server.Close()
+	m.activationOrigin, m.activationClient = server.URL, server.Client()
+	if err := m.pollActivation(ctx, m.state.Activation.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if m.state.Generation != before.Generation+1 || m.state.Configuration.Endpoint != "https://new-route.example" {
+		t.Fatal("reactivation did not advance to the replacement hosted route")
+	}
+	if m.state.ClientID != before.ClientID || m.state.CACertificatePEM != before.CACertificatePEM || m.state.CAPrivateKeyPEM != before.CAPrivateKeyPEM ||
+		m.state.Pairing.ID != before.Pairing.ID || !bytes.Equal(m.state.Pairing.PublicKey, before.Pairing.PublicKey) || m.state.Pairing.Identity != before.Pairing.Identity ||
+		m.state.Username != before.Username || m.state.Password != before.Password || m.state.Invitation != nil {
+		t.Fatal("reactivation replaced local trust, pairing, proxy credentials, or created an invitation")
+	}
+
+	// Protected persistence must retain both the desired route and the phone's
+	// older acknowledgement so restarting cannot hide the pending update.
+	restored := NewDirect(m.repository, "windows", "amd64", "test")
+	if err := restored.ensureLocked(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := restored.Status(); !status.Paired || !status.UpdatePending || status.Connected || status.Generation != m.state.Generation {
+		t.Fatal("restart lost pending recovery or reported an offline phone connected")
+	}
+	if restored.state.AcknowledgedGeneration != before.Generation || restored.state.AcknowledgedEndpoint != "https://old-route.example" {
+		t.Fatal("reactivation silently acknowledged an address the phone has not received")
+	}
+	bundle, err = restored.ExportEndpointUpdate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = base64.RawURLEncoding.DecodeString(bundle)
+	var wrapper struct {
+		Version   int    `json:"version"`
+		Type      string `json:"type"`
+		Payload   string `json:"payload"`
+		Signature string `json:"signature"`
+	}
+	if err != nil || directStrictJSON(raw, &wrapper) != nil || wrapper.Version != 2 || wrapper.Type != "mobile-egress-direct-endpoint-update" {
+		t.Fatal("invalid recovery update wrapper")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(wrapper.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(wrapper.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(append([]byte(directSignatureDomain), payload...))
+	ca, _, err := directCA(before)
+	if err != nil || !ecdsa.VerifyASN1(ca.PublicKey.(*ecdsa.PublicKey), digest[:], signature) {
+		t.Fatal("recovery update was not signed by the phone's existing pinned authority")
+	}
+	var fields struct {
+		ClientID   string `json:"clientId"`
+		PairingID  string `json:"pairingId"`
+		Generation uint64 `json:"generation"`
+		Endpoint   string `json:"endpoint"`
+		Transport  string `json:"transport"`
+	}
+	if directStrictJSON(payload, &fields) != nil || fields.ClientID != before.ClientID || fields.PairingID != before.Pairing.ID || fields.Generation != before.Generation+1 || fields.Endpoint != "https://new-route.example" || fields.Transport != "hosted" {
+		t.Fatal("recovery update did not bind the new route to the existing phone identity")
+	}
+	tc, err := directTLS(restored.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.tlsConfig.Store(tc)
+	if response := ackAt(restored, "https://old-route.example", fields.Generation); response.Code != http.StatusConflict || !restored.Status().UpdatePending {
+		t.Fatal("old route incorrectly confirmed delivery of the replacement endpoint", response.Code)
+	}
+	if response := ackAt(restored, fields.Endpoint, fields.Generation); response.Code != http.StatusOK || restored.Status().UpdatePending {
+		t.Fatal("existing phone certificate could not acknowledge the recovery update", response.Code)
+	}
+	if restored.Status().Connected {
+		t.Fatal("an acknowledgement without a live session reported connected")
+	}
+	restored.mu.Lock()
+	restored.status.Running = true
+	restored.sessionGeneration, restored.sessionTransport = before.Generation, "hosted"
+	restored.mu.Unlock()
+	restored.opener.swap(&healthyUpdateTunnel{})
+	defer restored.opener.swap(nil)
+	if restored.Status().Connected {
+		t.Fatal("a stale hosted session verified the replacement route")
+	}
+	restored.mu.Lock()
+	restored.sessionGeneration = fields.Generation
+	restored.mu.Unlock()
+	if !restored.Status().Connected {
+		t.Fatal("current-generation authenticated session did not finish recovery")
 	}
 }
 

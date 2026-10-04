@@ -53,11 +53,18 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
     <button id="stepAddress"><span>1</span><b id="addressStepLabel">Computer address</b></button>
     <button id="stepNetwork"><span>2</span><b id="networkStepLabel">Network access</b></button>
     <button id="stepPair"><span>3</span>Pair phone</button>
-    <button id="stepVerify"><span>4</span>Start on your phone</button>
+    <button id="stepVerify"><span>4</span><b id="verifyStepLabel">Start on your phone</b></button>
     <button id="stepProxy"><span>5</span>Use your proxy</button>
   </nav>
   <div class="heading"><div><div id="stepCount" class="eyebrow">Step 1 of 5</div><h2 id="stepTitle" tabindex="-1">Computer address</h2></div><button id="finishLater" class="quiet">Finish later</button></div>
 </div>
+<details id="recoveryPanel" class="card hidden"><summary id="recoveryHeading">Connection updates</summary>
+  <p id="recoveryMessage"></p>
+  <button id="exportUpdate" disabled>Show connection update</button><button id="copyUpdate" class="secondary" disabled>Copy connection update</button>
+  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"></div><p class="note">On your phone, open Mobile Egress and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the complete connection update</summary><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
+  <p class="note">Keep this computer enabled in the phone app. If sharing is stopped, tap Start cellular Agent on Android or Start sharing on iPhone after scanning.</p>
+  <details><summary>Removed this computer from the phone app?</summary><p>The phone needs a new pairing. On this computer, go to the dashboard, choose Remove paired phone, then create a new invitation and scan it on your phone. Your Inevitable activation stays in place.</p></details>
+</details>
 <section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
   <h2 id="verifyHeading">Start sharing on your phone</h2><p id="verificationMessage" role="status"></p>
   <div id="phoneStartInstructions" class="hidden">
@@ -162,12 +169,6 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <p class="note">Use these proxies only in applications on this computer. Copies include your proxy credentials. Never expose ports 1080 or 1081.</p>
   <button id="finishSetup">Go to dashboard</button>
 </section>
-<details id="recoveryPanel" class="card hidden"><summary>Recover after an address change</summary>
-  <p>The phone receives connection updates while connected. If it cannot reach the old address, scan or import this signed update on the paired phone.</p>
-  <button id="exportUpdate" class="secondary" disabled>Show connection update</button><button id="copyUpdate" class="secondary" disabled>Copy connection update</button>
-  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"></div><p class="note">Keep the entire code visible while scanning. Enlarge this window if needed.</p><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></div>
-  <p class="note">For software updates or repair, run the latest signed Client installer. Direct pairing and proxy credentials are preserved.</p>
-</details>
 <div id="feedback" role="status" aria-live="polite"></div>
 <footer><span>Client ⇄ phone ⇄ cellular Internet</span><span id="version"></span></footer>
 </main><script src="app.js"></script></body>

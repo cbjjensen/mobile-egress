@@ -51,3 +51,5 @@ Run a compatible signed installer for upgrades/repair. Direct pairing, proxy cre
 Change mode or the direct advertised endpoint in the Client app and keep the phone connected to receive a signed update. If the old endpoint is unreachable, choose Show/Copy connection update and import it on the paired phone. Missed generations can be skipped. Pending remains until acknowledged. Trust replacement requires re-pairing. Revoking Inevitable gateway access stops hosted attachment; it does not erase local phone pairing or affect other commercial proxies.
 
 Remove paired phone immediately revokes its access and closes traffic. Pair a replacement using a new invitation. To free a phone registry slot, also remove the saved Client there.
+
+Removing the computer from Inevitable only revokes hosted access; it does not remove its local phone pairing. After reactivation, **Reconnect your phone** appears if the gateway address changed. Choose **Show connection update**, scan it in the phone app and start sharing if stopped. This updates the saved pairing rather than creating a second Client.
