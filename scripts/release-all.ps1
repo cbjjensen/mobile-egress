@@ -999,6 +999,34 @@ function Assert-MobileEgressReleaseFreezeRecord {
     }
 }
 
+function Read-MobileEgressClientExecutableVersion {
+    param([Parameter(Mandatory)][string]$Path)
+
+    # PowerShell's native invocation can omit stdout for a Windows GUI-subsystem
+    # executable. Explicit pipes also ensure we wait for its version response.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $Path
+    $start.Arguments = '--version'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw 'Could not start the Client version check.' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10000)) {
+            try { $process.Kill() } catch { }
+            throw 'Client version check exceeded ten seconds.'
+        }
+        if ($process.ExitCode -ne 0) { throw 'Client version check failed.' }
+        $null = $stderr.GetAwaiter().GetResult()
+        return $stdout.GetAwaiter().GetResult()
+    } finally { $process.Dispose() }
+}
+
 function Assert-MobileEgressDirectWindowsArtifacts {
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
@@ -1006,7 +1034,7 @@ function Assert-MobileEgressDirectWindowsArtifacts {
         [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit,
         [scriptblock]$SignatureReader = {param($Path) Get-AuthenticodeSignature -LiteralPath $Path},
         [scriptblock]$BuildInfoReader = {param($Path) Invoke-MobileEgressNativeCommand -FilePath 'go' -Arguments @('version','-m',$Path) -Description 'Reading signed Client build provenance'},
-        [scriptblock]$VersionReader = {param($Path) Invoke-MobileEgressNativeCommand -FilePath $Path -Arguments @('--version') -Description 'Reading signed Client version'},
+        [scriptblock]$VersionReader = {param($Path) Read-MobileEgressClientExecutableVersion -Path $Path},
         [scriptblock]$PayloadVerifier = {param($InstallerPath,$PayloadPath,$Sources) Assert-MobileEgressInstallerPayload -InstallerPath $InstallerPath -PayloadPath $PayloadPath -ExpectedSources $Sources}
     )
     $root = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version"

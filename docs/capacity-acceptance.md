@@ -4,6 +4,8 @@ For the hosted pilot, repeat these measurements through Inevitable Gateway with 
 
 Exercise cross-node forwarding, owner replacement, scale-in/drain, config expiry/backend outage, device/grant revocation, TLS renewal and missed mode updates. Record phone thermal behavior and cellular IPv6/NAT64; synthetic loopback throughput does not establish handset performance. See [hosted acceptance](hosted-acceptance.md). Never overwrite historical relay/direct benchmark records.
 
+The 2026-10-04 follow-up completed a short local transport/coexistence smoke, recorded in [hosted acceptance](hosted-acceptance.md) and the sibling Inevitable `local-capacity-report.md`. It confirmed exact bytes, Core accounting, fair progress and hundreds of Mbps to aggregate Gbps on loopback, while also showing contention when both local fixtures ran at maximum speed. This is sufficient evidence to continue local development, not a promise of equal Core/Mobile throughput or a substitute for the deployed/physical acceptance below.
+
 The direct product has one phone-initiated tunnel per Client, one paired phone per Client, and ten saved Clients per phone including disabled and pending records. These are identity/session limits, not fixed active-stream or throughput caps.
 
 Directional phone data debt is globally bounded at 8,192 frames / 64 MiB, with 32 frames per stream. Queued and native in-flight work both count until completion/cancellation; ten peers do not multiply the budget. Idle saved entries reserve no static share. Control processing is bounded separately. Under contention, peers and streams must make progress without one failure stopping the others.

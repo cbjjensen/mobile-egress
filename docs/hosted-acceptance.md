@@ -28,14 +28,24 @@ Independent reviews found and prompted regression fixes for concurrent gateway c
 
 | Gate | State and required evidence |
 |---|---|
-| Real PostgreSQL concurrency | BLOCKED: no Windows/Mac localhost Postgres/test database; Docker Desktop API returns 500 and its service is stopped. Four dedicated opt-in tests remain skipped. Synthetic service/HTTP tests do not prove real SQL locking. |
+| Real PostgreSQL concurrency | PASS on follow-up: all four dedicated tests passed on isolated PostgreSQL 16.15 with the real migration; zero skipped, fixture schema cleanup verified and server stopped. Production migration rehearsal remains separate. |
 | Deployment and recovery | NOT RUN: reviewed AWS plan, image/Compose startup, actual cross-node loss/scale-in, private TLS renewal, backend outage and configured revocation timing. Infrastructure remains disabled. |
 | Physical traffic | NOT RUN: Windows/Mac with Android/iPhone HTTP/CONNECT/SOCKS over cellular through Gateway, with no router changes; include IPv6/NAT64 and offline mode recovery. |
-| Signed installers | NOT RUN: Windows install/upgrade/repair/boot/logout/DPAPI and Mac notarized PKG/LaunchDaemon/file-based System Keychain acceptance with established identities. |
+| Signed installers | PARTIAL: local signed Windows installer/service/GUI passed exact signer, timestamp, source, version and embedded payload verification; signed Android release APK matches the established identity. Mac guarded fixture compilation, configured Developer ID signing and designated-requirement verification passed. Installed Windows upgrade/repair/boot/logout/DPAPI and Mac notarized PKG/LaunchDaemon/file-based System Keychain acceptance remain NOT RUN; noninteractive Mac root execution is blocked. |
 | iOS and Android lifecycle | NOT RUN on hardware: Android screen-off/cellular recovery, iOS short-auto-lock no-touch keep-awake, manual lock/app switching, Stop/resume and legacy VPN cleanup. |
-| Capacity and coexistence | NOT RUN: sustained one-/ten-Client throughput, latency, fairness, CPU/memory and thermal measurements, ordinary proxy usage intact, no Mobile usage submissions, and at most 5% agreed Core throughput/p95 regression under combined load. |
+| Capacity and coexistence | PARTIAL: short loopback one-/ten-Client same/cross-node and Core coexistence measurements passed correctness/accounting/cleanup checks. Sustained deployed throughput, latency, CPU/memory, phone thermal behavior and the agreed 5% Core regression bound remain unmeasured. Synthetic maximum-speed cohosting reduced Core throughput and does not establish the deployed bound. |
 
 Downloads remain pre-release and are not release-ready. Historical relay/direct benchmark results remain historical; no Mbps rate is promised. Use [capacity acceptance](capacity-acceptance.md) and the [physical record](templates/physical-acceptance-record.md) for sign-off.
+
+## Follow-up local validation
+
+On 2026-10-04, the four real PostgreSQL concurrency tests passed against a fresh loopback-only PostgreSQL 16.15 cluster with synthetic data. No existing database, Docker service or production configuration was changed. The server was stopped, validation schemas/tables were removed and temporary password files deleted. Automatic approval review blocked deletion of the stopped cluster directories, which remain in the task's G: cache with the reusable vendor archive and logs.
+
+[Signed artifact validation](signed-validation-2026-10-04.md) records the locally built Windows installer and Android APK. Full Windows artifact verification caught and led to repair of missing GUI stdout capture in the release version check; a real Windows GUI executable regression reproduced the failure and passed after correction. These artifacts were not installed or published. [Mac validation](mac-signed-validation-2026-10-04.md) records successful guarded native test compilation, Developer ID signing through the existing configured unlock, and the remaining root-access blocker. Neither Android nor iPhone hardware was attached.
+
+The bounded capacity smoke uses real Core CONNECT and Mobile TLS/yamux/SNI/private-bridge paths with synthetic loopback peers. Three two-second trials measured median useful payload per direction: Core single connection 1,132 Mbps and ten aggregate 3,739 Mbps; Mobile same-node single 649 Mbps and ten aggregate 4,989 Mbps; Mobile cross-node single 734 Mbps and ten aggregate 3,093 Mbps. Payload/EOF, per-Client progress, memory-reservation cleanup and Core accounting checks passed. These are transport-only figures, not handset/WAN throughput or customer speed claims.
+
+With both ten-connection test processes sending as fast as possible on the same workstation, Core measured 2,239 Mbps (about 40% lower), then recovered to 3,781 Mbps after Mobile stopped. All simulated peers share that workstation and no deployment container CPU limits apply, so this measures local contention rather than the production 5% gate. Shared gateway infrastructure alone does not establish equal throughput or zero interference. The reproducible method, CPU/memory/fairness data and raw evidence locations are in Inevitable's `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/local-capacity-report.md`. A short pilot coexistence check remains appropriate; a longer physical thermal/load campaign is still unperformed.
 
 ## Rollback
 

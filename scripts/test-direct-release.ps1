@@ -84,6 +84,22 @@ try {
         $verifyParameters.BuildInfoReader={param($Path) "build vcs.revision=$('c'*40)`nbuild vcs.modified=false"}
         $rejected=$false;try { Assert-MobileEgressDirectWindowsArtifacts @verifyParameters } catch { $rejected=$true }
         Assert-DirectRelease $rejected 'A direct Windows artifact from another commit must be rejected.'
+        if ($env:OS -eq 'Windows_NT') {
+            $source = Join-Path $fixture 'version-fixture.go'
+            [IO.File]::WriteAllText($source, 'package main; import "fmt"; func main() { fmt.Println("2.0.0") }')
+            $guiVersion = Join-Path $clientRoot 'mobile-egress-client-app.exe'
+            $builtFixture = Join-Path $fixture 'version-gui.exe'
+            & go build -ldflags '-H windowsgui' -o $builtFixture $source
+            if ($LASTEXITCODE -ne 0) { throw 'Could not build the real Windows GUI version fixture.' }
+            Copy-Item -LiteralPath $builtFixture -Destination $guiVersion -Force
+            Copy-Item -LiteralPath $guiVersion -Destination (Join-Path $clientRoot 'mobile-egress-client.exe') -Force
+            $verifyParameters.BuildInfoReader={param($Path) $command=if ([IO.Path]::GetFileName($Path) -ceq 'MobileEgressClientSetup.exe') {'mobile-egress-setup'}else{[IO.Path]::GetFileNameWithoutExtension($Path)}; "path`t mobile-egress/windows-client/cmd/$command`nbuild`t vcs.revision=$('b'*40)`nbuild`t vcs.modified=false`nbuild`t GOOS=windows`nbuild`t GOARCH=amd64"}
+            $verifyParameters.Remove('VersionReader')
+            Assert-MobileEgressDirectWindowsArtifacts @verifyParameters
+            $verifyParameters.VersionReader={param($Path) '2.0.1'}
+            $rejected=$false;try { Assert-MobileEgressDirectWindowsArtifacts @verifyParameters } catch { $rejected=$true }
+            Assert-DirectRelease $rejected 'Capturing GUI output must still reject the wrong version.'
+        }
     } finally { $publicCertificate.Dispose() }
 } finally {
     $resolved = [IO.Path]::GetFullPath($fixture)
