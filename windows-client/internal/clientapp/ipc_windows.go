@@ -5,6 +5,7 @@ package clientapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 )
 
 const localPipe = `\\.\pipe\MobileEgressClient`
+const localPipeClientAccess = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.SYNCHRONIZE
 
 func ListenLocal(stateDir string) (net.Listener, error) {
 	token, err := windows.GetCurrentProcessToken().GetTokenUser()
@@ -30,9 +32,10 @@ func ListenLocal(stateDir string) (net.Listener, error) {
 		return nil, errors.New("Client owner is invalid; repair the installation")
 	}
 	// FILE_GENERIC_WRITE includes FILE_CREATE_PIPE_INSTANCE. Grant only data
-	// read/write, READ_CONTROL and SYNCHRONIZE so the owner can use the service
-	// but cannot create an impersonating server instance in its pipe namespace.
-	descriptor := "O:SYG:SYD:P(A;;GA;;;SY)(A;;0x00120003;;;" + sid.String() + ")"
+	// read/write, read attributes, READ_CONTROL and SYNCHRONIZE. CreateFile also
+	// checks read attributes when opening the client handle. The owner still
+	// cannot create an impersonating server instance in this pipe namespace.
+	descriptor := fmt.Sprintf("O:SYG:SYD:P(A;;GA;;;SY)(A;;0x%08x;;;%s)", localPipeClientAccess, sid.String())
 	return winio.ListenPipe(localPipe, &winio.PipeConfig{SecurityDescriptor: descriptor, InputBufferSize: 65536, OutputBufferSize: 65536})
 }
 
@@ -43,7 +46,7 @@ func dialLocal(ctx context.Context) (net.Conn, error) {
 func dialAuthenticatedPipe(ctx context.Context, path string) (net.Conn, error) {
 	// READ_CONTROL lets the GUI verify the server's object owner before sending
 	// an invitation. An unprivileged process cannot create a SYSTEM-owned pipe.
-	connection, err := winio.DialPipeAccess(ctx, path, windows.FILE_READ_DATA|windows.FILE_WRITE_DATA|windows.READ_CONTROL|windows.SYNCHRONIZE)
+	connection, err := winio.DialPipeAccess(ctx, path, localPipeClientAccess)
 	if err != nil {
 		return nil, err
 	}

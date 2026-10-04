@@ -1,6 +1,6 @@
 # Local signed artifact validation — 2026-10-04
 
-These are local validation artifacts for hosted application source `7430ba63ace5597d0453ac23d6eaeb8bcf155a83`. The initial build changed no installed application/service; the subsequent owner-approved Windows installation is recorded below. No release tag, public GitHub asset, trust store or publisher identity was changed. Hosted infrastructure remains disabled. Successful signing does not establish boot/logout, physical cellular or release acceptance.
+These are local validation artifacts for hosted application source `7430ba63ace5597d0453ac23d6eaeb8bcf155a83`. The initial build changed no installed application/service; the subsequent owner-approved Windows installation is recorded below. No release tag, public GitHub asset, trust store or publisher identity was changed. Hosted infrastructure was disabled at this initial checkpoint; the later owner-only deployment is recorded in [hosted acceptance](hosted-acceptance.md). Successful signing does not establish boot/logout, physical cellular or release acceptance.
 
 ## Windows
 
