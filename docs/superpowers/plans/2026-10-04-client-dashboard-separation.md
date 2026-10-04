@@ -11,7 +11,7 @@ The owner confirmed that the Windows desktop Client dashboard feels partly like 
 - [x] Put manual connection updates and confirmed phone removal in an explicit Phone settings view with a return action. Keep Review setup as an explicit entry into the existing wizard. Removal leads to fresh pairing without automatically issuing an invitation.
 - [x] Preserve paired-offline startup, Finish later, saved invitations, pending acknowledgements, manual edits, direct-mode configuration, service retry/repair and protected operations. Dashboard state reflects saved service configuration, never an abandoned mode selection.
 - [x] Add state/navigation regressions, run frontend and Windows gates, visually inspect synthetic connected/offline/recovery/settings states, and obtain an independent review.
-- [ ] Synchronize operations/onboarding and the sibling pilot record; prepare a signed local validation installer without automatically interrupting the owner's working connection.
+- [x] Synchronize operations/onboarding and the sibling pilot record; prepare a signed local validation installer without automatically interrupting the owner's working connection.
 
 ## Interfaces and limits
 
@@ -23,4 +23,6 @@ New navigation/state tests failed against the original dashboard and passed afte
 
 Synthetic actual-asset renderer checks use installed Edge at 940×760 and 620×650 for connected, offline, pending-update and Phone settings states. All eight screens have no renderer errors or horizontal overflow; the connected dashboard fits the native window, and smaller/recovery screens scroll normally. The ignored harness contains no real service credentials and leaves no capture process running. This is browser-renderer evidence, not a native installation or new phone-traffic acceptance test.
 
-Onboarding/operations and the sibling Inevitable pilot record are synchronized. Native mobile source and manifest evidence are unchanged. The established Windows signer validates. Signed local build preparation remains pending; the recovered installed connection has not been interrupted. No signing, native Mac installation or new physical-device result is implied by these source/renderer checks.
+Onboarding/operations and the sibling Inevitable pilot record are synchronized. Native mobile source and manifest evidence are unchanged. Final screenshots were recaptured after the heading-focus polish and contextual-feedback fix. The established Windows signer validates.
+
+Committed source `3684ab003862afe58283c22e4005bc5157457a48` produced signed Windows validation build `2.0.0-hosted-validation.20261004.5`. Full guarded verification passed established-signer/timestamp, version/platform/source and embedded-payload checks. Installer SHA-256: `03FE0254D9B43AB34C6A2547690206B5D8A98EC2DD3434F497B40D9EE4038BF9`. The artifact is prepared, not installed over the owner's working Client. Native installation of this UI, native Mac validation and new physical-device acceptance remain unperformed. No deployment, main merge or public release occurred.
