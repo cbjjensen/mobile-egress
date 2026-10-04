@@ -69,4 +69,6 @@ The owner subsequently installed `.2` and confirmed successful camera scanning. 
 
 ## Rollback procedure
 
+Subsequent hosted reactivation recovery is recorded in the [recovery repair](superpowers/plans/2026-10-04-hosted-reactivation-recovery.md). The owner removed the Client from both Inevitable and Android. The computer reactivated at generation 2; because Android's pairing key had also been deleted, the owner paired again through a fresh invitation after normal local revocation of the obsolete phone association. Authenticated connection returned, and HTTP/CONNECT/SOCKS5 smoke requests all passed again with the same non-PC public exit IP. Saved-pairing signed-update recovery is covered by automated tests; that distinct hardware path remains unverified. The desktop now makes pending connection updates visible and explains phone-side deletion separately.
+
 Disable the separate Mobile service/listener/target registration without changing Core health ownership or commercial proxy paths. Retain additive backend records and signing/service identities. Existing direct Clients stay direct. A hosted Client returns to direct only through an explicit local change and signed phone update; gateway outage never opens ingress or automatically downgrades trust. Reverting source is not authorization to drop account or pairing records.
