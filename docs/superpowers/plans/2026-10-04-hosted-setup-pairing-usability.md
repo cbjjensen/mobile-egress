@@ -18,7 +18,7 @@ The signed Windows validation installer `2.0.0-hosted-validation.20261004.1` is 
 - [x] Run targeted tests, decode representative generated images with the installed Android decoder, review both fixes, and run Windows/frontend/release-contract/mobile-manifest gates.
 - [x] Update implementation evidence and synchronized Inevitable pilot records. Commit independently reviewable source changes on the existing feature branch.
 - [x] Build and verify a new signed local Windows validation installer with the existing signer. Use the normal installer handoff; preserve activation and pairing. No public release.
-- [ ] Verify installed status and retry phone scanning/pairing with the owner. Record physical HTTP/CONNECT/SOCKS acceptance separately; never infer it from socket or gateway status.
+- [x] Verify installed status and retry phone scanning/pairing with the owner. Record physical HTTP/CONNECT/SOCKS acceptance separately; never infer it from socket or gateway status.
 
 ## Interfaces and acceptance
 
@@ -39,3 +39,21 @@ Activation tests must exercise the actual worker context, not only a manual back
 - Android/iOS source and wire formats remain unchanged. Additional scanner-unavailable feedback gaps and Android's orientation-sensitive detector are recorded for a focused mobile follow-up if physical scanning still fails; the existing APK can test the corrected desktop QR first. Manifest evidence is unchanged and validation passed. Native Mac installation and physical phone acceptance remain separate unperformed gates.
 - The existing unexpired pilot invitation was re-rendered without changing its payload/reservation: 612px PNG passed ordinary ZXing decoding at 100/125/150/175/200% with both interpolation modes. Its short remaining lifetime was not extended or reset. A fresh invitation can be requested normally after expiry.
 - Source `8bb6f090dbb03fcf2cad066aef06e5517b15ac36` was committed and pushed on the existing hosted branch. Guarded local build `2.0.0-hosted-validation.20261004.2` passed complete `Assert-MobileEgressDirectWindowsArtifacts` verification: all three timestamped signatures use the established publisher; exact clean source, platform, versions and embedded payload match. Installer SHA-256: `10BC8F97F01171F87436A928935884C68D3C8F521DF6A03B186114ACB30AEAF4`. The normal installer was opened for owner confirmation. Installation and physical scan/traffic acceptance remain pending at this checkpoint; no tag or public release was created. Synchronized Inevitable documentation is committed separately as `f96ddf57` on `codex/mobile-egress-setup-pilot-record`; no production change or main merge was performed.
+
+## Owner feedback: explicit phone handoff
+
+The owner installed `.2` and confirmed that the QR scanned successfully. Their screenshot showed acknowledged pairing but a waiting phone session; the owner found the verification page unclear about needing to act in the mobile app. Subsequent protected status confirmed `.2`, authorized, paired, gateway connected and an authenticated live phone connection. Traffic acceptance is recorded separately after actual requests.
+
+Keep this follow-up small: rename step 4 to **Start on your phone**, put phone instructions before technical connection status, name the existing native buttons (**Start cellular Agent** on Android and **Start sharing** on iPhone), explain automatic progression, and collapse troubleshooting. Keep iPhone foreground requirements explicit. Do not change the phone apps, start sharing remotely, replace pairing, require Wi-Fi changes in the normal path, or treat gateway attachment as phone connectivity.
+
+Implementation also removes stale invitation-ready feedback when consumed/expired, without clearing unrelated errors. Unpaired and awaiting-acknowledgement states retain scan/confirmation guidance and cancellation; Start instructions appear only for an acknowledged, disconnected phone. Connected status still advances automatically. Existing dashboard-on-reopen behavior is preserved.
+
+The focused regressions failed before implementation and all 43 frontend tests passed afterward, with JavaScript syntax and whitespace checks passing. Full Windows validation and signed update preparation follow; the current live phone connection must not be interrupted by automatically running an installer for this copy change.
+
+The full Windows integration gate passed (Go tests/vet/build, installer/release contracts, manifest/schema, 43 frontend tests and syntax). Independent review prompted one wording correction: unavailable service status must not claim a saved pairing for an unpaired Client. Frontend checks were rerun after that correction. No other actionable findings remained.
+
+### Windows/Android live traffic smoke
+
+With the owner-operated Android phone connected to installed Windows `.2`, three tiny requests through the protected local proxy credentials passed: HTTP absolute-form returned 200 in 583ms; HTTPS over HTTP CONNECT returned 200 in 944ms; HTTPS over SOCKS5 returned 200 in 944ms. All returned the same valid public exit IP, different from a direct PC HTTPS comparison (200 in 223ms). The phone remained paired and connected. The helper used credentials only in memory and changed no clipboard, configuration, pairing or service state. No raw secrets or public IPs are included in this record.
+
+This is an actual Windows/Android hosted traffic smoke, not a throughput benchmark, independent carrier identification, Android lifecycle test, iOS/Mac acceptance, or Core coexistence qualification. The ignored helper is under `windows-client/.local/operator/trafficprobe/`.

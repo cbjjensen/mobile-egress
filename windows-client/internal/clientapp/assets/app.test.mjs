@@ -136,15 +136,32 @@ test('resuming an active invitation offers its existing QR without auto-issuing'
 });
 test('lost pairing acknowledgement resumes verification without replacing invitation',async()=>{
  const h=await harness({status:{phase:'acknowledging',invitationExpiresAt:'2026-10-03T12:10:00Z'}});
- assert.equal(h.get('stepTitle').textContent,'Verify connection');assert.equal(h.calls.some(c=>c[0]==='issue'),false);
+ assert.equal(h.get('stepTitle').textContent,'Start on your phone');assert.equal(h.calls.some(c=>c[0]==='issue'),false);
  assert.match(h.get('verificationMessage').textContent,/confirm|pairing/i);assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(visible(h,'phoneStartInstructions'),false);assert.equal(visible(h,'cancelPairing'),true);
 });
 test('verification requires connected status even if paired or phase says ready',async()=>{
  const h=await harness();await h.get('networkNext').onclick();await h.get('issue').onclick();
  Object.assign(h.status,{paired:true,phase:'ready',connected:false});await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Verify connection');assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(h.get('stepTitle').textContent,'Start on your phone');assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(h.get('verifyHeading').textContent,'Start sharing on your phone');
+ assert.equal(visible(h,'phoneStartInstructions'),true);assert.equal(visible(h,'verifyNext'),false);
+ assert.match(h.get('verificationMessage').textContent,/automatically/);assert.equal(h.get('feedback').textContent,'');
  Object.assign(h.status,{connected:true});await h.refresh();
  assert.equal(h.get('stepTitle').textContent,'Use your proxy');assert.equal(h.get('connectedState').textContent,'Connected');
+ assert.equal(visible(h,'phoneStartInstructions'),false);
+});
+
+test('phone instructions wait for pairing and preserve unrelated action errors',async()=>{
+ const h=await harness();await h.get('stepVerify').onclick();
+ assert.equal(visible(h,'phoneStartInstructions'),false);assert.match(h.get('verificationMessage').textContent,/scan/i);
+ await h.get('stepPair').onclick();await h.get('issue').onclick();
+ Object.assign(h.status,{phase:'acknowledging'});await h.refresh();
+ assert.equal(h.get('feedback').textContent,'');assert.equal(visible(h,'phoneStartInstructions'),false);
+ h.get('feedback').textContent='Connection update could not be copied.';
+ Object.assign(h.status,{paired:true,phase:'ready'});await h.refresh();
+ assert.equal(h.get('feedback').textContent,'Connection update could not be copied.');
+ assert.equal(visible(h,'phoneStartInstructions'),true);
 });
 test('finish later and review preserve invitation and service configuration',async()=>{
  const h=await harness();await h.get('networkNext').onclick();await h.get('issue').onclick();

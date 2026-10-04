@@ -3,7 +3,8 @@ const el = id => document.getElementById(id);
 const api = () => window.go.clientapp.App;
 const show = (id, visible) => el(id).classList.toggle("hidden", !visible);
 const steps = ["address", "network", "pair", "verify", "proxy"];
-const titles = ["Computer address", "Network access", "Pair phone", "Verify connection", "Use your proxy"];
+const titles = ["Computer address", "Network access", "Pair phone", "Start on your phone", "Use your proxy"];
+const invitationReadyMessage = "Invitation ready. Scan it with Mobile Egress on your phone.";
 const labels = {waiting:"Setup needed", migration_required:"Fresh pairing required", listening:"Listening", awaiting_phone:"Waiting for phone", pairing:"Pairing", acknowledging:"Confirming pairing", ready:"Waiting for phone", connected:"Waiting for phone", expired:"Invitation expired", revoked:"Phone removed", error:"Needs attention", unavailable:"Service unavailable"};
 let status = null, setup = {localAddresses:[], defaultBindAddress:":8443", defaultPublicPort:8443};
 let step = "address", dashboard = false, initialized = false, metadataReady = false;
@@ -20,6 +21,7 @@ const configKey = value => [value.transport || (value.endpoint ? "direct" : "hos
 const activeInvitation = () => !!(status && status.invitationExpiresAt && new Date(status.invitationExpiresAt).getTime() > Date.now());
 
 function clearInvitation() {
+  if (el("feedback").textContent === invitationReadyMessage) el("feedback").textContent = "";
   el("invitation").value = ""; el("invitationQR").removeAttribute("src");
   invitationConfiguration = ""; invitationExpiry = "";
   show("invitationDetails", false);
@@ -142,6 +144,7 @@ function render() {
   el("finishLater").disabled = el("finishSetup").disabled = el("reviewSetup").disabled = busy;
   el("networkNext").disabled = busy || !ready || !status.endpoint;
   el("verifyNext").disabled = busy || !connected;
+  show("verifyNext", connected);
   el("pairNext").disabled = busy || !ready;
   el("issue").disabled = busy || !ready || !status.running || !status.endpoint || status.paired || status.phase === "acknowledging" || !!el("invitation").value;
   el("issue").textContent = activeInvitation() ? "Show current invitation" : "Create invitation";
@@ -155,7 +158,11 @@ function render() {
   el("pairNote").textContent = status?.paired ? "A phone is already paired. Continue to verify its live connection. Use the dashboard to remove it before pairing a replacement." : status?.phase === "acknowledging" ? "The phone is confirming pairing. Leave it open on cellular and let it retry; a new invitation is not needed." : "Create or show this computer's invitation, then scan it in the Mobile Egress phone app using cellular data.";
   const expires = activeInvitation() ? new Date(status.invitationExpiresAt) : null;
   el("expiry").textContent = expires ? "Invitation expires " + expires.toLocaleTimeString() + "." : "";
-  el("verificationMessage").textContent = connected ? "An authenticated phone session is connected. This computer can now use the phone's cellular connection." : status?.phase === "acknowledging" ? "Waiting for the phone to confirm pairing. Keep the phone app open on cellular; it can retry confirmation without replacing the invitation." : status?.paired ? "Your phone is paired. Start sharing in the phone app and wait for its authenticated connection." : "Waiting for an authenticated phone connection. Scan the invitation, finish pairing and start sharing on your phone.";
+  const confirmingPairing = status?.phase === "acknowledging";
+  show("phoneStartInstructions", ready && status.paired && !confirmingPairing && !connected);
+  el("verifyHeading").textContent = connected ? "Your phone is connected" : confirmingPairing ? "Finishing pairing on your phone" : "Start sharing on your phone";
+  el("verificationMessage").textContent = !ready ? "Waiting for the Client service." : connected ? "Your phone is connected. You can now use your proxy." : confirmingPairing ? "Keep Mobile Egress open on your phone while it confirms pairing. You do not need to scan again." : status?.paired ? "Your phone is paired. Follow these steps on your phone; this screen will continue automatically when it connects." : "First, return to Pair phone and scan the QR code with Mobile Egress on your phone.";
+  if ((status?.paired || confirmingPairing) && el("feedback").textContent === invitationReadyMessage) el("feedback").textContent = "";
   el("proxyConnection").textContent = connected ? "Your phone is connected. Copy a proxy into an application on this computer." : "The phone is not connected. Saved proxy details are available, but traffic needs a live phone connection.";
   el("version").textContent = status?.version ? "Client " + status.version : "";
   renderNetwork();
@@ -282,7 +289,7 @@ el("issue").onclick = () => action(el("issue"), async () => {
   const key = configKey(status), view = await api().IssueInvitation();
   invitationConfiguration = key; invitationExpiry = "";
   el("invitation").value = view.bundle; el("invitationQR").src = view.qrDataUrl; show("invitationDetails", true);
-}, "Invitation ready. Scan it with Mobile Egress on your phone.");
+}, invitationReadyMessage);
 el("copyInvitation").onclick = () => action(el("copyInvitation"), () => api().CopyInvitation(), "Invitation copied. Keep it private.");
 const cancelInvitation = button => action(button, async () => {
   await api().CancelInvitation(); clearInvitation(); if (!dashboard) step = "pair";

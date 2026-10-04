@@ -32,6 +32,7 @@ details{margin-top:18px}summary{cursor:pointer;font-weight:600}details p{margin-
 #networkInstructions{white-space:pre-line}.firewall{padding:14px 16px;background:#101b29;border-radius:9px;margin:18px 0}
 .firewall p{margin-bottom:0}.firewall strong{font-size:14px}footer{font-size:11px;color:#8098b3;display:flex;justify-content:space-between;gap:12px;margin:18px 0}
 ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
+.phoneSteps{padding-left:24px;font-size:17px;color:#e8eef7}.phoneSteps li{margin:14px 0}
 @media(max-width:560px){body{padding:16px}.card{padding:18px}.columns{grid-template-columns:1fr}.status{align-items:start}.steps button{font-size:10px}.milestones{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
@@ -52,11 +53,33 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
     <button id="stepAddress"><span>1</span><b id="addressStepLabel">Computer address</b></button>
     <button id="stepNetwork"><span>2</span><b id="networkStepLabel">Network access</b></button>
     <button id="stepPair"><span>3</span>Pair phone</button>
-    <button id="stepVerify"><span>4</span>Verify connection</button>
+    <button id="stepVerify"><span>4</span>Start on your phone</button>
     <button id="stepProxy"><span>5</span>Use your proxy</button>
   </nav>
   <div class="heading"><div><div id="stepCount" class="eyebrow">Step 1 of 5</div><h2 id="stepTitle" tabindex="-1">Computer address</h2></div><button id="finishLater" class="quiet">Finish later</button></div>
 </div>
+<section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
+  <h2 id="verifyHeading">Start sharing on your phone</h2><p id="verificationMessage" role="status"></p>
+  <div id="phoneStartInstructions" class="hidden">
+    <ol class="phoneSteps">
+      <li>Open <strong>Mobile Egress</strong> on your phone.</li>
+      <li>Tap <strong>Start cellular Agent</strong> on Android or <strong>Start sharing</strong> on iPhone.</li>
+    </ol>
+    <p class="note">Keep mobile data on. On iPhone, keep the app open and unlocked.</p>
+  </div>
+  <details id="connectionHelp"><summary>Phone not connecting?</summary>
+    <p>If your phone already shows Stop, leave sharing running. Make sure this computer is enabled in the phone app and cellular data is available.</p>
+    <div id="directTroubleshooting"><ul>
+      <li>Check the public address and public port. A VPN or CGNAT can make a suggested address unreachable.</li>
+      <li>Check this computer’s firewall and its listener port.</li>
+      <li>Check router forwarding or the hosted server’s firewall, security group and internet route.</li>
+    </ul></div>
+    <p id="hostedTroubleshooting" class="note hidden">Check that Inevitable activation is approved and the gateway is connected.</p>
+    <p class="note">For a cellular connection check, try turning off Wi-Fi on the phone. On iPhone, keep-awake prevents automatic locking while sharing; it does not enable background sharing.</p>
+    <button id="verifyBack" class="secondary">Review connection setup</button>
+  </details>
+  <button id="cancelPairing" class="secondary hidden">Cancel pending pairing</button><button id="verifyNext" class="hidden" disabled>Continue to proxy details</button>
+</section>
 <section id="connectionSummary" class="card hidden" aria-labelledby="connectionHeading">
   <div class="status"><h2 id="connectionHeading">Connection</h2><span id="phase" class="badge">Checking service</span></div>
   <p id="message" role="status"></p>
@@ -130,19 +153,6 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <div id="removePhone" class="hidden"><button id="revoke" class="danger" disabled>Remove paired phone</button>
     <div id="revokeConfirmation" class="hidden"><p>Remove this phone and immediately close its connections? Pairing again will require a new invitation.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
   </div>
-</section>
-
-<section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
-  <h2 id="verifyHeading">Connect over cellular</h2><p id="verificationMessage" role="status"></p>
-  <p>Turn off Wi-Fi on the phone for this check, then start sharing. On iPhone, leave Mobile Egress open and unlocked. Keep-awake helps the screen stay on; it does not enable background sharing.</p>
-  <details id="directTroubleshooting" open><summary>Still waiting?</summary><ul>
-    <li>Check the public address and public port. A VPN or CGNAT can make a suggested address unreachable.</li>
-    <li>Check this computer’s firewall and its listener port.</li>
-    <li>Check router forwarding or the hosted server’s firewall, security group and internet route.</li>
-    <li>Confirm the phone has working cellular data and has started sharing.</li>
-  </ul><p class="note">A bound listener or allowed firewall rule cannot confirm external access. Verification completes only when an authenticated phone session is live.</p></details>
-  <p id="hostedTroubleshooting" class="note hidden">Confirm activation is approved, the gateway is connected, and the phone has cellular data with sharing started. Gateway attachment alone does not verify the phone connection.</p>
-  <button id="verifyBack" class="secondary">Review network access</button><button id="cancelPairing" class="secondary hidden">Cancel pending pairing</button><button id="verifyNext" disabled>Continue to proxy details</button>
 </section>
 
 <section id="proxyPanel" class="card hidden" aria-labelledby="proxyHeading">
