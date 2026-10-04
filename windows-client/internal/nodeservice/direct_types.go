@@ -5,12 +5,14 @@ import "time"
 // DirectConfiguration separates the local listener from the public origin.
 // The latter may have a different port when a router forwards inbound TLS.
 type DirectConfiguration struct {
+	Transport   string `json:"transport,omitempty"`
 	BindAddress string `json:"bindAddress"`
 	Endpoint    string `json:"endpoint"`
 	DisplayName string `json:"displayName"`
 }
 
 type directInvitation struct {
+	Transport        string    `json:"transport,omitempty"`
 	Version          int       `json:"version"`
 	Type             string    `json:"type"`
 	ClientID         string    `json:"clientId"`
@@ -43,6 +45,8 @@ type directPairing struct {
 }
 
 type directState struct {
+	Hosted                 *hostedState         `json:"hosted,omitempty"`
+	Activation             *activationState     `json:"activation,omitempty"`
 	Version                int                  `json:"version"`
 	ClientID               string               `json:"clientId"`
 	Configuration          *DirectConfiguration `json:"configuration,omitempty"`

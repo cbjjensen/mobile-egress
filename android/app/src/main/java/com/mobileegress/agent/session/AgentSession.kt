@@ -29,6 +29,8 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
 interface AgentSessionListener {
+    val supportsEndpointUpdates: Boolean get() = false
+    fun onEndpointUpdate(bundle: String): Boolean = false
     fun onConnected()
     fun onTerminated(errorClass: ErrorClass)
 }
@@ -130,6 +132,7 @@ class AgentSession internal constructor(
                 return
             }
             listener.onConnected()
+            if (listener.supportsEndpointUpdates) enqueueRequiredControl("pong", payload = "mobile-egress.endpoint-update.v1".encodeToByteArray())
             scope.launch { writeLoop(webSocket) }
         }
 
@@ -181,9 +184,16 @@ class AgentSession internal constructor(
     }
 
     private fun handleEnvelope(envelope: WireEnvelope) {
+        if (closed.get()) return
         when (envelope.type) {
             "ping" -> enqueueRequiredControl("pong")
             "pong" -> Unit
+            "endpoint_update" -> {
+                if (!listener.supportsEndpointUpdates || !listener.onEndpointUpdate(envelope.decodePayload().decodeToString(throwOnInvalidSequence = true))) {
+                    throw ProtocolException("Endpoint update rejected")
+                }
+                terminate(ErrorClass.None, sendWebSocketClose = true)
+            }
             "open" -> openStream(envelope)
             "data" -> routeData(envelope)
             "close" -> closeFromRelay(envelope)

@@ -99,7 +99,7 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
             tone = ScreenTone.Warning,
         )
         else -> ScreenStatus(
-            headline = "Direct Clients active",
+            headline = "Clients active",
             summary = "Paired workloads can now use this phone's cellular connection.",
             badge = "Connected",
             tone = ScreenTone.Success,
@@ -192,7 +192,7 @@ private fun rotationScreenStatus(rotation: RotationState): ScreenStatus? = when 
     is RotationState.Completed -> when (rotation.result) {
         RotationResult.Changed -> ScreenStatus(
             "Cellular IP changed",
-            "The direct Client connections are ready with a different public address.",
+            "The Client connections are ready with a different public address.",
             "Changed",
             ScreenTone.Success,
         )
@@ -224,7 +224,7 @@ private fun rotationScreenStatus(rotation: RotationState): ScreenStatus? = when 
         )
         RotationFailure.Cancelled -> ScreenStatus(
             "IP rotation cancelled",
-            "The Agent restored direct Client connections where possible.",
+            "The Agent restored Client connections where possible.",
             "Cancelled",
             ScreenTone.Neutral,
         )

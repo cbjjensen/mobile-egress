@@ -224,6 +224,7 @@ struct AgentRuntimeLimits: Equatable, Sendable {
 }
 
 enum AgentRuntimeEffect: Equatable, Hashable, Sendable {
+    case applyEndpointUpdate(String)
     case startRelay
     case createTarget(streamID: String, token: UInt64, configuration: TargetConnectionConfiguration)
     case writeTarget(streamID: String, token: UInt64, writeID: UInt64, data: Data)

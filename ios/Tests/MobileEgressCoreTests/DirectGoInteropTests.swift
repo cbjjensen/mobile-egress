@@ -12,12 +12,27 @@ final class DirectGoInteropTests: XCTestCase {
         let invitation: String
         let invitationExpiresAt: String
         let update: String
+        let hostedUpdate: String
         let csrPem: String
         let identity: DirectIssuedIdentity
     }
     private func fixture() throws -> Fixture {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "direct-v2-wire", withExtension: "json", subdirectory: "Fixtures"))
         return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+    }
+    func testGoHostedUpdateVerifiesWithPinnedAuthorityAndProtectsMode() throws {
+        let fixture = try fixture()
+        let date = try XCTUnwrap(ISO8601DateFormatter().date(from: fixture.invitationExpiresAt)).addingTimeInterval(-30)
+        let ca = try CertificateAuthorityValidator().validate(fixture.caCertificatePem, at: date)
+        var record = DirectClientRecord(clientID: fixture.clientId, displayName: "Workload", endpoint: "https://client.example")
+        record.pairingID = fixture.pairingId; record.generation = 1
+        let update = try DirectEndpointUpdate.parse(fixture.hostedUpdate, for: record) { try DirectSecurity.verify($0, signature: $1, authority: ca.der) }
+        XCTAssertEqual(update.transport, .hosted)
+        var wrapper = try XCTUnwrap(JSONSerialization.jsonObject(with: DirectBundle.decode(fixture.hostedUpdate)) as? [String: Any])
+        let payload = try DirectBundle.decode(try XCTUnwrap(wrapper["payload"] as? String))
+        let changed = try XCTUnwrap(String(data: payload, encoding: .utf8)).replacingOccurrences(of: "hosted", with: "direct")
+        wrapper["payload"] = DirectBundle.encode(Data(changed.utf8))
+        XCTAssertThrowsError(try DirectEndpointUpdate.parse(DirectBundle.encode(JSONSerialization.data(withJSONObject: wrapper)), for: record) { try DirectSecurity.verify($0, signature: $1, authority: ca.der) })
     }
     func testGoInvitationAndRealAuthoritySignatureAcceptSkippedGenerationAndRejectTampering() throws {
         let fixture = try fixture()

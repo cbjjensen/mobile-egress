@@ -67,7 +67,7 @@ class AgentScreenPresentationTest {
             ),
         )
 
-        assertEquals("Direct Clients active", presentation.headline)
+        assertEquals("Clients active", presentation.headline)
         assertEquals(ScreenTone.Success, presentation.tone)
         assertEquals(AgentPrimaryAction.Stop, presentation.agentPrimaryAction)
         assertEquals(RotationAction.Rotate, presentation.rotationAction)
@@ -165,7 +165,7 @@ class AgentScreenPresentationTest {
             ),
         )
 
-        assertEquals("Direct Clients active", presentation.headline)
+        assertEquals("Clients active", presentation.headline)
         assertEquals(ScreenTone.Success, presentation.tone)
     }
 

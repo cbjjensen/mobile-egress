@@ -51,21 +51,24 @@ type Session struct {
 	client       *http.Client
 	transport    *http.Transport
 
-	ctx           context.Context
-	cancel        context.CancelFunc
-	writeMu       sync.Mutex
-	mu            sync.Mutex
-	streams       map[string]*relayStream
-	draining      map[string]*relayStream
-	closedStreams map[string]struct{}
-	closedOrder   []string
-	connected     bool
-	agent         bool
-	closeOnce     sync.Once
-	inboundBudget *inboundBudget
-	bytesUp       atomic.Int64
-	bytesDown     atomic.Int64
-	binaryData    atomic.Bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	writeMu         sync.Mutex
+	mu              sync.Mutex
+	streams         map[string]*relayStream
+	draining        map[string]*relayStream
+	closedStreams   map[string]struct{}
+	closedOrder     []string
+	connected       bool
+	agent           bool
+	closeOnce       sync.Once
+	inboundBudget   *inboundBudget
+	bytesUp         atomic.Int64
+	bytesDown       atomic.Int64
+	binaryData      atomic.Bool
+	endpointMu      sync.Mutex
+	endpointUpdates bool
+	pendingEndpoint string
 }
 
 type inboundBudget struct {
@@ -275,6 +278,12 @@ func (session *Session) readLoop() {
 			continue
 		}
 		if envelope.Type == "pong" {
+			payload, err := envelope.DecodePayload()
+			if err == nil && string(payload) == "mobile-egress.endpoint-update.v1" && session.direct {
+				if session.enableEndpointUpdates() != nil {
+					return
+				}
+			}
 			continue
 		}
 		if envelope.Type != "opened" && envelope.Type != "rejected" && envelope.Type != "data" && envelope.Type != "close" {

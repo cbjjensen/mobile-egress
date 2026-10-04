@@ -4,6 +4,9 @@ import "time"
 
 // StandaloneStatus is intentionally independent of the secret-bearing repository.
 type StandaloneStatus struct {
+	Transport           string     `json:"transport"`
+	ActivationState     string     `json:"activationState"`
+	GatewayState        string     `json:"gatewayState"`
 	ClientID            string     `json:"clientId"`
 	DisplayName         string     `json:"displayName"`
 	BindAddress         string     `json:"bindAddress"`

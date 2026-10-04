@@ -148,7 +148,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
                 errorMessage = "The Client invitation expired or was canceled. Generate a new invitation on the workload Client and scan it again."
                 await refresh()
             } catch {
-                errorMessage = "Pairing or update could not finish. Use a current direct Client code, then retry; pending pairing is saved."
+                errorMessage = "Pairing or update could not finish. Use a current Client code, then retry; pending pairing is saved."
                 await refresh()
             }
         }
@@ -200,7 +200,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     }
     private func updateIdleTimer() { UIApplication.shared.isIdleTimerDisabled = lifecycle.idleTimerDisabled }
     func safeStatusForCopy() -> String {
-        "Mobile Egress direct\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(statuses.filter { $0.state == "Connected" }.count)\nStreams: \(activeStreamCount)\nCellular only; no relay fallback"
+        "Mobile Egress\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(statuses.filter { $0.state == "Connected" }.count)\nStreams: \(activeStreamCount)\nCellular only; no automatic fallback"
     }
     func requestRotation() { Task { await rotation?.start() } }
     func confirmRotation(_ accepted: Bool) { Task { await rotation?.confirm(proceed: accepted) } }

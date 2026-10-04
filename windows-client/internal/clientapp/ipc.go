@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +33,11 @@ type Request struct {
 	Value  string `json:"value,omitempty"`
 }
 type Response struct {
-	Status   *nodeservice.StandaloneStatus `json:"status,omitempty"`
-	Firewall *FirewallStatus               `json:"firewall,omitempty"`
-	Value    string                        `json:"value,omitempty"`
-	Error    string                        `json:"error,omitempty"`
+	Activation *nodeservice.ActivationView   `json:"activation,omitempty"`
+	Status     *nodeservice.StandaloneStatus `json:"status,omitempty"`
+	Firewall   *FirewallStatus               `json:"firewall,omitempty"`
+	Value      string                        `json:"value,omitempty"`
+	Error      string                        `json:"error,omitempty"`
 }
 
 // Serve accepts only a platform listener which authenticates local peers before
@@ -89,6 +89,31 @@ func serveConnection(ctx context.Context, connection net.Conn, service Service) 
 		defer cancel()
 		var err error
 		switch request.Method {
+		case "start-hosted-activation", "resume-hosted-activation", "cancel-hosted-activation":
+			if hosted, ok := service.(HostedService); ok {
+				if request.Method != "start-hosted-activation" && request.Value != "" {
+					err = errors.New("Activation control accepts no credentials or settings.")
+				} else {
+					switch request.Method {
+					case "start-hosted-activation":
+						var view nodeservice.ActivationView
+						view, err = hosted.StartHostedActivation(requestCtx, request.Value)
+						if err == nil {
+							response.Activation = &view
+						}
+					case "resume-hosted-activation":
+						var view nodeservice.ActivationView
+						view, err = hosted.ResumeHostedActivation(requestCtx)
+						if err == nil {
+							response.Activation = &view
+						}
+					case "cancel-hosted-activation":
+						err = hosted.CancelHostedActivation(requestCtx)
+					}
+				}
+			} else {
+				err = errors.New("Update the Client service to activate hosted connectivity.")
+			}
 		case "check-firewall", "retry-firewall":
 			if request.Value != "" {
 				err = errors.New("Firewall checks accept no program paths or settings.")
@@ -109,10 +134,8 @@ func serveConnection(ctx context.Context, connection net.Conn, service Service) 
 			status := service.Status()
 			response.Status = &status
 		case "configure":
-			var configuration nodeservice.DirectConfiguration
-			configDecoder := json.NewDecoder(strings.NewReader(request.Value))
-			configDecoder.DisallowUnknownFields()
-			if configDecoder.Decode(&configuration) != nil || configDecoder.Decode(&struct{}{}) != io.EOF {
+			configuration, decodeErr := nodeservice.DecodeDirectConfiguration(request.Value)
+			if decodeErr != nil {
 				err = errors.New("Invalid endpoint configuration.")
 			} else if direct, ok := service.(interface {
 				Configure(context.Context, nodeservice.DirectConfiguration) error

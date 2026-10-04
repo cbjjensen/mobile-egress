@@ -74,6 +74,23 @@ func TestGenerateDirectWireFixture(t *testing.T) {
 			"generation": next.Generation, "update": retained,
 		})
 	}
+	// Export a hosted transition through the same signing boundary. No gateway
+	// activation credentials are needed or written into this public fixture.
+	next := m.cloneLocked()
+	next.Configuration.Transport = "hosted"
+	next.Configuration.BindAddress = ""
+	next.Configuration.Endpoint = "https://r-fixture.gateway.example"
+	next.Generation++
+	if err := directServerCertificate(next, next.Configuration.Endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.saveLocked(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	hostedUpdate, err := m.ExportEndpointUpdate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := map[string]any{
 		"description": "Disposable Go-generated direct/1 interoperability fixture. Public certificates and an unusable test invitation only; private authority and phone keys discarded.",
 		"clientId":    invitation.ClientID, "pairingId": identity.PairingID,
@@ -82,6 +99,7 @@ func TestGenerateDirectWireFixture(t *testing.T) {
 		"invitationExpiresAt": invitation.ExpiresAt, "identity": identity,
 		"update": update, "updatePayload": json.RawMessage(rawPayload),
 		"retainedUpdates": retainedUpdates,
+		"hostedUpdate":    hostedUpdate,
 	}
 	raw, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {

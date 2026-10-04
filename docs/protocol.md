@@ -1,6 +1,6 @@
 # Protocol
 
-Mobile Egress2 uses direct workload listeners and phone-initiated cellular TLS/WebSocket sessions. The authoritative API, bundle and signature shapes are in [the direct protocol contract](direct-protocol-v2.md). Existing1.x relay endpoints and invitations are incompatible; there is no automatic fallback.
+Mobile Egress uses phone-initiated cellular TLS/WebSocket sessions terminating at the workload Client. Default hosted mode carries them through Inevitable's gateway; Advanced direct uses a public workload listener. The authoritative inner API and signatures are in [the direct protocol contract](direct-protocol-v2.md), with [hosted mode and live-update additions](hosted-transport-contract.md). Existing 1.x relay endpoints and invitations remain incompatible; there is no automatic fallback.
 
 ## Transport semantics
 

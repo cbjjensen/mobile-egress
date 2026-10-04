@@ -1,5 +1,9 @@
 # Current status
 
+Current development is the [Inevitable hosted connectivity plan](superpowers/plans/2026-10-03-inevitable-hosted-connectivity.md) on `feature/mobile-egress-inevitable-gateway` in both repositories. New setup defaults to hosted outbound connections; existing direct installations remain direct until explicitly switched. Inevitable uses a separate default-off process on existing gateway hosts and does not meter Mobile Egress traffic. See [hosted acceptance](hosted-acceptance.md) for current evidence and blockers. This work does not deploy or publish.
+
+## Historical direct baseline
+
 Mobile Egress 2 direct-mode source is implemented on `main` under the [approved plan](superpowers/plans/2026-10-03-direct-client-phone.md). It replaces the relay, central controller, AWS management and Funnel runtime with a locally managed Windows/Mac Client and a phone-initiated connection. The phone can save ten Clients; every Client has one paired phone.
 
 Android retains its owner-started foreground service. iOS serves only while the main app is active, with default-on **Keep screen awake while sharing**. Manual locking or leaving the app pauses traffic. This lifecycle difference is an explicit approved exception in the mobile manifest.

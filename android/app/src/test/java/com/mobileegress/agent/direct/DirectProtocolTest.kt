@@ -23,6 +23,48 @@ class DirectProtocolTest {
     private val clientId = "00000000-0000-4000-8000-000000000001"
     private val pairingId = "00000000-0000-4000-8000-000000000002"
     private val now = Instant.parse("2026-10-03T00:00:00Z")
+    @Test fun hostedInvitationRetainsPinnedClientTrust() {
+        val raw = invitation().replace("\"role\":\"agent\"", "\"role\":\"agent\",\"transport\":\"hosted\"")
+        val parsed = DirectBundles.invitation(encode(raw.toByteArray()), now)
+        assertEquals(clientId, parsed.clientId)
+        assertEquals("https://client.example", parsed.endpoint)
+        assertEquals(DirectTransport.Hosted, parsed.transport)
+        val registry = DirectRegistry(MemoryDirectPersistence())
+        val saved = registry.reserve(parsed) { PendingKey("key", "csr") }
+        assertEquals(DirectTransport.Hosted, saved.transport)
+        assertEquals(saved, DirectBundles.json.decodeFromString<DirectRecord>(DirectBundles.json.encodeToString(saved)))
+        assertEquals(DirectTransport.Direct, DirectBundles.invitation(encode(invitation().toByteArray()), now).transport)
+        listOf("null", "\"HOSTED\"", "\"relay\"", "1").forEach { invalid ->
+            assertThrows(DirectException::class.java) {
+                DirectBundles.invitation(encode(raw.replace("\"hosted\"", invalid).toByteArray()), now)
+            }
+        }
+    }
+    @Test fun signedModeChangesAreAtomicGenerationBoundAndRejectStaleOperations() {
+        val ca = authority()
+        val before = endpointRecord(ca.second)
+        val registry = DirectRegistry(MemoryDirectPersistence(DirectRegistryState(records = listOf(before))))
+        val payload = DirectEndpointPayload(clientId, pairingId, 7, "https://route.example", DirectTransport.Hosted)
+        val bundle = signedEndpoint(ca.first, payload)
+        val updated = registry.endpoint(before, DirectBundles.endpoint(bundle, before, now))
+        assertEquals(DirectTransport.Hosted, updated.transport)
+        assertEquals(before.keyAlias, updated.keyAlias)
+        assertEquals(before.pairingId, updated.pairingId)
+        assertEquals(DirectStage.AwaitingAck, updated.stage)
+        assertThrows(DirectException::class.java) { registry.acknowledged(before) }
+        val conflict = payload.copy(transport = DirectTransport.Direct)
+        assertThrows(DirectException::class.java) { DirectBundles.endpoint(signedEndpoint(ca.first, conflict), updated, now) }
+        assertThrows(DirectException::class.java) { registry.endpoint(updated, conflict) }
+        val wrapper = DirectBundles.json.parseToJsonElement(DirectBundles.text(DirectBundles.decode(bundle))).jsonObject
+        val changedBytes = DirectBundles.json.encodeToString(conflict).toByteArray()
+        val tampered = encode(JsonObject(wrapper + ("payload" to JsonPrimitive(encode(changedBytes)))).toString().toByteArray())
+        assertEquals("invalid_update_signature", assertThrows(DirectException::class.java) {
+            DirectBundles.endpoint(tampered, before, now)
+        }.code)
+        val direct = registry.endpoint(updated, DirectBundles.endpoint(signedEndpoint(ca.first, payload.copy(generation = 10, transport = DirectTransport.Direct)), updated, now))
+        assertEquals(DirectTransport.Direct, direct.transport)
+        assertEquals(before.identity!!.serial, direct.identity!!.serial)
+    }
     @Test fun strictInvitationRejectsLegacyDuplicatesUnknownFieldsAndNoncanonicalEncoding() {
         val value = invitation()
         val encoded = encode(value.toByteArray())

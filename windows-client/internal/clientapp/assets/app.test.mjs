@@ -23,7 +23,7 @@ async function harness(options={}) {
     }
     return elements.get(id);
   };
-  const status={phase:'listening',message:'Listening',running:true,connected:false,generation:1,endpoint:'https://client.example:8443',bindAddress:':8443',displayName:'Workload',paired:false,updatePending:false,httpAddress:'127.0.0.1:1081',socksAddress:'127.0.0.1:1080',version:'2.0.0',...options.status};
+  const status={transport:'direct',phase:'listening',message:'Listening',running:true,connected:false,generation:1,endpoint:'https://client.example:8443',bindAddress:':8443',displayName:'Workload',paired:false,updatePending:false,httpAddress:'127.0.0.1:1081',socksAddress:'127.0.0.1:1080',version:'2.0.0',...options.status};
   const api={Status:async()=>({...status}),SetupInfo:async()=>({platform:'windows',suggestedName:'My computer',localAddresses:['192.168.1.20'],defaultBindAddress:':8443',defaultPublicPort:8443}),DiscoverPublicAddress:async()=>{calls.push(['discover']);return {address:'203.0.113.30',endpoint:'https://203.0.113.30:8443',provider:'ipify'};},
     Configure:async(bind,endpoint,name)=>{calls.push(['configure',bind,endpoint,name]);Object.assign(status,{bindAddress:bind,endpoint,displayName:name,generation:status.generation+1,phase:'listening',invitationExpiresAt:undefined});},
     IssueInvitation:async()=>{calls.push(['issue']);status.invitationExpiresAt=new Date(now+600000).toISOString();status.phase='awaiting_phone';return {bundle:'invitation',qrDataUrl:'data:image/png;base64,aA=='};},
@@ -244,4 +244,68 @@ test('removing a phone requires explicit confirmation and preserves copy and upd
  const h=await harness({status:{paired:true}});await h.get('revoke').onclick();assert.deepEqual(operations(h),[]);
  await h.get('copyHttp').onclick();await h.get('copySocks').onclick();await h.get('copyUpdate').onclick();await h.get('confirmRevoke').onclick();
  assert.deepEqual(operations(h),[['proxy','http'],['proxy','socks'],['copy-update'],['revoke']]);
+});
+
+test('fresh hosted setup activates without address lookup or firewall',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',displayName:'',phase:'waiting',generation:0},api:{StartHostedActivation:async name=>{h.calls.push(['activate',name]);h.status.activationState='pending';return {state:'pending'};}}});
+ assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');
+ assert.equal(h.calls.some(c=>c[0]==='discover'||c[0]==='check-firewall'),false);
+ assert.equal(visible(h,'hostedPanel'),true);assert.equal(visible(h,'addressPanel'),false);
+ await h.get('activateHosted').onclick();
+ assert.deepEqual(operations(h),[['activate','My computer']]);
+});
+
+test('hosted gateway attachment never verifies a phone connection',async()=>{
+ const h=await harness({status:{transport:'hosted',bindAddress:'',endpoint:'https://route.example',gatewayState:'connected',activationState:'authorized',paired:true,connected:false}});
+ assert.equal(h.get('connectedState').textContent,'Waiting');assert.equal(h.get('listeningState').textContent,'Gateway connected');
+ assert.equal(h.get('verifyNext').disabled,true);assert.equal(h.calls.some(c=>c[0]==='check-firewall'),false);
+ await h.get('reviewSetup').onclick();await h.get('advancedDirect').onclick();
+ assert.equal(visible(h,'addressPanel'),true);assert.equal(h.get('stepTitle').textContent,'Computer address');
+});
+
+test('hosted access rejection directs reactivation and preserves phone pairing',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'https://route.example',bindAddress:'',paired:true,connected:false,gatewayState:'authorization_rejected',activationState:'access_rejected'}});
+ assert.match(h.get('activationMessage').textContent,/account access or reactivate/);
+ assert.match(h.get('gatewayMessage').textContent,/pairing is preserved/);
+ assert.doesNotMatch(h.get('gatewayMessage').textContent,/Internet connection/);
+ assert.equal(h.status.paired,true);assert.equal(h.get('verifyNext').disabled,true);
+});
+
+test('browser approval advances fresh hosted setup without verifying the phone',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'pending'}});
+ Object.assign(h.status,{endpoint:'https://route.example',activationState:'authorized',gatewayState:'connected',phase:'awaiting_phone'});
+ await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Gateway connection');
+ assert.equal(visible(h,'gatewayPanel'),true);assert.equal(h.get('verifyNext').disabled,true);
+ await h.get('gatewayNext').onclick();
+ assert.equal(h.get('stepTitle').textContent,'Pair phone');
+ assert.deepEqual(operations(h),[]);
+});
+
+test('reviewing approved hosted setup continues without replacing activation',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'https://route.example',bindAddress:'',activationState:'authorized',paired:true},api:{StartHostedActivation:async()=>{h.calls.push(['activate']);}}});
+ await h.get('reviewSetup').onclick();await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');
+ assert.equal(h.get('activateHosted').textContent,'Continue to gateway connection');
+ await h.get('activateHosted').onclick();
+ assert.equal(h.get('stepTitle').textContent,'Gateway connection');
+ assert.deepEqual(operations(h),[]);assert.equal(h.status.paired,true);
+});
+
+test('approval after Finish later keeps the dashboard visible',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'pending'}});
+ await h.get('finishLater').onclick();
+ Object.assign(h.status,{endpoint:'https://route.example',activationState:'authorized',phase:'awaiting_phone'});
+ await h.refresh();
+ assert.equal(visible(h,'dashboardHeader'),true);assert.equal(visible(h,'wizardHeader'),false);
+ assert.deepEqual(operations(h),[]);
+});
+
+test('late approval does not navigate away from an explicitly selected direct form',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'pending'}});
+ await h.get('advancedDirect').onclick();edit(h,'endpoint','direct.example');
+ Object.assign(h.status,{endpoint:'https://route.example',activationState:'authorized',phase:'awaiting_phone'});
+ await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Computer address');assert.equal(h.get('endpoint').value,'direct.example');
+ assert.equal(visible(h,'addressPanel'),true);assert.deepEqual(operations(h),[]);
 });

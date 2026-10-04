@@ -1,6 +1,12 @@
 # Security model
 
-Mobile Egress 2 trusts the workload installation owner and the owner of the paired phone. It exposes an authenticated Agent listener on the workload, while keeping HTTP/CONNECT/SOCKS proxies on loopback. It never offers an unauthenticated public proxy or remote administrative listener.
+Mobile Egress trusts the workload installation owner and the owner of the paired phone. HTTP/CONNECT/SOCKS proxies stay on loopback. Default hosted mode carries the phone's TLS connection through an outbound workload attachment; only Advanced direct mode opens a public workload listener. Neither mode offers an unauthenticated public proxy or remote administration.
+
+## Hosted access boundary
+
+Inevitable browser activation uses expiring PKCE proofs and existing account sessions. A scoped hashed-at-rest device credential authorizes the workload's outer TLS attachment; the phone receives none of it. Pilot grants authorize product access, not a data quota. Mobile Egress submits no traffic bytes, destinations or accounting events. Existing proxy accounting paths remain unchanged.
+
+The gateway terminates only the workload's outer attachment TLS and its private node bridge. Phone TLS, mTLS, pairing capabilities, proxy credentials and application payloads stay encrypted to the workload. Bounded SNI parsing selects a registered route; it cannot request an arbitrary destination. Signed, expiring configuration and current PostgreSQL ownership bind node/process/session generations. Unavailable or expired authorization fails closed; do not treat revocation as instantaneous before the configured cache refresh/freshness boundary. Gateway access revocation and local phone revocation are separate operations.
 
 ## Trust and enrollment
 
@@ -16,7 +22,7 @@ Windows service secrets use LocalSystem DPAPI. Mac service secrets use a dedicat
 
 Revocation commits before reporting success and closes active streams; reconnection is denied. Removing a Client on the phone durably disables reconnection before destroying its association. A new phone needs explicit re-pairing. Renewal requires an admitted existing identity and the same public key; expired/unrecoverable trust requires local re-pairing.
 
-Endpoint update signatures cover exact serialized payload bytes with a domain separator. The pinned authority, Client ID, pairing ID and generation must match; skipped generations are allowed, stale/conflicting changes reject. Update payloads cannot change authority, keys or proxy credentials. Desired endpoints remain pending until acknowledged.
+Endpoint update signatures cover exact serialized payload bytes, including mode, with a domain separator. The pinned authority, Client ID, pairing ID and generation must match; skipped generations are allowed, stale/conflicting changes reject. Update payloads cannot change authority, keys or proxy credentials. An explicit capability allows one bounded live update per phone session; QR/file recovery remains available. Desired endpoints remain pending until acknowledged.
 
 ## Traffic boundaries
 

@@ -28,20 +28,27 @@ import (
 // Direct owns one locally protected authority and a single inbound phone tunnel.
 // opMu serializes identity changes and persistence, never stream traffic.
 type Direct struct {
-	repository   *Repository
-	version      string
-	opMu         sync.Mutex
-	state        *directState
-	runCtx       context.Context
-	server       *http.Server
-	listener     net.Listener
-	activeSerial string
-	opener       switchingTunnel
-	tlsConfig    atomic.Pointer[tls.Config]
-	denied       atomic.Bool
-	enrollSlots  chan struct{}
-	mu           sync.RWMutex
-	status       StandaloneStatus
+	activationCancel  context.CancelFunc
+	activationClient  *http.Client
+	activationOrigin  string
+	gatewayState      string
+	gatewayEpoch      uint64
+	repository        *Repository
+	version           string
+	opMu              sync.Mutex
+	state             *directState
+	runCtx            context.Context
+	server            *http.Server
+	listener          net.Listener
+	activeSerial      string
+	opener            switchingTunnel
+	tlsConfig         atomic.Pointer[tls.Config]
+	denied            atomic.Bool
+	enrollSlots       chan struct{}
+	mu                sync.RWMutex
+	sessionGeneration uint64
+	sessionTransport  string
+	status            StandaloneStatus
 }
 
 func NewDirect(repository *Repository, platform, architecture, version string) *Direct {
@@ -117,6 +124,15 @@ func (m *Direct) ensureLocked(ctx context.Context) error {
 			}
 			m.tlsConfig.Store(config)
 		}
+		if state.Hosted != nil && validateSavedHosted(state.Hosted) != nil {
+			return errDirectStorage
+		}
+		if state.Configuration != nil && state.Configuration.Transport == "hosted" && state.Hosted == nil {
+			return errDirectStorage
+		}
+		if state.Activation != nil && validateSavedActivation(state.Activation) != nil {
+			return errDirectStorage
+		}
 		m.state = state
 	}
 	m.refreshLocked()
@@ -144,9 +160,10 @@ func (m *Direct) saveLocked(ctx context.Context, next *directState) error {
 func (m *Direct) Status() StandaloneStatus {
 	m.mu.RLock()
 	status := m.status
+	sessionGeneration, sessionTransport := m.sessionGeneration, m.sessionTransport
 	m.mu.RUnlock()
 	tunnel := m.opener.current()
-	status.Connected = status.Running && tunnel != nil && tunnel.Healthy()
+	status.Connected = status.Running && status.Paired && !status.UpdatePending && sessionGeneration == status.Generation && sessionTransport == status.Transport && tunnel != nil && tunnel.Healthy()
 	if status.Connected {
 		status.Phase = "ready"
 		status.Message = "Phone connected. Copy a proxy to use it in your application."
@@ -165,14 +182,34 @@ func (m *Direct) refreshLocked() {
 		return
 	}
 	status := StandaloneStatus{Version: m.version, ClientID: s.ClientID, Generation: s.Generation, SOCKSAddress: proxyendpoint.SOCKSAddress(), HTTPAddress: proxyendpoint.HTTPConnectAddress(), Phase: "waiting", Message: "Configure this Client's public endpoint to pair a phone."}
+	status.Transport = "hosted"
+	status.Message = "Activate Inevitable to connect this Client, then pair your phone."
+	status.ActivationState = "inactive"
+	status.GatewayState = m.gatewayState
+	if status.GatewayState == "" {
+		status.GatewayState = "disconnected"
+	}
+	if s.Hosted != nil {
+		status.ActivationState = "authorized"
+	}
+	if s.Activation != nil {
+		status.ActivationState = s.Activation.Status
+	}
 	if s.Configuration != nil {
+		status.Transport = effectiveTransport(s.Configuration.Transport)
 		status.DisplayName = s.Configuration.DisplayName
 		status.Endpoint = s.Configuration.Endpoint
 		status.BindAddress = s.Configuration.BindAddress
 		status.Message = "Ready to pair a phone. Create an invitation in this Client app."
+		if status.Transport == "hosted" {
+			status.Message = "Hosted connectivity configured. Pair your phone using this Client's invitation."
+		}
 		if m.listener != nil {
 			status.Phase = "listening"
 			status.Message = "Listening. Pair your phone to verify cellular reachability."
+			if status.Transport == "hosted" {
+				status.Message = "Gateway " + status.GatewayState + ". Pair your phone to verify its authenticated cellular connection."
+			}
 			if s.Invitation != nil && time.Now().Before(s.Invitation.ExpiresAt) {
 				status.Phase = "awaiting_phone"
 				status.Message = "Awaiting phone. Scan the invitation using the phone's cellular connection."
@@ -198,6 +235,10 @@ func (m *Direct) refreshLocked() {
 		expires := s.Invitation.ExpiresAt
 		status.InvitationExpiresAt = &expires
 	}
+	if status.Transport == "hosted" && status.GatewayState == "authorization_rejected" {
+		status.ActivationState = "access_rejected"
+		status.Message = "Gateway access was rejected. Check Mobile Egress account access or reactivate this Client. Local phone pairing is preserved."
+	}
 	if m.denied.Load() {
 		status.Phase = "error"
 		status.Message = "Access is disabled because revocation could not be saved. Repair protected storage."
@@ -209,6 +250,9 @@ func (m *Direct) refreshLocked() {
 }
 
 func (m *Direct) Configure(ctx context.Context, configuration DirectConfiguration) error {
+	if configuration.Transport == "hosted" {
+		return errors.New("Activate Inevitable to configure hosted connectivity.")
+	}
 	config, err := validateDirectConfiguration(configuration)
 	if err != nil {
 		return err
@@ -219,7 +263,8 @@ func (m *Direct) Configure(ctx context.Context, configuration DirectConfiguratio
 		return err
 	}
 	next := m.cloneLocked()
-	changed := next.Configuration == nil || next.Configuration.Endpoint != config.Endpoint
+	next.Activation = nil
+	changed := next.Configuration == nil || next.Configuration.Endpoint != config.Endpoint || effectiveTransport(next.Configuration.Transport) != effectiveTransport(config.Transport)
 	if changed {
 		if next.Generation == math.MaxInt64 {
 			return errors.New("Endpoint generation exhausted. Reinstall with a new identity.")
@@ -255,6 +300,8 @@ func (m *Direct) Configure(ctx context.Context, configuration DirectConfiguratio
 		}
 		return err
 	}
+	m.stopActivationPollingLocked()
+	m.notifyEndpointUpdateLocked()
 	m.tlsConfig.Store(tlsConfig)
 	if replacement != nil {
 		m.replaceListenerLocked(replacement)
@@ -292,6 +339,7 @@ func (m *Direct) IssueInvitation(ctx context.Context) (string, error) {
 		next.Pairing = nil
 		next.AcknowledgedGeneration = 0
 		next.Invitation = &directInvitation{Version: 2, Type: "mobile-egress-direct-invitation", ClientID: next.ClientID, DisplayName: next.Configuration.DisplayName, Endpoint: next.Configuration.Endpoint, CACertificatePEM: next.CACertificatePEM, InvitationID: id, Capability: capability, ExpiresAt: time.Now().UTC().Add(10 * time.Minute).Truncate(time.Second), Role: "agent"}
+		next.Invitation.Transport = wireTransport(next.Configuration.Transport)
 		if err = m.saveLocked(ctx, next); err != nil {
 			return "", err
 		}
@@ -379,6 +427,9 @@ func (m *Direct) replaceListenerLocked(listener net.Listener) {
 	}}
 	server := &http.Server{Handler: m.handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	m.server = server
+	if runner, ok := listener.(interface{ Run(context.Context) error }); ok {
+		go runner.Run(m.runCtx)
+	}
 	go func() {
 		err := server.Serve(tls.NewListener(newDirectListener(listener, 64), config))
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -410,11 +461,22 @@ func (m *Direct) Run(ctx context.Context) error {
 		m.setError("HTTP proxy port 1081 is occupied. Close the application using it, then restart the Client.")
 		return errors.New("HTTP proxy port is unavailable")
 	}
+	if m.state.Activation != nil && m.state.Activation.Status == "authorized" {
+		if err := m.configureHostedLocked(ctx, m.state.Activation.DisplayName); err != nil {
+			m.runCtx = nil
+			httpProxy.Stop()
+			proxy.Stop()
+			m.opMu.Unlock()
+			return err
+		}
+	}
 	m.runCtx = ctx
+	m.startActivationPollingLocked()
 	if m.state.Configuration != nil {
 		if directServerNeedsRenewal(m.state) {
 			next := m.cloneLocked()
 			if directServerCertificate(next, next.Configuration.Endpoint) != nil || m.saveLocked(ctx, next) != nil {
+				m.stopActivationPollingLocked()
 				m.runCtx = nil
 				httpProxy.Stop()
 				proxy.Stop()
@@ -428,9 +490,14 @@ func (m *Direct) Run(ctx context.Context) error {
 		}
 		var listener net.Listener
 		if err == nil {
-			listener, err = net.Listen("tcp", m.state.Configuration.BindAddress)
+			if m.state.Configuration.Transport == "hosted" {
+				listener, err = m.hostedListenerLocked(m.state)
+			} else {
+				listener, err = net.Listen("tcp", m.state.Configuration.BindAddress)
+			}
 		}
 		if err != nil {
+			m.stopActivationPollingLocked()
 			m.runCtx = nil
 			httpProxy.Stop()
 			proxy.Stop()
@@ -447,6 +514,7 @@ func (m *Direct) Run(ctx context.Context) error {
 	m.opMu.Unlock()
 	defer func() {
 		m.opMu.Lock()
+		m.stopActivationPollingLocked()
 		m.opener.swap(nil)
 		if m.server != nil {
 			m.server.Close()

@@ -13,18 +13,18 @@ One product, two companion apps: **Mobile Egress Client** runs on your computer 
 - **Use familiar proxy settings.** Connect applications that support authenticated HTTP/HTTPS CONNECT or SOCKS5 over TCP.
 - **Use your own cellular connection.** Traffic exits through your phone’s carrier network. The Client-to-phone connection is encrypted and authenticated.
 - **Connect several computers.** Save up to ten Clients on one phone, with independent connection status and enable/disable controls. They share the same phone and cellular capacity.
-- **Manage access locally.** Pair by QR code, copy proxy details, remove a paired phone, and recover after a computer’s public address changes.
-- **Run directly.** No separate relay computer, AWS account, Tailscale, or Funnel setup is required.
+- **Manage access locally.** Activate the Client with Inevitable, pair your phone by QR, copy proxy details, and remove a paired phone locally.
+- **Connect without router setup.** Hosted mode uses outbound connections through Inevitable's existing gateways. No separate relay computer, customer AWS account, Tailscale, or Funnel setup is required. Advanced direct mode is also available.
 
 ## How it works
 
 ```text
-Your application → local Client proxy ⇄ your phone → cellular Internet
+Your application → local Client proxy ⇄ Inevitable gateway ⇄ your phone → cellular Internet
 ```
 
-The phone connects to the Client on your computer over cellular. Your application connects to a local proxy on that same computer. Only applications configured to use the proxy send their traffic through Mobile Egress.
+Your computer and phone connect outbound to Inevitable on TCP 443. The gateway carries the phone-to-Client encrypted connection; its keys remain on your devices. Your application connects to the local proxy on that computer. Only applications configured to use the proxy send traffic through Mobile Egress, and their Internet traffic exits through your phone.
 
-**Your computer must be reachable from the phone’s cellular network.** It needs a public address or router port forwarding. The phone does not need an inbound port, and the devices do not need to be on the same network.
+**Hosted mode needs no incoming port on your computer or router.** Both devices need outbound access to Inevitable. Your phone uses cellular, and the devices need not be on the same network. The current controlled pilot requires an Inevitable account with Mobile Egress access; the phone needs no separate login. Advanced direct mode connects without Inevitable but requires a reachable workload endpoint.
 
 ## What you need
 
@@ -37,7 +37,11 @@ The initial 2.0 platform targets are:
 | Android phone | Android 10+ with working cellular data |
 | iPhone | iOS 17+ with working cellular data; app must remain open and active |
 
-You also need permission to install the Client and allow its incoming connection, plus an application with authenticated proxy support. Linux and Intel Macs are outside the initial release.
+You also need permission to install the Client, outbound gateway access, and an application with authenticated proxy support. Linux and Intel Macs are outside the initial release.
+
+### Advanced direct mode networking
+
+The following inbound network setup applies only when you explicitly select direct mode. Existing direct installations stay direct until you switch them. Hosted mode does not run public-IP discovery, bind the direct listener, or open an inbound host firewall rule.
 
 The setup wizard configures the Client's local firewall access where permitted. Windows uses an executable/service/port rule; macOS uses an application exception for the Client daemon. Existing managed or block-all policies can require administrator help.
 
@@ -52,12 +56,12 @@ If your ISP uses carrier-grade NAT (CGNAT), ordinary router forwarding may not m
 Use matching 2.x computer and phone builds once accepted downloads are available.
 
 1. **Install both apps.** Install the Windows Client or Mac Client on the computer running your applications, and the compatible phone app on your phone.
-2. **Run the installer and follow the setup wizard.** Mobile Egress suggests your public address, configures local access where permitted, and guides you through pairing your phone. You can edit the address and port before continuing. If the Mac app does not open automatically, open Mobile Egress Client from Applications.
-3. **Complete network access and pair your phone.** Follow the wizard's Home/router, AWS EC2, or Other hosted server instructions. Scan its private pairing QR in the phone app; invitations expire after ten minutes for initial pairing.
-4. **Verify the connection.** Tap **Start** on the phone and wait for **Connected** in the wizard. A suggested address or a successful firewall check alone does not prove the phone can reach your computer. Follow the platform requirements below.
+2. **Run the installer and follow the setup wizard.** Activate the Client in your Inevitable browser account. The Client keeps activation credentials in protected service storage. If the Mac app does not open automatically, open Mobile Egress Client from Applications.
+3. **Pair your phone.** Scan the Client's private pairing QR in the compatible phone app; invitations expire after ten minutes for initial pairing. The phone does not sign in to Inevitable.
+4. **Verify the connection.** Tap **Start** on the phone and wait for **Connected**. Account activation and a gateway connection alone do not prove that your phone is connected. Follow the platform requirements below.
 5. **Connect your application.** Use **Copy HTTP proxy** or **Copy SOCKS URL**, then enter those details in your application's proxy settings. Copies include the username and password; keep them private.
 
-Address suggestions use ipify, which receives your computer's outgoing public IP. Suggestions may describe a VPN or NAT gateway instead of a reachable computer. You can enter a hostname or IP manually if discovery fails; ongoing sharing does not depend on the lookup service. **Finish later** preserves setup, and **Review setup** lets you revisit settings without resetting an existing pairing.
+Advanced direct setup retains editable hostname/port, local firewall checks, and router/provider instructions. Its ipify address suggestion receives your outgoing public IP and may describe a VPN/NAT gateway instead of a reachable computer; manual entry remains available. **Finish later** preserves setup, and **Review setup** revisits settings without resetting pairing. Gateway failure never silently switches modes.
 
 The HTTP copy uses `host:port:username:password`; enter these as separate fields if your application requires them. The SOCKS copy is a URL.
 
@@ -66,7 +70,7 @@ The HTTP copy uses `host:port:username:password`; enter these as separate fields
 | Windows | `127.0.0.2:1081` | `127.0.0.2:1080` |
 | Mac | `127.0.0.1:1081` | `127.0.0.1:1080` |
 
-These proxy addresses are local to the computer. **Keep ports 1080 and 1081 private.** Only the phone connection listener needs incoming access. Configure individual applications rather than a system-wide proxy.
+These proxy addresses are local to the computer. **Keep ports 1080 and 1081 private.** Only Advanced direct mode needs incoming access to its authenticated phone listener. Configure individual applications rather than a system-wide proxy.
 
 ## Keeping your phone connected
 
@@ -78,9 +82,11 @@ For longer iPhone sessions, use a dedicated phone and keep it powered. The compu
 
 ## Performance and limits
 
-- **Cellular only.** Both the connection to your computer and outgoing Internet traffic use cellular data. If cellular becomes unavailable, traffic stops; it does not fall back to phone Wi-Fi.
+- **Cellular only.** The phone uses cellular for both its Client connection (through Inevitable in hosted mode) and outgoing Internet traffic. If cellular becomes unavailable, traffic stops; it does not fall back to phone Wi-Fi.
 - **Speed depends on your connection.** There is no fixed Mbps throttle. Cellular upload and download, carrier congestion, computer networking, and device resources affect performance. Even downloading a page requires the phone to upload that data back to your computer. No minimum speed is guaranteed.
 - **Bring your own data plan.** Traffic consumes your phone’s mobile data. Mobile Egress does not supply cellular service or a pool of proxy IP addresses.
+- **Access, not data metering.** Mobile Egress gateway access depends on entitlement, not traffic volume. It submits no customer traffic usage or destinations to Inevitable, and has no included-data allowance or overage charges. Your carrier's data-plan terms still apply. Inevitable's other proxy products retain their own accounting.
+- **Hosted availability.** Hosted mode depends on Inevitable gateways and access/configuration services. Gateways can observe connection addresses, timing and routing metadata, but do not hold the keys for the phone-to-Client TLS connection. Operational health monitoring is separate from traffic usage reporting.
 - **One phone per Client.** Each Client pairs with one phone. Each phone saves up to ten Clients, including pending and disabled entries.
 - **Public Internet destinations over TCP.** Private-network destinations, UDP, and QUIC are unsupported. Applications must send the intended traffic through their configured proxy.
 - **Carrier-controlled addresses.** Guided cellular IP rotation requires manual Airplane Mode steps and interrupts every connected Client. A new address is not guaranteed. Separate Clients on one phone do not receive separate dedicated IPs.
@@ -89,7 +95,7 @@ For longer iPhone sessions, use a dedicated phone and keep it powered. The compu
 
 Check [official releases](https://github.com/cbjjensen/mobile-egress/releases) for availability and compatibility notes. The 2.x computer packages are the **Windows Client installer** (`MobileEgressClientSetup.exe`) and **Apple Silicon Mac Client PKG**, paired with compatible Android or iPhone builds. The pre-release notice above remains in effect; historical 1.x downloads are not substitutes.
 
-Upgrading from 1.x requires fresh pairing and a reachable Client endpoint. Follow the [installation and migration guide](docs/standalone-clients.md). Retire a former controller computer using the [separate retirement instructions](docs/controller-retirement.md).
+Upgrading from 1.x requires fresh pairing. Existing direct 2.x installations keep their settings until you explicitly switch to hosted mode. Follow the [installation and migration guide](docs/standalone-clients.md). Retire a former controller computer using the [separate retirement instructions](docs/controller-retirement.md).
 
 ## Help and technical documentation
 

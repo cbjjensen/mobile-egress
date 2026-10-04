@@ -135,9 +135,10 @@ private fun DirectClientsCard(
     var removal by remember { mutableStateOf<ClientUiState?>(null) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Direct Clients (" + state.clients.size + "/10)", style = MaterialTheme.typography.titleMedium)
+            Text("Clients (" + state.clients.size + "/10)", style = MaterialTheme.typography.titleMedium)
             state.clients.forEach { client ->
                 Text(client.name, fontWeight = FontWeight.Bold)
+                Text(if (client.transport == com.mobileegress.agent.direct.DirectTransport.Hosted) "Inevitable Gateway" else "Direct connection")
                 Text(if (client.removalPending) "Stopped · Removal pending" else if (!client.enabled) "Disabled" else if (client.connected) "Connected · " + client.streams + " streams" else client.stage + " · Disconnected")
                 if (client.error.isNotEmpty()) Text(client.error, color = MaterialTheme.colorScheme.error)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

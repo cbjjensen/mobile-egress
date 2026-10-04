@@ -80,9 +80,12 @@ struct AgentSessionStateMachine {
     private var nextWriteID: UInt64 = 1
     private var terminal = false
     private var transportV2 = false
+    private let endpointUpdates: Bool
+    private var endpointUpdateReceived = false
     private(set) var terminalFailure: AgentRuntimeErrorClass?
 
-    init(limits: AgentRuntimeLimits = .production, sharedBudget: DirectPhoneBudget? = nil) {
+    init(limits: AgentRuntimeLimits = .production, sharedBudget: DirectPhoneBudget? = nil, endpointUpdates: Bool = false) {
+        self.endpointUpdates = endpointUpdates
         self.limits = limits
         self.sharedBudget = sharedBudget
         admission = StreamAdmission()
@@ -123,9 +126,10 @@ struct AgentSessionStateMachine {
         return [.startRelay]
     }
 
-    mutating func relayConnected() {
-        guard !terminal, connectionState == .connecting else { return }
+    @discardableResult mutating func relayConnected() -> [AgentRuntimeEffect] {
+        guard !terminal, connectionState == .connecting else { return [] }
         connectionState = .connected
+        return endpointUpdates ? enqueueRequiredControl(type: .pong, streamID: "", payload: WireProtocol.endpointUpdateAdvertisement) : []
     }
 
     mutating func receiveRelay(_ message: RelayWebSocketMessage) -> [AgentRuntimeEffect] {
@@ -357,6 +361,12 @@ struct AgentSessionStateMachine {
             return enqueueRequiredControl(type: .pong, streamID: "")
         case .pong:
             return []
+        case .endpointUpdate:
+            guard endpointUpdates, !endpointUpdateReceived,
+                  let bytes = try? envelope.decodedPayload(),
+                  let bundle = String(data: bytes, encoding: .ascii), !bundle.isEmpty else { return protocolFailure() }
+            endpointUpdateReceived = true
+            return [.applyEndpointUpdate(bundle)]
         case .opened, .rejected:
             return protocolFailure()
         }

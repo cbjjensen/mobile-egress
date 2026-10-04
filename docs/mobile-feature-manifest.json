@@ -3,6 +3,43 @@
   "schemaVersion": 2,
   "features": [
     {
+      "id": "agent.hosted-connectivity",
+      "title": "Hosted and direct mode with pinned trust and signed live recovery",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRegistry.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectBundles.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectPeerSupervisor.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectProtocolTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectGoInteropTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionBackpressureTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Direct/DirectModels.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectEndpointUpdate.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift",
+            "ios/MobileEgressAgent/AgentDashboardView.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/DirectProtocolTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectGoInteropTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift"
+          ]
+        }
+      }
+    },
+    {
       "id": "agent.transport-v2",
       "title": "Explicit direct handshake and binary data framing",
       "platforms": {

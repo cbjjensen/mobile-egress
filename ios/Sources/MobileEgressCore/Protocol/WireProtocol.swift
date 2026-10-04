@@ -2,6 +2,7 @@ import Foundation
 
 public enum WireMessageType: String, Codable, CaseIterable, Sendable {
     case open, opened, rejected, data, close, ping, pong
+    case endpointUpdate = "endpoint_update"
 }
 
 public struct WireEnvelope: Equatable {
@@ -24,11 +25,12 @@ public struct WireEnvelope: Equatable {
 
 public enum WireProtocol {
     public static let transportV2Advertisement = Data("mobile-egress.transport.v2".utf8)
+    public static let endpointUpdateAdvertisement = Data("mobile-egress.endpoint-update.v1".utf8)
     public static let maximumWebSocketMessageBytes = 2 * 1024 * 1024
     public static let maximumPayloadBytes = 1024 * 1024
     private static let maximumDataPayloadBytes = 32 * 1024
 
-    private static let agentInboundTypes: Set<WireMessageType> = [.open, .data, .close, .ping, .pong]
+    private static let agentInboundTypes: Set<WireMessageType> = [.open, .data, .close, .ping, .pong, .endpointUpdate]
     private static let agentOutboundTypes: Set<WireMessageType> = [.opened, .rejected, .data, .close, .pong]
     private static let errorCodes: Set<String> = [
         "agent_stream_limit", "agent_unavailable", "client_closed", "client_stream_limit", "dns_failure",
@@ -123,7 +125,7 @@ public enum WireProtocol {
 
     private static func validate(version: Int, type: WireMessageType, streamID: String, payload: String) throws {
         guard version == 1 else { throw CoreValidationError.invalidJSON }
-        let isKeepAlive = type == .ping || type == .pong
+        let isKeepAlive = type == .ping || type == .pong || type == .endpointUpdate
         guard (isKeepAlive && streamID.isEmpty) || (!isKeepAlive && isValidStreamID(streamID)) else {
             throw CoreValidationError.invalidJSON
         }
@@ -131,7 +133,7 @@ public enum WireProtocol {
     }
 
     private static func payloadLimit(for type: WireMessageType) -> Int {
-        type == .data ? maximumDataPayloadBytes : maximumPayloadBytes
+        type == .data ? maximumDataPayloadBytes : type == .endpointUpdate ? 87_384 : maximumPayloadBytes
     }
 
     private static func isValidStreamID(_ value: String) -> Bool {

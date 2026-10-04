@@ -3,6 +3,48 @@ import XCTest
 @testable import MobileEgressCore
 
 final class DirectProtocolTests: XCTestCase {
+    func testHostedInvitationPreservesClientTrust() throws {
+        var object: [String: Any] = ["version": 2, "type": "mobile-egress-direct-invitation", "clientId": UUID().uuidString, "displayName": "Workload", "endpoint": "https://workload.example", "caCertificatePem": TestFixtures.validCAPEM, "invitationId": UUID().uuidString, "capability": DirectBundle.encode(Data(repeating: 5, count: 32)), "expiresAt": "2029-01-01T00:00:00Z", "role": "agent", "transport": "hosted"]
+        let encoded = DirectBundle.encode(try JSONSerialization.data(withJSONObject: object))
+        let invitation = try DirectInvitation.parse(encoded, now: TestFixtures.now)
+        XCTAssertEqual(invitation.caCertificatePem, TestFixtures.validCAPEM)
+        XCTAssertEqual(invitation.transport, .hosted)
+        for invalid: Any in [NSNull(), "HOSTED", "relay", 1] {
+            object["transport"] = invalid
+            XCTAssertThrowsError(try DirectInvitation.parse(DirectBundle.encode(try JSONSerialization.data(withJSONObject: object)), now: TestFixtures.now))
+        }
+        object.removeValue(forKey: "transport")
+        XCTAssertEqual(try DirectInvitation.parse(DirectBundle.encode(try JSONSerialization.data(withJSONObject: object)), now: TestFixtures.now).transport, .direct)
+    }
+    func testTransportPersistenceDefaultsOldRecordsAndRejectsNull() throws {
+        var client = DirectClientRecord(clientID: UUID().uuidString, displayName: "Workload", endpoint: "https://workload.example")
+        client.transport = .hosted
+        let data = try JSONEncoder().encode(client)
+        XCTAssertEqual(try JSONDecoder().decode(DirectClientRecord.self, from: data), client)
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        old.removeValue(forKey: "transport")
+        XCTAssertEqual(try JSONDecoder().decode(DirectClientRecord.self, from: JSONSerialization.data(withJSONObject: old)).transport, .direct)
+        old["transport"] = NSNull()
+        XCTAssertThrowsError(try JSONDecoder().decode(DirectClientRecord.self, from: JSONSerialization.data(withJSONObject: old)))
+    }
+    func testSignedTransportSwitchRejectsSameGenerationConflictAndTampering() throws {
+        var client = DirectClientRecord(clientID: UUID().uuidString, displayName: "Workload", endpoint: "https://workload.example")
+        client.pairingID = UUID().uuidString; client.generation = 1
+        var value: [String: Any] = ["clientId": client.clientID, "pairingId": client.pairingID!, "generation": 7, "endpoint": client.endpoint, "transport": "hosted"]
+        func bundle(_ data: Data) throws -> String {
+            DirectBundle.encode(try JSONSerialization.data(withJSONObject: ["version": 2, "type": "mobile-egress-direct-endpoint-update", "payload": DirectBundle.encode(data), "signature": DirectBundle.encode(Data([1]))]))
+        }
+        let payload = try JSONSerialization.data(withJSONObject: value)
+        let encoded = try bundle(payload)
+        let verify: (Data, Data) -> Bool = { signed, _ in signed == Data("MobileEgress-Direct-Endpoint-v2\n".utf8) + payload }
+        XCTAssertEqual(try DirectEndpointUpdate.parse(encoded, for: client, verify: verify).transport, .hosted)
+        client.generation = 7
+        XCTAssertThrowsError(try DirectEndpointUpdate.parse(encoded, for: client, verify: verify))
+        client.transport = .hosted
+        XCTAssertNoThrow(try DirectEndpointUpdate.parse(encoded, for: client, verify: verify))
+        value["transport"] = "direct"
+        XCTAssertThrowsError(try DirectEndpointUpdate.parse(bundle(JSONSerialization.data(withJSONObject: value)), for: client, verify: verify))
+    }
     func testNativeCompletionRefundsBeforeRetainedCallbackReturnsAndIsIdempotent() {
         let budget = DirectPhoneBudget(frameLimit: 1, byteLimit: 100)
         let completed = budget.acquire(.outbound, bytes: 100, streamKey: "peer/stream")

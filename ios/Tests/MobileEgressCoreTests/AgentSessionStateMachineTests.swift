@@ -3,6 +3,19 @@ import XCTest
 @testable import MobileEgressCore
 
 final class AgentSessionStateMachineTests: XCTestCase {
+    func testLiveEndpointUpdateAdvertisesSupportAndAdmitsOneBoundedControl() throws {
+        var machine = AgentSessionStateMachine(endpointUpdates: true)
+        _ = machine.start(); _ = machine.relayConnected()
+        try assertOutbound(&machine, type: .pong, streamID: "", payload: WireProtocol.endpointUpdateAdvertisement)
+        let update = try binary(type: .endpointUpdate, payload: Data("signed-bundle".utf8))
+        XCTAssertEqual(machine.receiveRelay(update), [.applyEndpointUpdate("signed-bundle")])
+        XCTAssertFalse(machine.receiveRelay(update).contains(.applyEndpointUpdate("signed-bundle")))
+        XCTAssertEqual(machine.snapshot.connectionState, .stopping)
+        XCTAssertThrowsError(try WireProtocol.encode(type: .endpointUpdate, payload: Data(repeating: 1, count: 87_385)))
+        XCTAssertThrowsError(try WireProtocol.parseAgentOutbound(WireProtocol.encode(type: .endpointUpdate, payload: Data([1]))))
+        var old = connectedMachine()
+        XCTAssertFalse(old.receiveRelay(update).contains(.applyEndpointUpdate("signed-bundle")))
+    }
     func testNegotiatedDataUsesLiteralBinaryAndAcceptsLegacyData() throws {
         var machine = connectedMachine()
         XCTAssertTrue(machine.receiveRelay(try binary(type: .ping, payload: Data("mobile-egress.transport.v2".utf8))).isEmpty)

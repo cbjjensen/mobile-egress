@@ -42,9 +42,9 @@ struct StrictQRCodeDecoder {
 }
 
 struct StrictJSONObject {
-    static func exactKeys(in data: Data, expected: Set<String>) throws {
+    static func exactKeys(in data: Data, expected: Set<String>, optional: Set<String> = []) throws {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == expected,
+              expected.isSubset(of: Set(object.keys)), Set(object.keys).isSubset(of: expected.union(optional)),
               hasUniqueTopLevelKeys(in: data)
         else {
             throw CoreValidationError.invalidJSON

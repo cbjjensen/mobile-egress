@@ -25,6 +25,17 @@ class DirectGoInteropTest {
     private val pending = DirectRecord(invitation.clientId, invitation.displayName, invitation.endpoint,
         "fixture-key", value("csrPem"), invitation.caCertificatePem, invitation = invitation)
 
+    @Test fun goSignedHostedUpdatePreservesPairingAndRejectsModeTampering() {
+        val before = pending.copy(pairingId = issued.pairingId, generation = issued.generation)
+        val update = DirectBundles.endpoint(value("hostedUpdate"), before, now)
+        assertEquals(DirectTransport.Hosted, update.transport)
+        assertEquals(value("clientId"), update.clientId)
+        val wrapper = DirectBundles.json.parseToJsonElement(DirectBundles.text(DirectBundles.decode(value("hostedUpdate")))).jsonObject
+        val payload = DirectBundles.text(DirectBundles.decode(wrapper.getValue("payload").jsonPrimitive.content)).replace("hosted", "direct")
+        val forged = encode(JsonObject(wrapper + ("payload" to JsonPrimitive(encode(payload.toByteArray())))).toString().toByteArray())
+        assertEquals("invalid_update_signature", assertThrows(DirectException::class.java) { DirectBundles.endpoint(forged, before, now) }.code)
+    }
+
     @Test fun goInvitationIdentityAndSkippedEndpointGenerationVerifyWithRealCaAndCsr() {
         assertEquals(value("clientId"), invitation.clientId)
         assertEquals(value("caCertificatePem"), invitation.caCertificatePem)

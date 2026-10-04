@@ -336,6 +336,11 @@ func (m *Direct) handleDirectSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.opener.swap(session)
+	m.mu.Lock()
+	m.sessionGeneration = m.state.AcknowledgedGeneration
+	m.sessionTransport = effectiveTransport(m.state.Configuration.Transport)
+	m.mu.Unlock()
+	m.notifyEndpointUpdateLocked()
 	m.activeSerial = serial
 	expiry := r.TLS.PeerCertificates[0].NotAfter
 	go func() {

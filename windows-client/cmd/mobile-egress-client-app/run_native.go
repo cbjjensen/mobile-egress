@@ -18,6 +18,6 @@ func runApp() error {
 		return err
 	}
 	var appContext context.Context
-	app := clientapp.New(clientapp.LocalClient{}, func(value string) error { return runtime.ClipboardSetText(appContext, value) })
+	app := clientapp.NewWithBrowser(clientapp.LocalClient{}, func(value string) error { return runtime.ClipboardSetText(appContext, value) }, func(raw string) error { runtime.BrowserOpenURL(appContext, raw); return nil })
 	return wails.Run(&options.App{Title: "Mobile Egress Client", Width: 760, Height: 760, MinWidth: 620, MinHeight: 650, AssetServer: &assetserver.Options{Assets: assets}, OnStartup: func(ctx context.Context) { appContext = ctx }, Bind: []interface{}{app}})
 }

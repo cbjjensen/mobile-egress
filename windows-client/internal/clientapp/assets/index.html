@@ -36,7 +36,7 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 </style>
 </head>
 <body><main>
-<div class="eyebrow">Direct cellular connection</div>
+<div class="eyebrow">Private cellular connection</div>
 <h1>Mobile Egress Client</h1>
 <p>Use your phone’s cellular connection for applications on this computer.</p>
 
@@ -49,8 +49,8 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 <p id="unfinishedSetup" class="hidden" role="status">Setup is unfinished. Your settings are saved. Choose Review setup to continue pairing and verify a live phone connection.</p>
 <div id="wizardHeader" class="hidden">
   <nav class="steps" aria-label="Setup steps">
-    <button id="stepAddress"><span>1</span>Computer address</button>
-    <button id="stepNetwork"><span>2</span>Network access</button>
+    <button id="stepAddress"><span>1</span><b id="addressStepLabel">Computer address</b></button>
+    <button id="stepNetwork"><span>2</span><b id="networkStepLabel">Network access</b></button>
     <button id="stepPair"><span>3</span>Pair phone</button>
     <button id="stepVerify"><span>4</span>Verify connection</button>
     <button id="stepProxy"><span>5</span>Use your proxy</button>
@@ -81,6 +81,25 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   </details>
   <button id="configure" disabled>Save and continue</button>
   <p class="note">Changing an existing endpoint may interrupt connections. Pairing and proxy credentials are retained; the paired phone may need a connection update.</p>
+</section>
+
+<section id="hostedPanel" class="card hidden" aria-labelledby="hostedHeading">
+  <h2 id="hostedHeading">Activate Inevitable</h2>
+  <p>Activate this Client in your browser, then pair your phone locally. Your phone does not need an Inevitable login. The Client and phone connect outbound; application traffic exits through cellular.</p>
+  <label for="hostedName">Computer name</label><input id="hostedName" maxlength="80" placeholder="My workload computer" autocomplete="off">
+  <p id="activationMessage" role="status"></p>
+  <button id="activateHosted">Activate in browser</button><button id="resumeActivation" class="secondary hidden">Continue in browser</button><button id="cancelActivation" class="secondary hidden">Cancel activation</button>
+  <p class="note">Keep this app open while approving. Activation can resume after restarting the Client service. Only a live authenticated phone connection verifies setup.</p>
+</section>
+<section id="transportChoice" class="card hidden">
+ <p>Hosted connectivity is the default for new Clients. Existing direct Clients keep their saved mode until you choose to switch.</p>
+ <button id="chooseHosted" class="secondary">Use Inevitable hosted connectivity</button>
+ <details><summary>Advanced: direct connection</summary><p>Direct mode requires a reachable authenticated Agent listener and your own network access configuration.</p><button id="advancedDirect" class="secondary">Configure direct mode</button></details>
+</section>
+<section id="gatewayPanel" class="card hidden" aria-labelledby="gatewayHeading">
+ <h2 id="gatewayHeading">Gateway connection</h2><p id="gatewayMessage" role="status"></p>
+ <p>No inbound workload listener, router forwarding or public address lookup is needed. Pair your phone and start sharing over cellular.</p>
+ <button id="gatewayNext">Continue to phone pairing</button>
 </section>
 
 <section id="networkPanel" class="card hidden" aria-labelledby="networkHeading">
@@ -115,12 +134,13 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 <section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
   <h2 id="verifyHeading">Connect over cellular</h2><p id="verificationMessage" role="status"></p>
   <p>Turn off Wi-Fi on the phone for this check, then start sharing. On iPhone, leave Mobile Egress open and unlocked. Keep-awake helps the screen stay on; it does not enable background sharing.</p>
-  <details open><summary>Still waiting?</summary><ul>
+  <details id="directTroubleshooting" open><summary>Still waiting?</summary><ul>
     <li>Check the public address and public port. A VPN or CGNAT can make a suggested address unreachable.</li>
     <li>Check this computer’s firewall and its listener port.</li>
     <li>Check router forwarding or the hosted server’s firewall, security group and internet route.</li>
     <li>Confirm the phone has working cellular data and has started sharing.</li>
   </ul><p class="note">A bound listener or allowed firewall rule cannot confirm external access. Verification completes only when an authenticated phone session is live.</p></details>
+  <p id="hostedTroubleshooting" class="note hidden">Confirm activation is approved, the gateway is connected, and the phone has cellular data with sharing started. Gateway attachment alone does not verify the phone connection.</p>
   <button id="verifyBack" class="secondary">Review network access</button><button id="cancelPairing" class="secondary hidden">Cancel pending pairing</button><button id="verifyNext" disabled>Continue to proxy details</button>
 </section>
 

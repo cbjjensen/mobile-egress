@@ -1,5 +1,29 @@
 import Foundation
 
+public enum ClientTransport: String, Codable, Sendable {
+    case direct, hosted
+    public var displayName: String { self == .hosted ? "Inevitable Gateway" : "Direct connection" }
+}
+
+/// Older v2 records omit the field. Present values must be valid, never null.
+@propertyWrapper public struct ClientTransportValue: Codable, Equatable, Sendable {
+    public var wrappedValue: ClientTransport
+    public init(wrappedValue: ClientTransport = .direct) { self.wrappedValue = wrappedValue }
+    public init(from decoder: any Decoder) throws {
+        wrappedValue = try decoder.singleValueContainer().decode(ClientTransport.self)
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wrappedValue)
+    }
+}
+
+extension KeyedDecodingContainer {
+    func decode(_ type: ClientTransportValue.Type, forKey key: Key) throws -> ClientTransportValue {
+        contains(key) ? try ClientTransportValue(from: superDecoder(forKey: key)) : ClientTransportValue()
+    }
+}
+
 public enum DirectAgentError: Error, Equatable, Sendable {
     case invalidBundle, expiredInvitation, invitationInvalid, capacity, duplicateClient, unavailable, persistence, removalIntentPersistence
     case rejected, trust, staleUpdate, identityMismatch, migrationRequired, cancelled
@@ -38,10 +62,11 @@ public struct DirectInvitation: Codable, Equatable, Sendable {
     public let capability: String
     public let expiresAt: String
     public let role: String
+    @ClientTransportValue public var transport: ClientTransport = .direct
 
     public static func parse(_ encoded: String, now: Date = Date()) throws -> Self {
         let data = try DirectBundle.decode(encoded)
-        try StrictJSONObject.exactKeys(in: data, expected: ["version", "type", "clientId", "displayName", "endpoint", "caCertificatePem", "invitationId", "capability", "expiresAt", "role"])
+        try StrictJSONObject.exactKeys(in: data, expected: ["version", "type", "clientId", "displayName", "endpoint", "caCertificatePem", "invitationId", "capability", "expiresAt", "role"], optional: ["transport"])
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard StrictJSONObject.hasIntegerLiteral(2, forKey: "version", in: data), value.type == "mobile-egress-direct-invitation", value.role == "agent",
               UUID(uuidString: value.clientId) != nil, UUID(uuidString: value.invitationId) != nil,
@@ -85,6 +110,7 @@ public struct DirectClientRecord: Codable, Equatable, Sendable, Identifiable {
     /// been issued; true preserves same-key recovery after an unknown outcome.
     public var enrollmentAttempted: Bool? = nil
     public var removing = false
+    @ClientTransportValue public var transport: ClientTransport = .direct
     public init(clientID: String, displayName: String, endpoint: String, enabled: Bool = true) {
         self.clientID = clientID; self.displayName = displayName; self.endpoint = endpoint; self.enabled = enabled
     }

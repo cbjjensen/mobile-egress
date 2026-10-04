@@ -51,6 +51,7 @@ public actor DirectClientRepository {
         let key = try keys.createKey()
         do {
             var client = DirectClientRecord(clientID: invitation.clientId, displayName: invitation.displayName, endpoint: try RelayOrigin.parse(invitation.endpoint))
+            client.transport = invitation.transport
             client.invitation = invitation; client.key = key
             client.csrPEM = try keys.createCSR(key: key, clientID: invitation.clientId)
             var next = document; try next.insert(client); try commit(next)
@@ -115,7 +116,8 @@ public actor DirectClientRepository {
             try await control.acknowledge(client)
             try Task.checkCancellation()
             var current = try self.current(id)
-            guard current.identity == client.identity, current.generation == client.generation else { return }
+            guard current.identity == client.identity, current.generation == client.generation,
+                  current.endpoint == client.endpoint, current.transport == client.transport else { return }
             current.needsAcknowledgement = false; current.invitation = nil
             try saveClient(current)
         }
@@ -154,6 +156,7 @@ public actor DirectClientRepository {
             try Task.checkCancellation()
             let latest = try current(id)
             guard latest.identity == client.identity, latest.generation == client.generation,
+                  latest.endpoint == client.endpoint, latest.transport == client.transport,
                   issued.generation == client.generation else { return }
             client = latest
             try install(issued, into: &client)
@@ -161,16 +164,19 @@ public actor DirectClientRepository {
             try await control.acknowledge(client)
             try Task.checkCancellation()
             var acknowledged = try current(id)
-            guard acknowledged.identity == client.identity, acknowledged.generation == client.generation else { return }
+            guard acknowledged.identity == client.identity, acknowledged.generation == client.generation,
+                  acknowledged.endpoint == client.endpoint, acknowledged.transport == client.transport else { return }
             acknowledged.needsAcknowledgement = false; try saveClient(acknowledged)
         }
     }
-    public func importUpdate(_ bundle: String) throws {
+    public func importUpdate(_ bundle: String, expectedClientID: String? = nil) throws {
         // Try only the ten pinned peer authorities. Identity binding is checked inside verification.
         for client in document.clients where !client.removing && !removedClientIDs.contains(client.id) {
+            if let expectedClientID, client.clientID != expectedClientID { continue }
             guard let identity = client.identity,
                   let update = try? DirectEndpointUpdate.parse(bundle, for: client, verify: { try DirectSecurity.verify($0, signature: $1, authority: identity.caCertificateDER) }) else { continue }
             var changed = client; changed.endpoint = update.endpoint; changed.generation = update.generation
+            changed.transport = update.transport
             changed.identity = identity.replacingRelayOrigin(update.endpoint)
             if update.generation > client.generation { changed.needsAcknowledgement = true }
             if changed != client { try saveClient(changed) }

@@ -1,5 +1,7 @@
 # Direct protocol v2 implementation contract
 
+The hosted extension preserves this inner protocol. See [hosted transport contract](hosted-transport-contract.md) for optional mode metadata, signed mode transitions and negotiated live updates. The TLS server accepts virtual gateway connections or an explicit public direct listener; CA/mTLS admission is identical.
+
 This is the shared implementation contract for the 2026-10-03 direct Client/phone migration. It is not evidence of completed implementation or physical acceptance. No legacy relay endpoint is a fallback.
 
 ## Encoding and trust

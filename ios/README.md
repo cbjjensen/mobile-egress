@@ -1,6 +1,6 @@
 # Mobile Egress iOS Agent — direct Clients
 
-Version 2.0.0 requires reachable HTTPS workload Client endpoints. The iPhone opens one authenticated cellular WebSocket per enabled Client, for at most ten records including pending and disabled Clients. Applications use the Client's local HTTP/CONNECT or SOCKS proxy; target traffic exits through the iPhone's cellular interface. There is no relay, Tailscale Funnel, AWS dependency, or legacy endpoint fallback in the production app.
+The iPhone opens one authenticated cellular WebSocket per enabled Client, for at most ten records including pending and disabled Clients. Default Inevitable Gateway mode carries the pinned end-to-end TLS connection through the workload's outbound attachment; no router forwarding or phone account is needed. Advanced direct requires reachable workload ingress. Applications use local HTTP/CONNECT or SOCKS proxies and exit through cellular. There is no personal relay, AWS management, Tailscale/Funnel dependency or automatic fallback.
 
 ## Foreground lifecycle
 
@@ -18,7 +18,7 @@ An expired invitation releases its local slot and key when the durable record pr
 
 Each association has separate trust and credentials in the existing shared Keychain access group. The direct registry is one atomically updated Keychain document. Keys use AfterFirstUnlockThisDeviceOnly, so they are unavailable before the first unlock after reboot and do not migrate to another device through backup. The retired extension never reads direct records.
 
-The phone polls the direct configuration endpoint on connection and every 30 seconds while active. Signed endpoint updates bind Client ID, pairing ID, generation, and endpoint; skipped generations are accepted, stale/conflicting updates are rejected, and trust or keys cannot be replaced by an endpoint update. Import a QR, pasted bundle, or text file when the old endpoint is unreachable. Pending acknowledgement remains visible. Certificate renewal uses the existing key when less than seven days remain; expired credentials require new pairing.
+The phone receives signed mode/endpoint updates through the authenticated session and polls configuration on connection and every 30 seconds while active. It verifies and saves before reconnecting. Updates bind Client ID, pairing ID, generation, mode and endpoint; skipped generations work and stale/conflicting updates reject. Older records default direct; neither mode can substitute trust or keys. QR/file import recovers offline peers. Pending acknowledgement stays visible. Renewal preserves the existing key; expired credentials require fresh pairing. Mobile Egress submits no traffic-usage accounting to Inevitable.
 
 Disable pauses a Client without deleting credentials. Remove closes its sessions and deletes its local association. Revoke the pairing in the workload Client before pairing another phone; local deletion does not pretend to perform a remote administrative revocation. Status copies contain counts and finite states, never capabilities, keys, certificates, addresses, or raw network errors.
 

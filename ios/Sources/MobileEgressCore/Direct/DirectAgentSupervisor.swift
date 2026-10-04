@@ -16,6 +16,7 @@ public actor DirectAgentSupervisor {
     private struct Peer {
         let epoch: UUID
         let identity: AgentIdentity?
+        let transport: ClientTransport
         let task: Task<Void, Never>
         var runtime: AgentSessionRuntime?
         var status: String = "Connecting"
@@ -47,12 +48,12 @@ public actor DirectAgentSupervisor {
         }
         for client in eligible {
             guard enabled, revision == expectedRevision else { return }
-            if let peer = peers[client.clientID], peer.identity != nil, peer.identity != client.identity { await stopPeer(client.clientID) }
+            if let peer = peers[client.clientID], peer.transport != client.transport || (peer.identity != nil && peer.identity != client.identity) { await stopPeer(client.clientID) }
             guard enabled, revision == expectedRevision else { return }
             guard peers[client.clientID] == nil else { continue }
             let epoch = UUID()
             let task = Task<Void, Never> { [weak self] in await self?.run(client.clientID, epoch: epoch) }
-            peers[client.clientID] = Peer(epoch: epoch, identity: client.identity, task: task)
+            peers[client.clientID] = Peer(epoch: epoch, identity: client.identity, transport: client.transport, task: task)
         }
     }
     public func stop() async {
@@ -110,7 +111,10 @@ public actor DirectAgentSupervisor {
                 // runtime reduces transport failures to bounded diagnostics.
                 _ = try identityResolver.securityIdentity(forKeyTag: identity.keyTag)
                 let socket = NetworkRelayWebSocket(configuration: try RelayWebSocketConfiguration(directIdentity: identity), identityResolver: identityResolver)
-                let runtime = AgentSessionRuntime(relay: socket, targetFactory: NetworkTargetConnectionFactory(), sharedBudget: budget)
+                let runtime = AgentSessionRuntime(relay: socket, targetFactory: NetworkTargetConnectionFactory(), sharedBudget: budget,
+                    endpointUpdateHandler: { [weak self] bundle in
+                        try await self?.applyEndpointUpdate(bundle, clientID: id, epoch: epoch)
+                    })
                 peers[id]?.runtime = runtime
                 peers[id]?.status = "Connecting"
                 peers[id]?.recovery = nil
@@ -123,7 +127,8 @@ public actor DirectAgentSupervisor {
                     if snapshot.connectionState == .connected { retry = 1 }
                     ticks += 1
                     if ticks % 30 == 0 { try await repository.maintain(id) }
-                    if await repository.snapshot().clients.first(where: { $0.clientID == id })?.identity != identity { break }
+                    let latest = await repository.snapshot().clients.first(where: { $0.clientID == id })
+                    if latest?.identity != identity || latest?.transport != client.transport { break }
                 }
                 await runtime.stop()
                 if current(id, epoch) { peers[id]?.runtime = nil }
@@ -146,5 +151,9 @@ public actor DirectAgentSupervisor {
         if current(id, epoch) { await stopPeer(id) }
     }
     private func current(_ id: String, _ epoch: UUID) -> Bool { enabled && peers[id]?.epoch == epoch }
+    private func applyEndpointUpdate(_ bundle: String, clientID: String, epoch: UUID) async throws {
+        guard current(clientID, epoch) else { throw DirectAgentError.cancelled }
+        try await repository.importUpdate(bundle, expectedClientID: clientID)
+    }
 }
 #endif

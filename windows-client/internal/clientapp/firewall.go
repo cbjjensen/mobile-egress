@@ -63,6 +63,9 @@ func (s *firewallService) firewallStatus(ctx context.Context, retry bool) (Firew
 		return FirewallStatus{}, err
 	}
 	saved := s.DirectService.Status()
+	if saved.Transport == "hosted" {
+		return FirewallStatus{State: "not_required", Scope: hostFirewallScope, Message: "Hosted connectivity uses outbound TLS. No inbound firewall rule is required."}, nil
+	}
 	_, rawPort, err := net.SplitHostPort(saved.BindAddress)
 	port, portErr := strconv.ParseUint(rawPort, 10, 16)
 	if saved.Endpoint == "" || err != nil || portErr != nil || port == 0 {

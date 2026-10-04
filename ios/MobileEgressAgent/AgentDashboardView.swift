@@ -24,6 +24,7 @@ struct AgentDashboardView: View {
                     ForEach(model.clients) { client in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(client.displayName).font(.headline)
+                            Text(client.transport.displayName).font(.caption)
                             Text(model.status(client)).font(.caption)
                             Toggle("Enabled", isOn: Binding(get: { client.enabled }, set: { model.setEnabled(client, $0) }))
                                 .disabled(client.removing)
@@ -33,7 +34,7 @@ struct AgentDashboardView: View {
                             }
                         }.padding(.vertical, 4)
                     }
-                    if model.clients.isEmpty { Text("Pair a direct Client. Previous relay enrollment must be replaced with a new direct pairing.").font(.footnote) }
+                    if model.clients.isEmpty { Text("Scan the QR code from your Client app. Previous relay enrollment requires fresh pairing.").font(.footnote) }
                 }
                 Section("Pair or update a Client") {
                     Button("Scan Client QR") { model.isScannerPresented = true }.disabled(model.isBusy)
@@ -50,14 +51,14 @@ struct AgentDashboardView: View {
                 if let error = model.errorMessage { Section { Text(error).foregroundStyle(.red) } }
                 Section {
                     Button("Copy safe status") { UIPasteboard.general.string = model.safeStatusForCopy() }
-                    Text("Cellular only • Direct to Clients • No relay fallback").font(.caption)
+                    Text("Cellular only • Encrypted to your Clients").font(.caption)
                 }
             }
             .navigationTitle("Mobile Egress")
             .sheet(isPresented: $model.isScannerPresented) {
                 NavigationStack {
                     QRScannerView(onCode: model.acceptScannedCode, onUnavailable: { model.isScannerPresented = false })
-                        .navigationTitle("Scan direct Client QR")
+                        .navigationTitle("Scan Client QR")
                         .toolbar { Button("Cancel") { model.isScannerPresented = false } }
                 }
             }

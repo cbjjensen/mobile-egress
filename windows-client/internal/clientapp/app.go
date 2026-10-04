@@ -11,6 +11,7 @@ import (
 )
 
 type App struct {
+	browser    func(string) error
 	service    Service
 	clipboard  func(string) error
 	mu         sync.Mutex
@@ -51,7 +52,7 @@ func (app *App) Configure(bindAddress, endpoint, displayName string) error {
 	// Saving the endpoint can succeed before host-firewall setup reports an error.
 	// Never let a previous, invalidated invitation survive either outcome.
 	app.invitation = ""
-	return direct.Configure(context.Background(), nodeservice.DirectConfiguration{BindAddress: bindAddress, Endpoint: endpoint, DisplayName: displayName})
+	return direct.Configure(context.Background(), nodeservice.DirectConfiguration{Transport: "direct", BindAddress: bindAddress, Endpoint: endpoint, DisplayName: displayName})
 }
 func (app *App) IssueInvitation() (BundleView, error) {
 	app.mu.Lock()

@@ -9,6 +9,7 @@ public actor AgentSessionRuntime {
     private let relay: any RelayWebSocketIO
     private let targetFactory: any TargetConnectionFactory
     private let terminalFailureHandler: @Sendable (AgentRuntimeErrorClass) -> Void
+    private let endpointUpdateHandler: (@Sendable (String) async throws -> Void)?
     private var machine = AgentSessionStateMachine()
     private var targets: [String: TargetHandle] = [:]
     private var outboundInFlight: OutboundFrame?
@@ -25,12 +26,14 @@ public actor AgentSessionRuntime {
         relay: any RelayWebSocketIO,
         targetFactory: any TargetConnectionFactory,
         terminalFailureHandler: @escaping @Sendable (AgentRuntimeErrorClass) -> Void = { _ in },
-        sharedBudget: DirectPhoneBudget? = nil
+        sharedBudget: DirectPhoneBudget? = nil,
+        endpointUpdateHandler: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.relay = relay
         self.targetFactory = targetFactory
         self.terminalFailureHandler = terminalFailureHandler
-        self.machine = AgentSessionStateMachine(sharedBudget: sharedBudget)
+        self.endpointUpdateHandler = endpointUpdateHandler
+        self.machine = AgentSessionStateMachine(sharedBudget: sharedBudget, endpointUpdates: endpointUpdateHandler != nil)
         self.readTurns = sharedBudget?.readTurns
         self.readPeer = sharedBudget?.readTurns.makePeer()
     }
@@ -50,8 +53,7 @@ public actor AgentSessionRuntime {
     private func handleRelay(_ event: RelayWebSocketEvent) {
         switch event {
         case .connected:
-            machine.relayConnected()
-            pumpOutbound()
+            process(machine.relayConnected())
         case let .message(message):
             process(machine.receiveRelay(message))
         case .closed:
@@ -120,6 +122,13 @@ public actor AgentSessionRuntime {
             let effect = effects[nextEffectIndex]
             nextEffectIndex += 1
             switch effect {
+            case let .applyEndpointUpdate(bundle):
+                // The state machine admits one bounded update per session. Stop
+                // after durable import (or rejection); the supervisor owns retry.
+                Task { [weak self, endpointUpdateHandler] in
+                    try? await endpointUpdateHandler?(bundle)
+                    await self?.stop()
+                }
             case .startRelay:
                 relay.start { [weak self] event in
                     await self?.handleRelay(event)

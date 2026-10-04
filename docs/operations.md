@@ -2,7 +2,9 @@
 
 ## Reading connection state
 
-- Set up endpoint / Migration required: enter a reachable direct endpoint and pair a phone.
+- Activation required: activate hosted access in your browser, or explicitly choose Advanced direct mode.
+- Gateway connecting / unavailable: inspect account access, outbound TCP 443 and service readiness; this is separate from phone pairing.
+- Set up endpoint / Migration required: complete the selected mode and pair a phone.
 - Listening / Awaiting phone: local listener is ready; cellular reachability is not yet proved.
 - Connected: the paired phone has an authenticated direct session. A target may still reject a particular request.
 - Connection update pending: desired endpoint is persisted but not acknowledged by the phone.
@@ -10,7 +12,13 @@
 
 Status is deliberately secret-safe. Copy proxy credentials or invitations only through the explicit app actions. Never paste credentials, QR capabilities or private diagnostic dumps into issue reports.
 
-## Unreachable endpoint
+## Hosted connection recovery
+
+Check Inevitable access and the workload's outbound Internet connection. Resume pending browser activation from the Client app; its proof stays in the service. Expired/denied activation requires a new request. If the one-time authorization response is lost before durable storage, reactivate the same Client. Account device revocation stops hosted access; local pairing is retained. A gateway outage never silently changes mode or opens a public workload listener. Only an authenticated phone connection completes verification.
+
+On Inevitable, use the separate Mobile health/readiness and sanitized connection/error/resource indicators. Keep existing Core traffic and accounting enabled. Mobile gateway deployment/drain/rollback uses its own service and target registrations; disabling it must not replace healthy Core ASG nodes. Follow the sibling Inevitable requirements/runbook for certificates, fleet scope, signed configuration expiry and route-owner recovery. No Mobile usage dispatch is part of recovery.
+
+## Unreachable endpoint in Advanced direct mode
 
 Use Review setup to inspect the address and Network access guidance without removing the paired phone. Public-address discovery is a suggestion from the computer's outgoing network path, and can report a VPN/NAT gateway. It never proves ingress and is not required during normal sharing. Manual hostname/IP entry remains available.
 
@@ -40,7 +48,7 @@ Client revocation persists before it reports success and closes active traffic. 
 
 If phone credential storage cannot finish removal, the Client remains stopped with a visible pending-removal state. Retry Remove after storage recovers. A separate private record of stopped Client IDs preserves that decision across restart without containing credentials. If even that record cannot be saved, the app explains that the stop is guaranteed only for the current session; retry before restarting the app, or revoke the phone from the workload Client.
 
-Endpoint changes are signed by the existing Client authority and carry monotonic generations. Connected phones check configuration on connection and every 30 seconds. Copy/scan a connection update for a phone that missed the change and cannot reach the old endpoint. Skipped generations work; stale, conflicting, wrong-Client or trust-changing updates reject. A pending status remains until acknowledgement.
+Mode and endpoint changes are signed by the existing Client authority and carry monotonic generations. Compatible connected phones receive an update over their existing authenticated session, persist it and reconnect. Configuration checks on connection and every 30 seconds remain supported. Copy/scan a connection update for a phone that missed the change or uses an older direct build. Skipped generations work; stale, conflicting, wrong-Client or trust-changing updates reject. A pending status remains until acknowledgement.
 
 Certificate renewal uses existing authenticated trust. Expired/unrecoverable credentials, lost keys or a new authority require re-pairing. Never bypass CA pinning, certificate validity or secure-store errors to recover.
 

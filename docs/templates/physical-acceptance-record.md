@@ -1,5 +1,7 @@
 # Mobile Egress 2 direct physical acceptance record
 
+Hosted addendum: record gateway image/source, Client/phone versions and selected mode. Prove outbound-only Windows/Mac setup with no router/provider ingress; preserve Advanced direct results separately. Cover IPv4/IPv6/NAT64, cross-node routing, account revocation versus local pairing revocation, live/offline signed mode updates, and the iOS active/keep-awake exception. Attach combined Core/Mobile contention results and confirmation that existing proxy usage continues while Mobile submits none. Mark unavailable checks NOT RUN or BLOCKED.
+
 Copy into private release evidence. Every unexecuted check remains NOT RUN. FAIL, NOT RUN or PENDING on a required gate blocks stable promotion. Do not record invitations, capabilities, proxy passwords, private keys, device identifiers, public endpoint/target addresses or traffic payloads.
 
 ## Release identity

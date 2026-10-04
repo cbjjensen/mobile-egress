@@ -12,8 +12,11 @@ let refreshing = null, busy = false, mutation = 0, editing = false, addressEdite
 let discoveryStarted = false, discovering = false, suggestedAddress = "";
 let invitationConfiguration = "", invitationExpiry = "", firewall = null, firewallBusy = false;
 let waitingSince = Date.now(), readinessExpired = false;
+let selectedTransport = "";
+const hostedSelected = () => (selectedTransport || status?.transport || (status?.endpoint ? "direct" : "hosted")) === "hosted";
+const hostedAuthorized = () => status?.transport === "hosted" && !!status.endpoint && status.activationState === "authorized";
 const available = () => status && status.phase !== "unavailable";
-const configKey = value => [value.endpoint, value.bindAddress, value.displayName, value.generation].join("|");
+const configKey = value => [value.transport || (value.endpoint ? "direct" : "hosted"), value.endpoint, value.bindAddress, value.displayName, value.generation].join("|");
 const activeInvitation = () => !!(status && status.invitationExpiresAt && new Date(status.invitationExpiresAt).getTime() > Date.now());
 
 function clearInvitation() {
@@ -48,6 +51,7 @@ function fillInputs() {
   }
   el("bindAddress").value = status.bindAddress || setup.defaultBindAddress;
   el("displayName").value = status.displayName || setup.suggestedName || "";
+  if (!el("hostedName").value) el("hostedName").value = status.displayName || setup.suggestedName || "";
 }
 function resumeStep() {
   if (!status.endpoint) return "address";
@@ -60,7 +64,7 @@ function selectStep(next) {
   if (next !== "address" && !status.endpoint) return;
   if (next === "proxy" && !status.connected) return;
   step = next; dashboard = false; render();
-  if (next === "network" && !firewall) void checkFirewall(false);
+  if (next === "network" && !firewall && !hostedSelected()) void checkFirewall(false);
 }
 function renderNetwork() {
   const parts = endpointParts(status?.endpoint || "");
@@ -89,7 +93,9 @@ function render() {
   el("serviceMessage").textContent = readinessExpired ? "The Client service has not become available. Retry, or run the latest signed installer to repair the installation. Your saved pairing and proxy credentials are preserved." : "Waiting for the installed Client service. Setup will wait up to 30 seconds.";
   show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard);
   show("unfinishedSetup", initialized && dashboard && !status?.paired);
-  el("stepTitle").textContent = titles[steps.indexOf(step)];
+  el("stepTitle").textContent = hostedSelected() && step === "address" ? "Activate Inevitable" : hostedSelected() && step === "network" ? "Gateway connection" : titles[steps.indexOf(step)];
+  el("addressStepLabel").textContent = hostedSelected() ? "Activate Inevitable" : "Computer address";
+  el("networkStepLabel").textContent = hostedSelected() ? "Gateway connection" : "Network access";
   el("stepCount").textContent = "Step " + (steps.indexOf(step) + 1) + " of 5";
   for (const [index, name] of steps.entries()) {
     const button = el("step" + name[0].toUpperCase() + name.slice(1));
@@ -99,6 +105,23 @@ function render() {
   for (const name of ["address", "network", "pair", "verify", "proxy"]) {
     show(name + "Panel", initialized && (dashboard ? ["address","pair","proxy"].includes(name) : step === name));
   }
+  show("addressPanel", initialized && !hostedSelected() && (dashboard || step === "address"));
+  show("networkPanel", initialized && !dashboard && !hostedSelected() && step === "network");
+  show("hostedPanel", initialized && hostedSelected() && (dashboard || step === "address"));
+  show("transportChoice", initialized && (dashboard || step === "address"));
+  show("gatewayPanel", initialized && hostedSelected() && !dashboard && step === "network");
+  show("directTroubleshooting", !hostedSelected());show("hostedTroubleshooting", hostedSelected());
+  el("activationMessage").textContent = status?.activationState === "pending" ? "Waiting for browser approval. Your activation request is saved." : status?.activationState === "authorized" ? "Inevitable activation approved." : status?.activationState === "denied" ? "Activation denied. You can try again." : status?.activationState === "expired" ? "Activation expired. Start a new request." : "Activate this Client to use hosted connectivity.";
+  if (status?.activationState === "access_rejected") el("activationMessage").textContent = "Gateway access was rejected. Check your Mobile Egress account access or reactivate this Client. Your local phone pairing is preserved.";
+  const activationPending = status?.activationState === "pending";
+  show("resumeActivation", activationPending);show("cancelActivation", activationPending);
+  el("activateHosted").disabled = busy || !ready || activationPending;
+  el("activateHosted").textContent = hostedAuthorized() ? "Continue to gateway connection" : status?.activationState === "access_rejected" ? "Reactivate in browser" : "Activate in browser";
+  el("resumeActivation").disabled = el("cancelActivation").disabled = busy || !ready;
+  el("advancedDirect").disabled = el("chooseHosted").disabled = busy || !ready;
+  el("gatewayNext").disabled = busy || !ready || status?.transport !== "hosted" || !status?.endpoint;
+  el("gatewayMessage").textContent = "Gateway " + (status?.gatewayState || "disconnected") + ". " + (status?.gatewayState === "connected" ? "Waiting for the authenticated phone session." : "The Client reconnects to its saved gateway. Check this computer's Internet connection.");
+  if (status?.gatewayState === "authorization_rejected") el("gatewayMessage").textContent = "Gateway access was rejected. Check your Mobile Egress account access or reactivate this Client. Your local phone pairing is preserved.";
   show("recoveryPanel", initialized && dashboard); show("removePhone", initialized && dashboard);
   show("connectionSummary", initialized);
   el("phase").textContent = connected ? "Connected" : labels[status?.phase] || "Checking service";
@@ -106,6 +129,7 @@ function render() {
   el("message").textContent = status?.message || "Configure a reachable address to pair your phone.";
   el("installedState").textContent = ready ? "Installed" : "Checking";
   el("listeningState").textContent = ready && status.running && status.endpoint && !["waiting","migration_required","error"].includes(status.phase) ? "Listening" : "Not confirmed";
+  if (status?.transport === "hosted") el("listeningState").textContent = "Gateway " + (status.gatewayState || "disconnected");
   el("pairedState").textContent = status?.paired ? "Paired" : status?.phase === "acknowledging" ? "Confirming" : "Not paired";
   el("connectedState").textContent = connected ? "Connected" : "Waiting";
   el("httpAddress").textContent = status?.httpAddress ? "HTTP / CONNECT  " + status.httpAddress : "";
@@ -163,12 +187,13 @@ function refresh() {
       clearInvitation();
     } else {
       status = next; readinessExpired = false;
-      if (previous?.endpoint && configKey(previous) !== configKey(next)) { firewall = null; clearUpdate(); }
+      if (previous?.endpoint && configKey(previous) !== configKey(next)) { firewall = null; clearUpdate(); if (previous.transport !== next.transport) selectedTransport = next.transport; }
       if (el("invitation").value && (status.paired || !activeInvitation() || invitationConfiguration !== configKey(status) || (invitationExpiry && invitationExpiry !== status.invitationExpiresAt))) clearInvitation();
       if (el("invitation").value) invitationExpiry = status.invitationExpiresAt;
       if (!initialized) { initialized = true; dashboard = !!status.paired; step = resumeStep(); }
       else if (!dashboard) {
         if (!status.endpoint) step = "address";
+        else if (step === "address" && hostedSelected() && hostedAuthorized() && previous?.activationState === "pending") step = "network";
         else if (["pair","verify"].includes(step) && status.connected) step = "proxy";
         else if (step === "pair" && (status.paired || status.phase === "acknowledging")) step = "verify";
       }
@@ -180,9 +205,10 @@ function refresh() {
   return refreshing;
 }
 function maybeDiscover() {
-  if (metadataReady && initialized && !dashboard && step === "address" && !status.endpoint && !discoveryStarted) void discover();
+  if (metadataReady && initialized && !dashboard && !hostedSelected() && step === "address" && !status.endpoint && !discoveryStarted) void discover();
 }
 async function discover() {
+  if (hostedSelected()) return;
   if (discovering) return;
   discovering = true; discoveryStarted = true; el("retryDiscovery").disabled = true;
   el("discoveryMessage").textContent = "Looking up a suggested public address…";
@@ -198,6 +224,7 @@ async function discover() {
   finally { discovering = false; el("retryDiscovery").disabled = false; }
 }
 async function checkFirewall(retry) {
+  if (hostedSelected()) return;
   if (firewallBusy || !available() || !status.endpoint) return;
   firewallBusy = true; renderNetwork();
   const key = configKey(status);
@@ -221,6 +248,12 @@ async function action(button, callback, success) {
 for (const id of ["bindAddress","endpoint","displayName","publicPort"]) el(id).oninput = () => { editing = true; if (id === "endpoint") addressEdited = true; };
 for (const name of steps) el("step" + name[0].toUpperCase() + name.slice(1)).onclick = () => selectStep(name);
 el("reviewSetup").onclick = () => selectStep("address");
+el("advancedDirect").onclick = () => { if (!busy && available()) { selectedTransport = "direct"; step = "address"; dashboard = false; render(); maybeDiscover(); } };
+el("chooseHosted").onclick = () => { if (!busy && available()) { selectedTransport = "hosted"; step = "address"; dashboard = false; render(); } };
+el("activateHosted").onclick = () => hostedAuthorized() ? selectStep("network") : action(el("activateHosted"), () => api().StartHostedActivation(el("hostedName").value.trim()), "Approve this Client in your browser. Your phone pairs locally afterward.");
+el("resumeActivation").onclick = () => action(el("resumeActivation"), () => api().ResumeHostedActivation(), "Continue activation in your browser.");
+el("cancelActivation").onclick = () => action(el("cancelActivation"), () => api().CancelHostedActivation(), "Activation canceled.");
+el("gatewayNext").onclick = () => selectStep(status?.paired ? "verify" : "pair");
 el("finishLater").onclick = el("finishSetup").onclick = () => { if (!busy) { dashboard = true; render(); } };
 el("networkLocation").onchange = renderNetwork;
 el("retryDiscovery").onclick = discover;

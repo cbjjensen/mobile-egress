@@ -25,6 +25,7 @@ data class ClientUiState(
     val id: String, val name: String, val enabled: Boolean, val stage: String,
     val connected: Boolean, val streams: Int, val error: String = "",
     val removalPending: Boolean = false,
+    val transport: DirectTransport = DirectTransport.Direct,
 )
 data class MainUiState(
     val pairingInProgress: Boolean = false,
@@ -70,7 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         when (record.stage) { DirectStage.Pending -> "Pairing pending"; DirectStage.AwaitingAck -> "Acknowledgement pending"; DirectStage.Paired -> "Paired" },
                         peer?.connected == true, peer?.streams ?: 0,
                         recovery.message.ifEmpty { peer?.error?.takeIf { it != com.mobileegress.agent.status.ErrorClass.None }?.name?.replace("Relay", "Client") ?: "" },
-                        removalPending = record.removalPending)
+                        removalPending = record.removalPending, transport = record.transport)
                 },
             ) }
         } catch (_: Exception) { mutableState.update { old -> old.copy(

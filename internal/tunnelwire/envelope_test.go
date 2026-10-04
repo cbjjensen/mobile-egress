@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestEndpointUpdateIsBoundedSessionControl(t *testing.T) {
+	raw := []byte(`{"version":1,"type":"endpoint_update","streamId":"","payload":"YQ"}`)
+	if _, err := ParseEnvelope(raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseEnvelopeAcceptsVersionOneMessages(t *testing.T) {
 	t.Parallel()
 

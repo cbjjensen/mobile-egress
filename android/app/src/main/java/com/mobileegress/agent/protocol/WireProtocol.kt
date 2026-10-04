@@ -30,8 +30,8 @@ object WireProtocol {
     const val MAX_DATA_PAYLOAD_BYTES = 32 * 1024
     private val STREAM_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
     private val BASE64URL = Regex("^[A-Za-z0-9_-]*$")
-    private val ALL_TYPES = setOf("open", "opened", "rejected", "data", "close", "ping", "pong")
-    private val AGENT_INBOUND_TYPES = setOf("open", "data", "close", "ping", "pong")
+    private val ALL_TYPES = setOf("open", "opened", "rejected", "data", "close", "ping", "pong", "endpoint_update")
+    private val AGENT_INBOUND_TYPES = setOf("open", "data", "close", "ping", "pong", "endpoint_update")
     private val json = Json {
         ignoreUnknownKeys = false
         isLenient = false
@@ -105,10 +105,10 @@ object WireProtocol {
 
     private fun validate(envelope: WireEnvelope) {
         if (envelope.version != 1 || envelope.type !in ALL_TYPES) throw ProtocolException("Invalid v1 envelope")
-        val keepalive = envelope.type == "ping" || envelope.type == "pong"
+        val keepalive = envelope.type == "ping" || envelope.type == "pong" || envelope.type == "endpoint_update"
         if (keepalive && envelope.streamId.isNotEmpty()) throw ProtocolException("Keepalive stream ID must be empty")
         if (!keepalive && !STREAM_ID.matches(envelope.streamId)) throw ProtocolException("Invalid stream ID")
-        val payloadLimit = if (envelope.type == "data") MAX_DATA_PAYLOAD_BYTES else MAX_PAYLOAD_BYTES
+        val payloadLimit = when (envelope.type) { "data" -> MAX_DATA_PAYLOAD_BYTES; "endpoint_update" -> 87_384; else -> MAX_PAYLOAD_BYTES }
         decodePayload(envelope.payload, payloadLimit)
     }
 

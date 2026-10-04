@@ -1,16 +1,20 @@
 # Architecture
 
-## Direct workload-to-phone topology
+## Workload-to-phone topology
 
-Mobile Egress 2 consists of a native workload Client service/app and a phone Agent. The Agent initiates a TLS 1.3 connection to each reachable Client and carries application streams over one authenticated WebSocket per Client. The Client’s HTTP/CONNECT and SOCKS5 proxies remain local to the workload machine; target TCP connections originate from the phone’s cellular interface.
+Mobile Egress consists of a native workload Client service/app and a phone Agent. The Agent initiates a TLS 1.3 connection to each Client and carries application streams over one authenticated WebSocket per Client. The Client’s HTTP/CONNECT and SOCKS5 proxies remain local to the workload machine; target TCP connections originate from the phone’s cellular interface.
 
-There is no controller, relay routing hop, AWS management, Tailscale, Funnel, or automatic fallback in the 2.x runtime. Workload machines behind NAT need explicit forwarding or another already-reachable public endpoint. Private connectivity traversal and hosted intermediary traffic services are outside this release.
+Gateway mode is the default for new setup. Both peers connect outbound on TCP 443 to Inevitable's existing gateway machines. A separate small service carries the phone's TLS bytes unchanged through the workload's authenticated outbound yamux connection. The workload, never the gateway, terminates the pinned phone TLS and admits its paired key. Direct mode remains an explicit Advanced choice and requires reachable workload ingress. Existing direct installations remain direct until switched. There is no automatic fallback, personal-computer controller, AWS management, Tailscale or Funnel dependency.
+
+The separate hosted service follows the existing proxy infrastructure's deployment, signed configuration and heartbeat patterns. Mobile-only PostgreSQL records identify the current route/node/process/session owner; a private authenticated TLS bridge reaches that owner when the load balancer chooses another node. Existing Core listeners, health ownership, commercial routing and usage accounting are unchanged except the separately committed buffered CONNECT/half-close repairs. Mobile Egress has no traffic-usage ingestion, quota, byte billing or usage dashboard. Operational connection/error/resource health remains available.
 
 ## Workload service
 
 Windows uses a LocalSystem service and service-account DPAPI. Apple Silicon Mac uses a root LaunchDaemon and dedicated file-based System Keychain namespace. Existing authenticated named-pipe/Unix-socket IPC restricts GUI administration to the installation owner. GUI processes do not read private service storage.
 
-The TLS listener defaults to `:8443`; its advertised HTTPS origin is configured separately because forwarding can change the public port. Server certificate SANs match that origin and chain to the Client’s own authority. A listening socket is distinct from an externally reachable endpoint; only phone enrollment/connection proves cellular reachability.
+In hosted mode the TLS server accepts virtual connections from the outbound gateway attachment and opens no public workload socket. Browser activation binds a scoped device credential to an eligible Inevitable account; the protected service owns that credential and the PKCE proof. The phone needs no account. Initial access uses admin pilot grants; paid checkout is deferred. Activation, gateway attachment, pairing and authenticated phone connection are separate states.
+
+In Advanced direct mode the TLS listener defaults to `:8443`; its advertised HTTPS origin is configured separately because forwarding can change the public port. Server certificate SANs match either selected endpoint and chain to the Client’s own authority. Only an authenticated live phone session completes connection verification.
 
 Local proxy endpoints remain Windows `127.0.0.2`, Mac `127.0.0.1`, ports HTTP 1081/SOCKS 1080. The public listener has no general proxy or Owner administration API. Applications opt into the local proxy; no default routes or system proxy settings are changed.
 
@@ -20,7 +24,7 @@ The existing Tunnel abstraction connects proxies to an admitted phone session. T
 
 Each Client generates independent authority/server credentials in protected storage. A ten-minute one-use invitation binds its identity, advertised endpoint, CA and capability. Each phone pairing has a separate non-exportable key. Redemption binds the invitation to the CSR key; both peers persist state before reporting success. Lost delivery and acknowledgements retry the same identity.
 
-The phone registry admits ten records, including pending and disabled records. Each Client accepts one paired phone. Revocation persists before disconnecting streams and denying reconnects. Endpoint updates carry a signature from the existing pinned authority, exact Client/pairing binding and monotonic generation. Connected phones poll signed updates; offline phones import a QR/text update. Endpoint updates never replace trust or proxy credentials.
+The phone registry admits ten records, including pending and disabled records. Each Client accepts one paired phone. Revocation persists before disconnecting streams and denying reconnects. Signed updates bind transport mode, endpoint, Client/pairing identity and monotonic generation. Capable connected phones receive updates through the authenticated session; polling remains supported. Offline/older phones import QR/file recovery. Mode switching preserves authority, pairing and proxy credentials; it reissues the hostname-bound server certificate. Updates remain pending until acknowledgement. See [hosted wire additions](hosted-transport-contract.md).
 
 See [wire contract](direct-protocol-v2.md) for exact schemas and paths.
 

@@ -3,12 +3,18 @@ package com.mobileegress.agent.direct
 import com.mobileegress.agent.security.AgentIdentity
 import java.time.Instant
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 class DirectException(val code: String) : Exception(code)
+@Serializable enum class DirectTransport {
+    @SerialName("direct") Direct,
+    @SerialName("hosted") Hosted,
+}
 @Serializable data class DirectInvitation(
     val version: Int, val type: String, val clientId: String, val displayName: String,
     val endpoint: String, val caCertificatePem: String, val invitationId: String,
     val capability: String, val expiresAt: String, val role: String,
+    val transport: DirectTransport = DirectTransport.Direct,
 )
 @Serializable enum class DirectStage { Pending, AwaitingAck, Paired }
 @Serializable data class DirectRecord(
@@ -20,6 +26,7 @@ class DirectException(val code: String) : Exception(code)
     // Missing metadata from an older build is an unknown outcome, never proof it was unsent.
     val enrollmentAttempted: Boolean = true,
     @kotlinx.serialization.Transient val removalPending: Boolean = false,
+    val transport: DirectTransport = DirectTransport.Direct,
 )
 @Serializable data class DirectRegistryState(
     val version: Int = 2, val migrationRequired: Boolean = false, val records: List<DirectRecord> = emptyList(),
@@ -59,6 +66,7 @@ class DirectRegistry(private val persistence: DirectPersistence) {
                 current.copy(records = current.records + DirectRecord(
                     invitation.clientId, invitation.displayName, invitation.endpoint, key.alias, key.csrPem,
                     invitation.caCertificatePem, invitation = invitation, enrollmentAttempted = false,
+                    transport = invitation.transport,
                 ))
             }
         }
@@ -128,9 +136,9 @@ class DirectRegistry(private val persistence: DirectPersistence) {
         checkCurrent(it, expected)
         val endpoint = DirectBundles.origin(update.endpoint)
         if (update.clientId != it.clientId || update.pairingId != it.pairingId || update.generation < it.generation ||
-            (update.generation == it.generation && endpoint != DirectBundles.origin(it.endpoint))) throw DirectException("stale_endpoint_update")
+            (update.generation == it.generation && (endpoint != DirectBundles.origin(it.endpoint) || update.transport != it.transport))) throw DirectException("stale_endpoint_update")
         it.copy(
-            endpoint = endpoint, generation = update.generation,
+            endpoint = endpoint, generation = update.generation, transport = update.transport,
             stage = if (update.generation == it.generation) it.stage else DirectStage.AwaitingAck,
             identity = it.identity?.copy(relayOrigin = endpoint),
         )
@@ -145,9 +153,11 @@ class DirectRegistry(private val persistence: DirectPersistence) {
     }
     private fun checkCurrent(current: DirectRecord, expected: DirectRecord) {
         if (current.keyAlias != expected.keyAlias || current.pairingId != expected.pairingId ||
-            current.generation != expected.generation || current.identity?.serial != expected.identity?.serial) {
+            current.generation != expected.generation || current.identity?.serial != expected.identity?.serial ||
+            current.endpoint != expected.endpoint || current.transport != expected.transport) {
             throw DirectException("stale_operation")
         }
     }
 }
-@Serializable data class DirectEndpointPayload(val clientId: String, val pairingId: String, val generation: Long, val endpoint: String)
+@Serializable data class DirectEndpointPayload(val clientId: String, val pairingId: String, val generation: Long, val endpoint: String,
+    val transport: DirectTransport = DirectTransport.Direct)

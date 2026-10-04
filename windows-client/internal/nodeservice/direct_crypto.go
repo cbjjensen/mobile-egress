@@ -116,6 +116,9 @@ func directExactFields(raw []byte, kind reflect.Type) error {
 			known[name] = field.Type
 		}
 		for name, value := range fields {
+			if name == "transport" && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return errDirectInvalid
+			}
 			field, ok := known[name]
 			if !ok {
 				return errDirectInvalid
@@ -215,9 +218,23 @@ func newDirectState() (*directState, error) {
 	return &directState{Version: 2, ClientID: id, CACertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPrivateKeyPEM: private, Username: "mobile-egress", Password: password}, nil
 }
 func validateDirectConfiguration(config DirectConfiguration) (DirectConfiguration, error) {
+	if config.Transport != "" && config.Transport != "direct" && config.Transport != "hosted" {
+		return config, errDirectInvalid
+	}
 	config.DisplayName = strings.TrimSpace(config.DisplayName)
 	if !utf8.ValidString(config.DisplayName) || len(config.DisplayName) == 0 || len(config.DisplayName) > 80 || strings.IndexFunc(config.DisplayName, unicode.IsControl) >= 0 {
 		return config, errDirectInvalid
+	}
+	if config.Transport == "hosted" {
+		if config.BindAddress != "" {
+			return config, errDirectInvalid
+		}
+		origin, err := directHTTPSOrigin(config.Endpoint)
+		if err != nil {
+			return config, err
+		}
+		config.Endpoint = origin.String()
+		return config, nil
 	}
 	if config.BindAddress == "" {
 		config.BindAddress = ":8443"
@@ -236,6 +253,16 @@ func validateDirectConfiguration(config DirectConfiguration) (DirectConfiguratio
 	}
 	config.Endpoint = origin.String()
 	return config, nil
+}
+
+// DecodeDirectConfiguration keeps the protected IPC mode schema identical to
+// persisted configuration, rejecting duplicate, null and case-folded fields.
+func DecodeDirectConfiguration(raw string) (DirectConfiguration, error) {
+	var c DirectConfiguration
+	if directStrictJSON([]byte(raw), &c) != nil {
+		return c, errDirectInvalid
+	}
+	return validateDirectConfiguration(c)
 }
 
 // Mobile URL implementations normalize numeric ports, DNS case and IP text.
@@ -394,7 +421,8 @@ func directEndpointBundle(state *directState) (string, error) {
 		PairingID  string `json:"pairingId"`
 		Generation uint64 `json:"generation"`
 		Endpoint   string `json:"endpoint"`
-	}{state.ClientID, state.Pairing.ID, state.Generation, state.Configuration.Endpoint})
+		Transport  string `json:"transport,omitempty"`
+	}{state.ClientID, state.Pairing.ID, state.Generation, state.Configuration.Endpoint, wireTransport(state.Configuration.Transport)})
 	if err != nil {
 		return "", err
 	}

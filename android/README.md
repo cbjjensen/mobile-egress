@@ -1,6 +1,6 @@
-# Android direct cellular Agent
+# Android cellular Agent
 
-Android 10+ (API 29+) supports up to ten direct workload Clients using one owner-started foreground service. The phone initiates every connection over cellular. Targets also use cellular; loss of cellular closes traffic even when Wi-Fi is available. The phone accepts no inbound connections.
+Android 10+ (API 29+) supports up to ten workload Clients using one owner-started foreground service. Hosted and Advanced direct modes use the same pinned end-to-end TLS and cellular-only sockets. The phone needs no Inevitable login and accepts no inbound connections. The Client list identifies each saved transport mode; switching mode requires a signed update, never automatic fallback.
 
 ## Version 2 migration
 
@@ -8,7 +8,7 @@ Version 2.0.0 is a direct-only major-version change. Old relay/Funnel enrollment
 
 ## Pair workload Clients
 
-1. Install and configure the version-2 Client on each workload machine. Its advertised HTTPS endpoint must be reachable from the phone's cellular network and match its certificate. This first direct release does not provide NAT traversal or an ingress relay.
+1. Install a compatible Client on each workload machine. Default Inevitable Gateway setup activates the computer and connects outbound; no router forwarding is needed. Advanced direct requires its own reachable public endpoint. In either mode, the phone pins the workload Client's certificate and reaches its advertised endpoint over cellular.
 2. Generate an invitation on that Client. On Android, choose **Scan QR**, or paste the invitation in the direct Client import field.
 3. The app stores a non-exportable P-256 Android Keystore key and pending CSR before enrollment. It pins that Client's CA, validates the endpoint hostname/IP, stores the issued identity before acknowledging, and retries interrupted delivery with the same key.
 4. Use **Retry** for an interrupted pairing or acknowledgement. Ten records are allowed, including pending and disabled records. **Remove** releases a phone slot; revoke the previous phone on the workload Client before pairing that workload again.
@@ -22,7 +22,7 @@ The encrypted direct registry uses an atomic file in app-private, non-backup sto
 
 ## Endpoint recovery and renewal
 
-The Agent polls direct configuration when connecting and every 30 seconds while active. A signed endpoint update is bound to the Client ID and pairing ID, preserves trust and keys, and uses a monotonic generation. Missed generations are supported; stale, conflicting, tampered, and wrong-peer updates are rejected.
+The Agent accepts a signed mode/endpoint update through its active authenticated session, persists it and reconnects. It also polls configuration on connection and every 30 seconds. Updates bind Client/pairing identity and generation while preserving trust and keys. Missing mode in older records means direct. Skipped generations work; stale, conflicting, tampered and wrong-peer updates reject. Offline recovery uses the Client's QR/file export. Mobile Egress sends no traffic-usage accounting to Inevitable.
 
 When the old endpoint is unreachable, import the workload Client's connection update through **Scan QR**, paste/import, or **Import update file**. Desired state is saved before the new endpoint is contacted, so an unavailable endpoint remains visibly pending and can be retried. Certificates with less than seven days remaining are renewed using the same key; expired trust requires fresh pairing. Renewal cannot acknowledge an endpoint generation the phone has not received in a verified update.
 

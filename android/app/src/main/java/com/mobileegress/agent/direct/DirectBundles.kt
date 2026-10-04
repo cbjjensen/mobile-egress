@@ -74,7 +74,7 @@ object DirectBundles {
         val endpoint = origin(result.endpoint)
         if (result.clientId != record.clientId || result.pairingId != record.pairingId || result.generation <= 0 ||
             result.generation < record.generation ||
-            (result.generation == record.generation && endpoint != origin(record.endpoint))) throw DirectException("stale_endpoint_update")
+            (result.generation == record.generation && (endpoint != origin(record.endpoint) || result.transport != record.transport))) throw DirectException("stale_endpoint_update")
         return result.copy(endpoint = endpoint)
     }
     fun origin(value: String): String {

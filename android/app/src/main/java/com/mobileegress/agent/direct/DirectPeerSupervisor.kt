@@ -88,7 +88,8 @@ internal class DirectPeerSupervisor(
                 val entry = entries.getValue(id)
                 val desired = records.find { it.clientId == id }
                 if (desired == null || entry.network !== network || desired.keyAlias != entry.record.keyAlias ||
-                    desired.endpoint != entry.record.endpoint || desired.generation != entry.record.generation) stopLocked(id)
+                    desired.endpoint != entry.record.endpoint || desired.generation != entry.record.generation ||
+                    desired.transport != entry.record.transport) stopLocked(id)
             }
             records.forEach { record ->
                 if (!registry.removals.isBlocked(record.clientId) && record.clientId !in entries) {
@@ -143,6 +144,14 @@ internal class DirectPeerSupervisor(
                 session = connectionFactory(
                     entry.network, record,
                     object : AgentSessionListener {
+                        override val supportsEndpointUpdates = true
+                        override fun onEndpointUpdate(bundle: String): Boolean = synchronized(lock) {
+                            if (!current(entry) || !entry.callbacksEnabled || entry.session !== session) return@synchronized false
+                            val currentRecord = registry.get(id)
+                            val update = DirectBundles.endpoint(bundle, currentRecord)
+                            registry.endpoint(currentRecord, update)
+                            true
+                        }
                         override fun onConnected() {
                             updateActive { it.copy(connected = true, error = ErrorClass.None, recovery = DirectRecovery.None) }
                         }
@@ -169,7 +178,7 @@ internal class DirectPeerSupervisor(
                     }
                     attempt = 0
                     val updated = maintain(id, entry.network)
-                    if (updated.endpoint != record.endpoint || updated.identity?.serial != record.identity?.serial) break
+                    if (updated.endpoint != record.endpoint || updated.transport != record.transport || updated.identity?.serial != record.identity?.serial) break
                 }
             } catch (canceled: CancellationException) { throw canceled }
             catch (error: Exception) {

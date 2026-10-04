@@ -24,13 +24,14 @@ var (
 type MessageType string
 
 const (
-	TypeOpen     MessageType = "open"
-	TypeOpened   MessageType = "opened"
-	TypeRejected MessageType = "rejected"
-	TypeData     MessageType = "data"
-	TypeClose    MessageType = "close"
-	TypePing     MessageType = "ping"
-	TypePong     MessageType = "pong"
+	TypeOpen           MessageType = "open"
+	TypeOpened         MessageType = "opened"
+	TypeRejected       MessageType = "rejected"
+	TypeData           MessageType = "data"
+	TypeClose          MessageType = "close"
+	TypePing           MessageType = "ping"
+	TypePong           MessageType = "pong"
+	TypeEndpointUpdate MessageType = "endpoint_update"
 )
 
 // Envelope holds a tunnel message in its received representation.
@@ -109,7 +110,7 @@ func (envelope Envelope) Validate() error {
 		return fmt.Errorf("%w: unsupported message type", ErrInvalidEnvelope)
 	}
 
-	isKeepalive := envelope.Type == TypePing || envelope.Type == TypePong
+	isKeepalive := envelope.Type == TypePing || envelope.Type == TypePong || envelope.Type == TypeEndpointUpdate
 	if isKeepalive && envelope.StreamID != "" {
 		return fmt.Errorf("%w: keepalive stream ID must be empty", ErrInvalidEnvelope)
 	}
@@ -120,6 +121,9 @@ func (envelope Envelope) Validate() error {
 	payloadLimit := MaxDecodedPayloadBytes
 	if envelope.Type == TypeData {
 		payloadLimit = MaxDecodedDataPayloadBytes
+	}
+	if envelope.Type == TypeEndpointUpdate {
+		payloadLimit = 87384
 	}
 	if _, err := decodePayload(envelope.Payload, payloadLimit); err != nil {
 		return err
@@ -218,7 +222,7 @@ func isEnvelopeKey(key string) bool {
 
 func isValidMessageType(messageType MessageType) bool {
 	switch messageType {
-	case TypeOpen, TypeOpened, TypeRejected, TypeData, TypeClose, TypePing, TypePong:
+	case TypeOpen, TypeOpened, TypeRejected, TypeData, TypeClose, TypePing, TypePong, TypeEndpointUpdate:
 		return true
 	default:
 		return false

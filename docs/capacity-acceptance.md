@@ -1,5 +1,9 @@
 # Direct Client capacity and performance acceptance
 
+For the hosted pilot, repeat these measurements through Inevitable Gateway with no customer inbound rule and preserve direct measurements separately. Run existing commercial proxy traffic with Mobile disabled, enabled idle, under one-/ten-Client load, overloaded, restarting and unavailable. Verify its usage submissions and billing fields remain unchanged; prove Mobile produces no usage submission. Acceptance requires no new correctness failure and at most 5% Core throughput/p95 setup regression under an agreed combined workload. Resource budgets are admission/backpressure bounds, not an advertised Mbps rate or data quota.
+
+Exercise cross-node forwarding, owner replacement, scale-in/drain, config expiry/backend outage, device/grant revocation, TLS renewal and missed mode updates. Record phone thermal behavior and cellular IPv6/NAT64; synthetic loopback throughput does not establish handset performance. See [hosted acceptance](hosted-acceptance.md). Never overwrite historical relay/direct benchmark records.
+
 The direct product has one phone-initiated tunnel per Client, one paired phone per Client, and ten saved Clients per phone including disabled and pending records. These are identity/session limits, not fixed active-stream or throughput caps.
 
 Directional phone data debt is globally bounded at 8,192 frames / 64 MiB, with 32 frames per stream. Queued and native in-flight work both count until completion/cancellation; ten peers do not multiply the budget. Idle saved entries reserve no static share. Control processing is bounded separately. Under contention, peers and streams must make progress without one failure stopping the others.

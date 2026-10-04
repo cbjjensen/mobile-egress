@@ -1,5 +1,7 @@
 # Mobile Egress 2 direct-mode implementation and acceptance
 
+Historical direct baseline, committed as `14c9d35`. These results do not establish hosted connectivity acceptance. The additive hosted change and its independent evidence are tracked in [hosted acceptance](hosted-acceptance.md).
+
 Record opened for the approved 2026-10-03 implementation on `main`. Follow-up review corrections and applicable automated gates are complete; **signed physical acceptance is pending and downloads are not release-ready**. This record is not an operator sign-off or evidence of a GitHub publication.
 
 ## Source and preservation

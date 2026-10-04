@@ -1,6 +1,8 @@
 # Release, deployment, and acceptance
 
-Mobile Egress 2 distributes the workload Client and compatible phone Agents. There is no controller, relay, AWS bootstrap, Tailscale, or Funnel build in the new product. Historical published 1.x tags and assets remain immutable and are incompatible with direct pairing.
+Mobile Egress distributes workload Clients and compatible phone Agents. Hosted connectivity is a separate disabled-by-default service on Inevitable's existing gateway infrastructure; it is deployed from the sibling Inevitable repository, not bundled into Client installers. There is no personal controller, AWS provisioning on customer machines, Tailscale or Funnel dependency. Historical tags/assets remain immutable. Old direct-only phone builds do not accept hosted invitations; coordinate compatible phone downloads before offering hosted setup publicly.
+
+The current [hosted implementation](superpowers/plans/2026-10-03-inevitable-hosted-connectivity.md) remains on feature branches. This work authorizes no release, deployment, secret publication or merge. See [hosted acceptance](hosted-acceptance.md) for software evidence and remaining signed/physical/capacity gates. Pilot access is manually granted; checkout is not implemented by this change.
 
 ## Artifacts and scope
 
