@@ -52,6 +52,8 @@ The focused regressions failed before implementation and all 43 frontend tests p
 
 The full Windows integration gate passed (Go tests/vet/build, installer/release contracts, manifest/schema, 43 frontend tests and syntax). Independent review prompted one wording correction: unavailable service status must not claim a saved pairing for an unpaired Client. Frontend checks were rerun after that correction. No other actionable findings remained.
 
+The follow-up is committed as `4c3bdc3f5759fe69f8f3a41072da05e3f4c05ea9`. Guarded local Windows build `2.0.0-hosted-validation.20261004.3` passed full artifact verification with the established timestamped publisher identity, exact clean source/platform/version and embedded payload. Installer SHA-256: `F08C170C0609BD92545727DCFF85A23226AEFD36F4CAC77EFD10694725820553`. It is prepared but deliberately not installed during the live owner test; final protected status still confirms `.2` paired and connected. No public release, service interruption or pairing replacement occurred.
+
 ### Windows/Android live traffic smoke
 
 With the owner-operated Android phone connected to installed Windows `.2`, three tiny requests through the protected local proxy credentials passed: HTTP absolute-form returned 200 in 583ms; HTTPS over HTTP CONNECT returned 200 in 944ms; HTTPS over SOCKS5 returned 200 in 944ms. All returned the same valid public exit IP, different from a direct PC HTTPS comparison (200 in 223ms). The phone remained paired and connected. The helper used credentials only in memory and changed no clipboard, configuration, pairing or service state. No raw secrets or public IPs are included in this record.
