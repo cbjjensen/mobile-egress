@@ -282,6 +282,26 @@ test('browser approval advances fresh hosted setup without verifying the phone',
  assert.deepEqual(operations(h),[]);
 });
 
+test('approval completed before the first post-action poll advances without a second click',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'inactive'},api:{StartHostedActivation:async()=>{
+  h.calls.push(['activate']);
+  Object.assign(h.status,{endpoint:'https://route.example',activationState:'authorized',gatewayState:'connected',phase:'awaiting_phone'});
+  return {state:'pending'};
+ }}});
+ await h.get('activateHosted').onclick();
+ assert.equal(h.get('stepTitle').textContent,'Gateway connection');
+ assert.equal(h.get('verifyNext').disabled,true);assert.deepEqual(operations(h),[['activate']]);
+});
+
+test('an authorization snapshot before endpoint readiness still advances when configuration finishes',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'pending'}});
+ Object.assign(h.status,{activationState:'authorized'});await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');
+ Object.assign(h.status,{endpoint:'https://route.example',gatewayState:'connected',phase:'awaiting_phone'});await h.refresh();
+ assert.equal(h.get('stepTitle').textContent,'Gateway connection');assert.equal(h.get('verifyNext').disabled,true);
+ assert.deepEqual(operations(h),[]);
+});
+
 test('reviewing approved hosted setup continues without replacing activation',async()=>{
  const h=await harness({status:{transport:'hosted',endpoint:'https://route.example',bindAddress:'',activationState:'authorized',paired:true},api:{StartHostedActivation:async()=>{h.calls.push(['activate']);}}});
  await h.get('reviewSetup').onclick();await h.refresh();

@@ -297,7 +297,9 @@ func (m *Direct) pollActivation(ctx context.Context, id string) error {
 		if err := m.saveLocked(ctx, next); err != nil {
 			return err
 		}
-		m.stopActivationPollingLocked()
+		// The polling loop owns ctx. Apply the saved approval before cancelling
+		// that loop, otherwise protected storage rejects the configuration write.
+		defer m.stopActivationPollingLocked()
 		return m.configureHostedLocked(ctx, name)
 	default:
 		return errActivation

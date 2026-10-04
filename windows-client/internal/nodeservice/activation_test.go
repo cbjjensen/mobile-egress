@@ -84,6 +84,66 @@ func TestHostedActivationPKCEProtectedPersistenceAndRestart(t *testing.T) {
 	}
 }
 
+func TestHostedActivationPollingAppliesApprovalWithoutResume(t *testing.T) {
+	m := NewDirect(NewRepository(securestore.NewMemoryStore()), "windows", "amd64", "test")
+	defer m.StopHostedActivation()
+	const requestID = "12345678-1234-4234-8234-123456789012"
+	const route = "r-23456789123442348234123456789012.gateway.example"
+	proof := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	var clientID string
+	var clientMu sync.Mutex
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/mobile-egress/device-links" {
+			var body struct {
+				ClientID string `json:"clientId"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				return
+			}
+			clientMu.Lock()
+			clientID = body.ClientID
+			clientMu.Unlock()
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"requestId": requestID, "pollSecret": proof, "verificationUri": "https://inevitableproxies.com/mobile-egress/approve?requestId=" + requestID, "expiresAt": time.Now().Add(10 * time.Minute), "pollIntervalSeconds": 5}})
+			return
+		}
+		if r.URL.Path != "/api/mobile-egress/device-links/poll" {
+			t.Errorf("unexpected activation request: %s", r.URL.Path)
+			return
+		}
+		clientMu.Lock()
+		approvedClientID := clientID
+		clientMu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "authorized", "deviceId": "34567890-1234-4234-8234-123456789012", "clientId": approvedClientID, "deviceToken": "med1." + proof, "routeId": "23456789-1234-4234-8234-123456789012", "brokerEndpoint": "https://broker.example:443", "gatewayHostname": route, "gatewayPort": 443}})
+	}))
+	defer server.Close()
+	m.activationOrigin = server.URL
+	m.activationClient = server.Client()
+	view, err := m.StartHostedActivation(context.Background(), "Workload")
+	if err != nil || view.State != "pending" {
+		t.Fatalf("start: state=%s error=%v", view.State, err)
+	}
+	// Exercise the real poller's child context. A direct call with a background
+	// context misses cancellation of that context during the approval handoff.
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		status := m.Status()
+		if status.ActivationState == "authorized" && status.Endpoint == "https://"+route {
+			restored := NewDirect(m.repository, "windows", "amd64", "test")
+			if err := restored.ensureLocked(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if restored.Status().Endpoint != status.Endpoint || restored.state.Activation != nil {
+				t.Fatal("approval was not fully persisted without a second resume")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	status := m.Status()
+	t.Fatalf("automatic approval did not configure the Client: state=%s endpointConfigured=%t", status.ActivationState, status.Endpoint != "")
+}
+
 func TestActivationRequestsRejectRedirectsAndSanitizeErrors(t *testing.T) {
 	leaked := false
 	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked = true }))

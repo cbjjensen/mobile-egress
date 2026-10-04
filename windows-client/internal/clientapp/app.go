@@ -29,7 +29,9 @@ type BundleView struct {
 }
 
 func renderBundle(bundle string) (BundleView, error) {
-	png, err := qrcode.Encode(bundle, qrcode.Medium, 512)
+	// A negative size gives every module exactly four pixels, including the
+	// quiet zone. Fixed image sizes and CSS shrinking blur dense invitations.
+	png, err := qrcode.Encode(bundle, qrcode.Medium, -4)
 	if err != nil {
 		return BundleView{}, errors.New("Unable to display this QR. Use the complete invitation text.")
 	}

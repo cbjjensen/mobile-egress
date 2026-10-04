@@ -14,7 +14,7 @@ let invitationConfiguration = "", invitationExpiry = "", firewall = null, firewa
 let waitingSince = Date.now(), readinessExpired = false;
 let selectedTransport = "";
 const hostedSelected = () => (selectedTransport || status?.transport || (status?.endpoint ? "direct" : "hosted")) === "hosted";
-const hostedAuthorized = () => status?.transport === "hosted" && !!status.endpoint && status.activationState === "authorized";
+const hostedAuthorized = (value = status) => value?.transport === "hosted" && !!value.endpoint && value.activationState === "authorized";
 const available = () => status && status.phase !== "unavailable";
 const configKey = value => [value.transport || (value.endpoint ? "direct" : "hosted"), value.endpoint, value.bindAddress, value.displayName, value.generation].join("|");
 const activeInvitation = () => !!(status && status.invitationExpiresAt && new Date(status.invitationExpiresAt).getTime() > Date.now());
@@ -193,7 +193,9 @@ function refresh() {
       if (!initialized) { initialized = true; dashboard = !!status.paired; step = resumeStep(); }
       else if (!dashboard) {
         if (!status.endpoint) step = "address";
-        else if (step === "address" && hostedSelected() && hostedAuthorized() && previous?.activationState === "pending") step = "network";
+        // Browser approval can finish before the UI observes a pending snapshot.
+        // Advance on usable approval, while leaving an explicit setup review put.
+        else if (step === "address" && hostedSelected() && hostedAuthorized() && !hostedAuthorized(previous)) step = "network";
         else if (["pair","verify"].includes(step) && status.connected) step = "proxy";
         else if (step === "pair" && (status.paired || status.phase === "acknowledging")) step = "verify";
       }

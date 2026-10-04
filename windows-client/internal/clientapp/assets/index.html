@@ -22,7 +22,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-vi
 .endpoints{font:13px ui-monospace,monospace;color:#c9d7e8;display:grid;gap:8px}
 .note{font-size:13px;color:#a3b8cd;margin:14px 0 0}#feedback,#pending{color:#8aefd0;font-size:14px}#feedback{min-height:25px}
 details{margin-top:18px}summary{cursor:pointer;font-weight:600}details p{margin-top:12px}.hidden{display:none!important}
-.qr{display:block;max-width:100%;width:280px;border:10px solid white;border-radius:8px;margin:18px auto}
+.qrFrame{overflow-x:auto;margin:18px 0}.qr{display:block;max-width:none;width:auto;height:auto;image-rendering:pixelated;margin:0 auto}
 .columns{display:grid;grid-template-columns:1fr 1fr;gap:16px}.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:18px 0 20px}
 .steps button{font-size:11px;margin:0;padding:9px 4px;background:#192535;color:#aebed0;border:1px solid #304157;font-weight:500}
 .steps button[aria-current="step"]{border-color:#6ce5ca;color:#8aefd0;background:#1b3937}.steps span{display:block;font-size:13px;margin-bottom:3px}
@@ -119,7 +119,8 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <h2 id="pairHeading">Pair your phone</h2><p id="pairNote"></p>
   <button id="issue" disabled>Create invitation</button>
   <div id="invitationDetails" class="hidden">
-    <img id="invitationQR" class="qr" alt="Private one-use phone pairing invitation"><p id="expiry"></p>
+    <div class="qrFrame"><img id="invitationQR" class="qr" alt="Private one-use phone pairing invitation"></div><p id="expiry"></p>
+    <p class="note">Keep the entire code visible while scanning. Enlarge this window if needed.</p>
     <details><summary>Copy the complete invitation</summary><label for="invitation">Complete invitation</label><textarea id="invitation" readonly spellcheck="false"></textarea><button id="copyInvitation" class="secondary">Copy invitation</button></details>
     <button id="cancelInvitation" class="secondary">Cancel invitation</button>
     <p class="note">Invitations expire after ten minutes. Keep them private.</p>
@@ -154,7 +155,7 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 <details id="recoveryPanel" class="card hidden"><summary>Recover after an address change</summary>
   <p>The phone receives connection updates while connected. If it cannot reach the old address, scan or import this signed update on the paired phone.</p>
   <button id="exportUpdate" class="secondary" disabled>Show connection update</button><button id="copyUpdate" class="secondary" disabled>Copy connection update</button>
-  <div id="updateDetails" class="hidden"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></div>
+  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"></div><p class="note">Keep the entire code visible while scanning. Enlarge this window if needed.</p><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></div>
   <p class="note">For software updates or repair, run the latest signed Client installer. Direct pairing and proxy credentials are preserved.</p>
 </details>
 <div id="feedback" role="status" aria-live="polite"></div>

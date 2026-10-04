@@ -13,8 +13,8 @@ An isolated native Windows pipe reproduced `ERROR_ACCESS_DENIED` with owner righ
 - [x] Grant the installation owner the required read-attributes right. Preserve the SYSTEM owner check and deny pipe-instance creation, broad write rights, and unrelated access.
 - [x] Run the relevant Go, Windows/frontend, installer and signing checks; review the minimal fix.
 - [x] Commit the source on the existing hosted feature branch and build a new signed local validation installer using the established publisher identity.
-- [ ] Repair the existing installation through the supported installer, preserving owner, protected state and service identity. Verify ordinary unelevated IPC before activation.
-- [ ] Activate the Client through the owner's already-approved pilot account and prepare one time-limited pairing QR. Record phone installation/traffic separately if hardware is unavailable.
+- [x] Repair the existing installation through the supported installer, preserving owner, protected state and service identity. Verify ordinary unelevated IPC before activation.
+- [x] Activate the Client through the owner's already-approved pilot account and prepare one time-limited pairing QR. Record phone installation/traffic separately if hardware is unavailable.
 
 ## Acceptance and rollback
 
@@ -35,3 +35,5 @@ Independent review found no unresolved findings after correcting the test to att
 The root-owned `scripts/test-all.ps1 -Components Windows` completed successfully: all Go tests, vet/build, installer/payload and release contract checks, manifest/schema checks, all 40 frontend tests and syntax validation passed. Full output is retained in the ignored `G:/codex-build-cache/mobile-egress-hosted-20261004/windows-ipc-repair-gate.log`. Signed repair and installed acceptance are the next steps.
 
 Source commit `b4eb10b` was pushed to the existing hosted feature branch. The guarded build produced local validation version `2.0.0-hosted-validation.20261004.1` from that clean committed tree. Full `Assert-MobileEgressDirectWindowsArtifacts` verification passed all three timestamped signatures, the exact established publisher, clean source/platform provenance, executable versions and embedded payload equality. The supported installer was opened for owner confirmation; installed repair and activation remain pending at this checkpoint. No tag or public release was created.
+
+Subsequent installed verification confirmed `.1` service/GUI hashes match the signed artifacts and ordinary unelevated protected IPC succeeds. The owner completed browser activation; live status reports authorized, gateway connected, generation 1 and awaiting phone, with both proxy endpoints loopback-only. The owner then reported needing a second browser action and an unreadable QR. Those separate failures are tracked in the [setup/pairing repair](2026-10-04-hosted-setup-pairing-usability.md); physical phone traffic is still unverified.
