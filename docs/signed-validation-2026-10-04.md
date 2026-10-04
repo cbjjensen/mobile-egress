@@ -1,6 +1,6 @@
 # Local signed artifact validation — 2026-10-04
 
-These are local validation artifacts for hosted application source `7430ba63ace5597d0453ac23d6eaeb8bcf155a83`. No release tag, GitHub asset, installed application/service, trust store or publisher identity was changed. Hosted infrastructure remains disabled. Successful signing does not establish installation, boot/logout, physical cellular or release acceptance.
+These are local validation artifacts for hosted application source `7430ba63ace5597d0453ac23d6eaeb8bcf155a83`. The initial build changed no installed application/service; the subsequent owner-approved Windows installation is recorded below. No release tag, public GitHub asset, trust store or publisher identity was changed. Hosted infrastructure remains disabled. Successful signing does not establish boot/logout, physical cellular or release acceptance.
 
 ## Windows
 
@@ -16,7 +16,7 @@ Local directory: `windows-client/build/release/mobile-egress-client-windows-2.0.
 | `mobile-egress-client.exe` | `9CA97420D94E05F9E938EF04E035850BB233446BB5529C4A7879EA22651EA353` |
 | `mobile-egress-client-app.exe` | `BA07BD9DD533A63558704C66931C5E4D18E98E815DC6C5A1C89077BE3836871C` |
 
-The private `payload-verification.zip` remains local verification evidence. Windows install/repair/upgrade/service-account DPAPI, reboot and logout tests remain unperformed; the existing installed service was left running and unchanged.
+The private `payload-verification.zip` remains local verification evidence. A subsequent owner-approved installation placed these service/GUI binaries under `C:\Program Files\Mobile Egress Client`. Read-only verification on 2026-10-04 confirmed both installed SHA-256 values match the table and both Authenticode signatures are valid. `MobileEgressClient` is running with automatic startup as LocalSystem. This completes the local fresh-install check only; repair/upgrade/service-account DPAPI recovery, reboot, logout and physical cellular tests remain unperformed. The legacy relay service was not changed.
 
 ## Android
 

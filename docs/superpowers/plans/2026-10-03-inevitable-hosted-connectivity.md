@@ -1,5 +1,7 @@
 # Mobile Egress on Inevitable Infrastructure
 
+> Follow-up approved 2026-10-04: prepare the owner-only Windows/Android pilot, restrict website navigation to enabled eligible accounts or administrators, and prepare required production environments/certificates using existing Caddy/ACME issuance. The concrete sequence and validation are tracked in the sibling `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/pilot-rollout-plan.md`. The latest workspace instructions retain the no-deploy/no-merge/no-publication boundary. The signed Windows Client has since been installed and verified locally; physical phone and deployed acceptance remain pending.
+
 Approved 2026-10-03. Implement in the existing checkouts on `feature/mobile-egress-inevitable-gateway`; do not merge, deploy, or publish releases. Inevitable requirements and implementation records live under `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/` in the sibling repository. Keep both records synchronized.
 
 ## Contract
