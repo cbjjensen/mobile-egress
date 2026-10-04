@@ -1,66 +1,49 @@
-# Windows and Mac workload Clients
+# Standalone Windows and Mac Clients
 
-AWS is optional. A workload machine uses the installed Mobile Egress Client to reach the owner's personal-computer relay through Tailscale Funnel, then the Android or iOS Agent and cellular Internet. The workload machine needs outbound HTTPS to the Funnel endpoint; it needs neither AWS credentials nor Tailscale. EC2 remains an optional workload/SSM management path. The Mac build server is development infrastructure, never a traffic relay.
+Mobile Egress 2 installs directly on the workload machine. Supported initial targets are x64 Windows 10/11 and Windows Server 2019+, and Apple Silicon macOS 13+. Linux and Intel Macs are deferred. Use only accepted compatible 2.x installers and phone builds from official distribution; existing 1.x releases do not support this setup.
 
-This describes the implemented source and next guarded Desktop release. It does not claim that new signed installers have been published or physically accepted. See the [implementation and validation record](superpowers/plans/2026-10-03-aws-optional-windows-mac-clients.md).
+## Install and connect
 
-## Install and pair
+1. Install `MobileEgressClientSetup.exe` or the signed/notarized `mobile-egress-client-macos-<version>-arm64.pkg`. Preserve normal publisher/Gatekeeper checks; never bypass a signer mismatch or remove quarantine to force installation.
+2. Follow the Client app's Computer address step. It suggests a name and public address using ipify over HTTPS; that provider sees the outgoing public IP, not pairing credentials. Suggestions are unverified and may represent a VPN/NAT gateway. Enter a hostname/IP manually if necessary. Advanced settings separate the local bind address (default `:8443`) from the advertised public port. No public CA certificate or AWS login is required.
+3. Follow Network access. The service configures its Windows executable/service/port rule or Mac application exception where policy permits. Check/Retry firewall access without resetting endpoint or pairing state. Configure router forwarding or provider ingress manually as described below. Keep HTTP 1081/SOCKS 1080 private. A restrictive network may require a different public port such as 443.
+4. Choose Pair phone, scan the private ten-minute QR in the compatible Agent and tap Start. Verify connection waits for an authenticated phone session over cellular; neither Listening nor an allowed firewall proves reachability.
+5. Use your proxy shows the HTTP proxy line and SOCKS URL copy actions. Configure the intended application on that same computer. Windows uses 127.0.0.2; Mac uses 127.0.0.1.
 
-Supported targets are x64 Windows 10/11 or Windows Server 2019+, and Apple Silicon macOS 13+. Linux and Intel Macs are deferred.
+Finish later preserves configuration. Reopening resumes unfinished setup; Review setup on a paired Client preserves its identity. Existing paired Clients open the dashboard even while their phone is offline. Retrying firewall access does not generate a new invitation. The app waits up to 30 seconds for the installed service before showing retry/repair guidance.
 
-1. On the personal controller, complete **Set up this computer**, pair the Agent, and start cellular sharing. Leave this controller open during Client pairing.
-2. On the workload machine, obtain the accepted `MobileEgressClientSetup.exe` or `mobile-egress-client-macos-<version>-arm64.pkg` from the official release. These are different from the controller installers. Use the existing Windows publisher verification or normal macOS Developer ID/Gatekeeper checks. The Mac workload owner must be logged in for the first graphical installation so the installer can bind that account.
-3. On the controller, open **Clients → Add Windows/Mac Client**, name the machine, and create an invitation. Paste it into the workload's **Mobile Egress Client** app within ten minutes. Invitations are secret, one-use capabilities; ordinary status never includes them.
-4. Wait for the Client app to finish pairing and the controller to acknowledge its configuration. Both apps distinguish saved installation/configuration from a live relay connection. Keep the personal relay and phone available.
-5. Copy the HTTP proxy line or SOCKS5 URL into the intended application on that same workload machine. Send a request and verify the connection. No system-wide proxy, default route, inbound firewall rule, or remote proxy listener is installed.
+The Windows installer opens the app unelevated after installation. The Mac PKG opens it only when the saved installation owner is the active GUI user; otherwise open Mobile Egress Client from Applications as that owner. A fresh Mac installation still requires its intended owner to be logged in. Headless upgrades/repair retain the owner and do not open a GUI. Never run the Mac Client app as root.
 
-| Workload platform | HTTP / CONNECT | SOCKS5 |
-|---|---|---|
-| Windows | `127.0.0.2:1081` | `127.0.0.2:1080` |
-| Mac | `127.0.0.1:1081` | `127.0.0.1:1080` |
+### Home routers
 
-Copy actions use the selected workload's address, regardless of the controller platform. Credentials appear only during explicit copy actions. An occupied proxy port produces an error: stop the conflicting local process and retry; the Client never silently chooses another address or port.
+Forward the advertised public TCP port to the computer's LAN address and selected local listener port. The wizard displays available local addresses; choose the adapter connected to your router and keep its LAN assignment stable. CGNAT or a private upstream network may prevent incoming access despite ordinary forwarding. A public-IP suggestion is not a diagnosis of this condition. Obtain a reachable address/route or use a supported publicly reachable server; automatic NAT traversal is not provided.
 
-## Background operation and repair
+### Hosted servers and AWS EC2
 
-The Windows Client runs as the `MobileEgressClient` LocalSystem service. Its keys and configuration use service-account DPAPI under the protected Client state directory. The GUI accesses narrow operations over a local-only named pipe restricted to SYSTEM and the recorded installing user. It verifies the pipe's SYSTEM owner before sending an invitation. The standalone installer rejects an existing AWS-managed installation instead of overwriting its service.
+The operating-system firewall and provider firewall are separate. On EC2, select the security group attached to the instance and add an inbound **Custom TCP** rule for the Client listener port (default **8443**). The instance also needs a public IPv4/IPv6 address and an appropriate internet-gateway route; outbound Internet access through a NAT gateway alone does not establish inbound reachability. Custom network ACLs or other filtering must permit the connection and replies. See [AWS security groups](https://docs.aws.amazon.com/vpc/latest/userguide/working-with-security-group-rules.html) and [internet-gateway routing](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html).
 
-The Mac Client runs as root LaunchDaemon `com.zfnf.mobile-egress.client`. It uses a distinct Client namespace in `/Library/Keychains/System.keychain`, explicitly selecting the file-based implementation required for daemons outside user sessions. Its item ACL restricts access to the signed Client daemon; unavailable storage fails closed. The GUI uses a restricted Unix socket and verifies the root service peer. The daemon verifies the recorded workload owner UID or root. There is no login-Keychain or plaintext fallback. See [Apple TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
+The allowed source must include the phone's **cellular** address. AWS's **My IP** setting uses the browser's public IP, which may belong to your administration computer rather than the phone. A narrow current-phone address rule can stop working after cellular rotation. Restrict sources where practical; broader Internet sources (`0.0.0.0/0` for IPv4 or `::/0` for IPv6) permit anyone to reach this listener, which still enforces pairing and authenticated Agent transport. If broader sources are needed, allow only the selected Client TCP port, never all ports or local proxy ports 1080/1081. Mobile Egress neither requests AWS credentials nor changes these rules.
 
-Once the workload Mac has booted and networking is available, the Client is designed to start without its GUI and continue after logout. FileVault/unattended boot policies still belong to macOS. This does not change the personal Mac relay's existing dependency on its controlling user and per-user Tailscale remaining available.
+Other hosting providers require the equivalent inbound TCP rule and reachable network route. A connection failure alone cannot identify which firewall, address or route is responsible.
 
-Install an accepted signed update on the workload machine to update or repair the standalone Client. Existing pairing, keys, credentials, and owner binding are retained. No remote software maintenance or SSH provisioning is provided. AWS-managed Clients retain their existing **Update** and **Repair** operations through SSM. Never delete protected state or reset a Keychain to repair a connection.
+One phone pairs to each Client. One phone saves at most ten Clients, including disabled and pending records. Cancel/expire pending attempts or remove a Client to release a slot. A retry resumes the existing pending identity.
 
-Revocation closes active traffic and prevents reconnecting with that identity. The service fails closed even if it cannot persist its revocation receipt. This version deliberately has no destructive identity-reset UI; installer repair does not undo revocation.
+## iPhone operation
 
-## Interrupted pairing
+Leave Mobile Egress open and unlocked. Keep screen awake while sharing defaults on; it prevents idle auto-lock while the app is active and sharing is requested. Manual lock, switching apps, Control Center or other inactive transitions pause connections. Returning active reconnects only if Start intent remains enabled. Stop restores normal auto-lock. Brightness is unchanged. A dedicated powered phone can remain on its sharing dashboard; this is foreground operation, not a background daemon.
 
-The controller reserves a stable Client ID before requesting an invitation. The relay and workload durably retain the public bootstrap/key binding, and approval issues one identity. The controller saves its encrypted metadata and the exact initial sealed configuration before delivery. Only a configuration receipt marks installation complete. Retrying lost responses or restarting either process reuses these records.
+## Upgrade from 1.x
 
-Use **Show invitation** to resume a saved attempt and **Cancel pairing** to release a canceled attempt after the relay confirms cancellation. Unredeemed invitations expire after ten minutes and cannot issue a new identity. An already approved delivery can be retried for its bound key; an acknowledgement lost after durable installation can be resent. Neither retry occupies a second slot.
+Run the new Client installer locally. Known AWS-installed Windows services can migrate without AWS access. The installer verifies the existing service path/account and retains its protected state directory, proxy credentials and LocalSystem ownership. Unknown installations fail with recovery instructions rather than being adopted. Existing standalone repair preserves the installation owner.
 
-If the Funnel origin changes during setup, first rotate the bridge in the controller. For an unfinished bootstrap, show and paste the refreshed invitation again: only its endpoint changes, while its capability, CA, ID, expiry, bootstrap, and local keys remain the same. After the original configuration arrives, import the latest connection update from the controller. If that attempt has expired before identity approval, cancel it and create a fresh invitation.
+The Client requires a new public endpoint and fresh phone pairing. Old relay CA/client credentials and QR/update formats are not direct identities. Phone upgrades remove old active associations; iOS must also stop/disable/remove its app-owned VPN profile before direct Start. If cleanup fails, follow the app’s Settings guidance; do not delete another VPN.
 
-For an approved attempt, **Show invitation** can reveal a resume-only invitation after its original deadline. It works only in the Client that already persisted the exact bound bootstrap and keys; the service polls the existing enrollment rather than making a new submission. The original deadline is never extended and other Clients cannot redeem it.
+Retire the old personal controller separately after workload migration. Do not install a public Client on that computer merely to remove the controller. Preserve encrypted recovery data, stop only Mobile Egress relay startup, and remove only its exact Funnel mapping if present. Leave other Tailscale configuration intact.
 
-## Funnel changes and AWS outages
+## Maintenance
 
-**Rotate endpoint safely** saves the desired origin and generation for the entire fleet before issuing the Agent migration QR. Scan that QR using the existing Android/iOS migration flow. Standalone Clients then use **Copy connection update** in the controller and **Import connection update** in the Client app. The sealed package is bound to the Client's key and enrollment; it changes only the relay endpoint/generation and rejects changed credentials, certificates, CA, identity, stale generations, and incompatible formats. A Client that missed several changes can import the latest generation directly. Status remains pending until the relay receives its applied-generation report.
+Run a compatible signed installer for upgrades/repair. Direct pairing, proxy credentials and secure-store ownership are preserved. The Windows service and Mac LaunchDaemon run after boot/network availability and after logout; the graphical Client app need not remain open. The phone must remain available according to its platform lifecycle.
 
-AWS delivery runs separately with bounded attempts and a retry delay. Missing or expired AWS credentials do not block pairing, status, proxy copies, or exporting/importing a standalone update. Reconnect AWS to resume EC2 management. Older EC2 Clients require consecutive generations, so the controller retains and replays their exact endpoint history in order through SSM, saving each receipt before advancing. Lost command responses are retried idempotently. The encrypted queue is bounded to 256 updates/64 KiB per Client; recover or revoke a permanently unavailable Client before exhausting that history.
+Change the advertised endpoint in the Client app and keep the phone connected to receive a signed update. If the old endpoint is unreachable, choose Show/Copy connection update and import it on the paired phone. Missed generations can be skipped. Pending remains until acknowledged. Trust replacement requires re-pairing.
 
-If an older controller already overwrote several unresolved generations before this feature was installed, that missing history cannot be reconstructed. Such a legacy Client remains pending rather than silently resetting its identity or credentials.
-
-## Registry and control interfaces
-
-Encrypted controller schema v3 preserves existing EC2 instance IDs, certificates, credentials, generations, and reservations. Each Client has a stable ID, display name, platform, architecture, and `aws-ssm` or `paired` management method. Installed state and live connection state are separate. The combined maximum is ten Clients, including reservations and unfinished pairings; legacy and standalone relay admission share that limit.
-
-Generic desktop bindings are `IssueClientInvitation`, `ClientInvitation`, `CancelClientInvitation`, `RefreshClients`, `ClientProxyLine`, `ClientSOCKSProxyURL`, `ExportClientEndpointUpdate`, and `RevokeClient`. Existing EC2 and proxy bindings remain compatible. New bounded relay control requests use Owner mTLS or the scoped enrollment capability; status reports use the enrolled Client identity. The relay stores public bootstrap material and sealed ciphertext, never workload private keys or plaintext proxy configuration.
-
-The Agent enrollment/migration formats and traffic wire protocol are unchanged. Each Client still uses one tunnel session. The mobile feature manifest is validated without changing Android/iOS feature evidence for this controller/Client-only feature.
-
-## Release and acceptance
-
-The guarded Desktop release adds the standalone Windows setup and signed/notarized Mac Client PKG while preserving the raw `mobile-egress-client.exe`, existing publisher identity, and immutable historical assets. Build support is not publication or physical acceptance.
-
-Before accepting a release, record no-AWS graphical installation and HTTP/CONNECT/SOCKS traffic on a non-AWS Windows workload and Apple Silicon Mac. Exercise boot/logout, signed upgrade/repair, unavailable secure storage, port conflicts, invitation expiry/reuse, interrupted pairing/lost receipts, concurrent admission at ten, revocation, mixed EC2 fleets with AWS unavailable, and several missed endpoint changes. Repeat traffic with Android, iOS, and older EC2 Clients. Live System Keychain ACL/upgrade acceptance must use the signed root daemon, not an unsigned test substitute.
+Remove paired phone immediately revokes its access and closes traffic. Pair a replacement using a new invitation. To free a phone registry slot, also remove the saved Client there.

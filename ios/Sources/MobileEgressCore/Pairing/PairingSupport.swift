@@ -1,5 +1,11 @@
 import Foundation
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 public enum CoreValidationError: Error, Equatable {
     case invalidBase64URL
     case invalidJSON
@@ -221,8 +227,9 @@ private struct JSONObjectLexer {
 
 enum RelayOrigin {
     static func parse(_ value: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let components = URLComponents(string: trimmed),
+        guard value.hasPrefix("https://"),
+              value.utf8.allSatisfy({ (0x21 ... 0x7E).contains($0) && $0 != 0x25 && $0 != 0x5C }),
+              let components = URLComponents(string: value),
               components.scheme == "https",
               let host = components.host,
               !host.isEmpty,
@@ -230,20 +237,56 @@ enum RelayOrigin {
               components.password == nil,
               components.query == nil,
               components.fragment == nil,
-              components.path.isEmpty || components.path == "/",
-              components.port != 0
+              components.path.isEmpty || components.path == "/"
         else {
             throw CoreValidationError.invalidRelayOrigin
         }
+        // Check the original authority as well: Foundation accepts an empty port
+        // and can otherwise repair malformed input while splitting URL components.
+        let authority = value.dropFirst("https://".count).prefix { $0 != "/" }
+        guard authority.hasPrefix(host) else { throw CoreValidationError.invalidRelayOrigin }
+        let suffix = authority.dropFirst(host.count)
+        let port: Int
+        if suffix.isEmpty {
+            port = 443
+        } else {
+            let digits = suffix.dropFirst()
+            guard suffix.first == ":", !digits.isEmpty,
+                  digits.utf8.allSatisfy({ (48 ... 57).contains($0) }),
+                  let number = Int(digits), (1 ... 65_535).contains(number)
+            else { throw CoreValidationError.invalidRelayOrigin }
+            port = number
+        }
+        let hostname = try canonicalHostname(host)
+        let headerHost = hostname.contains(":") ? "[\(hostname)]" : hostname
+        return port == 443 ? "https://\(headerHost)" : "https://\(headerHost):\(port)"
+    }
 
-        var origin = URLComponents()
-        origin.scheme = "https"
-        origin.host = host
-        origin.port = components.port
-        guard let normalized = origin.string else {
+    private static func canonicalHostname(_ host: String) throws -> String {
+        if host.first == "[", host.last == "]" {
+            let literal = String(host.dropFirst().dropLast())
+            var address = in6_addr()
+            guard literal.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else {
+                throw CoreValidationError.invalidRelayOrigin
+            }
+            let bytes = withUnsafeBytes(of: address) { Array($0) }
+            if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF {
+                return bytes.suffix(4).map(String.init).joined(separator: ".")
+            }
+            var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            return try buffer.withUnsafeMutableBufferPointer { output in
+                guard let text = inet_ntop(AF_INET6, &address, output.baseAddress, socklen_t(output.count)) else {
+                    throw CoreValidationError.invalidRelayOrigin
+                }
+                return String(cString: text)
+            }
+        }
+        guard host.utf8.count <= 253,
+              host.utf8.allSatisfy({ (65 ... 90).contains($0) || (97 ... 122).contains($0) || (48 ... 57).contains($0) || $0 == 45 || $0 == 46 })
+        else {
             throw CoreValidationError.invalidRelayOrigin
         }
-        return normalized
+        return host.lowercased()
     }
 }
 

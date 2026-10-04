@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Windows Self-Signing and Guided Bootstrap Implementation Plan
 
 **Goal:** Create one reusable, locally generated Windows Authenticode identity and a guided setup executable so friends can install Mobile Egress without buying a certificate, visiting a certificate-provider website, or manually running trust scripts.

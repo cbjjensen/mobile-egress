@@ -20,3 +20,31 @@ case "$OWNER_UID" in ''|*[!0-9]*) exit 1;; esac
 /bin/launchctl bootstrap system "$PLIST"
 /bin/launchctl kickstart system/com.zfnf.mobile-egress.client
 # Configuration and keychain items are deliberately retained for update/repair.
+
+# Installer runs as root. Enter the saved owner's current GUI session AND
+# explicitly drop credentials before asking LaunchServices to open the app.
+# An absent/different console owner (including headless repair) gets no GUI.
+open_owner_app() {
+    ACTIVE_UID=$(/usr/bin/stat -f %u /dev/console) || return 1
+    [ "$ACTIVE_UID" = "$OWNER_UID" ] || return 1
+    /bin/launchctl print "gui/$OWNER_UID" >/dev/null 2>&1 || return 1
+    exec /bin/launchctl asuser "$OWNER_UID" /usr/bin/sudo -n -H -u "#$OWNER_UID" \
+        /usr/bin/open -a '/Applications/ZFNF Mobile Egress Client.app'
+}
+
+# GUI dispatch is best effort and must never hold up a completed installation.
+# Do not retain Installer output pipes in the launched application. The app's
+# own readiness check handles daemon startup; this does not wait for the GUI.
+open_owner_app >/dev/null 2>&1 &
+HANDOFF_PID=$!
+for attempt in 1 2 3 4 5; do
+    if ! kill -0 "$HANDOFF_PID" 2>/dev/null; then break; fi
+    /bin/sleep 1
+done
+if kill -0 "$HANDOFF_PID" 2>/dev/null; then
+    kill -KILL "$HANDOFF_PID" 2>/dev/null || true
+fi
+if ! wait "$HANDOFF_PID" 2>/dev/null; then
+    printf 'Open ZFNF Mobile Egress Client from Applications as the installation owner to continue setup.\n'
+fi
+exit 0

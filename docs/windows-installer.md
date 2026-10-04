@@ -1,11 +1,29 @@
-# Windows installer
+# Windows Client installation and repair
 
-For upcoming releases built from this source, download **MobileEgressSetup.exe** directly from the project's official GitHub Releases and double-click it. It contains the signed application files; no extraction or adjacent payload folder is needed. Choose **Yes** to trust the displayed publisher and install Mobile Egress, then approve Windows permission. Independently checking Properties > Digital Signatures against the separately shared certificate fingerprint is optional. This source change has not published a new installer; existing releases through v1.1.6 retain their ZIP downloads.
+The 2.x Windows product is `MobileEgressClientSetup.exe`, containing only the signed Client app, Client service, and public signer metadata. It uses the established publisher identity and timestamp checks. The installer verifies the exact payload before elevated installation; private signing material is never embedded.
 
-Native Windows setup windows show the current installation stage before the app opens, including unpacking, signature verification, application installation, and WebView2 preparation. Keep an internet connection available if WebView2 is missing. If runtime preparation fails, **Retry** repeats only that runtime step. **Cancel** leaves the installed application available; opening Mobile Egress from the Start Menu retries missing runtime preparation without reinstalling the application.
+Run the installer normally, confirm the expected publisher, and approve the standard Windows elevation request. Do not bypass a signer mismatch. The installer transaction locks its confirmed bytes, verifies payload signatures, stages files under restricted access, and rolls back files/trust changes after failure.
 
-The established publisher identity, exact executable locking through elevation, nonce and digest bound completion, bounded machine-global installer mutex, signed-file verification, and transactional rollback remain required. A reported `install_rollback_failed` still means stop and contact the publisher; do not rerun setup or move the restricted recovery backup.
+## Stable installation identities
 
-The guarded Windows build signs the application binaries first, embeds their exact compressed bytes with the manifest and public certificate metadata into setup, and signs the complete installer last. The release verifier checks every executable signature, the manifest and Client hash, and the embedded payload against the verified sources. Private signing material never enters the payload. The local `payload-verification.zip` is verification evidence and is not a release asset.
+- App/service installation: `C:\Program Files\Mobile Egress Client`.
+- Windows service: `MobileEgressClient`, running as LocalSystem.
+- New protected state: `C:\ProgramData\MobileEgressClient`.
+- Existing owner SID and service-account DPAPI data remain protected during repair/upgrade.
+- Local app/service communication uses the protected named-pipe boundary; no public administration port exists.
 
-Upcoming Windows releases built from this source publish the single installer plus the separately used EC2 Client executable. Local compatibility ZIPs are still produced; existing flat and payload-folder ZIP layouts remain supported by development/legacy setup. All established v1.1.0 through v1.1.6 ZIP artifact contracts stay unchanged. Previously published assets must never be rebuilt or replaced.
+Installation opens the Client app unelevated. New installations enter the shared setup wizard: Computer address, Network access, Pair phone, Verify connection and Use your proxy. Address discovery is an optional setup aid, not proof of reachability; saved/edited values are preserved. Existing paired installations open their dashboard, with Review setup available. Finish later preserves unfinished setup.
+
+The default Agent TLS listener is TCP 8443. Its host-firewall rule is scoped to the exact Client executable, service and selected listener port. An unrelated rule with the same name is not adopted. Check/Retry firewall actions operate on the saved listener without regenerating pairing or endpoint state. Router forwarding and cloud ingress remain manual, including the additional EC2 security-group rule described in the [server networking guide](standalone-clients.md#hosted-servers-and-aws-ec2). Local HTTP 1081 and SOCKS 1080 stay on `127.0.0.2`.
+
+## Migrating an AWS-installed 1.x Client
+
+Run the signed 2.x installer locally on that workload. The recognized legacy service points to `C:\Program Files\MobileEgress\mobile-egress-client.exe` with protected state at `C:\ProgramData\MobileEgress\Client`. Migration verifies the exact known command/account, changes the service executable transactionally, and continues using that protected state directory. It does not decrypt/copy DPAPI state to a different account.
+
+Unknown commands, extra arguments, or unexpected service accounts fail closed with recovery guidance. Repair must not take over another service. The app displays **Migration required** until fresh direct pairing completes. Existing proxy credentials and usable stable Client IDs are retained, but relay-issued credentials cannot authorize direct serving.
+
+## Failures
+
+Occupied proxy ports produce an actionable error and do not silently move. Local management remains available while service startup retries, so a blocked public listener can be reconfigured. Free a conflicting local proxy port before retrying. Unavailable secure storage requires repair under the original ownership; do not delete protected state to suppress the error.
+
+Former controller computers follow [separate retirement instructions](controller-retirement.md). This installer does not automatically convert one into a workload endpoint.

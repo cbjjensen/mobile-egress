@@ -9,10 +9,8 @@ struct MobileEgressAgentApp: App {
         WindowGroup {
             AgentDashboardView(model: model)
         }
-        .onChange(of: scenePhase) { _, scenePhase in
-            if scenePhase == .active {
-                model.resumeAfterActivation()
-            }
+        .onChange(of: scenePhase, initial: true) { _, scenePhase in
+            model.sceneChanged(active: scenePhase == .active)
         }
     }
 }

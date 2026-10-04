@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,18 +19,25 @@ const maximumIPCBytes = 3 << 20
 
 type Service interface {
 	Status() nodeservice.StandaloneStatus
-	Pair(context.Context, string) error
-	Import(context.Context, string) error
 	Proxy(context.Context, string) (string, error)
+}
+type DirectService interface {
+	Service
+	Configure(context.Context, nodeservice.DirectConfiguration) error
+	IssueInvitation(context.Context) (string, error)
+	CancelInvitation(context.Context) error
+	ExportEndpointUpdate(context.Context) (string, error)
+	Revoke(context.Context) error
 }
 type Request struct {
 	Method string `json:"method"`
 	Value  string `json:"value,omitempty"`
 }
 type Response struct {
-	Status *nodeservice.StandaloneStatus `json:"status,omitempty"`
-	Value  string                        `json:"value,omitempty"`
-	Error  string                        `json:"error,omitempty"`
+	Status   *nodeservice.StandaloneStatus `json:"status,omitempty"`
+	Firewall *FirewallStatus               `json:"firewall,omitempty"`
+	Value    string                        `json:"value,omitempty"`
+	Error    string                        `json:"error,omitempty"`
 }
 
 // Serve accepts only a platform listener which authenticates local peers before
@@ -81,13 +89,68 @@ func serveConnection(ctx context.Context, connection net.Conn, service Service) 
 		defer cancel()
 		var err error
 		switch request.Method {
+		case "check-firewall", "retry-firewall":
+			if request.Value != "" {
+				err = errors.New("Firewall checks accept no program paths or settings.")
+			} else if firewall, ok := service.(FirewallService); ok {
+				var status FirewallStatus
+				if request.Method == "retry-firewall" {
+					status, err = firewall.RetryFirewall(requestCtx)
+				} else {
+					status, err = firewall.CheckFirewall(requestCtx)
+				}
+				if err == nil {
+					response.Firewall = &status
+				}
+			} else {
+				err = errors.New("Update the Client service to check its firewall access.")
+			}
 		case "status":
 			status := service.Status()
 			response.Status = &status
-		case "pair":
-			err = service.Pair(requestCtx, request.Value)
-		case "import":
-			err = service.Import(requestCtx, request.Value)
+		case "configure":
+			var configuration nodeservice.DirectConfiguration
+			configDecoder := json.NewDecoder(strings.NewReader(request.Value))
+			configDecoder.DisallowUnknownFields()
+			if configDecoder.Decode(&configuration) != nil || configDecoder.Decode(&struct{}{}) != io.EOF {
+				err = errors.New("Invalid endpoint configuration.")
+			} else if direct, ok := service.(interface {
+				Configure(context.Context, nodeservice.DirectConfiguration) error
+			}); ok {
+				err = direct.Configure(requestCtx, configuration)
+			} else {
+				err = errors.New("Update the Client service to configure a direct endpoint.")
+			}
+		case "issue-invitation":
+			if direct, ok := service.(interface {
+				IssueInvitation(context.Context) (string, error)
+			}); ok {
+				response.Value, err = direct.IssueInvitation(requestCtx)
+			} else {
+				err = errors.New("Update the Client service to pair a phone.")
+			}
+		case "cancel-invitation":
+			if direct, ok := service.(interface{ CancelInvitation(context.Context) error }); ok {
+				err = direct.CancelInvitation(requestCtx)
+			} else {
+				err = errors.New("Update the Client service to cancel pairing.")
+			}
+		case "export-update":
+			if direct, ok := service.(interface {
+				ExportEndpointUpdate(context.Context) (string, error)
+			}); ok {
+				response.Value, err = direct.ExportEndpointUpdate(requestCtx)
+			} else {
+				err = errors.New("Update the Client service to export a connection update.")
+			}
+		case "revoke":
+			if direct, ok := service.(interface{ Revoke(context.Context) error }); ok {
+				err = direct.Revoke(requestCtx)
+			} else {
+				err = errors.New("Update the Client service to remove a phone.")
+			}
+		case "pair", "import":
+			err = errors.New("Relay invitations and updates are unsupported. Configure this Client's endpoint and pair your phone again.")
 		case "proxy":
 			if request.Value != "http" && request.Value != "socks" {
 				err = errors.New("Unknown proxy format.")
@@ -139,12 +202,28 @@ func (client LocalClient) Status() nodeservice.StandaloneStatus {
 	}
 	return *response.Status
 }
-func (client LocalClient) Pair(ctx context.Context, value string) error {
-	_, err := client.call(ctx, "pair", value)
+func (client LocalClient) Configure(ctx context.Context, configuration nodeservice.DirectConfiguration) error {
+	raw, err := json.Marshal(configuration)
+	if err != nil {
+		return errors.New("Invalid endpoint configuration.")
+	}
+	_, err = client.call(ctx, "configure", string(raw))
 	return err
 }
-func (client LocalClient) Import(ctx context.Context, value string) error {
-	_, err := client.call(ctx, "import", value)
+func (client LocalClient) IssueInvitation(ctx context.Context) (string, error) {
+	response, err := client.call(ctx, "issue-invitation", "")
+	return response.Value, err
+}
+func (client LocalClient) CancelInvitation(ctx context.Context) error {
+	_, err := client.call(ctx, "cancel-invitation", "")
+	return err
+}
+func (client LocalClient) ExportEndpointUpdate(ctx context.Context) (string, error) {
+	response, err := client.call(ctx, "export-update", "")
+	return response.Value, err
+}
+func (client LocalClient) Revoke(ctx context.Context) error {
+	_, err := client.call(ctx, "revoke", "")
 	return err
 }
 func (client LocalClient) Proxy(ctx context.Context, kind string) (string, error) {

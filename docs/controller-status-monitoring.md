@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Controller status monitoring
 
 Windows and macOS controllers collect status once at startup and every four

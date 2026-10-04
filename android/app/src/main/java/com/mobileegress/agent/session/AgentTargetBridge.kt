@@ -49,6 +49,10 @@ internal class AgentTargetBridge(
     private val closed = AtomicBoolean(false)
     @Volatile private var reactor: TargetReactorPort? = null
 
+    init {
+        outbound.setDataCapacityListener { reactor?.outboundCapacityAvailable() }
+    }
+
     fun start(): Boolean {
         val startedSuccessfully = try {
             synchronized(lifecycleLock) {
@@ -306,6 +310,17 @@ internal class AgentTargetBridge(
         }
         if (accepted) status.onBytesDown(payload.size)
         return accepted
+    }
+
+    override fun readAvailability(streamId: String, correlationToken: Long): TargetReadAvailability {
+        val stream = current(streamId, correlationToken) ?: return TargetReadAvailability.Closed
+        return synchronized(stream.lock) {
+            if (stream.finalized || stream.state != StreamState.Open || closed.get()) {
+                TargetReadAvailability.Closed
+            } else {
+                outbound.streamReadAvailability(streamId)
+            }
+        }
     }
 
     override fun onBytesWritten(streamId: String, correlationToken: Long, byteCount: Int) {

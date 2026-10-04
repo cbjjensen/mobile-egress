@@ -32,6 +32,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,6 +72,11 @@ fun AgentScreen(
     onRotateIp: (Int) -> Unit,
     onCancelRotation: () -> Unit,
     onCopyStatus: () -> Unit,
+    onClientEnabled: (String, Boolean) -> Unit = { _, _ -> },
+    onRemoveClient: (String) -> Unit = {},
+    onRetryClient: (String) -> Unit = {},
+    onImportBundle: (String) -> Unit = {},
+    onImportFile: () -> Unit = {},
 ) {
     val presentation = presentAgentScreen(state)
     val colorScheme = MaterialTheme.colorScheme
@@ -98,6 +104,7 @@ fun AgentScreen(
                 onQrNotRecognized = onQrNotRecognized,
                 onScannerUnavailable = onScannerUnavailable,
             )
+            DirectClientsCard(state, onClientEnabled, onRemoveClient, onRetryClient, onImportBundle, onImportFile)
             AgentCard(
                 state = state,
                 presentation = presentation,
@@ -116,6 +123,45 @@ fun AgentScreen(
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+    }
+}
+
+@Composable
+private fun DirectClientsCard(
+    state: MainUiState, enable: (String, Boolean) -> Unit, remove: (String) -> Unit,
+    retry: (String) -> Unit, import: (String) -> Unit, importFile: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    var removal by remember { mutableStateOf<ClientUiState?>(null) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Direct Clients (" + state.clients.size + "/10)", style = MaterialTheme.typography.titleMedium)
+            state.clients.forEach { client ->
+                Text(client.name, fontWeight = FontWeight.Bold)
+                Text(if (client.removalPending) "Stopped · Removal pending" else if (!client.enabled) "Disabled" else if (client.connected) "Connected · " + client.streams + " streams" else client.stage + " · Disconnected")
+                if (client.error.isNotEmpty()) Text(client.error, color = MaterialTheme.colorScheme.error)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { enable(client.id, !client.enabled) }, enabled = !state.pairingInProgress) {
+                        Text(if (client.enabled) "Disable" else "Enable")
+                    }
+                    TextButton(onClick = { retry(client.id) }, enabled = !state.pairingInProgress && !client.removalPending) { Text("Retry") }
+                    TextButton(onClick = { removal = client }, enabled = !state.pairingInProgress) { Text(if (client.removalPending) "Retry Remove" else "Remove") }
+                }
+            }
+            OutlinedTextField(value = text, onValueChange = { if (it.length <= 87_384) text = it },
+                label = { Text("Invitation or connection update") }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
+            Row {
+                TextButton(onClick = { val value = text; text = ""; import(value) }, enabled = text.isNotBlank() && !state.pairingInProgress) { Text("Import") }
+                TextButton(onClick = importFile, enabled = !state.pairingInProgress) { Text("Import update file") }
+            }
+        }
+    }
+    removal?.let { client ->
+        AlertDialog(onDismissRequest = { removal = null },
+            title = { Text("Remove Client?") },
+            text = { Text("This closes its streams and removes this phone's pairing. Revoke the phone on the workload Client before pairing again.") },
+            confirmButton = { TextButton(onClick = { removal = null; remove(client.id) }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { removal = null }) { Text("Cancel") } })
     }
 }
 
@@ -194,9 +240,9 @@ private fun PairingCard(
         )
         Text(
             text = if (state.paired) {
-                "Scan again only when the Windows controller shows an endpoint-migration QR."
+                "Scan a direct Client invitation or a signed connection update. Up to ten Clients can use this phone."
             } else {
-                "Generate an Android QR in the Windows controller, then scan it here to create this phone's identity."
+                "Generate an invitation on a reachable workload Client, then scan it here to pair this phone."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -273,7 +319,7 @@ private fun AgentCard(
                 modifier = Modifier.weight(1f),
             )
             ConnectionTile(
-                label = "Relay",
+                label = "Clients",
                 value = runtime.relay.name.lowercase().replaceFirstChar(Char::uppercase),
                 tone = when (runtime.relay) {
                     RelayHealth.Connected -> ScreenTone.Info
@@ -586,7 +632,7 @@ private fun AgentMessage(errorClass: ErrorClass) {
         )
         Spacer(modifier = Modifier.width(9.dp))
         Text(
-            text = if (hasError) readableName(errorClass.name) else "No errors detected",
+            text = if (hasError) readableName(errorClass.name.replace("Relay", "Client")) else "No errors detected",
             color = if (hasError) color else MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )

@@ -86,6 +86,7 @@ public final class SecureEnclaveIdentityKeyManager: IdentityKeyManaging, @unchec
             kSecMatchLimit: kSecMatchLimitOne,
             kSecReturnRef: true,
         ] as CFDictionary, &result)
+        try IdentityKeyAccess.requireSuccess(status)
         guard status == errSecSuccess, let result, CFGetTypeID(result) == SecKeyGetTypeID() else {
             throw IdentityError.identityLookupFailed
         }

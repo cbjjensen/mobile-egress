@@ -25,6 +25,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
+    private val updateFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.importFile(uri)
+    }
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) {
@@ -65,6 +68,11 @@ class MainActivity : ComponentActivity() {
                     onRotateIp = viewModel::rotateCellularIp,
                     onCancelRotation = viewModel::cancelCellularIpRotation,
                     onCopyStatus = ::copySafeStatus,
+                    onClientEnabled = viewModel::setClientEnabled,
+                    onRemoveClient = viewModel::removeClient,
+                    onRetryClient = viewModel::retryClient,
+                    onImportBundle = viewModel::importBundle,
+                    onImportFile = { updateFile.launch(arrayOf("text/*", "application/octet-stream")) },
                 )
             }
         }

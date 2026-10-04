@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # AWS-optional Windows and Mac Clients Implementation Plan
 
 > Approved for implementation directly on `main` in `C:\Users\Chad\workspace\mobile-egress`. This document is the durable specification and execution checklist.

@@ -249,11 +249,8 @@ $outputRelativePaths = @(
     'assets\branding\zfnf-logo.png',
     'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_foreground.png',
     'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_notification.png',
-    'windows-client\frontend\public\zfnf-logo.png',
-    'windows-client\internal\desktop\zfnf-logo.ico',
     'ios\Assets\AppAssets.xcassets\AppIcon.appiconset\MobileEgressAppIcon.png',
     'ios\Assets\AppAssets.xcassets\ZFNFHeader.imageset\ZFNFHeader.png',
-    'windows-client\internal\desktop\zfnf-menu-bar.png',
     'windows-client\macos\appicon.icns'
 )
 $generationRoot = $repositoryRoot
@@ -268,12 +265,9 @@ try {
     Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[0]) -Size 1024 -Transparent $false
     Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[1]) -Size 432 -Transparent $true -Scale 0.88
     Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[2]) -Size 96 -Transparent $true -Scale 0.9
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[3]) -Size 512 -Transparent $false
-    Save-LogoIco -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[4])
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[5]) -Size 1024 -Transparent $false -Scale 0.84 -OpaqueRGB $true
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[6]) -Size 256 -Transparent $true -Scale 0.9
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[7]) -Size 36 -Transparent $true -Scale 0.9
-    Save-LogoIcns -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[8])
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[3]) -Size 1024 -Transparent $false -Scale 0.84 -OpaqueRGB $true
+    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[4]) -Size 256 -Transparent $true -Scale 0.9
+    Save-LogoIcns -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[5])
 } finally {
     $source.Dispose()
 }

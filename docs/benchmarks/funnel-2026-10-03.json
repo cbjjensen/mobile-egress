@@ -1,0 +1,612 @@
+{
+  "schemaVersion": 1,
+  "measuredDate": "2026-10-03",
+  "scope": "Completed-transfer payload goodput through public Tailscale Funnel; client and temporary backend on the same personal Windows PC.",
+  "tailscaleVersion": "1.102.3",
+  "goVersion": "go1.26.3",
+  "harnessSHA256": "b12863d74c0ee8bb6a3bc64e97f55501573000565cab340a6079927a23741c37",
+  "publicPort": 10000,
+  "productionPort": 8443,
+  "warmupMaximumBytes": 524288,
+  "requestedSenderSeconds": 10,
+  "measuredMaximumBytes": 268435456,
+  "drainGraceSeconds": 60,
+  "sequential": true,
+  "tlsAndPayloadVerified": true,
+  "publicIngressResolvedBy": "Google and Cloudflare DNS-over-HTTPS; literal public IP pinned for dial; actual socket destination checked.",
+  "transportRoute": "Windows Ethernet; no Tailscale exit node; no HTTP proxy.",
+  "limitations": [
+    "Both directions traverse the home WAN uplink and downlink; this does not isolate a Tailscale policy limit.",
+    "No cellular, phone Agent, or Mobile Egress relay protocol is included.",
+    "Sender time bounds differ from actual receiving intervals because buffered bytes drain before acknowledgement.",
+    "Loopback controls hit a 256 MiB cap in under one second and are local capacity checks only.",
+    "Earlier incomplete timeout attempts are excluded from successful measurements."
+  ],
+  "cleanup": {
+    "mappingRestored": true,
+    "temporaryServerStopped": true,
+    "checkedAtUTC": "2026-10-03T22:55:55.0451459Z"
+  },
+  "results": [
+    {
+      "route": "direct",
+      "direction": "download",
+      "receivedBytes": 268435456,
+      "receiveSeconds": 0.3630009,
+      "Mbps": 5915.918247034649,
+      "wallSeconds": 0.3630009,
+      "intervals": [
+        {
+          "seconds": 0.3630009,
+          "receivedBytes": 268435456
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": false,
+      "destinationMatched": true,
+      "byteLimitReached": true,
+      "run": 1,
+      "measuredAtUTC": "2026-10-03T22:53:58.0920224Z"
+    },
+    {
+      "route": "direct",
+      "direction": "upload",
+      "receivedBytes": 268435456,
+      "receiveSeconds": 0.4995013,
+      "Mbps": 4299.255373309338,
+      "wallSeconds": 0.5000032,
+      "intervals": [
+        {
+          "seconds": 0.4995013,
+          "receivedBytes": 268435456
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": false,
+      "destinationMatched": true,
+      "byteLimitReached": true,
+      "run": 1,
+      "measuredAtUTC": "2026-10-03T22:53:58.6265374Z"
+    },
+    {
+      "route": "funnel",
+      "direction": "download",
+      "receivedBytes": 10289152,
+      "receiveSeconds": 20.43425,
+      "Mbps": 4.028198539217246,
+      "wallSeconds": 20.5233375,
+      "intervals": [
+        {
+          "seconds": 1.5516254,
+          "receivedBytes": 458752
+        },
+        {
+          "seconds": 3.9787378,
+          "receivedBytes": 524288
+        },
+        {
+          "seconds": 4.0156527,
+          "receivedBytes": 589824
+        },
+        {
+          "seconds": 5.118409,
+          "receivedBytes": 2162688
+        },
+        {
+          "seconds": 6.0624722,
+          "receivedBytes": 2621440
+        },
+        {
+          "seconds": 7.1783565,
+          "receivedBytes": 3145728
+        },
+        {
+          "seconds": 8.2433779,
+          "receivedBytes": 3342336
+        },
+        {
+          "seconds": 9.0665367,
+          "receivedBytes": 3866624
+        },
+        {
+          "seconds": 10.0262574,
+          "receivedBytes": 4456448
+        },
+        {
+          "seconds": 11.0664468,
+          "receivedBytes": 5046272
+        },
+        {
+          "seconds": 12.0704441,
+          "receivedBytes": 5636096
+        },
+        {
+          "seconds": 13.0464346,
+          "receivedBytes": 6225920
+        },
+        {
+          "seconds": 14.031016,
+          "receivedBytes": 6815744
+        },
+        {
+          "seconds": 15.0622143,
+          "receivedBytes": 7405568
+        },
+        {
+          "seconds": 16.0661706,
+          "receivedBytes": 7864320
+        },
+        {
+          "seconds": 17.0107467,
+          "receivedBytes": 8323072
+        },
+        {
+          "seconds": 18.087177,
+          "receivedBytes": 8912896
+        },
+        {
+          "seconds": 19.0870542,
+          "receivedBytes": 9502720
+        },
+        {
+          "seconds": 20.0074032,
+          "receivedBytes": 10027008
+        },
+        {
+          "seconds": 20.43425,
+          "receivedBytes": 10289152
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "run": 1,
+      "measuredAtUTC": "2026-10-03T22:54:20.4321928Z"
+    },
+    {
+      "route": "funnel",
+      "direction": "upload",
+      "receivedBytes": 5898240,
+      "receiveSeconds": 10.248316,
+      "Mbps": 4.604260836609644,
+      "wallSeconds": 10.3342538,
+      "intervals": [
+        {
+          "seconds": 1.0298266,
+          "receivedBytes": 524288
+        },
+        {
+          "seconds": 2.0249591,
+          "receivedBytes": 1114112
+        },
+        {
+          "seconds": 3.0051566,
+          "receivedBytes": 1703936
+        },
+        {
+          "seconds": 4.0212481,
+          "receivedBytes": 2293760
+        },
+        {
+          "seconds": 5.04904,
+          "receivedBytes": 2818048
+        },
+        {
+          "seconds": 6.0897989,
+          "receivedBytes": 3473408
+        },
+        {
+          "seconds": 7.0481335,
+          "receivedBytes": 4063232
+        },
+        {
+          "seconds": 8.0251061,
+          "receivedBytes": 4653056
+        },
+        {
+          "seconds": 9.0683519,
+          "receivedBytes": 5242880
+        },
+        {
+          "seconds": 10.0253465,
+          "receivedBytes": 5767168
+        },
+        {
+          "seconds": 10.248316,
+          "receivedBytes": 5898240
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "run": 1,
+      "measuredAtUTC": "2026-10-03T22:54:31.8744849Z"
+    },
+    {
+      "route": "funnel",
+      "direction": "download",
+      "receivedBytes": 15794176,
+      "receiveSeconds": 26.1471171,
+      "Mbps": 4.832403033831978,
+      "wallSeconds": 26.2376286,
+      "intervals": [
+        {
+          "seconds": 1.0711242,
+          "receivedBytes": 589824
+        },
+        {
+          "seconds": 2.0510484,
+          "receivedBytes": 1245184
+        },
+        {
+          "seconds": 3.0476592,
+          "receivedBytes": 1835008
+        },
+        {
+          "seconds": 4.0118412,
+          "receivedBytes": 2424832
+        },
+        {
+          "seconds": 5.0670047,
+          "receivedBytes": 3080192
+        },
+        {
+          "seconds": 6.0473542,
+          "receivedBytes": 3670016
+        },
+        {
+          "seconds": 7.0120487,
+          "receivedBytes": 4259840
+        },
+        {
+          "seconds": 8.09743,
+          "receivedBytes": 4915200
+        },
+        {
+          "seconds": 9.0424369,
+          "receivedBytes": 5505024
+        },
+        {
+          "seconds": 10.1206692,
+          "receivedBytes": 6160384
+        },
+        {
+          "seconds": 11.073939,
+          "receivedBytes": 6750208
+        },
+        {
+          "seconds": 12.0230353,
+          "receivedBytes": 7340032
+        },
+        {
+          "seconds": 13.0353346,
+          "receivedBytes": 7864320
+        },
+        {
+          "seconds": 14.088766,
+          "receivedBytes": 8519680
+        },
+        {
+          "seconds": 15.0591894,
+          "receivedBytes": 9109504
+        },
+        {
+          "seconds": 16.0394213,
+          "receivedBytes": 9699328
+        },
+        {
+          "seconds": 17.0979611,
+          "receivedBytes": 10354688
+        },
+        {
+          "seconds": 18.0433498,
+          "receivedBytes": 10944512
+        },
+        {
+          "seconds": 19.0107309,
+          "receivedBytes": 11534336
+        },
+        {
+          "seconds": 20.0681881,
+          "receivedBytes": 12189696
+        },
+        {
+          "seconds": 21.0592253,
+          "receivedBytes": 12779520
+        },
+        {
+          "seconds": 22.0315907,
+          "receivedBytes": 13238272
+        },
+        {
+          "seconds": 23.0822907,
+          "receivedBytes": 13893632
+        },
+        {
+          "seconds": 24.0247933,
+          "receivedBytes": 14483456
+        },
+        {
+          "seconds": 25.0968429,
+          "receivedBytes": 15138816
+        },
+        {
+          "seconds": 26.0408277,
+          "receivedBytes": 15728640
+        },
+        {
+          "seconds": 26.1471171,
+          "receivedBytes": 15794176
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "run": 2,
+      "measuredAtUTC": "2026-10-03T22:54:59.715751Z"
+    },
+    {
+      "route": "funnel",
+      "direction": "upload",
+      "receivedBytes": 5505024,
+      "receiveSeconds": 10.0841507,
+      "Mbps": 4.367268331283466,
+      "wallSeconds": 10.1607334,
+      "intervals": [
+        {
+          "seconds": 1.0104,
+          "receivedBytes": 589824
+        },
+        {
+          "seconds": 2.0644719,
+          "receivedBytes": 1245184
+        },
+        {
+          "seconds": 3.0771419,
+          "receivedBytes": 1835008
+        },
+        {
+          "seconds": 4.029891,
+          "receivedBytes": 2359296
+        },
+        {
+          "seconds": 5.0676254,
+          "receivedBytes": 2949120
+        },
+        {
+          "seconds": 6.0326461,
+          "receivedBytes": 3538944
+        },
+        {
+          "seconds": 7.0683586,
+          "receivedBytes": 3997696
+        },
+        {
+          "seconds": 8.125509,
+          "receivedBytes": 4390912
+        },
+        {
+          "seconds": 9.004225,
+          "receivedBytes": 4849664
+        },
+        {
+          "seconds": 10.0841507,
+          "receivedBytes": 5505024
+        },
+        {
+          "seconds": 10.0841507,
+          "receivedBytes": 5505024
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "run": 2,
+      "measuredAtUTC": "2026-10-03T22:55:11.0440635Z"
+    },
+    {
+      "route": "funnel",
+      "direction": "download",
+      "receivedBytes": 15728640,
+      "receiveSeconds": 30.0422407,
+      "Mbps": 4.188406625741468,
+      "wallSeconds": 30.1696409,
+      "intervals": [
+        {
+          "seconds": 1.0485439,
+          "receivedBytes": 655360
+        },
+        {
+          "seconds": 2.0037207,
+          "receivedBytes": 1245184
+        },
+        {
+          "seconds": 3.0371764,
+          "receivedBytes": 1703936
+        },
+        {
+          "seconds": 4.0684511,
+          "receivedBytes": 2293760
+        },
+        {
+          "seconds": 5.0403424,
+          "receivedBytes": 2883584
+        },
+        {
+          "seconds": 6.0182073,
+          "receivedBytes": 3473408
+        },
+        {
+          "seconds": 7.0686476,
+          "receivedBytes": 4128768
+        },
+        {
+          "seconds": 8.169901,
+          "receivedBytes": 4587520
+        },
+        {
+          "seconds": 9.180303,
+          "receivedBytes": 4915200
+        },
+        {
+          "seconds": 10.100824,
+          "receivedBytes": 5308416
+        },
+        {
+          "seconds": 11.1194012,
+          "receivedBytes": 5636096
+        },
+        {
+          "seconds": 12.0761918,
+          "receivedBytes": 5963776
+        },
+        {
+          "seconds": 13.083343,
+          "receivedBytes": 6291456
+        },
+        {
+          "seconds": 14.0274591,
+          "receivedBytes": 6684672
+        },
+        {
+          "seconds": 15.1491807,
+          "receivedBytes": 7012352
+        },
+        {
+          "seconds": 16.0690091,
+          "receivedBytes": 7536640
+        },
+        {
+          "seconds": 17.109578,
+          "receivedBytes": 7995392
+        },
+        {
+          "seconds": 18.0709756,
+          "receivedBytes": 8585216
+        },
+        {
+          "seconds": 19.0610039,
+          "receivedBytes": 9175040
+        },
+        {
+          "seconds": 20.0473675,
+          "receivedBytes": 9764864
+        },
+        {
+          "seconds": 21.0395992,
+          "receivedBytes": 10354688
+        },
+        {
+          "seconds": 22.0552228,
+          "receivedBytes": 10944512
+        },
+        {
+          "seconds": 23.0314801,
+          "receivedBytes": 11534336
+        },
+        {
+          "seconds": 24.0311712,
+          "receivedBytes": 12124160
+        },
+        {
+          "seconds": 25.0311455,
+          "receivedBytes": 12713984
+        },
+        {
+          "seconds": 26.0796206,
+          "receivedBytes": 13369344
+        },
+        {
+          "seconds": 27.0795741,
+          "receivedBytes": 13959168
+        },
+        {
+          "seconds": 28.03969,
+          "receivedBytes": 14548992
+        },
+        {
+          "seconds": 29.0232093,
+          "receivedBytes": 15138816
+        },
+        {
+          "seconds": 30.0422407,
+          "receivedBytes": 15728640
+        },
+        {
+          "seconds": 30.0422407,
+          "receivedBytes": 15728640
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "run": 3,
+      "measuredAtUTC": "2026-10-03T22:55:42.6936786Z"
+    },
+    {
+      "route": "funnel",
+      "direction": "upload",
+      "receivedBytes": 6029312,
+      "receiveSeconds": 10.5060125,
+      "Mbps": 4.59113255385904,
+      "wallSeconds": 10.5915498,
+      "intervals": [
+        {
+          "seconds": 1.0342298,
+          "receivedBytes": 524288
+        },
+        {
+          "seconds": 2.0820585,
+          "receivedBytes": 1179648
+        },
+        {
+          "seconds": 3.0538489,
+          "receivedBytes": 1769472
+        },
+        {
+          "seconds": 4.0692447,
+          "receivedBytes": 2359296
+        },
+        {
+          "seconds": 5.1020436,
+          "receivedBytes": 2949120
+        },
+        {
+          "seconds": 6.0295688,
+          "receivedBytes": 3473408
+        },
+        {
+          "seconds": 7.0455249,
+          "receivedBytes": 4063232
+        },
+        {
+          "seconds": 8.0889654,
+          "receivedBytes": 4653056
+        },
+        {
+          "seconds": 9.0220758,
+          "receivedBytes": 5177344
+        },
+        {
+          "seconds": 10.049195,
+          "receivedBytes": 5767168
+        },
+        {
+          "seconds": 10.5060125,
+          "receivedBytes": 6029312
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "run": 3,
+      "measuredAtUTC": "2026-10-03T22:55:54.9144942Z"
+    }
+  ]
+}

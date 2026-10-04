@@ -19,7 +19,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 REPO=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
 [ "$(/usr/bin/git -C "$REPO" rev-parse HEAD)" = "$SOURCE_COMMIT" ] || fail 'source commit mismatch'
 [ -z "$(/usr/bin/git -C "$REPO" status --porcelain --untracked-files=normal)" ] || fail 'release checkout must be clean'
-/bin/sh "$SCRIPT_DIR/bootstrap-macos-toolchain.sh"
+/bin/sh "$SCRIPT_DIR/bootstrap-macos-toolchain.sh" --go-only
 BUILD_ROOT=${MOBILE_EGRESS_MAC_BUILD_ROOT:-"$HOME/Library/Caches/com.cbjjensen.mobile-egress.build"}
 GO_BIN="$BUILD_ROOT/toolchains/go/1.26.7/bin/go"
 export GOPATH="$BUILD_ROOT/gopath" GOMODCACHE="$BUILD_ROOT/gomodcache" GOCACHE="$BUILD_ROOT/gocache"
@@ -51,8 +51,8 @@ BUILD_VERSION=${RELEASE_VERSION%%-*}
 /bin/cp "$REPO/windows-client/macos/appicon.icns" "$APP/Contents/Resources/iconfile.icns"
 /bin/cp "$REPO/windows-client/macos/client/com.zfnf.mobile-egress.client.plist" "$STAGE/Library/LaunchDaemons/"
 cd "$REPO"
-"$GO_BIN" build -trimpath -ldflags "-X main.version=$RELEASE_VERSION" -o "$DAEMON" ./windows-client/cmd/mobile-egress-client
-"$GO_BIN" build -trimpath -tags production -ldflags "-X main.version=$RELEASE_VERSION" -o "$APP/Contents/MacOS/mobile-egress-client-app" ./windows-client/cmd/mobile-egress-client-app
+"$GO_BIN" build -buildvcs=true -trimpath -ldflags "-X main.version=$RELEASE_VERSION" -o "$DAEMON" ./windows-client/cmd/mobile-egress-client
+"$GO_BIN" build -buildvcs=true -trimpath -tags production -ldflags "-X main.version=$RELEASE_VERSION" -o "$APP/Contents/MacOS/mobile-egress-client-app" ./windows-client/cmd/mobile-egress-client-app
 for binary in "$DAEMON" "$APP/Contents/MacOS/mobile-egress-client-app"; do
     /bin/chmod 755 "$binary"
     [ "$(/usr/bin/lipo -archs "$binary")" = arm64 ] || fail 'Client binary is not arm64'

@@ -106,6 +106,7 @@ private final class OutboundCompletion: @unchecked Sendable {
 }
 
 public struct OutboundFrame: @unchecked Sendable {
+    let budgetLease: DirectBudgetLease?
     public let id: UInt64
     public let bytes: Data
     let streamID: String?
@@ -119,8 +120,10 @@ public struct OutboundFrame: @unchecked Sendable {
         streamID: String?,
         streamCancellation: OutboundCancellation?,
         dataCancellation: OutboundCancellation?,
-        completion: OutboundCompletion
+        completion: OutboundCompletion,
+        budgetLease: DirectBudgetLease? = nil
     ) {
+        self.budgetLease = budgetLease
         self.id = id
         self.bytes = bytes
         self.streamID = streamID
@@ -159,6 +162,8 @@ struct OutboundMailboxBookkeepingSnapshot: Equatable, Sendable {
 }
 
 public final class OutboundMailbox: @unchecked Sendable {
+    private let sharedBudget: DirectPhoneBudget?
+    private let budgetOwner = UUID().uuidString
     private struct ControlFrame {
         let frame: OutboundFrame
         let afterDataStreamID: String?
@@ -189,8 +194,10 @@ public final class OutboundMailbox: @unchecked Sendable {
         dataCapacity: Int,
         perStreamDataCapacity: Int,
         dataByteCapacity: Int,
-        cancellationHistoryCapacity: Int = 1_024
+        cancellationHistoryCapacity: Int = 1_024,
+        sharedBudget: DirectPhoneBudget? = nil
     ) {
+        self.sharedBudget = sharedBudget
         precondition(controlCapacity > 0)
         precondition(dataCapacity > 0)
         precondition((1 ... dataCapacity).contains(perStreamDataCapacity))
@@ -242,6 +249,14 @@ public final class OutboundMailbox: @unchecked Sendable {
     }
 
     public func offerData(_ frame: Data, streamID: String) -> Bool {
+        offerData(frame, streamID: streamID, reservedLease: nil)
+    }
+
+    func reserveData(_ frame: Data, streamID: String) -> DirectBudgetLease? {
+        sharedBudget?.acquire(.outbound, bytes: frame.count, streamKey: budgetOwner + "/" + streamID)
+    }
+
+    func offerData(_ frame: Data, streamID: String, reservedLease: DirectBudgetLease?) -> Bool {
         lock.withLock {
             guard !closed,
                    !blockedDataStreams.contains(streamID),
@@ -249,6 +264,8 @@ public final class OutboundMailbox: @unchecked Sendable {
                    frame.count <= dataByteCapacity - outstandingDataBytes,
                    (outstandingDataFramesByStream[streamID] ?? 0) < perStreamDataCapacity
             else { return false }
+            let lease = reservedLease ?? reserveData(frame, streamID: streamID)
+            guard sharedBudget == nil || lease != nil else { return false }
             let frames: BoundedDeque<OutboundFrame>
             let insertedStream: Bool
             if let existing = dataByStream[streamID] {
@@ -260,7 +277,7 @@ public final class OutboundMailbox: @unchecked Sendable {
                 dataByStream[streamID] = frames
                 insertedStream = true
             }
-            let outboundFrame = makeFrame(bytes: frame, streamID: streamID, isData: true)
+            let outboundFrame = makeFrame(bytes: frame, streamID: streamID, isData: true, budgetLease: lease)
             guard frames.append(outboundFrame) else {
                 release(outboundFrame)
                 if insertedStream {
@@ -273,6 +290,13 @@ public final class OutboundMailbox: @unchecked Sendable {
         }
     }
 
+    func hasStreamDataCapacity(_ streamID: String) -> Bool {
+        lock.withLock {
+            !closed && !blockedDataStreams.contains(streamID) &&
+                (outstandingDataFramesByStream[streamID] ?? 0) < perStreamDataCapacity
+        }
+    }
+
     public func offerRequiredControl(
         _ frame: Data,
         streamID: String?,
@@ -280,8 +304,10 @@ public final class OutboundMailbox: @unchecked Sendable {
     ) -> Bool {
         let accepted = lock.withLock {
             guard !closed, controls.count < controlCapacity else { return false }
+            let lease = sharedBudget?.acquire(.control, bytes: frame.count)
+            guard sharedBudget == nil || lease != nil else { return false }
             return controls.append(ControlFrame(
-                frame: makeFrame(bytes: frame, streamID: streamID, isData: false),
+                frame: makeFrame(bytes: frame, streamID: streamID, isData: false, budgetLease: lease),
                 afterDataStreamID: nil
             ))
         }
@@ -296,9 +322,11 @@ public final class OutboundMailbox: @unchecked Sendable {
     ) -> Bool {
         let accepted = lock.withLock {
             guard !closed, controls.count < controlCapacity else { return false }
+            let lease = sharedBudget?.acquire(.control, bytes: frame.count)
+            guard sharedBudget == nil || lease != nil else { return false }
             blockDataStream(streamID)
             return controls.append(ControlFrame(
-                frame: makeFrame(bytes: frame, streamID: streamID, isData: false),
+                frame: makeFrame(bytes: frame, streamID: streamID, isData: false, budgetLease: lease),
                 afterDataStreamID: streamID
             ))
         }
@@ -428,7 +456,7 @@ public final class OutboundMailbox: @unchecked Sendable {
         readyStreams.removeAll { $0 == streamID }
     }
 
-    private func makeFrame(bytes: Data, streamID: String?, isData: Bool) -> OutboundFrame {
+    private func makeFrame(bytes: Data, streamID: String?, isData: Bool, budgetLease: DirectBudgetLease? = nil) -> OutboundFrame {
         let id = nextFrameID
         nextFrameID &+= 1
         let streamCancellation = streamID.map {
@@ -448,7 +476,8 @@ public final class OutboundMailbox: @unchecked Sendable {
             streamID: streamID,
             streamCancellation: streamCancellation,
             dataCancellation: dataCancellation,
-            completion: OutboundCompletion()
+            completion: OutboundCompletion(),
+            budgetLease: budgetLease
         )
         if isData {
             guard let streamID else { preconditionFailure("Data frame requires a stream ID") }

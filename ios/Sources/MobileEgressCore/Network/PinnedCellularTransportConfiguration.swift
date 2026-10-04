@@ -15,13 +15,16 @@ struct RelayEndpoint: Equatable, Sendable {
     init(origin: String) throws {
         let normalized = try RelayOrigin.parse(origin)
         guard let components = URLComponents(string: normalized),
-              let hostname = components.host,
-              !hostname.isEmpty
+              let host = components.host,
+              !host.isEmpty
         else {
             throw CoreValidationError.invalidRelayOrigin
         }
         let port = components.port ?? 443
         guard (1 ... 65_535).contains(port) else { throw CoreValidationError.invalidRelayOrigin }
+        // URLComponents.host retains the brackets around an IPv6 literal.
+        // Network.framework and certificate hostname policies require the bare IP.
+        let hostname = host.first == "[" && host.last == "]" ? String(host.dropFirst().dropLast()) : host
         let headerHost = hostname.contains(":") ? "[\(hostname)]" : hostname
         self.origin = normalized
         self.hostname = hostname

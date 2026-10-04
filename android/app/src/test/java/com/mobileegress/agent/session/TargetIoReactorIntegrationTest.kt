@@ -1,7 +1,10 @@
 package com.mobileegress.agent.session
 
+import com.mobileegress.agent.protocol.WireProtocol
+import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey
@@ -13,12 +16,76 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TargetIoReactorIntegrationTest {
+    @Test
+    fun `real selector preserves a response across a stalled relay and sends eof after every byte`() {
+        val expected = ByteArray(128 * 1024 + 17) { (it % 251).toByte() }
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
+            val targetFailure = AtomicReference<Throwable?>()
+            val target = thread(isDaemon = true) {
+                try {
+                    server.accept().use { socket ->
+                        socket.getOutputStream().write(expected)
+                        socket.shutdownOutput()
+                    }
+                } catch (error: Throwable) {
+                    targetFailure.set(error)
+                }
+            }
+            val mailbox = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1)
+            val bridge = AgentTargetBridge(mailbox, { listener ->
+                TargetIoReactor(TargetSocketBinder {}, listener)
+            }, { throw AssertionError(it) })
+            assertTrue(bridge.start())
+            try {
+                bridge.open("response", InetSocketAddress(InetAddress.getLoopbackAddress(), server.localPort))
+                fun nextFrame(): OutboundFrame {
+                    var frame: OutboundFrame? = null
+                    waitUntil { mailbox.poll()?.also { frame = it } != null }
+                    return requireNotNull(frame)
+                }
+                assertEquals(OutboundEmission.Emitted, mailbox.emit(nextFrame()) { true })
+                val output = ByteArrayOutputStream()
+                val first = nextFrame()
+                assertEquals(OutboundEmission.Emitted, mailbox.emit(first, retainUntilDrained = true) {
+                    output.write(WireProtocol.parseAgentInbound(it).decodePayload())
+                    true
+                })
+                // The target has queued far more than the injected one-frame budget. No
+                // transport completion occurs here, so only kernel TCP buffers may grow.
+                Thread.sleep(100)
+                assertEquals(1, bridge.activeStreamCount)
+                assertEquals(1, mailbox.snapshot().outstandingDataFrames)
+                assertEquals(null, mailbox.poll())
+                mailbox.drained(first)
+                while (true) {
+                    val frame = nextFrame()
+                    val envelope = WireProtocol.parseAgentInbound(frame.bytes)
+                    assertEquals(OutboundEmission.Emitted, mailbox.emit(frame) { true })
+                    if (envelope.type == "close") break
+                    assertEquals("data", envelope.type)
+                    output.write(envelope.decodePayload())
+                }
+                assertTrue(expected.contentEquals(output.toByteArray()))
+                waitUntil { bridge.activeStreamCount == 0 }
+                assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+                target.join(2_000)
+                assertFalse(target.isAlive)
+                assertEquals(null, targetFailure.get())
+            } finally {
+                assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+                mailbox.close()
+            }
+        }
+    }
+
     @Test
     fun `failed socket setup advances while applying cellular binding to the alternate`() {
         LoopbackEchoServer().use { server ->

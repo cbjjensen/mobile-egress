@@ -203,6 +203,36 @@ $nullNativeEquivalenceNotes = Invoke-ManifestValidatorFixture -MutateManifest {
 Assert-Condition ($nullNativeEquivalenceNotes.ExitCode -eq 1) 'An explicit null nativeEquivalenceNotes property must fail validation even when optional.'
 Assert-Condition ($nullNativeEquivalenceNotes.Output -match 'agent\.enrollment/android nativeEquivalenceNotes must be a string') 'Null native-equivalence diagnostics must reject present null as a string value.'
 
+function Set-TestApprovedException {
+    param($Manifest)
+    $Manifest.schemaVersion = 2
+    $entry = $Manifest.features[0].platforms.ios
+    $entry.status = 'approved-exception'
+    $entry.Remove('nativeEquivalenceNotes')
+    $entry.Add('exceptionNotes', 'Owner approved foreground-only iOS; background closes all connections.')
+    $entry.Add('decisionEvidence', @('ios/Sources/MobileEgressCore/Enrollment/EnrollmentRepository.swift'))
+}
+$approvedException = Invoke-ManifestValidatorFixture -MutateManifest { param($Manifest) Set-TestApprovedException $Manifest }
+Assert-Condition ($approvedException.ExitCode -eq 0) 'Schema v2 must represent an approved exception with tracked decision, source, and test evidence.'
+$missingDecision = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    Set-TestApprovedException $Manifest
+    $Manifest.features[0].platforms.ios.Remove('decisionEvidence')
+}
+Assert-Condition ($missingDecision.ExitCode -eq 1 -and $missingDecision.Output -match 'decisionEvidence') 'An exception without a tracked decision must fail.'
+$missingExceptionTests = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    Set-TestApprovedException $Manifest
+    $Manifest.features[0].platforms.ios.testEvidence = @()
+}
+Assert-Condition ($missingExceptionTests.ExitCode -eq 1) 'An approved exception still requires tests of the actual behavior.'
+$hiddenException = Invoke-ManifestValidatorFixture -MutateManifest {
+    param($Manifest)
+    Set-TestApprovedException $Manifest
+    $Manifest.features[0].platforms.ios.status = 'implemented'
+}
+Assert-Condition ($hiddenException.ExitCode -eq 1) 'An exception cannot be relabeled implemented while retaining exception metadata.'
+
 $actualManifestOutput = & $validator -RepositoryRoot $repositoryRoot *>&1 | Out-String
 Assert-Condition ($LASTEXITCODE -eq 0) 'The checked-in mobile feature manifest must pass validation.'
 Assert-Condition ($actualManifestOutput -match 'Mobile feature manifest validation passed') 'The checked-in manifest must report validation success.'

@@ -59,7 +59,14 @@ exit 1
 	}
 }
 
-func runBootstrapWithFakeWails(t *testing.T, wails string) (string, error) {
+func TestClientBootstrapDoesNotInvokeControllerToolchain(t *testing.T) {
+	output, err := runBootstrapWithFakeWails(t, "#!/bin/sh\nexit 97\n", "--go-only")
+	if err != nil || !strings.Contains(output, "Pinned macOS Go toolchain is ready") {
+		t.Fatalf("Client bootstrap requires only Go: %v\n%s", err, output)
+	}
+}
+
+func runBootstrapWithFakeWails(t *testing.T, wails string, args ...string) (string, error) {
 	t.Helper()
 	buildRoot := t.TempDir()
 	writeFakeTool(t, filepath.Join(buildRoot, "toolchains", "go", "1.26.7", "bin", "go"), `#!/bin/sh
@@ -72,7 +79,7 @@ printf '%s\n' 'v24.20.0'
 
 	t.Setenv("MOBILE_EGRESS_MAC_BUILD_ROOT", buildRoot)
 	script := filepath.Clean(filepath.Join("..", "..", "..", "scripts", "bootstrap-macos-toolchain.sh"))
-	command := exec.Command("/bin/sh", script)
+	command := exec.Command("/bin/sh", append([]string{script}, args...)...)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }

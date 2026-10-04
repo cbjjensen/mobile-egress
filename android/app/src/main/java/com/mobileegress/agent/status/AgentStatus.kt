@@ -38,7 +38,7 @@ data class AgentRuntimeStatus(
         "Paired: ${if (paired) "yes" else "no"}",
         "Running: ${if (running) "yes" else "no"}",
         "Cellular: ${cellular.name.lowercase()}",
-        "Relay: ${relay.name.lowercase()}",
+        "Clients: ${relay.name.lowercase()}",
         "Active streams: $activeStreams",
         "Bytes up: $bytesUp",
         "Bytes down: $bytesDown",

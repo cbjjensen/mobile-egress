@@ -64,7 +64,7 @@ func TestSetupAcceptsPayloadDirectoryWithOnlySetupAtTopLevel(t *testing.T) {
 	if err := RunElevated(options, fake); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.installed) != 3 || filepath.Dir(fake.installed[0].Source) != payload {
+	if len(fake.installed) != 2 || filepath.Dir(fake.installed[0].Source) != payload {
 		t.Fatal("payload was not installed")
 	}
 }
@@ -639,7 +639,7 @@ func TestRunElevatedUsesFixedSiblingsAndRollsBackOnlyNewTrust(t *testing.T) {
 	if !reflect.DeepEqual(fake.verified, wantVerified) {
 		t.Fatalf("verified = %#v", fake.verified)
 	}
-	wantInstalled := []string{ControllerExecutableName, AdminExecutableName, RelayExecutableName}
+	wantInstalled := []string{"mobile-egress-client-app.exe", "mobile-egress-client.exe"}
 	var gotInstalled []string
 	for _, file := range fake.installed {
 		gotInstalled = append(gotInstalled, filepath.Base(file.Source))

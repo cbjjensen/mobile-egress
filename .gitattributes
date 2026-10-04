@@ -1,3 +1,5 @@
 windows-client/macos/toolchain.lock text eol=lf
 *.sh text eol=lf
 windows-client/macos/client/scripts/* text eol=lf
+# Preserve literal unified-diff context, including its leading space before tabs.
+docs/benchmarks/historical-relay-bridge-fixes.patch -whitespace

@@ -1,116 +1,45 @@
 # Architecture
 
-## Permanent personal-computer routing requirement
+## Direct workload-to-phone topology
 
-All proxy traffic must pass through the owner's personal Windows PC or Mac running the local relay, with the existing Tailscale Funnel ingress. This is an explicit product constraint. Do not propose, benchmark, provision, or implement cloud-hosted, VPS-hosted, EC2-hosted, managed, or otherwise externally hosted Mobile Egress relays as optimizations or deployment alternatives unless the owner explicitly reverses the constraint. EC2 machines are workload Clients only. The Mac build server remains development infrastructure. Performance work must improve the protocol, clients, mobile Agents, and local relay within this topology.
+Mobile Egress 2 consists of a native workload Client service/app and a phone Agent. The Agent initiates a TLS 1.3 connection to each reachable Client and carries application streams over one authenticated WebSocket per Client. The Client’s HTTP/CONNECT and SOCKS5 proxies remain local to the workload machine; target TCP connections originate from the phone’s cellular interface.
 
-Transport-2 peers negotiate raw binary data while keeping v1 JSON controls and compatibility with older peers. The relay provides a bounded list of validated destination addresses to supporting mobile Agents so a failed address can fall back within the original connection deadline. A single rejected open does not mark the entire Agent unavailable in the Windows Client. The connection topology remains one WebSocket per Client and one for the Agent; local contention measurements precede any proposal to add connections. See [the wire contract](protocol.md#negotiated-transport-extensions) and [latency evidence](latency-benchmarks.md).
+There is no controller, relay routing hop, AWS management, Tailscale, Funnel, or automatic fallback in the 2.x runtime. Workload machines behind NAT need explicit forwarding or another already-reachable public endpoint. Private connectivity traversal and hosted intermediary traffic services are outside this release.
 
-## Accepted topology
+## Workload service
 
-Every operator has one independent bridge. Its relay and control plane run on either Windows 10/11 or Apple Silicon macOS 13+, up to ten Windows or Apple Silicon Mac workload machines are Clients (paired locally or managed as EC2 through SSM), and one Android or iOS device is the cellular Agent.
+Windows uses a LocalSystem service and service-account DPAPI. Apple Silicon Mac uses a root LaunchDaemon and dedicated file-based System Keychain namespace. Existing authenticated named-pipe/Unix-socket IPC restricts GUI administration to the installation owner. GUI processes do not read private service storage.
 
-```text
-Workload HTTP/CONNECT -> loopback proxy -> Client service --+
-                                                        +-> public *.ts.net:8443 -> Funnel raw TCP -> 127.0.0.1:8443 relay -> Agent -> cellular target
-Workload SOCKS5 -> loopback proxy -> Client service --------+
-```
+The TLS listener defaults to `:8443`; its advertised HTTPS origin is configured separately because forwarding can change the public port. Server certificate SANs match that origin and chain to the Client’s own authority. A listening socket is distinct from an externally reachable endpoint; only phone enrollment/connection proves cellular reachability.
 
-Tailscale passes Mobile Egress TLS bytes without replacing the relay certificate. The public Funnel name is the certificate server name. The local Owner uses `127.0.0.1:8443` as a dial override while still validating the public name.
+Local proxy endpoints remain Windows `127.0.0.2`, Mac `127.0.0.1`, ports HTTP 1081/SOCKS 1080. The public listener has no general proxy or Owner administration API. Applications opt into the local proxy; no default routes or system proxy settings are changed.
 
-Standalone Clients support x64 Windows 10/11 and Server 2019+, plus Apple Silicon macOS 13+. AWS inventory retains its existing Windows Server 2019 restriction. The first Mac release does not migrate Windows private state. A Mac bridge additionally depends on its controlling administrator remaining logged in with the per-user Tailscale app and Keychain available; logout makes traffic fail closed.
+The existing Tunnel abstraction connects proxies to an admitted phone session. The workload resolves destination names through bounded DNS admission and validates every candidate against the public-address policy. The phone repeats validation before opening targets.
 
-## Components
+## Pairing and recovery
 
-Provider-independent Client schema, standalone enrollment, workload service/IPC boundaries, and endpoint recovery are described in [Windows and Mac workload Clients](standalone-clients.md). The combined ten-Client limit includes AWS and paired records plus pending reservations. AWS login is optional and does not gate standalone pairing or recovery.
+Each Client generates independent authority/server credentials in protected storage. A ten-minute one-use invitation binds its identity, advertised endpoint, CA and capability. Each phone pairing has a separate non-exportable key. Redemption binds the invitation to the CSR key; both peers persist state before reporting success. Lost delivery and acknowledgements retry the same identity.
 
-The Go relay and Client share the tunnel envelope codec in `internal/tunnelwire`, including JSON validation, payload limits, binary framing, and mixed-version serialization. Session negotiation and role checks remain in their callers. SOCKS and HTTP CONNECT share the Client's `internal/preopen` reader lifecycle, so buffering, cancellation, and deadline cleanup follow one implementation.
+The phone registry admits ten records, including pending and disabled records. Each Client accepts one paired phone. Revocation persists before disconnecting streams and denying reconnects. Endpoint updates carry a signature from the existing pinned authority, exact Client/pairing binding and monotonic generation. Connected phones poll signed updates; offline phones import a QR/text update. Endpoint updates never replace trust or proxy credentials.
 
-### Desktop controller
+See [wire contract](direct-protocol-v2.md) for exact schemas and paths.
 
-The shared Wails/React and Go app is the only normal operator interface. Both thin Windows and Darwin roots retain the same four tabs, backend bindings, AWS/node logic, QR flows, and release-manifest handling.
+## Phone runtime and capacity
 
-#### Windows composition
+One supervisor owns all Client sessions, cellular observation, Start/Stop, and rotation. Peer errors/retries are independent; stream ownership includes Client and session generation. Removed/disabled peers cannot be resurrected by stale callbacks or rotation recovery.
 
-It:
+The outbound and inbound retained-data lanes each share an 8,192-frame / 64-MiB phone-wide allowance. Each stream retains at most 32 data frames. Accounting includes queued and native/transport-owned debt, refunded exactly once on completion/cancellation. Idle saved Clients do not reserve a fixed tenth of the capacity. Per-stream read pause/resume and bounded fair peer admission preserve progress. Aggregate data overload closes the contributing stream; required-control failure closes the affected session. No fixed live-stream or Mbps limit is added.
 
-- downloads the official stable Tailscale amd64 MSI, verifies the published SHA-256 and a valid Tailscale Authenticode signer, and requests explicit UAC;
-- enables unattended Tailscale and `tailscale funnel --bg --yes --tcp=8443 tcp://127.0.0.1:8443`;
-- generates the Owner P-256 key in the unelevated process, sends only its CSR to the elevated helper, and stores the resulting Owner identity with Windows DPAPI;
-- supports IAM Identity Center device login and DPAPI-encrypted access-key fallback;
-- inventories only supported `us-east-1` instances and orchestrates installation/update/repair with SSM;
-- stores encrypted node metadata and reveals proxy credentials only on an explicit HTTP-line or SOCKS-URL copy action; and
-- coordinates Funnel endpoint rotation, sealed EC2 updates, and a one-use Agent migration QR.
+Senders prefer 16-KiB data frames and accept valid frames through 32 KiB. Binary framing, ordered EOF, cancellation and validated destination alternatives reuse the proven transport semantics. Buffer limits do not equal total process memory: target sockets, stream metadata and native buffers also consume resources.
 
-#### macOS composition
+## Platform lifecycle
 
-The Mac root:
+Android uses an owner-started foreground service, remains cellular-only with Wi-Fi present, and reconnects eligible peers when cellular returns. Reboot/force-stop requires Start again.
 
-- accepts a correctly signed Tailscale standalone (`io.tailscale.ipn.macsys`) or App Store (`io.tailscale.ipn.macos`) app at `/Applications/Tailscale.app`; guided installation verifies the official standalone PKG before Apple Installer;
-- sets `TAILSCALE_BE_CLI=1`, invokes `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, and uses `tailscale up` without Windows-only unattended arguments;
-- stores Owner/AWS/node state in Security.framework data-protection Keychain service `com.cbjjensen.mobile-egress.controller`, with hashed account names, device-only/non-synchronizing items, and no file fallback; and
-- registers the signed root relay through [`SMAppService`](https://developer.apple.com/documentation/servicemanagement/smappservice). Its public states are `not-registered`, `approval-required`, `enabled`, `version-mismatch`, and `unavailable`; Windows reports `not-required`. `enabled` requires both native authorization and authenticated strict-v1 status from the exact helper.
+iOS runs the Agent in the main app while its aggregate scene is active. Inactive/background transitions close sessions/targets; active return reconnects only with retained Start intent. Stop clears that intent. Keep screen awake while sharing defaults on and disables only the idle timer while active sharing is requested, including temporary retries. Stop, disabling the option, inactive/background, or a terminal sharing failure restores the idle timer. Brightness and manual locking are unchanged.
 
-### Local relay
+Foreground-only iOS is an owner-approved lifecycle parity exception. The old VPN extension cannot serve traffic; only fail-closed migration access remains to remove app-owned profiles. Other VPN configurations are untouched.
 
-On Windows, `MobileEgressRelay` runs as LocalSystem, listens only on `127.0.0.1:8443`, and stores its CA, server identity, SQLite authorization state, and aggregate metrics under `C:\ProgramData\MobileEgress\Relay`. The directory ACL grants only SYSTEM and local Administrators.
+## Upgrade boundary
 
-The Windows SCM execution path is separate from foreground CLI behavior. Public commands are `bootstrap-owner`, `rotate-endpoint`, `serve`, and `--version`. Direct Owner bootstrap signs a locally generated CSR and never creates an Owner invitation.
-
-On macOS, `com.cbjjensen.mobile-egress.relay` is a root LaunchDaemon with fixed state `/Library/Application Support/ZFNF Mobile Egress/Relay` mode `0700`, socket `/var/run/com.cbjjensen.mobile-egress.relay.sock` owned `root:admin` mode `0660`, and the same loopback listener. Strict relay-admin protocol v1 exposes only `status`, `setup`, `rotate`, and `repair`. First setup binds a kernel-authenticated nonzero administrator UID; later management accepts only that UID or root. Bounded frames, request IDs, deadlines, typed results, and allowlisted errors prevent Owner/AWS/node/CA-key/raw-error material from crossing IPC.
-
-The relay permits multiple simultaneous Clients and one active Agent session, with no application-imposed active-stream count ceiling. At most 256 concurrent DNS workers may run; established streams do not consume worker permits and excess resolution work rejects with `agent_unavailable` without a waiting queue. A rejected or revoked identity cannot open new sessions. Destination policy rejects non-public targets after resolution.
-
-Every retained data mailbox is bounded at 32 frames per stream. Client-to-Agent data has its own 8,192-frame/64-MiB lane, and Agent-to-Client data shares a separate 8,192-frame/64-MiB lane across all Client sessions. Queued and in-flight data remain charged until completion or discard. Per-stream, aggregate-frame, or aggregate-byte saturation is stream-local; required-control saturation and writer failure are session-fatal.
-
-### Workload Client (paired or EC2-managed)
-
-`MobileEgressClient` is a LocalSystem service installed under `C:\Program Files\MobileEgress`; state is under ACL-protected `C:\ProgramData\MobileEgress\Client`. It generates and retains:
-
-- its P-256 Client private key and CSR;
-- a durable X25519 sealed-configuration private key; and
-- its authenticated proxy username and password after decrypting the Owner-supplied configuration.
-
-The AWS management path retains the same raw Windows Client manifest. Standalone Clients share this service core with graphical installation/pairing; macOS uses its own LaunchDaemon and file-based System Keychain. See [Client architecture and recovery](standalone-clients.md).
-
-Bootstrap output contains only the CSR and X25519 public key. The service binds SOCKS5 to `127.0.0.2:1080` and an HTTP forward/CONNECT proxy to `127.0.0.2:1081`, so a browser or application on that same EC2 node must explicitly opt in. There is no `.1` compatibility listener. The controller exposes either copy value only after the managed node reports Client `1.1.1` or later; an older node requires a signed **Update** followed by a fresh copy. These are not controller-host, system-wide, VPN, public, UDP, or QUIC proxies. Both listeners use the same retained credentials and one relay session without a fixed active-stream ceiling. Ordinary HTTP requests are rewritten to origin form and carried through a relay stream to the destination; repeat requests to the same destination can reuse that stream through a bounded keep-alive pool. SOCKS, active HTTP requests, HTTPS CONNECT, and the pool's at most 16 idle streams (four per host) all remain tracked until closed. Idle streams expire after 60 seconds, leaving capacity for other destinations while avoiding a full mobile connection setup for every request. HTTPS clients establish end-to-end TLS through CONNECT, and Mobile Egress does not decrypt that traffic. Proxy credentials and hop-by-hop proxy headers are removed before an ordinary HTTP request reaches the destination. The Client reconnects outbound over HTTPS/WSS and needs no inbound rule or public IP.
-
-### Mobile Agents
-
-The Android app stores its P-256 identity in Android Keystore and encrypted app storage. A foreground service requests a cellular `Network` and uses that network's socket factory for the relay. Each still-unconnected target `SocketChannel` is bound to that same `Network` before nonblocking connect; one bounded `Selector` reactor owns connect, partial read/write, deadline, cancellation, and close state for all target channels without per-stream I/O threads. Loss of cellular closes streams; Wi-Fi is never used as fallback. Its guided IP-rotation state machine may close the relay, query ipify IPv4/IPv6 endpoints through that same cellular network, open the system Airplane Mode settings for manual toggling, observe radio loss/return, and reconnect. No relay protocol or default-route behavior changes.
-
-The iOS/iPadOS 17+ app stores its non-exportable P-256 identity in the Secure Enclave and shares its certificate and enrollment metadata with the packet-tunnel extension through the configured Keychain access group. Its Network.framework relay and target connections require cellular. The app manages an on-demand packet-tunnel configuration whose tunnel settings intentionally contain no included routes, so Mobile Egress traffic remains the only tunnel workload. Cellular path health is observed independently from packet-tunnel relay health and the OLED SwiftUI dashboard presents both signals separately.
-
-iOS guided rotation pauses the packet tunnel and its on-demand intent, confirms before disconnecting active streams, probes comparable IPv4/IPv6 families only through cellular, and guides the user to change Airplane Mode manually in Control Center. The app neither changes Airplane Mode nor opens a private Settings URL. A normal attempt holds for 10 seconds; an unchanged result can be retried for 30 seconds. The coordinator observes cellular loss and return, resumes when the app enters the foreground, and uses a bounded App Group checkpoint to restore the Agent after completion, cancellation, or recoverable failure. Copied status and unified logging use finite classifications and exclude public addresses, relay origins, certificates, capabilities, and raw errors.
-
-Both implementations use the same enrollment/migration QR formats, binary WebSocket protocol, public-target policy, mTLS identity model, no fixed active-stream ceilings, bounded queues, and finite failure behavior. Outbound senders prefer 16 KiB data frames while accepting valid data frames up to 32 KiB. Their relay-bound and target-bound lanes separately enforce 32 frames per stream, 8,192 aggregate frames, and 64 MiB. Loss of cellular closes streams; Wi-Fi is never used as fallback.
-
-The expanded stream and queue limits are covered by deterministic unit/component tests and ordinary build checks. No load, soak, memory, authenticated-harness, or physical-device validation was performed for this change; those gates remain pending.
-
-The versioned [mobile feature manifest](mobile-feature-manifest.json) is the tracked parity ledger for user-facing Android and iOS behavior. Every entry cites tracked source and test evidence; Apple-specific mechanisms are identified as native equivalents rather than treated as missing Android behavior.
-
-## Optional AWS provisioning sequence
-
-1. The controller independently models Tailscale as absent, installed/offline, or online. Windows uses verified MSI installation plus browser/unattended setup. macOS verifies the official app/PKG, opens Apple Installer when needed, guides system-extension/VPN approval and browser login, then obtains the stable Funnel FQDN.
-2. Windows generates the Owner key/CSR and initializes the elevated relay as before. macOS first registers the LaunchDaemon. If Login Items approval is pending, setup returns without generating an Owner key. An ordinary status poll must prove the exact helper `enabled`; a later explicit Setup invocation generates the Keychain Owner identity and initializes relay state.
-3. For each EC2 node, the controller verifies or safely prepares SSM IAM access. It never replaces an existing instance profile. It allows a 30-second passive Agent credential refresh first; if SSM remains unavailable, an explicit operator-confirmed recovery may reboot only that selected instance. The controller then requires a post-request SSM ping before provisioning, so a stale online record cannot trigger Client installation.
-4. The controller durably reserves one of its ten managed-node slots before remote provisioning begins.
-5. The signed controller validates node-release manifest v2, including the bounded self-signed Code Signing certificate and exact fingerprints. SSM pins the artifact hash and exact pre-trust signer bytes. Fresh Windows Server 2019 may report that already-pinned self-signed signature as `UnknownError`; that status is accepted only at this pre-trust checkpoint after both pins match. SSM then adds only the embedded public certificate to the node Root/TrustedPublisher stores when absent, requires post-trust Authenticode `Valid`, and installs the Client. Attempt-added trust is rolled back on later failure; existing exact trust is idempotent. The node returns only a CSR and X25519 public key.
-6. The Owner calls the relay's direct Client-CSR endpoint.
-7. The controller generates SOCKS credentials and commits encrypted `configuring` metadata before it sends anything secret-bearing to the node. It seals the endpoint/certificates/credentials to the node key using ephemeral X25519, HKDF-SHA256, and AES-256-GCM, and sends only the envelope through SSM.
-8. The node rejects malformed, tampered, replayed, or wrong-key envelopes, persists the configuration, restarts its service, and starts both loopback proxy listeners atomically.
-9. After that restart succeeds, the controller marks the node `installed`. Ambiguous failures retain enough encrypted metadata for **Repair** to reapply the exact same generation safely. The controller is single-instance, and an operator can explicitly cancel an abandoned pre-metadata reservation when its EC2 instance is no longer recoverable.
-
-## Endpoint migration
-
-When Tailscale reports a different Funnel FQDN, the controller requires AWS connectivity first if nodes are managed. Windows uses UAC; macOS requires exact helper proof and authenticated relay-admin IPC. Both rotate only the relay leaf key/certificate and stored URL under the existing CA, then update the encrypted Owner endpoint. For each node the controller first persists the desired endpoint/generation as `configuring`, then pushes the newly sealed endpoint-only configuration and marks it `installed` after restart. A failed node therefore remains repairable at the new endpoint. The controller then displays a versioned `agent-endpoint-migration` QR. The existing Agent authenticates to the new endpoint with its current certificate, consumes the one-use capability, and updates only `relayOrigin`; its Android Keystore or iOS Secure Enclave identity and certificate remain unchanged. Mac update/repair preserves CA, identities, approval, and replay state and may briefly restart the launchd helper; it does not unregister/reregister merely to upgrade.
-
-## Availability and trust
-
-The operator computer, Tailscale/Funnel, phone, cellular service, relay, and selected EC2 Client must all be available. A Mac additionally requires the controlling administrator to remain logged in with Keychain/per-user Tailscale available; controller quit does not erase the root daemon, but logout removes supported availability. Failure closes or prevents streams; it does not reroute an application through a different egress. Tailscale controls reachability while the relay CA and mTLS identities remain the Mobile Egress authorization boundary.
-
-### Relay connectivity and bounded background work
-
-The Windows Client observes the relay session's close signal independently of Agent readiness. Failed health requests and temporary Agent absence disable new-stream readiness without closing established streams. Failed connections retry with nominal delays of 2, 4, 8, 16, then 30 seconds; equal jitter uses the latter half of each delay. Thirty seconds of uninterrupted relay connectivity resets the backoff. Cancellation interrupts every retry wait.
-
-Android keeps mailbox reservations charged through OkHttp's outgoing buffer. One sender reconciles FIFO completion against OkHttp's queued message bytes, with a 512-KiB handoff window and 64 KiB reserved for controls. It checks progress every two milliseconds only while SDK work remains; idle senders wait for mailbox signals. Data fairness stays in the application mailbox. iOS keeps equivalent reservations until native send completion. These byte/frame limits are independent of the number of established streams.
+Version 2 requires fresh pairing. Old ClientAuth relay certificates cannot serve as direct server identities. Local Client migration preserves protected credentials/ownership and marks migration required. Old QR/update formats reject with guidance; there is no mixed 1.x/2.x relay runtime. Historical release artifacts and old benchmark evidence retain their original meaning.

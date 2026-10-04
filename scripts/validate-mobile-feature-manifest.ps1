@@ -55,7 +55,7 @@ function Test-JsonObject {
 function Test-SchemaVersion {
     param([object]$Value)
 
-    return ($Value -is [int] -or $Value -is [long]) -and [int64]$Value -eq 1
+    return ($Value -is [int] -or $Value -is [long]) -and [int64]$Value -in @(1, 2)
 }
 
 function Test-StringValue {
@@ -168,8 +168,9 @@ if (Test-JsonProperty -Object $manifest -Name '$schema') {
 
 $schemaVersion = Get-JsonProperty -Object $manifest -Name 'schemaVersion'
 if (-not (Test-SchemaVersion -Value $schemaVersion)) {
-    Add-ManifestError 'schemaVersion must be 1'
+    Add-ManifestError 'schemaVersion must be 1 or 2'
 }
+if ($schemaVersion -eq 2) { $allowedStatuses += 'approved-exception' }
 
 if (-not (Test-JsonProperty -Object $manifest -Name 'features')) {
     Add-ManifestError 'root missing features'
@@ -234,7 +235,9 @@ foreach ($feature in $features) {
             Add-ManifestError "$featureId/$platform must be an object"
             continue
         }
-        Test-UnexpectedProperties -Object $entry -Context "$featureId/$platform" -AllowedProperties @('status', 'nativeEquivalenceNotes', 'sourceEvidence', 'testEvidence')
+        $entryProperties = @('status', 'nativeEquivalenceNotes', 'sourceEvidence', 'testEvidence')
+        if ($schemaVersion -eq 2) { $entryProperties += @('exceptionNotes', 'decisionEvidence') }
+        Test-UnexpectedProperties -Object $entry -Context "$featureId/$platform" -AllowedProperties $entryProperties
 
         $status = Get-JsonProperty -Object $entry -Name 'status'
         if ($allowedStatuses -notcontains $status) {
@@ -251,6 +254,17 @@ foreach ($feature in $features) {
         }
         if ($status -eq 'implemented' -and $nativeEquivalenceNotes -is [string] -and -not [string]::IsNullOrWhiteSpace($nativeEquivalenceNotes)) {
             Add-ManifestError "$featureId/$platform implemented status must not use nativeEquivalenceNotes"
+        }
+        if ($status -eq 'approved-exception') {
+            if (-not (Test-StringValue -Value (Get-JsonProperty -Object $entry -Name 'exceptionNotes'))) {
+                Add-ManifestError "$featureId/$platform approved-exception requires exceptionNotes"
+            }
+            if ($hasNativeEquivalenceNotes) {
+                Add-ManifestError "$featureId/$platform approved-exception must not claim native equivalence"
+            }
+            Test-EvidenceList -Entry $entry -FeatureId $featureId -Platform $platform -PropertyName 'decisionEvidence' -RepositoryRoot $resolvedRoot
+        } elseif ((Test-JsonProperty -Object $entry -Name 'exceptionNotes') -or (Test-JsonProperty -Object $entry -Name 'decisionEvidence')) {
+            Add-ManifestError "$featureId/$platform exception metadata requires approved-exception status"
         }
 
         Test-EvidenceList -Entry $entry -FeatureId $featureId -Platform $platform -PropertyName 'sourceEvidence' -RepositoryRoot $resolvedRoot

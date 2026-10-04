@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Mobile Egress Capacity Relaxation — 256 Streams / 32-Frame Queues
 
 **Date:** 2026-09-02

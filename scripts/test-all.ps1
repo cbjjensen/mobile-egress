@@ -108,6 +108,8 @@ try {
     Initialize-MobileEgressTestAllToolchain -Components $Components
     Invoke-RequiredCommand -Name 'Mobile feature manifest parity' -Command { & (Join-Path $PSScriptRoot 'validate-mobile-feature-manifest.ps1') }
     Invoke-RequiredCommand -Name 'Release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-all.ps1') }
+    Invoke-RequiredCommand -Name 'Direct release contracts' -Command { & (Join-Path $PSScriptRoot 'test-direct-release.ps1') }
+    Invoke-RequiredCommand -Name 'Mobile manifest schema tests' -Command { & (Join-Path $PSScriptRoot 'test-mobile-feature-manifest.ps1') }
 
     if ($Components -contains 'Windows') {
         Invoke-RequiredCommand -Name 'Desktop release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-desktop.ps1') }
@@ -121,14 +123,8 @@ try {
         Invoke-RequiredCommand -Name 'Go vet' -Command { go vet ./... }
         Invoke-RequiredCommand -Name 'Go build' -Command { go build ./... }
 
-        Push-Location (Join-Path $repositoryRoot 'windows-client\frontend')
-        try {
-            Invoke-RequiredCommand -Name 'Frontend tests' -Command { npm test }
-            Invoke-RequiredCommand -Name 'Frontend typecheck' -Command { npm run check }
-            Invoke-RequiredCommand -Name 'Frontend build' -Command { npm run build }
-        } finally {
-            Pop-Location
-        }
+        Invoke-RequiredCommand -Name 'Client frontend behavior' -Command { node --test windows-client/internal/clientapp/assets/app.test.mjs }
+        Invoke-RequiredCommand -Name 'Client frontend syntax' -Command { node --check windows-client/internal/clientapp/assets/app.js }
     }
 
     if ($Components -contains 'Android') {

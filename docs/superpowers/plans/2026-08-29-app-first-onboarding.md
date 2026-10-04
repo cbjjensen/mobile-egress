@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # App-First Onboarding Implementation Plan
 
 > Historical completed plan. Its unchecked boxes are not current work status; see [current status](../../status.md) and the current source instead.

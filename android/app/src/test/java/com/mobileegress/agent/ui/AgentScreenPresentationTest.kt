@@ -13,6 +13,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentScreenPresentationTest {
+    @Test fun stopRemainsAvailableDuringManagementAndAfterLastClientRemoval() {
+        for ((paired, managing) in listOf(true to true, false to false, false to true)) {
+            val presentation = presentAgentScreen(MainUiState(paired = paired, pairingInProgress = managing,
+                runtime = AgentRuntimeStatus(running = true)))
+            assertEquals(AgentPrimaryAction.Stop, presentation.agentPrimaryAction)
+        }
+    }
     @Test
     fun `screen header uses ZFNF mobile branding`() {
         val presentation = presentAgentScreen(MainUiState())
@@ -60,13 +67,13 @@ class AgentScreenPresentationTest {
             ),
         )
 
-        assertEquals("Cellular relay active", presentation.headline)
+        assertEquals("Direct Clients active", presentation.headline)
         assertEquals(ScreenTone.Success, presentation.tone)
         assertEquals(AgentPrimaryAction.Stop, presentation.agentPrimaryAction)
         assertEquals(RotationAction.Rotate, presentation.rotationAction)
         assertEquals("Rotate cellular IP", presentation.rotationLabel)
         assertTrue(presentation.rotationEnabled)
-        assertFalse(presentation.scanEnabled)
+        assertTrue(presentation.scanEnabled)
     }
 
     @Test
@@ -158,7 +165,7 @@ class AgentScreenPresentationTest {
             ),
         )
 
-        assertEquals("Cellular relay active", presentation.headline)
+        assertEquals("Direct Clients active", presentation.headline)
         assertEquals(ScreenTone.Success, presentation.tone)
     }
 

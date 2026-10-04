@@ -5,13 +5,13 @@ import org.junit.Test
 
 class AgentSessionUrlTest {
     @Test
-    fun `websocket request uses the HTTPS relay session URL`() {
+    fun `websocket request uses only the direct HTTPS session URL`() {
         val url = agentSessionUrl("https://relay.example:8443")
 
         assertEquals("https", url.scheme)
         assertEquals("relay.example", url.host)
         assertEquals(8443, url.port)
-        assertEquals("/v1/session", url.encodedPath)
+        assertEquals("/v2/direct/session", url.encodedPath)
         assertEquals("2", url.queryParameter("transport"))
     }
 

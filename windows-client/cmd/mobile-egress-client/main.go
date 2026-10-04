@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,13 +11,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
 	"mobile-egress/windows-client/internal/clientapp"
 	"mobile-egress/windows-client/internal/nodeservice"
-	"mobile-egress/windows-client/internal/sealedconfig"
 )
-
-const maximumEnvelopeFileBytes = 2 << 20
 
 var version = "dev"
 
@@ -43,10 +39,9 @@ func run(arguments []string, stdout, stderr io.Writer, open repositoryOpener) in
 		return 1
 	}
 	switch arguments[0] {
-	case "bootstrap":
-		return runBootstrap(arguments[1:], stdout, stderr, open)
-	case "apply-config":
-		return runApplyConfiguration(arguments[1:], stdout, stderr, open)
+	case "bootstrap", "apply-config":
+		fmt.Fprintln(stderr, "Mobile Egress 2 uses direct phone pairing. Install or repair the Client app and configure its endpoint; legacy relay configuration is unsupported.")
+		return 2
 	case "serve":
 		return runServe(arguments[1:], stderr, open)
 	default:
@@ -55,69 +50,11 @@ func run(arguments []string, stdout, stderr io.Writer, open repositoryOpener) in
 	}
 }
 
-func runBootstrap(arguments []string, stdout, stderr io.Writer, open repositoryOpener) int {
-	flags := flag.NewFlagSet("mobile-egress-client bootstrap", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	stateDir := flags.String("state-dir", defaultStateDirectory(), "protected Client service state directory")
-	if err := flags.Parse(arguments); err != nil {
-		return 2
-	}
-	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "mobile-egress-client bootstrap: unexpected positional arguments")
-		return 2
-	}
-	repository, err := open(*stateDir)
-	if err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-client bootstrap: open protected state:", err)
-		return 1
-	}
-	response, err := repository.Bootstrap(context.Background())
-	if err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-client bootstrap:", err)
-		return 1
-	}
-	if err := json.NewEncoder(stdout).Encode(response); err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-client bootstrap: encode public response:", err)
-		return 1
-	}
-	return 0
-}
-
-func runApplyConfiguration(arguments []string, stdout, stderr io.Writer, open repositoryOpener) int {
-	flags := flag.NewFlagSet("mobile-egress-client apply-config", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	stateDir := flags.String("state-dir", defaultStateDirectory(), "protected Client service state directory")
-	envelopeFile := flags.String("envelope-file", "", "path to a sealed configuration envelope")
-	if err := flags.Parse(arguments); err != nil {
-		return 2
-	}
-	if flags.NArg() != 0 || *envelopeFile == "" {
-		fmt.Fprintln(stderr, "mobile-egress-client apply-config: envelope file is required and positional arguments are not accepted")
-		return 2
-	}
-	envelope, err := readEnvelopeFile(*envelopeFile)
-	if err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-client apply-config: sealed envelope is invalid")
-		return 1
-	}
-	repository, err := open(*stateDir)
-	if err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-client apply-config: open protected state:", err)
-		return 1
-	}
-	if err := repository.Apply(context.Background(), envelope); err != nil {
-		fmt.Fprintln(stderr, "mobile-egress-client apply-config:", err)
-		return 1
-	}
-	_ = json.NewEncoder(stdout).Encode(map[string]bool{"configured": true})
-	return 0
-}
-
 func runServe(arguments []string, stderr io.Writer, open repositoryOpener) int {
 	flags := flag.NewFlagSet("mobile-egress-client serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	stateDir := flags.String("state-dir", "", "protected Client service state directory")
-	standalone := flags.Bool("standalone", false, "enable installed standalone Client pairing")
+	_ = flags.Bool("standalone", false, "compatibility flag; all Clients use direct phone pairing")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -126,10 +63,7 @@ func runServe(arguments []string, stderr io.Writer, open repositoryOpener) int {
 		return 2
 	}
 	if *stateDir == "" {
-		*stateDir = defaultStateDirectory()
-		if *standalone {
-			*stateDir = standaloneStateDirectory()
-		}
+		*stateDir = standaloneStateDirectory()
 	}
 	repository, err := open(*stateDir)
 	if err != nil {
@@ -137,10 +71,7 @@ func runServe(arguments []string, stderr io.Writer, open repositoryOpener) int {
 		return 1
 	}
 	return runNodeService(func(ctx context.Context) error {
-		if *standalone {
-			return runStandalone(ctx, repository, *stateDir)
-		}
-		return nodeservice.NewService(repository, nodeservice.DefaultDialer{}).Run(ctx)
+		return runStandalone(ctx, repository, *stateDir)
 	}, stderr)
 }
 
@@ -159,12 +90,12 @@ func runStandalone(ctx context.Context, repository *nodeservice.Repository, stat
 	if platform == "darwin" {
 		platform = "macos"
 	}
-	manager := nodeservice.NewStandalone(repository, nodeservice.DefaultDialer{}, nodeservice.RelayEnrollmentTransport{}, platform, runtime.GOARCH, version)
+	manager := nodeservice.NewDirect(repository, platform, runtime.GOARCH, version)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan error, 2)
-	go func() { done <- manager.Run(ctx) }()
-	go func() { done <- clientapp.Serve(ctx, listener, manager) }()
+	go func() { done <- runRecoverableRuntime(ctx, manager.Run, 2*time.Second) }()
+	go func() { done <- clientapp.Serve(ctx, listener, clientapp.WithHostFirewall(manager)) }()
 	err = <-done
 	cancel()
 	other := <-done
@@ -172,6 +103,26 @@ func runStandalone(ctx context.Context, repository *nodeservice.Repository, stat
 		return err
 	}
 	return other
+}
+
+// Local management remains available while an occupied port or unavailable
+// store prevents serving. The manager retains actionable status, and a local
+// configuration change or repair is picked up by the next bounded retry.
+func runRecoverableRuntime(ctx context.Context, run func(context.Context) error, retry time.Duration) error {
+	for ctx.Err() == nil {
+		_ = run(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		timer := time.NewTimer(retry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
+	}
+	return nil
 }
 
 func openNodeRepository(stateDir string) (*nodeservice.Repository, error) {
@@ -186,39 +137,6 @@ func openNodeRepository(stateDir string) (*nodeservice.Repository, error) {
 	return nodeservice.NewRepository(store), nil
 }
 
-func readEnvelopeFile(path string) (sealedconfig.Envelope, error) {
-	file, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return sealedconfig.Envelope{}, err
-	}
-	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, maximumEnvelopeFileBytes+1))
-	if err != nil || len(raw) == 0 || len(raw) > maximumEnvelopeFileBytes {
-		return sealedconfig.Envelope{}, errors.New("sealed envelope file is missing or too large")
-	}
-	defer clear(raw)
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var envelope sealedconfig.Envelope
-	if err := decoder.Decode(&envelope); err != nil {
-		return sealedconfig.Envelope{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return sealedconfig.Envelope{}, errors.New("sealed envelope contains trailing JSON")
-	}
-	return envelope, nil
-}
-
-func defaultStateDirectory() string {
-	if runtime.GOOS == "windows" {
-		if programData := os.Getenv("ProgramData"); programData != "" {
-			return filepath.Join(programData, "MobileEgress", "Client")
-		}
-		return `C:\ProgramData\MobileEgress\Client`
-	}
-	return "/var/lib/mobile-egress-client"
-}
-
 func standaloneStateDirectory() string {
 	if runtime.GOOS == "darwin" {
 		return "/Library/Application Support/MobileEgressClient"
@@ -230,5 +148,5 @@ func standaloneStateDirectory() string {
 }
 
 func writeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: mobile-egress-client <bootstrap|apply-config|serve|--version> [flags]")
+	fmt.Fprintln(writer, "usage: mobile-egress-client <serve|--version> [flags]; configure and pair through the installed Client app")
 }

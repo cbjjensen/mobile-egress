@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Personal PC transport optimization implementation plan
 
 **Goal:** Reduce framing and stream-opening overhead while keeping Funnel and the owner's personal computer in the traffic path.

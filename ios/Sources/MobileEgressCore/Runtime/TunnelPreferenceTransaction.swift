@@ -14,10 +14,10 @@ public protocol TunnelRotationPreferenceSession: TunnelPreferenceSession {
 }
 
 public struct TunnelRotationReceipt: Codable, Equatable, Sendable {
-    let wasRunning: Bool
-    let wasOnDemandEnabled: Bool
+    public let wasRunning: Bool
+    public let wasOnDemandEnabled: Bool
 
-    init(wasRunning: Bool, wasOnDemandEnabled: Bool) {
+    public init(wasRunning: Bool, wasOnDemandEnabled: Bool) {
         self.wasRunning = wasRunning
         self.wasOnDemandEnabled = wasOnDemandEnabled
     }

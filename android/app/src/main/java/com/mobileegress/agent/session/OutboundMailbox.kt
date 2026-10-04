@@ -34,6 +34,8 @@ class OutboundMailbox(
     private val perStreamDataCapacity: Int = AgentCapacity.OUTBOUND_PER_STREAM_DATA_CAPACITY,
     private val retainedStreamCapacity: Int = AgentCapacity.RETAINED_STREAM_CAPACITY,
     private val dataByteCapacity: Long = AgentCapacity.OUTBOUND_DATA_BYTE_CAPACITY.toLong(),
+    private val sharedDataBudget: SharedFrameBudget? = null,
+    private val sharedControlBudget: SharedFrameBudget? = null,
 ) {
     private val lock = Any()
     private val controls = ArrayDeque<ControlFrame>()
@@ -51,6 +53,7 @@ class OutboundMailbox(
     private var outstandingControlFrames = 0
     private var outstandingDataBytes = 0L
     private var closed = false
+    @Volatile private var onDataCapacityAvailable: (() -> Unit)? = null
 
     init {
         require(controlCapacity > 0)
@@ -67,7 +70,8 @@ class OutboundMailbox(
                 streamId in blockedDataStreams ||
                 outstandingDataFrames >= dataCapacity ||
                 (outstandingDataFramesByStream[streamId] ?: 0) >= perStreamDataCapacity ||
-                frame.size.toLong() > dataByteCapacity - outstandingDataBytes
+                frame.size.toLong() > dataByteCapacity - outstandingDataBytes ||
+                sharedDataBudget?.acquire(frame.size) == false
             ) {
                 return@synchronized false
             }
@@ -79,6 +83,21 @@ class OutboundMailbox(
         }
         if (queued) available.trySend(Unit)
         return queued
+    }
+
+    /** The listener only wakes the reactor; it must not acquire any stream locks. */
+    internal fun setDataCapacityListener(listener: (() -> Unit)?) {
+        onDataCapacityAvailable = listener
+    }
+
+    internal fun streamReadAvailability(streamId: String): TargetReadAvailability = synchronized(lock) {
+        // The single target reactor is the only data producer. Admission of actual encoded
+        // bytes remains in offerData, so EOF and short reads never require maximum-frame space.
+        when {
+            closed || streamId in blockedDataStreams -> TargetReadAvailability.Closed
+            (outstandingDataFramesByStream[streamId] ?: 0) >= perStreamDataCapacity -> TargetReadAvailability.Pause
+            else -> TargetReadAvailability.Ready
+        }
     }
 
     fun blockAndDiscardData(streamId: String) {
@@ -133,7 +152,8 @@ class OutboundMailbox(
         onSaturated: () -> Unit,
     ): Boolean {
         val queued = synchronized(lock) {
-            if (closed || outstandingControlFrames >= controlCapacity) return@synchronized false
+            if (closed || outstandingControlFrames >= controlCapacity ||
+                sharedControlBudget?.acquire(frame.size) == false) return@synchronized false
             blockDataStream(streamId)
             val outboundFrame = createFrame(
                 bytes = frame,
@@ -236,7 +256,8 @@ class OutboundMailbox(
 
     private fun offerControl(bytes: ByteArray, streamId: String?): Boolean {
         val queued = synchronized(lock) {
-            if (closed || outstandingControlFrames >= controlCapacity) return@synchronized false
+            if (closed || outstandingControlFrames >= controlCapacity ||
+                sharedControlBudget?.acquire(bytes.size) == false) return@synchronized false
             controls.addLast(ControlFrame(createFrame(bytes, streamId = streamId)))
             true
         }
@@ -339,9 +360,12 @@ class OutboundMailbox(
             else outstandingDataFramesByStream[streamId] = remaining
             outstandingDataFrames -= 1
             outstandingDataBytes -= frame.dataByteCount.toLong()
+            sharedDataBudget?.release(frame.dataByteCount.toLong())
             check(outstandingDataFrames >= 0 && outstandingDataBytes >= 0)
+            onDataCapacityAvailable?.invoke()
         } else {
             outstandingControlFrames -= 1
+            sharedControlBudget?.release(frame.bytes.size.toLong())
             check(outstandingControlFrames >= 0)
         }
         frame.streamId?.let { streamId ->

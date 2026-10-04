@@ -9,7 +9,7 @@ description: Use when preparing, publishing, or verifying a Mobile Egress Deskto
 
 Choose the smallest compatible guarded entry point. Do not reconstruct signing, tagging, upload, or verification manually:
 
-- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled controller, setup, relay, or EC2 Client changes that are ready to ship for Windows and macOS together. Desktop is indivisible: the Windows installer, Windows EC2 Client, and macOS PKG share one version/tag.
+- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled Windows and Apple Silicon Mac Client installers. From 2.0.0, Desktop contains only `MobileEgressClientSetup.exe` and `mobile-egress-client-macos-<version>-arm64.pkg`, sharing one version/tag. No controller, relay, or raw EC2 asset is built or published.
 - `scripts\release-android.ps1 -ReleaseVersion ...` for Android-only changes.
 - `scripts\release-all.ps1 -Components Desktop,Android` for protocol/shared compatibility or coordinated Desktop/Android changes.
 - `scripts\release-all.ps1 -Components Windows,Android` for normal non-Apple releases when Windows and Android should ship while macOS/iOS are handled separately.
@@ -18,7 +18,7 @@ Choose the smallest compatible guarded entry point. Do not reconstruct signing, 
 
 Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1 hotfix. macOS-only selection remains unsupported.
 
-Upcoming releases built from this source use the single self-contained `MobileEgressSetup.exe` as the primary Windows asset. All published v1.1.0 through v1.1.6 releases retain their versioned Windows ZIP artifact contracts; never rebuild or replace them to change packaging. The local compatibility ZIP and `payload-verification.zip` are not additional assets for a new release. Updating the source or these instructions does not publish an installer.
+Direct 2.x releases use the self-contained `MobileEgressClientSetup.exe` as the only Windows download, with no legacy filename alias. Android fallback links must remain within the same direct major version. Historical 1.x artifact contracts and published assets remain immutable; rebuilding historical controller releases requires their original source checkout. `payload-verification.zip` and Mac verification JSON remain private validation evidence. Updating source or these instructions does not publish an installer.
 
 **REQUIRED SUB-SKILLS:** Use `mobile-egress-windows-signing` and `mobile-egress-android-signing` for identity recovery or signer failures. Never regenerate an established key to unblock a release.
 
@@ -32,7 +32,7 @@ Require:
 - the intended code committed on clean `main`;
 - Android `versionName` matching the release and an increased `versionCode` only when Android is selected;
 - the established ignored signing inputs for each selected component on the publisher workstation;
-- ignored/untracked `.local\mac-build-server\release-desktop.psd1`, its configured key, standard OpenSSH host trust, and working Mac Developer ID/profile/notary prerequisites when Desktop is selected; and
+- ignored/untracked `.local\mac-build-server\release-desktop.psd1`, its configured key, standard OpenSSH host trust, and working Mac Developer ID/notary API prerequisites when Desktop is selected (2.x does not require the retired controller provisioning profile or node manifest); and
 - origin `cbjjensen/mobile-egress`.
 
 The orchestrator resolves and validates only the selected component toolchains, runs the matching gate, signs only the selected component artifacts, and verifies their identities and hashes.

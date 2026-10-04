@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Mobile Egress v1.1.0 Stream Capacity Implementation Plan
 
 **Goal:** Raise Mobile Egress from 4 to 32 simultaneous TCP streams per authenticated Client identity and from 32 to 256 simultaneous streams per connected Agent while keeping memory, writers, and target I/O bounded.

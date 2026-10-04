@@ -160,6 +160,15 @@ if ($MyInvocation.InvocationName -eq '.') {
     return
 }
 
+if ([version]($ReleaseVersion -split '-')[0] -ge [version]'2.0.0') {
+    & (Join-Path $PSScriptRoot 'build-client-windows.ps1') -ReleaseVersion $ReleaseVersion
+    if ($LASTEXITCODE -ne 0) { throw 'Direct Windows Client build failed.' }
+    return
+}
+if (-not (Test-Path -LiteralPath $wailsProjectPath -PathType Leaf)) {
+    throw 'Historical controller builds require their original 1.x source checkout. This source builds direct Client releases from 2.0.0 onward.'
+}
+
 $wailsProject = Get-Content -Raw -LiteralPath $wailsProjectPath | ConvertFrom-Json
 if ([string]$wailsProject.info.productVersion -cne $ReleaseVersion) {
     throw "windows-client\wails.json ProductVersion must equal $ReleaseVersion before release."

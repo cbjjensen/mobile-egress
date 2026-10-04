@@ -36,7 +36,7 @@ public final class CellularIPRotationCoordinator<
     Tunnel: CellularIPRotationTunnelControlling
 > where Tunnel.RotationReceipt == TunnelRotationReceipt {
     public typealias StateChangeHandler = @MainActor @Sendable (CellularIPRotationState) -> Void
-    public typealias CellularChangeHandler = @MainActor @Sendable (Bool) -> Void
+    public typealias CellularChangeHandler = @MainActor @Sendable (Bool?) -> Void
 
     public private(set) var state: CellularIPRotationState = .idle
     public private(set) var isCellularAvailable = false
@@ -56,6 +56,8 @@ public final class CellularIPRotationCoordinator<
     private var pathObservationStarted = false
     private var lastCellularAvailability: Bool?
     private var recoveryAttempted = false
+    private var foregroundSuspended = false
+    private var suspendedAttemptID: UInt64?
     private var nextAttemptID: UInt64 = 0
     private var cellularGeneration: UInt64 = 0
     private var currentNetworkToken: String?
@@ -103,7 +105,7 @@ public final class CellularIPRotationCoordinator<
 
     public func setCellularChangeHandler(_ handler: CellularChangeHandler?) {
         cellularChangeHandler = handler
-        handler?(isCellularAvailable)
+        handler?(lastCellularAvailability)
     }
 
     public func updateAgentAvailability(
@@ -116,20 +118,19 @@ public final class CellularIPRotationCoordinator<
         self.activeStreamCount = max(0, activeStreamCount)
     }
 
+    /// App action: the state machine owns normal versus unchanged-IP retry timing.
+    public func start() async { await start(holdSeconds: state.nextHoldSeconds) }
+
     public func start(holdSeconds: Int) async {
-        let expectedHoldSeconds: Int
-        if case .completed(_, _, _, .unchanged) = state {
-            expectedHoldSeconds = 30
-        } else {
-            expectedHoldSeconds = 10
-        }
+        let expectedHoldSeconds = state.nextHoldSeconds
         let availability = CellularIPRotationAvailability(
             isEnrolled: isEnrolled,
             isAgentRunning: isAgentRunning,
             isCellularAvailable: isCellularAvailable,
             activeStreamCount: activeStreamCount
         )
-        guard pendingTerminalOutcome == nil,
+        guard !foregroundSuspended,
+              pendingTerminalOutcome == nil,
               !state.requiresRecoveryReconstruction,
               holdSeconds == expectedHoldSeconds,
               availability.isEligible(for: state),
@@ -182,8 +183,10 @@ public final class CellularIPRotationCoordinator<
     }
 
     public func resumeAfterActivation() async {
+        foregroundSuspended = false
+        suspendedAttemptID = nil
         startPathObservationIfNeeded()
-        cellularChangeHandler?(isCellularAvailable)
+        cellularChangeHandler?(lastCellularAvailability)
         stateChangeHandler?(state)
         guard !state.isActive, !recoveryAttempted else { return }
         recoveryAttempted = true
@@ -227,10 +230,27 @@ public final class CellularIPRotationCoordinator<
                 expectedGeneration: attemptGeneration,
                 preservedDeadline: checkpoint.timeoutDeadline
             )
+            if let available = lastCellularAvailability {
+                await applyCurrentCellularPath(available)
+            }
         } catch {
             try? checkpointStore.clear()
             await failRecovery()
         }
+    }
+
+    /// Foreground-only hosts cancel live probes/timers while retaining the durable
+    /// rotation checkpoint. Activation recovers it against elapsed wall-clock time.
+    public func suspendForForegroundOnly() {
+        guard !foregroundSuspended else { return }
+        foregroundSuspended = true
+        suspendedAttemptID = state.attemptID
+        attemptGeneration &+= 1
+        cancelOwnedTasks()
+        recoveryAttempted = false
+        state = .idle
+        reducer = CellularIPRotationReducer()
+        stateChangeHandler?(state)
     }
 
     private func failRecovery() async {
@@ -295,6 +315,61 @@ public final class CellularIPRotationCoordinator<
             currentNetworkToken = "cellular-\(cellularGeneration)"
         }
         cellularChangeHandler?(available)
+        if foregroundSuspended {
+            recordSuspendedCellularPath(available)
+            return
+        }
+        await applyCurrentCellularPath(available)
+    }
+
+    /// A delivered path observation is evidence even while Control Center makes
+    /// the app inactive. Persist pure state transitions, but never interpret their
+    /// effects until activation. Synchronous MainActor access prevents a delayed
+    /// observation from overwriting an activated, cancelled or newer attempt.
+    private func recordSuspendedCellularPath(_ available: Bool) {
+        guard let attemptID = suspendedAttemptID else { return }
+        let date = clock.currentDate()
+        do {
+            guard let checkpoint = try checkpointStore.load(at: date),
+                  checkpoint.state.attemptID == attemptID,
+                  checkpoint.state.isActive,
+                  !checkpoint.isExpired(at: date) else { return }
+            if case .restoring = checkpoint.state { return }
+            var passive = CellularIPRotationReducer()
+            let recovered = passive.reduce(.recover(checkpoint: checkpoint, at: date))
+            guard recovered.state.isActive else { return }
+            let event: CellularIPRotationEvent
+            if available, let currentNetworkToken {
+                event = .cellularAvailable(attemptID: attemptID, networkToken: currentNetworkToken)
+            } else {
+                event = .cellularLost(attemptID: attemptID)
+            }
+            let observed = passive.reduce(event)
+            guard observed.state.isActive else { return }
+            var deadline = checkpoint.timeoutDeadline
+            for transition in [recovered, observed] {
+                switch transition.state {
+                case .awaitingAirplaneMode, .awaitingCellularReturn: break
+                default: deadline = nil
+                }
+                for effect in transition.effects {
+                    switch effect {
+                    case let .scheduleCellularLossTimeout(_, seconds), let .scheduleCellularReturnTimeout(_, seconds):
+                        deadline = deadline ?? date.addingTimeInterval(TimeInterval(seconds))
+                    case .cancelCellularLossTimeout, .cancelCellularReturnTimeout: deadline = nil
+                    default: break
+                    }
+                }
+            }
+            try checkpointStore.save(CellularIPRotationCheckpoint(state: observed.state, savedAt: date,
+                timeoutDeadline: deadline, pauseDisposition: checkpoint.pauseDisposition))
+        } catch {
+            // Keep the last durable checkpoint. Activation owns recovery errors;
+            // a missing observation must never be presented as a completed cycle.
+        }
+    }
+
+    private func applyCurrentCellularPath(_ available: Bool) async {
         guard pendingTerminalOutcome == nil,
               let attemptID = state.attemptID,
               state.isActive else { return }

@@ -76,7 +76,6 @@ try {
 $preflightScript = Get-Content -Raw $preflight
 $releaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'release-android.ps1')
 $windowsReleaseScript = Get-Content -Raw (Join-Path $PSScriptRoot 'build-windows.ps1')
-$windowsProject = Get-Content -Raw (Join-Path $repositoryRoot 'windows-client\wails.json') | ConvertFrom-Json
 Assert-Condition ($preflightScript -match "operations-common\.ps1'\)") 'Preflight must load the shared operations resolver.'
 Assert-Condition ($releaseScript -match "operations-common\.ps1'\)") 'Android release must load the shared operations resolver.'
 Assert-Condition ($preflightScript -match 'Get-MobileEgressAndroidSdkRoot -RepositoryRoot') 'Preflight must use the shared Android SDK-root resolver.'
@@ -98,20 +97,6 @@ Assert-Condition ($windowsReleaseScript -match 'Set-AuthenticodeSignature') 'Win
 Assert-Condition ($windowsReleaseScript -notmatch 'signtool\.exe') 'Windows release packaging must not require Windows SDK signtool.'
 Assert-Condition ($windowsReleaseScript -match 'TimeStamperCertificate') 'Windows release packaging must reject signatures without a timestamp certificate.'
 Assert-Condition ($windowsReleaseScript -match 'CertificateSha256') 'Windows release packaging must verify the exact SHA-256 certificate identity.'
-Assert-Condition ($windowsReleaseScript -match 'release-manifest\.json') 'Windows release packaging must produce the headless Client manifest.'
-Assert-Condition ($windowsReleaseScript -match 'embeddedReleaseManifestBase64') 'The signed controller must embed its node-release trust manifest.'
-Assert-Condition ($windowsProject.info.productVersion -eq '1.1.5') 'The tracked Wails product metadata must match the Windows v1.1.5 Desktop release.'
-Assert-Condition ($windowsReleaseScript -match 'desktop\.controllerVersion=\$ReleaseVersion') 'The signed controller must link its canonical release version instead of retaining the development value.'
-Assert-Condition ($windowsReleaseScript -match 'ProductVersion.*ReleaseVersion') 'Windows packaging must reject Wails product metadata that differs from the requested release.'
-Assert-Condition ($windowsReleaseScript -match 'signerThumbprint') 'The node-release manifest must pin the exact Authenticode signer.'
-Assert-Condition ($windowsReleaseScript -match 'version\s*=\s*2') 'The embedded node-release manifest must use version 2.'
-Assert-Condition ($windowsReleaseScript -match 'signerCertificateSha256') 'Manifest v2 must pin the tracked publisher certificate SHA-256.'
-Assert-Condition ($windowsReleaseScript -match 'signerCertificateBase64') 'Manifest v2 must embed the tracked publisher certificate DER base64.'
-Assert-Condition ($windowsReleaseScript -notmatch '(?m)^\s*publisher\s*=') 'The mutable release manifest must not choose a trusted publisher.'
-Assert-Condition ($windowsReleaseScript -match 'MobileEgressSetup\.exe') 'The controller package must include the guided setup executable.'
-Assert-Condition ($windowsReleaseScript -match 'mobile-egress-relay\.exe') 'The controller package must include the local relay.'
-Assert-Condition ($windowsReleaseScript -match 'mobile-egress-admin\.exe') 'The controller package must include the elevated helper.'
-Assert-Condition ($windowsReleaseScript -match 'mobile-egress-client\.exe') 'The controller package must include the headless Client release.'
 Assert-Condition ($windowsReleaseScript -match 'mobile-egress-code-signing\.cer') 'The release ZIP must include the tracked public publisher certificate.'
 Assert-Condition ($windowsReleaseScript -match 'release-signing-certificate\.txt') 'The release ZIP must include the public publisher identity record.'
 

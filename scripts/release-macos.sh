@@ -36,6 +36,10 @@ done
 
 printf '%s' "$RELEASE_VERSION" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || fail 'release version is required'
 printf '%s' "$SOURCE_COMMIT" | /usr/bin/grep -Eq '^[0-9a-f]{40}$' || fail 'source commit must be exactly 40 lowercase hex characters'
+if [ "${RELEASE_VERSION%%.*}" -ge 2 ]; then
+    SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+    exec /bin/sh "$SCRIPT_DIR/release-client-macos.sh" --release-version "$RELEASE_VERSION" --source-commit "$SOURCE_COMMIT" --team-id "$TEAM_ID" --application-identity "$APPLICATION_IDENTITY" --installer-identity "$INSTALLER_IDENTITY" --notary-api-key "$NOTARY_API_KEY" --notary-api-key-id "$NOTARY_API_KEY_ID" --notary-api-issuer-id "$NOTARY_API_ISSUER_ID"
+fi
 printf '%s' "$TEAM_ID" | /usr/bin/grep -Eq '^[A-Z0-9]{10}$' || fail 'ten-character Apple Team ID is required'
 [ -n "$APPLICATION_IDENTITY" ] || fail 'Developer ID Application identity is required'
 [ -n "$INSTALLER_IDENTITY" ] || fail 'Developer ID Installer identity is required'

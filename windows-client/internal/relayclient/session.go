@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -43,10 +42,14 @@ type SessionStatus struct {
 }
 
 type Session struct {
-	identity  Identity
-	conn      *websocket.Conn
-	client    *http.Client
-	transport *http.Transport
+	openPayload  func(context.Context, string, uint16) ([]byte, error)
+	direct       bool
+	controlSlots chan struct{}
+	lastReceive  atomic.Int64
+	identity     Identity
+	conn         *websocket.Conn
+	client       *http.Client
+	transport    *http.Transport
 
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -105,6 +108,7 @@ type relayStream struct {
 	inboundFrames    int
 	terminal         atomic.Bool
 	drainInbound     atomic.Bool
+	opened           atomic.Bool
 }
 
 func newInboundBudget(frameLimit, byteLimit int) *inboundBudget {
@@ -145,57 +149,6 @@ func (reservation *inboundReservation) refund() {
 	})
 }
 
-func DialSession(ctx context.Context, identity Identity) (*Session, error) {
-	if identity.Role != "client" {
-		return nil, errors.New("only a client identity may establish a tunnel session")
-	}
-	baseURL, err := validateRelayURL(identity.RelayURL)
-	if err != nil {
-		return nil, err
-	}
-	httpClient, transport, err := identityHTTPClient(identity)
-	if err != nil {
-		return nil, err
-	}
-	httpClient.Timeout = 10 * time.Second
-	// Health controls admission, not relay connectivity. A health outage must
-	// not prevent an independently authenticated WebSocket connection.
-	agentAvailable, healthErr := fetchAgentHealth(ctx, httpClient, baseURL.String())
-	agentAvailable = healthErr == nil && agentAvailable
-	tlsConfig := transport.TLSClientConfig.Clone()
-	webSocketURL := *baseURL
-	webSocketURL.Scheme = "wss"
-	webSocketURL.Path = "/v1/session"
-	webSocketURL.RawQuery = "transport=2"
-	dialer := websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 10 * time.Second}
-	if transport.DialContext != nil {
-		dialer.NetDialContext = transport.DialContext
-	}
-	connection, response, err := dialer.DialContext(ctx, webSocketURL.String(), nil)
-	if response != nil && response.Body != nil {
-		response.Body.Close()
-	}
-	if err != nil {
-		transport.CloseIdleConnections()
-		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
-			return nil, ErrClientUnauthorized
-		}
-		return nil, fmt.Errorf("connect relay session: %w", err)
-	}
-	sessionContext, cancel := context.WithCancel(context.Background())
-	session := &Session{
-		identity: identity, conn: connection, client: httpClient, transport: transport,
-		ctx: sessionContext, cancel: cancel, streams: make(map[string]*relayStream),
-		draining:      make(map[string]*relayStream),
-		closedStreams: make(map[string]struct{}),
-		inboundBudget: newInboundBudget(capacity.DataFramesPerLane, capacity.DataBytesPerLane),
-		connected:     true, agent: agentAvailable,
-	}
-	go session.readLoop()
-	go session.healthLoop(baseURL.String())
-	return session, nil
-}
-
 // Done closes on actual relay transport shutdown, independently of Agent readiness.
 func (session *Session) Done() <-chan struct{} { return session.ctx.Done() }
 
@@ -216,8 +169,23 @@ func (session *Session) Status() SessionStatus {
 }
 
 func (session *Session) OpenStream(ctx context.Context, host string, port uint16) (io.ReadWriteCloser, error) {
+	if session.direct {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		stop := context.AfterFunc(session.ctx, cancel)
+		defer stop()
+	}
 	if host == "" || port == 0 {
 		return nil, errors.New("invalid target")
+	}
+	var directPayload []byte
+	if session.openPayload != nil {
+		var err error
+		directPayload, err = session.openPayload(ctx, host, port)
+		if err != nil {
+			return nil, err
+		}
 	}
 	session.mu.Lock()
 	if !session.connected || !session.agent {
@@ -240,6 +208,9 @@ func (session *Session) OpenStream(ctx context.Context, host string, port uint16
 		Host string `json:"host"`
 		Port uint16 `json:"port"`
 	}{Host: host, Port: port})
+	if directPayload != nil {
+		payload = directPayload
+	}
 	if err := session.send(wireEnvelope{
 		Version: 1, Type: "open", StreamID: streamID,
 		Payload: base64.RawURLEncoding.EncodeToString(payload),
@@ -266,7 +237,9 @@ func (session *Session) Close() error {
 	session.closeOnce.Do(func() {
 		session.cancel()
 		_ = session.conn.Close()
-		session.transport.CloseIdleConnections()
+		if session.transport != nil {
+			session.transport.CloseIdleConnections()
+		}
 		session.failAll(ErrRelayUnavailable)
 	})
 	return nil
@@ -280,6 +253,7 @@ func (session *Session) readLoop() {
 		if err != nil {
 			return
 		}
+		session.lastReceive.Store(time.Now().UnixNano())
 		if messageType != websocket.BinaryMessage {
 			return
 		}
@@ -308,6 +282,11 @@ func (session *Session) readLoop() {
 		}
 		session.mu.Lock()
 		stream := session.streams[envelope.StreamID]
+		draining := false
+		if stream == nil && session.direct {
+			stream = session.draining[envelope.StreamID]
+			draining = stream != nil
+		}
 		_, locallyClosed := session.closedStreams[envelope.StreamID]
 		session.mu.Unlock()
 		if stream == nil {
@@ -316,9 +295,26 @@ func (session *Session) readLoop() {
 			}
 			return
 		}
+		if draining {
+			if envelope.Type != "close" {
+				return
+			}
+			code, err := decodeRelayCode(envelope.Payload)
+			if err != nil {
+				return
+			}
+			if code != "target_closed" {
+				session.claimLocalClose(stream)
+				stream.finish(io.EOF)
+			}
+			continue
+		}
 		switch envelope.Type {
 		case "opened":
 			if envelope.Payload != "" {
+				return
+			}
+			if session.direct && stream.opened.Swap(true) {
 				return
 			}
 			stream.resolve(nil)
@@ -330,6 +326,9 @@ func (session *Session) readLoop() {
 			session.removeStream(stream.id)
 			stream.finish(RelayError{Code: code})
 		case "data":
+			if session.direct && !stream.opened.Load() {
+				return
+			}
 			payload, err := envelope.DecodePayload()
 			if err != nil {
 				return
@@ -342,7 +341,17 @@ func (session *Session) readLoop() {
 				// closed with the finite v1 client_closed reason.
 				if session.claimLocalClose(stream) {
 					stream.finish(io.EOF)
+					if session.controlSlots != nil {
+						select {
+						case session.controlSlots <- struct{}{}:
+						default:
+							return
+						}
+					}
 					go func() {
+						if session.controlSlots != nil {
+							defer func() { <-session.controlSlots }()
+						}
 						stream.sendMu.Lock()
 						defer stream.sendMu.Unlock()
 						_ = session.send(wireEnvelope{
@@ -353,32 +362,18 @@ func (session *Session) readLoop() {
 				}
 			}
 		case "close":
-			if _, err := decodeRelayCode(envelope.Payload); err != nil {
+			code, err := decodeRelayCode(envelope.Payload)
+			if err != nil {
 				return
+			}
+			if session.direct && (code != "target_closed" || !stream.opened.Load()) {
+				session.claimLocalClose(stream)
+				stream.finish(io.EOF)
+				continue
 			}
 			if session.beginInboundDrain(stream) {
 				stream.finishAfterInboundDrain()
 			}
-		}
-	}
-}
-
-func (session *Session) healthLoop(baseURL string) {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(session.ctx, 5*time.Second)
-			agent, err := fetchAgentHealth(ctx, session.client, baseURL)
-			cancel()
-			session.mu.Lock()
-			if session.connected {
-				session.agent = err == nil && agent
-			}
-			session.mu.Unlock()
-		case <-session.ctx.Done():
-			return
 		}
 	}
 }
@@ -420,6 +415,9 @@ func (session *Session) forgetInboundDrain(stream *relayStream) {
 	session.mu.Lock()
 	if session.draining[stream.id] == stream {
 		delete(session.draining, stream.id)
+		if session.direct {
+			session.rememberClosedLocked(stream.id)
+		}
 	}
 	session.mu.Unlock()
 }
@@ -430,6 +428,9 @@ func (session *Session) claimLocalClose(stream *relayStream) bool {
 	if session.streams[stream.id] != stream {
 		if session.draining[stream.id] == stream {
 			delete(session.draining, stream.id)
+			if session.direct {
+				session.rememberClosedLocked(stream.id)
+			}
 		}
 		return false
 	}
@@ -675,28 +676,4 @@ func decodeRelayCode(payload string) (string, error) {
 		return "", errors.New("invalid relay error code")
 	}
 	return string(decoded), nil
-}
-
-func fetchAgentHealth(ctx context.Context, client *http.Client, baseURL string) (bool, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/healthz", nil)
-	if err != nil {
-		return false, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return false, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("relay health returned HTTP %d", response.StatusCode)
-	}
-	var health struct {
-		Readiness      bool `json:"readiness"`
-		AgentConnected bool `json:"agentConnected"`
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseBytes+1))
-	if err := decoder.Decode(&health); err != nil {
-		return false, errors.New("relay returned invalid health")
-	}
-	return health.Readiness && health.AgentConnected, nil
 }

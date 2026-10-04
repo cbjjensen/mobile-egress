@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Maintenance simplification
 
 The owner approved all four follow-up simplifications. Keep the personal-computer relay and Funnel topology, wire formats, mobile behavior, and release restrictions intact.

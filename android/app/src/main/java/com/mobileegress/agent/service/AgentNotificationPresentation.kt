@@ -9,7 +9,7 @@ fun agentNotificationSummary(status: AgentRuntimeStatus): String = when (val rot
     is RotationState.Detaching -> "Keep Airplane Mode on for ${rotation.holdSeconds} seconds"
     is RotationState.AwaitingCellularReturn -> "Turn Airplane Mode off · Waiting for cellular"
     is RotationState.Verifying -> "Cellular returned · Checking public IP"
-    else -> "Cellular ${status.cellular.name.lowercase()} · Relay ${status.relay.name.lowercase()} · ${status.activeStreams} streams"
+    else -> "Cellular ${status.cellular.name.lowercase()} · Clients ${status.relay.name.lowercase()} · ${status.activeStreams} streams"
 }
 
 internal class AgentNotificationPresentationCoalescer {

@@ -10,9 +10,7 @@ import com.mobileegress.agent.protocol.WireProtocol
 import com.mobileegress.agent.security.AgentIdentity
 import com.mobileegress.agent.security.DeviceKeyStore
 import com.mobileegress.agent.security.PinnedTls
-import com.mobileegress.agent.status.AgentStatusBus
 import com.mobileegress.agent.status.ErrorClass
-import com.mobileegress.agent.status.RelayHealth
 import java.security.PrivateKey
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,7 +35,7 @@ interface AgentSessionListener {
 
 internal fun agentSessionUrl(relayOrigin: String) =
     relayOrigin.toHttpUrl().newBuilder()
-        .addPathSegments("v1/session")
+        .addPathSegments("v2/direct/session")
         .addQueryParameter("transport", "2")
         .build()
 
@@ -50,7 +48,11 @@ class AgentSession internal constructor(
     deviceKeyStore: DeviceKeyStore,
     parentScope: CoroutineScope,
     private val listener: AgentSessionListener,
-    private val outbound: OutboundMailbox = OutboundMailbox(),
+    private val phoneBudgets: PhoneBudgets = PhoneBudgets(),
+    private val statusSink: AgentTargetStatusSink = NoOpAgentTargetStatusSink,
+    private val outbound: OutboundMailbox = OutboundMailbox(
+        sharedDataBudget = phoneBudgets.outbound, sharedControlBudget = phoneBudgets.outboundControls,
+    ),
     private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
     private val privateKeyProvider: (String) -> PrivateKey? = deviceKeyStore::privateKey,
     private val clientFactory: (Network, AgentIdentity, PrivateKey) -> OkHttpClient = {
@@ -62,6 +64,9 @@ class AgentSession internal constructor(
         val trustManager = PinnedTls.trustManager(ca)
         val keyManager = PinnedTls.deviceKeyManager(sessionIdentity, privateKey)
         PinnedTls.clientBuilder(sessionNetwork, trustManager, keyManager)
+            .followRedirects(false).followSslRedirects(false)
+            .connectionSpecs(listOf(okhttp3.ConnectionSpec.Builder(okhttp3.ConnectionSpec.RESTRICTED_TLS)
+                .tlsVersions(okhttp3.TlsVersion.TLS_1_3).build()))
             .connectTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(5, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -90,35 +95,22 @@ class AgentSession internal constructor(
                 TargetIoReactor(
                     binder = TargetSocketBinder(network::bindSocket),
                     listener = reactorListener,
+                    sharedWriteBudget = phoneBudgets.inbound,
+                    sharedControlBudget = phoneBudgets.reactorControls,
+                    peerReadGate = phoneBudgets.reads,
                 )
             },
             onSessionFailure = { errorClass ->
                 terminate(errorClass, sendWebSocketClose = false)
             },
-            status = object : AgentTargetStatusSink {
-                override fun onActiveStreams(count: Int) {
-                    AgentStatusBus.update { it.copy(activeStreams = count) }
-                }
-
-                override fun onBytesDown(byteCount: Int) {
-                    AgentStatusBus.update { it.copy(bytesDown = it.bytesDown + byteCount) }
-                }
-
-                override fun onBytesUp(byteCount: Int) {
-                    AgentStatusBus.update { it.copy(bytesUp = it.bytesUp + byteCount) }
-                }
-
-                override fun onError(errorClass: ErrorClass) {
-                    AgentStatusBus.update { it.copy(errorClass = errorClass) }
-                }
-            },
+            status = statusSink,
         )
     }
 
     fun connect() {
         if (closed.get()) return
         val sessionUrl = agentSessionUrl(identity.relayOrigin)
-        val request = Request.Builder().url(sessionUrl).build()
+        val request = Request.Builder().url(sessionUrl).header("X-Mobile-Egress-Protocol", "direct/1").build()
         if (!targetBridge.start() || closed.get()) return
         try {
             webSocket = client.newWebSocket(request, SocketListener())
@@ -240,13 +232,14 @@ class AgentSession internal constructor(
 
     private fun terminate(errorClass: ErrorClass, sendWebSocketClose: Boolean) {
         if (!closed.compareAndSet(false, true)) return
-        if (sendWebSocketClose) webSocket?.close(NORMAL_CLOSE, "session_closed") else webSocket?.cancel()
+        if (sendWebSocketClose) webSocket?.close(NORMAL_CLOSE, "session_closed")
+        // Abort transport ownership before refunding its phone-global buffered-byte debt.
+        webSocket?.cancel()
         targetBridge.shutdownAndAwait(REACTOR_SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
         outbound.close()
         job.cancel()
         client.connectionPool.evictAll()
         client.dispatcher.executorService.shutdown()
-        AgentStatusBus.update { it.copy(relay = RelayHealth.Disconnected, activeStreams = 0) }
         listener.onTerminated(errorClass)
     }
 

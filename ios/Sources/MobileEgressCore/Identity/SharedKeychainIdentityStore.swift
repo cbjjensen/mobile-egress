@@ -144,6 +144,14 @@ public final class SharedKeychainIdentityStore: AgentIdentityPersisting, Securit
         }
     }
 
+    public func securityIdentity(for identity: AgentIdentity) throws -> SecIdentity {
+        try lock.withLock {
+            try validateStoredIdentity(identity)
+            guard let leaf = try PEMCertificateChain.parse(identity.certificatePEM).first else { throw IdentityError.identityLookupFailed }
+            return try makeSecurityIdentity(leafDER: leaf, keyTag: identity.keyTag)
+        }
+    }
+
     private func loadWithoutLock() throws -> AgentIdentity? {
         var result: CFTypeRef?
         let status = SecItemCopyMatching([
@@ -177,6 +185,7 @@ public final class SharedKeychainIdentityStore: AgentIdentityPersisting, Securit
             kSecMatchLimit: kSecMatchLimitOne,
             kSecReturnRef: true,
         ] as CFDictionary, &keyResult)
+        try IdentityKeyAccess.requireSuccess(status)
         guard status == errSecSuccess, let keyResult else {
             throw IdentityError.identityLookupFailed
         }
@@ -214,6 +223,13 @@ public final class SharedKeychainIdentityStore: AgentIdentityPersisting, Securit
 
     private func certificateLabel(for keyTag: String) -> String {
         Self.certificateLabelPrefix + keyTag
+    }
+}
+
+enum IdentityKeyAccess {
+    static func requireSuccess(_ status: OSStatus) throws {
+        if status == errSecItemNotFound { throw IdentityError.keyMissing }
+        guard status == errSecSuccess else { throw IdentityError.secureStorageUnavailable }
     }
 }
 #endif

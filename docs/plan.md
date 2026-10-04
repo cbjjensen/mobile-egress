@@ -1,12 +1,5 @@
-# Delivery plan
+# Active implementation plan
 
-> Historical planning record. Its unchecked boxes are not current work status; see [current status](status.md) and the current source instead.
+The active owner-approved plan is [Mobile Egress 2: Direct Client-to-Phone Operation](superpowers/plans/2026-10-03-direct-client-phone.md). Its checklist, protocol contract, validation record and blockers supersede earlier personal-relay/controller plans.
 
-1. Establish repository documentation and build configuration before application code.
-2. Implement and test the relay policy, enrollment state, certificate authority, and protocol primitives.
-3. Implement the loopback Windows relay service and Tailscale Funnel ingress.
-4. Implement the Windows Owner controller, SSM-managed headless Clients, secure local configuration, and tray application.
-5. Implement the Android pairing and cellular-bound foreground agent.
-6. Add packaging, operational checks, and end-to-end validation instructions.
-
-Each phase is independently testable and committed separately. The detailed task plan is maintained under `docs/superpowers/plans/`.
+Dated plans/specifications remain historical records of their original releases. They must not be interpreted as requiring relay/Funnel/AWS features in 2.x.

@@ -417,8 +417,8 @@ func TestInstallVerifiedFilesLeavesInstallationUntouchedWhenControllerStopFails(
 	}
 }
 
-func TestStopProcessesAtPathTerminatesOnlyExactInstalledController(t *testing.T) {
-	target := `C:\Program Files\MobileEgress\Controller\mobile-egress-windows.exe`
+func TestStopProcessesAtPathTerminatesOnlyExactInstalledClientApp(t *testing.T) {
+	target := `C:\Program Files\Mobile Egress Client\mobile-egress-client-app.exe`
 	terminated := make([]uint32, 0, 1)
 	operations := controllerProcessOperations{
 		list: func(name string) ([]runningProcess, error) {
@@ -426,8 +426,8 @@ func TestStopProcessesAtPathTerminatesOnlyExactInstalledController(t *testing.T)
 				t.Fatalf("process name = %q, want %q", name, ControllerExecutableName)
 			}
 			return []runningProcess{
-				{id: 10, executable: `C:\Users\Chad\Desktop\mobile-egress-windows.exe`},
-				{id: 20, executable: `c:\program files\mobileegress\controller\MOBILE-EGRESS-WINDOWS.EXE`},
+				{id: 10, executable: `C:\Users\Chad\Desktop\mobile-egress-client-app.exe`},
+				{id: 20, executable: `c:\program files\mobile egress client\MOBILE-EGRESS-CLIENT-APP.EXE`},
 			}, nil
 		},
 		terminateAndWait: func(processID uint32, timeout time.Duration) error {

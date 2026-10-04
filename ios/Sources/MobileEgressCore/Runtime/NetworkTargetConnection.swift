@@ -62,7 +62,7 @@ public struct NetworkTargetConnectionFactory: TargetConnectionFactory, Sendable 
     }
 }
 
-private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Sendable {
+final class NetworkTargetConnection: TargetConnectionIO, @unchecked Sendable {
     private var connection: NWConnection
     private let endpoints: [NWEndpoint]
     private let parameters: NWParameters
@@ -71,6 +71,7 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
     private let readChunkBytes: Int
     private let queue = DispatchQueue(label: "com.mobileegress.agent.target-connection")
     private var eventHandler: TargetConnectionEventHandler?
+    private var readReadiness: TargetConnectionReadReadiness?
     private var receiveGate = ReceiveDeliveryGate()
     private var receiveGeneration: ReceiveDeliveryGate.Generation?
     private var pendingTerminalEvent: TargetConnectionEvent?
@@ -91,11 +92,12 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
         self.readChunkBytes = readChunkBytes
     }
 
-    func start(eventHandler: @escaping TargetConnectionEventHandler) {
+    func start(eventHandler: @escaping TargetConnectionEventHandler, readReadiness: @escaping TargetConnectionReadReadiness) {
         queue.async {
             guard !self.started, !self.lifecycle.isTerminal else { return }
             self.started = true
             self.eventHandler = eventHandler
+            self.readReadiness = readReadiness
             self.receiveGeneration = self.receiveGate.beginGeneration()
             guard let attempt = self.dialSequence.start(now: ProcessInfo.processInfo.systemUptime) else {
                 self.fail()
@@ -238,6 +240,16 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
         }
     }
 
+    private func waitForNextRead(_ generation: ReceiveDeliveryGate.Generation) {
+        guard let readReadiness else { return }
+        // Delivery has already returned, so this task retains no target bytes.
+        // No receive is issued while this stream's outbound lane is full.
+        Task { [weak self] in
+            guard await readReadiness() else { return }
+            self?.queue.async { [weak self] in self?.receiveNext(generation) }
+        }
+    }
+
     private func fail() {
         guard let event = lifecycle.fail() else { return }
         dialSequence.cancel()
@@ -320,7 +332,7 @@ private final class NetworkTargetConnection: TargetConnectionIO, @unchecked Send
         if shouldResume,
            receiveGeneration == generation,
            lifecycle.canRead {
-            receiveNext(generation)
+            waitForNextRead(generation)
         }
     }
 }

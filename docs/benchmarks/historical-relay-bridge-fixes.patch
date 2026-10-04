@@ -1,0 +1,1100 @@
+diff --git a/relay/internal/service/bridge_regression_test.go b/relay/internal/service/bridge_regression_test.go
+new file mode 100644
+index 0000000..02e9dfe
+--- /dev/null
++++ b/relay/internal/service/bridge_regression_test.go
+@@ -0,0 +1,690 @@
++package service
++
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"testing"
++	"time"
++
++	"github.com/gorilla/websocket"
++	"mobile-egress/internal/tunnelwire"
++	"mobile-egress/relay/internal/enrollment"
++	"mobile-egress/relay/internal/protocol"
++)
++
++func TestOrderlyCloseDrainsQueuedDataBeforeClose(t *testing.T) {
++	for _, fromAgent := range []bool{false, true} {
++		for _, binary := range []bool{false, true} {
++			t.Run(fmt.Sprintf("from-agent=%t/binary=%t", fromAgent, binary), func(t *testing.T) {
++				relay := newWriterTestService()
++				client := newDormantSession(relay, "client", enrollment.RoleClient)
++				agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++				registerTestSessions(relay, client, agent)
++				defer closeTestSessions(client, agent)
++				tracked := &stream{id: "tail", client: client, agent: agent, state: streamOpen}
++				relay.streams[tracked.id] = tracked
++				relay.activeStreams = 1
++				sender, recipient, code := client, agent, "client_closed"
++				if fromAgent {
++					sender, recipient, code = agent, client, "target_closed"
++				}
++				payload := bytes.Repeat([]byte{'x'}, 16<<10)
++				for i := 0; i < 2; i++ {
++					raw, err := (protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: tracked.id, Data: payload}).MarshalForPeer(binary)
++					if err != nil {
++						t.Fatal(err)
++					}
++					frame, err := tunnelwire.ParseEnvelope(raw)
++					if err != nil {
++						t.Fatal(err)
++					}
++					if err := relay.routeEnvelope(sender, frame); err != nil {
++						t.Fatal(err)
++					}
++				}
++				if err := relay.routeEnvelope(sender, streamCloseEnvelope(tracked.id, code)); err != nil {
++					t.Fatal(err)
++				}
++				// Heartbeats must still pass a blocked close barrier for another stream.
++				if err := recipient.send(protocol.Envelope{Version: 1, Type: protocol.TypePong}); err != nil {
++					t.Fatal(err)
++				}
++				for index, want := range []protocol.MessageType{protocol.TypePong, protocol.TypeData, protocol.TypeData, protocol.TypeClose} {
++					item, ok := recipient.outbound.poll()
++					if !ok || item.envelope.Type != want {
++						t.Fatalf("forwarded frame %d = %#v/%t, want %s", index, item, ok, want)
++					}
++					if want == protocol.TypeData && item.envelope.PayloadBytes() != len(payload) {
++						t.Fatal("truncated payload")
++					}
++					item.complete()
++				}
++				assertOutboundBudgetUsage(t, recipient.outbound.dataBudget, 0, 0)
++				if relay.activeStreams != 0 || len(relay.streams) != 0 {
++					t.Fatal("drained stream still occupies a slot")
++				}
++				if err := relay.routeEnvelope(sender, streamCloseEnvelope(tracked.id, code)); err != nil {
++					t.Fatalf("duplicate close: %v", err)
++				}
++				if _, ok := recipient.outbound.poll(); ok {
++					t.Fatal("duplicate close was forwarded")
++				}
++			})
++		}
++	}
++}
++
++func TestOrderlyCloseWaitsForInFlightDataAndAbortCancelsBarrier(t *testing.T) {
++	for _, abort := range []bool{false, true} {
++		t.Run(fmt.Sprintf("abort=%t", abort), func(t *testing.T) {
++			relay := newWriterTestService()
++			client := newDormantSession(relay, "client", enrollment.RoleClient)
++			agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++			registerTestSessions(relay, client, agent)
++			defer closeTestSessions(client, agent)
++			tracked := &stream{id: "tail", client: client, agent: agent, state: streamOpen}
++			relay.streams[tracked.id] = tracked
++			relay.activeStreams = 1
++			if err := relay.routeEnvelope(agent, dataEnvelope(tracked.id, "eA")); err != nil {
++				t.Fatal(err)
++			}
++			inFlight, ok := client.outbound.poll()
++			if !ok {
++				t.Fatal("no data")
++			}
++			if err := relay.routeEnvelope(agent, streamCloseEnvelope(tracked.id, "target_closed")); err != nil {
++				t.Fatal(err)
++			}
++			if _, ok := client.outbound.poll(); ok {
++				t.Fatal("close overtook in-flight data")
++			}
++			if relay.streams[tracked.id] == nil {
++				t.Fatal("draining stream detached before completion")
++			}
++			if abort {
++				agent.close("revoked")
++			}
++			inFlight.complete()
++			item, ok := client.outbound.poll()
++			if !ok || item.envelope.Type != protocol.TypeClose {
++				t.Fatal("missing terminal close")
++			}
++			wantCode := "target_closed"
++			if abort {
++				wantCode = "revoked"
++			}
++			if code := decodedErrorCode(t, item.envelope); code != wantCode {
++				t.Fatalf("close = %s, want %s", code, wantCode)
++			}
++			item.complete()
++			if _, ok := client.outbound.poll(); ok {
++				t.Fatal("stale orderly close survived abort")
++			}
++			assertOutboundBudgetUsage(t, client.outbound.dataBudget, 0, 0)
++			if len(relay.streams) != 0 || relay.activeStreams != 0 {
++				t.Fatal("stream reservation leaked")
++			}
++		})
++	}
++}
++
++func TestOrderlyCloseBarrierUsesBoundedControlLane(t *testing.T) {
++	relay := newWriterTestService()
++	client := newDormantSession(relay, "client", enrollment.RoleClient)
++	agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++	client.outbound.controlCapacity = 1
++	registerTestSessions(relay, client, agent)
++	defer closeTestSessions(client, agent)
++	for _, id := range []string{"first", "overflow"} {
++		tracked := &stream{id: id, client: client, agent: agent, state: streamOpen}
++		relay.streams[id] = tracked
++		relay.activeStreams++
++		if err := relay.routeEnvelope(agent, dataEnvelope(id, "eA")); err != nil {
++			t.Fatal(err)
++		}
++		if err := relay.routeEnvelope(agent, streamCloseEnvelope(id, "target_closed")); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if client.registered {
++		t.Fatal("terminal control overflow did not close affected session")
++	}
++	if !agent.registered {
++		t.Fatal("terminal control overflow closed unrelated session")
++	}
++	if len(relay.streams) != 0 || relay.activeStreams != 0 {
++		t.Fatal("overflow leaked draining streams")
++	}
++	assertOutboundBudgetUsage(t, client.outbound.dataBudget, 0, 0)
++}
++
++func TestClosingStreamCancellationDiscardsTail(t *testing.T) {
++	for _, initialAgent := range []bool{false, true} {
++		for _, opposing := range []bool{false, true} {
++			t.Run(fmt.Sprintf("agent-eof=%t/opposing=%t", initialAgent, opposing), func(t *testing.T) {
++				relay := newWriterTestService()
++				client := newDormantSession(relay, "client", enrollment.RoleClient)
++				agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++				registerTestSessions(relay, client, agent)
++				defer closeTestSessions(client, agent)
++				tracked := &stream{id: "tail", client: client, agent: agent, state: streamOpen}
++				relay.streams[tracked.id] = tracked
++				relay.activeStreams = 1
++				sender, recipient, orderly := client, agent, "client_closed"
++				if initialAgent {
++					sender, recipient, orderly = agent, client, "target_closed"
++				}
++				if err := relay.routeEnvelope(sender, dataEnvelope(tracked.id, "eA")); err != nil {
++					t.Fatal(err)
++				}
++				if err := relay.routeEnvelope(sender, streamCloseEnvelope(tracked.id, orderly)); err != nil {
++					t.Fatal(err)
++				}
++				// Duplicate EOF is idempotent while the original terminal barrier waits.
++				if err := relay.routeEnvelope(sender, streamCloseEnvelope(tracked.id, orderly)); err != nil {
++					t.Fatal(err)
++				}
++				if !recipient.outbound.hasStreamData(tracked.id) {
++					t.Fatal("duplicate orderly close discarded tail")
++				}
++				abortSender, abortRecipient, abortCode := sender, recipient, "target_failure"
++				if opposing {
++					abortSender, abortRecipient = recipient, sender
++					abortCode = "client_closed"
++					if abortSender == agent {
++						abortCode = "target_closed"
++					}
++				}
++				if err := relay.routeEnvelope(abortSender, streamCloseEnvelope(tracked.id, abortCode)); err != nil {
++					t.Fatal(err)
++				}
++				if len(relay.streams) != 0 || relay.activeStreams != 0 {
++					t.Fatal("cancellation retained draining stream")
++				}
++				assertOutboundBudgetUsage(t, recipient.outbound.dataBudget, 0, 0)
++				item, ok := abortRecipient.outbound.poll()
++				if !ok || item.envelope.Type != protocol.TypeClose || decodedErrorCode(t, item.envelope) != abortCode {
++					t.Fatal("cancellation did not replace queued orderly close")
++				}
++				item.complete()
++				for _, peer := range []*session{client, agent} {
++					if _, ok := peer.outbound.poll(); ok {
++						t.Fatal("canceled tail or terminal barrier survived")
++					}
++				}
++			})
++		}
++	}
++}
++
++func TestClosingStreamLateDataDoesNotChurnTombstones(t *testing.T) {
++	relay := newWriterTestService()
++	client := newDormantSession(relay, "client", enrollment.RoleClient)
++	agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++	registerTestSessions(relay, client, agent)
++	defer closeTestSessions(client, agent)
++	for i := 0; i < maxClosedStreamTombstones; i++ {
++		id := fmt.Sprintf("closed-%d", i)
++		relay.closedStreams[id] = closedStreamTombstone{expiresAt: time.Now().Add(time.Minute)}
++	}
++	tracked := &stream{id: "tail", client: client, agent: agent, state: streamOpen}
++	relay.streams[tracked.id] = tracked
++	relay.activeStreams = 1
++	if err := relay.routeEnvelope(agent, dataEnvelope(tracked.id, "eA")); err != nil {
++		t.Fatal(err)
++	}
++	if err := relay.routeEnvelope(agent, streamCloseEnvelope(tracked.id, "target_closed")); err != nil {
++		t.Fatal(err)
++	}
++	for i := 0; i < maxClosedStreamTombstones; i++ {
++		if err := relay.routeEnvelope(client, dataEnvelope(tracked.id, "eA")); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if len(relay.closedStreams) != maxClosedStreamTombstones {
++		t.Fatal("late frames changed tombstone capacity")
++	}
++	for i := 0; i < maxClosedStreamTombstones; i++ {
++		if _, exists := relay.closedStreams[fmt.Sprintf("closed-%d", i)]; !exists {
++			t.Fatal("late data churned existing tombstones")
++		}
++	}
++}
++
++func TestOrderlyCloseExpiryDiscardsTailAndLateCompletionCannotRemoveReplacement(t *testing.T) {
++	for _, terminalInFlight := range []bool{false, true} {
++		t.Run(fmt.Sprintf("terminal-in-flight=%t", terminalInFlight), func(t *testing.T) {
++			relay := newWriterTestService()
++			relay.idleTimeout = time.Minute
++			client := newDormantSession(relay, "client", enrollment.RoleClient)
++			agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++			registerTestSessions(relay, client, agent)
++			defer closeTestSessions(client, agent)
++			tracked := &stream{id: "tail", client: client, agent: agent, state: streamOpen, lastActivity: time.Now()}
++			agent.lastInbound = tracked.lastActivity
++			relay.streams[tracked.id] = tracked
++			relay.activeStreams = 1
++			if err := relay.routeEnvelope(agent, dataEnvelope(tracked.id, "eA")); err != nil {
++				t.Fatal(err)
++			}
++			if err := relay.routeEnvelope(agent, streamCloseEnvelope(tracked.id, "target_closed")); err != nil {
++				t.Fatal(err)
++			}
++			var terminal *outboundMailboxItem
++			if terminalInFlight {
++				item, ok := client.outbound.poll()
++				if !ok || item.envelope.Type != protocol.TypeData {
++					t.Fatal("missing tail")
++				}
++				item.complete()
++				terminal, ok = client.outbound.poll()
++				if !ok || terminal.envelope.Type != protocol.TypeClose {
++					t.Fatal("missing in-flight close")
++				}
++			}
++			relay.expireStreams(tracked.lastActivity.Add(time.Minute))
++			if len(relay.streams) != 0 || relay.activeStreams != 0 {
++				t.Fatal("expiry leaked draining stream")
++			}
++			assertOutboundBudgetUsage(t, client.outbound.dataBudget, 0, 0)
++			for _, peer := range []*session{client, agent} {
++				item, ok := peer.outbound.poll()
++				if !ok || item.envelope.Type != protocol.TypeClose || decodedErrorCode(t, item.envelope) != "idle_timeout" {
++					t.Fatal("expiry did not supersede orderly close")
++				}
++				item.complete()
++				if _, ok := peer.outbound.poll(); ok {
++					t.Fatal("expired tail survived cleanup")
++				}
++			}
++			// Model a writer finishing after expiry, tombstone expiry and ID reuse.
++			if terminal != nil {
++				replacement := &stream{id: tracked.id, client: client, agent: agent, state: streamOpen}
++				relay.streams[replacement.id] = replacement
++				relay.activeStreams = 1
++				terminal.complete()
++				terminal.complete()
++				if relay.streams[replacement.id] != replacement || relay.activeStreams != 1 {
++					t.Fatal("old close completion removed replacement stream")
++				}
++			}
++		})
++	}
++}
++
++func TestPersistedRevocationDiscardsOrderlyTail(t *testing.T) {
++	fixture := newRelayFixture(t)
++	defer fixture.Close()
++	_, devices := enrollDevices(t, fixture, "client", "agent")
++	relay := fixture.service
++	client := newDormantSession(relay, devices[0].serial, enrollment.RoleClient)
++	agent := newDormantSession(relay, devices[1].serial, enrollment.RoleAgent)
++	registerTestSessions(relay, client, agent)
++	defer closeTestSessions(client, agent)
++	tracked := &stream{id: "tail", client: client, agent: agent, state: streamOpen}
++	relay.streams[tracked.id] = tracked
++	relay.activeStreams = 1
++	if err := relay.routeEnvelope(agent, dataEnvelope(tracked.id, "eA")); err != nil {
++		t.Fatal(err)
++	}
++	if err := relay.routeEnvelope(agent, streamCloseEnvelope(tracked.id, "target_closed")); err != nil {
++		t.Fatal(err)
++	}
++	if err := relay.revokeIdentity(context.Background(), agent.serial, time.Now()); err != nil {
++		t.Fatal(err)
++	}
++	assertOutboundBudgetUsage(t, client.outbound.dataBudget, 0, 0)
++	item, ok := client.outbound.poll()
++	if !ok || item.envelope.Type != protocol.TypeClose || decodedErrorCode(t, item.envelope) != "revoked" {
++		t.Fatal("revocation failed to discard orderly tail")
++	}
++	item.complete()
++	if _, ok := client.outbound.poll(); ok {
++		t.Fatal("revoked tail survived")
++	}
++	if len(relay.streams) != 0 || relay.activeStreams != 0 {
++		t.Fatal("revocation leaked draining stream")
++	}
++}
++
++func TestShutdownDuringAdmissionDatabaseWaitPreventsRegistration(t *testing.T) {
++	fixture := newRelayFixture(t)
++	defer fixture.Close()
++	_, devices := enrollDevices(t, fixture, "agent")
++	relay := fixture.service
++	writer := newBlockingUpgradeResponseWriter()
++	defer writer.release()
++	request := authenticatedSessionRequest(t, devices[0])
++	done := make(chan struct{})
++	go func() { relay.handleSession(writer, request); close(done) }()
++	waitForSignal(t, writer.connection.writeStarted, "upgrade start")
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	reserved, err := relay.store.db.Conn(ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer reserved.Close()
++	before := relay.store.db.Stats().WaitCount
++	writer.release()
++	waitForDatabaseWait(t, relay, before)
++	closed := make(chan error, 1)
++	go func() { closed <- relay.Close() }()
++	deadline := time.Now().Add(time.Second)
++	for {
++		relay.mu.RLock()
++		stopped := relay.closed
++		relay.mu.RUnlock()
++		if stopped {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("shutdown waited for admission SQLite before stopping traffic")
++		}
++		time.Sleep(time.Millisecond)
++	}
++	_ = reserved.Close()
++	waitForSignal(t, done, "stopped admission completion")
++	if err := <-closed; err != nil {
++		t.Fatal(err)
++	}
++	relay.mu.RLock()
++	registered := len(relay.sessions) != 0 || len(relay.pendingSessions) != 0 || relay.agentPending != nil
++	relay.mu.RUnlock()
++	if registered {
++		t.Fatal("shutdown admission occupied a session slot")
++	}
++}
++
++func TestTargetEOFDeliversTailThroughSlowRelayWriter(t *testing.T) {
++	for _, binaryClient := range []bool{false, true} {
++		for _, binaryAgent := range []bool{false, true} {
++			t.Run(fmt.Sprintf("client-binary=%t/agent-binary=%t", binaryClient, binaryAgent), func(t *testing.T) {
++				fixture := newRelayFixture(t)
++				defer fixture.Close()
++				_, devices := enrollDevices(t, fixture, "client", "agent")
++				dial := func(device enrolledDevice, binary bool) *websocket.Conn {
++					if binary {
++						return dialTransport2(t, fixture, device.client)
++					}
++					return mustDialSession(t, fixture, device.client)
++				}
++				client, agent := dial(devices[0], binaryClient), dial(devices[1], binaryAgent)
++				defer client.Close()
++				defer agent.Close()
++				writeEnvelope(t, client, openEnvelope("tail", "1.1.1.1", 443))
++				_ = readEnvelope(t, agent)
++				writeEnvelope(t, agent, protocol.Envelope{Version: 1, Type: protocol.TypeOpened, StreamID: "tail"})
++				_ = readEnvelope(t, client)
++				fixture.service.mu.RLock()
++				relayClient := fixture.service.sessions[devices[0].serial]
++				fixture.service.mu.RUnlock()
++				relayClient.writeMu.Lock()
++				locked := true
++				defer func() {
++					if locked {
++						relayClient.writeMu.Unlock()
++					}
++				}()
++				payload := bytes.Repeat([]byte("tail-data"), 2<<10)
++				for i := 0; i < 2; i++ {
++					raw, err := (protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: "tail", Data: payload}).MarshalForPeer(binaryAgent)
++					if err != nil {
++						t.Fatal(err)
++					}
++					if err := agent.WriteMessage(websocket.BinaryMessage, raw); err != nil {
++						t.Fatal(err)
++					}
++				}
++				writeEnvelope(t, agent, streamCloseEnvelope("tail", "target_closed"))
++				waitForClosingStream(t, fixture.service, "tail")
++				relayClient.writeMu.Unlock()
++				locked = false
++				var received []byte
++				for i := 0; i < 3; i++ {
++					frame := readEnvelope(t, client)
++					if i < 2 {
++						if frame.Type != protocol.TypeData {
++							t.Fatalf("tail frame %d = %s", i, frame.Type)
++						}
++						data, err := frame.DecodePayload()
++						if err != nil {
++							t.Fatal(err)
++						}
++						received = append(received, data...)
++					} else if frame.Type != protocol.TypeClose || decodedErrorCode(t, frame) != "target_closed" {
++						t.Fatal("missing orderly EOF")
++					}
++				}
++				if !bytes.Equal(received, bytes.Repeat(payload, 2)) {
++					t.Fatalf("received %d of %d tail bytes", len(received), 2*len(payload))
++				}
++				waitForStreamRemoval(t, fixture.service, "tail")
++			})
++		}
++	}
++}
++
++func TestWindowsClientReadsCompleteTailBeforeEOF(t *testing.T) {
++	for _, binaryAgent := range []bool{false, true} {
++		t.Run(fmt.Sprintf("binary-agent=%t", binaryAgent), func(t *testing.T) {
++			fixture := newRelayFixture(t)
++			defer fixture.Close()
++			_, devices := enrollDevices(t, fixture, "client", "agent")
++			var agent *websocket.Conn
++			if binaryAgent {
++				agent = dialTransport2(t, fixture, devices[1].client)
++			} else {
++				agent = mustDialSession(t, fixture, devices[1].client)
++			}
++			defer agent.Close()
++			client := dialWindowsSession(t, fixture, devices[0])
++			defer client.Close()
++			opened := openWindowsStream(t, client, agent, "1.1.1.1", 443)
++			defer opened.stream.Close()
++			fixture.service.mu.RLock()
++			relayClient := fixture.service.sessions[devices[0].serial]
++			fixture.service.mu.RUnlock()
++			relayClient.writeMu.Lock()
++			locked := true
++			defer func() {
++				if locked {
++					relayClient.writeMu.Unlock()
++				}
++			}()
++			payload := bytes.Repeat([]byte("tail"), 4<<10)
++			for i := 0; i < 2; i++ {
++				raw, err := (protocol.Envelope{Version: 1, Type: protocol.TypeData, StreamID: opened.id, Data: payload}).MarshalForPeer(binaryAgent)
++				if err != nil {
++					t.Fatal(err)
++				}
++				if err := agent.WriteMessage(websocket.BinaryMessage, raw); err != nil {
++					t.Fatal(err)
++				}
++			}
++			writeEnvelope(t, agent, streamCloseEnvelope(opened.id, "target_closed"))
++			waitForClosingStream(t, fixture.service, opened.id)
++			relayClient.writeMu.Unlock()
++			locked = false
++			read := make(chan []byte, 1)
++			errors := make(chan error, 1)
++			go func() {
++				data, err := io.ReadAll(opened.stream)
++				if err != nil {
++					errors <- err
++				} else {
++					read <- data
++				}
++			}()
++			select {
++			case received := <-read:
++				if !bytes.Equal(received, bytes.Repeat(payload, 2)) {
++					t.Fatalf("Windows received %d of %d bytes before EOF", len(received), 2*len(payload))
++				}
++			case err := <-errors:
++				t.Fatal(err)
++			case <-time.After(2 * time.Second):
++				t.Fatal("Windows read did not reach EOF")
++			}
++			waitForStreamRemoval(t, fixture.service, opened.id)
++		})
++	}
++}
++
++func waitForClosingStream(t *testing.T, relay *Service, id string) {
++	t.Helper()
++	deadline := time.Now().Add(time.Second)
++	for {
++		relay.mu.RLock()
++		tracked := relay.streams[id]
++		closing := tracked != nil && tracked.closing
++		relay.mu.RUnlock()
++		if closing {
++			return
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("stream did not start draining")
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
++
++func TestRevocationDuringBlockedAdmissionPreventsRegistration(t *testing.T) {
++	for _, role := range []string{"client", "agent"} {
++		t.Run(role, func(t *testing.T) {
++			fixture := newRelayFixture(t)
++			defer fixture.Close()
++			_, devices := enrollDevices(t, fixture, role)
++			relay := fixture.service
++			writer := newBlockingUpgradeResponseWriter()
++			defer writer.release()
++			done := make(chan struct{})
++			request := authenticatedSessionRequest(t, devices[0])
++			go func() { relay.handleSession(writer, request); close(done) }()
++			waitForSignal(t, writer.connection.writeStarted, "upgrade start")
++			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++			defer cancel()
++			reserved, err := relay.store.db.Conn(ctx)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer reserved.Close()
++			before := relay.store.db.Stats().WaitCount
++			revoked := make(chan error, 1)
++			go func() { revoked <- relay.revokeIdentity(ctx, devices[0].serial, time.Now()) }()
++			waitForDatabaseWait(t, relay, before)
++			writer.release()
++			_ = reserved.Close()
++			if err := <-revoked; err != nil {
++				t.Fatal(err)
++			}
++			waitForSignal(t, done, "revoked admission completion")
++			relay.mu.RLock()
++			registered := relay.sessions[devices[0].serial] != nil || len(relay.pendingSessions) != 0 || relay.agentPending != nil
++			relay.mu.RUnlock()
++			if registered {
++				t.Fatal("revoked admission occupied a session slot")
++			}
++			if _, _, status := relay.authenticateRequest(request); status != http.StatusUnauthorized {
++				t.Fatal("revoked identity still authenticated")
++			}
++		})
++	}
++}
++
++func TestRevocationDatabaseWaitDoesNotBlockUnrelatedData(t *testing.T) {
++	fixture := newRelayFixture(t)
++	defer fixture.Close()
++	relay := fixture.service
++	client := newDormantSession(relay, "client", enrollment.RoleClient)
++	agent := newDormantSession(relay, "agent", enrollment.RoleAgent)
++	registerTestSessions(relay, client, agent)
++	defer closeTestSessions(client, agent)
++	tracked := &stream{id: "unrelated", client: client, agent: agent, state: streamOpen}
++	relay.streams[tracked.id] = tracked
++	relay.activeStreams = 1
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	reserved, err := relay.store.db.Conn(ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer reserved.Close()
++	before := relay.store.db.Stats().WaitCount
++	revokeDone := make(chan error, 1)
++	go func() { revokeDone <- relay.revokeIdentity(ctx, "unrelated-identity", time.Now()) }()
++	waitForDatabaseWait(t, relay, before)
++	routeDone := make(chan error, 1)
++	go func() { routeDone <- relay.handleAgentStreamFrame(agent, dataEnvelope(tracked.id, "eA")) }()
++	select {
++	case err := <-routeDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(150 * time.Millisecond):
++		_ = reserved.Close()
++		<-revokeDone
++		<-routeDone
++		t.Fatal("unrelated stream forwarding waited for SQLite")
++	}
++	_ = reserved.Close()
++	<-revokeDone
++}
++
++func TestSessionAdmissionDatabaseWaitDoesNotBlockUnrelatedData(t *testing.T) {
++	fixture := newRelayFixture(t)
++	defer fixture.Close()
++	_, devices := enrollDevices(t, fixture, "client")
++	relay := fixture.service
++	client := newDormantSession(relay, "existing-client", enrollment.RoleClient)
++	agent := newDormantSession(relay, "existing-agent", enrollment.RoleAgent)
++	registerTestSessions(relay, client, agent)
++	defer closeTestSessions(client, agent)
++	tracked := &stream{id: "unrelated", client: client, agent: agent, state: streamOpen}
++	relay.streams[tracked.id] = tracked
++	relay.activeStreams = 1
++	writer := newBlockingUpgradeResponseWriter()
++	defer writer.release()
++	done := make(chan struct{})
++	go func() { relay.handleSession(writer, authenticatedSessionRequest(t, devices[0])); close(done) }()
++	waitForSignal(t, writer.connection.writeStarted, "upgrade start")
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	reserved, err := relay.store.db.Conn(ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer reserved.Close()
++	before := relay.store.db.Stats().WaitCount
++	writer.release()
++	waitForDatabaseWait(t, relay, before)
++	routeDone := make(chan error, 1)
++	go func() { routeDone <- relay.handleAgentStreamFrame(agent, dataEnvelope(tracked.id, "eA")) }()
++	select {
++	case err := <-routeDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(150 * time.Millisecond):
++		_ = reserved.Close()
++		<-done
++		<-routeDone
++		t.Fatal("unrelated stream forwarding waited for session admission SQLite")
++	}
++	_ = reserved.Close()
++	waitForSignal(t, done, "admission completion")
++}
++
++func waitForDatabaseWait(t *testing.T, relay *Service, previous int64) {
++	t.Helper()
++	deadline := time.Now().Add(time.Second)
++	for relay.store.db.Stats().WaitCount <= previous {
++		if time.Now().After(deadline) {
++			t.Fatal("database wait did not start")
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
+diff --git a/relay/internal/service/outbound_mailbox.go b/relay/internal/service/outbound_mailbox.go
+index 22cb590..1ea08c0 100644
+--- a/relay/internal/service/outbound_mailbox.go
++++ b/relay/internal/service/outbound_mailbox.go
+@@ -49,6 +49,8 @@ type outboundMailboxItem struct {
+ 	envelope    protocol.Envelope
+ 	mailbox     *outboundMailbox
+ 	reservation *outboundDataReservation
++	afterData   bool
++	onComplete  func()
+ 	once        sync.Once
+ }
+ 
+@@ -57,11 +59,13 @@ func (item *outboundMailboxItem) complete() {
+ 		return
+ 	}
+ 	item.once.Do(func() {
+-		if item.reservation == nil {
+-			return
++		if item.reservation != nil {
++			item.mailbox.completeData(item.envelope.StreamID)
++			item.reservation.release()
++		}
++		if item.onComplete != nil {
++			item.onComplete()
+ 		}
+-		item.mailbox.completeData(item.envelope.StreamID)
+-		item.reservation.release()
+ 	})
+ }
+ 
+@@ -143,6 +147,29 @@ func (mailbox *outboundMailbox) enqueue(envelope protocol.Envelope) outboundAdmi
+ 	return outboundAdmitted
+ }
+ 
++// An orderly close consumes the existing bounded control lane, but cannot pass
++// data already retained for its stream, including a write in flight. Other
++// controls retain priority and data streams retain round-robin scheduling.
++func (mailbox *outboundMailbox) enqueueAfterData(envelope protocol.Envelope, completed func()) outboundAdmission {
++	mailbox.mu.Lock()
++	defer mailbox.mu.Unlock()
++	if mailbox.closed {
++		return outboundClosed
++	}
++	if len(mailbox.controls) >= mailbox.controlCapacity {
++		return outboundControlSaturated
++	}
++	mailbox.controls = append(mailbox.controls, &outboundMailboxItem{envelope: envelope, afterData: true, onComplete: completed})
++	mailbox.signalReady()
++	return outboundAdmitted
++}
++
++func (mailbox *outboundMailbox) hasStreamData(streamID string) bool {
++	mailbox.mu.Lock()
++	defer mailbox.mu.Unlock()
++	return mailbox.streamDataCounts[streamID] != 0
++}
++
+ func (mailbox *outboundMailbox) poll() (*outboundMailboxItem, bool) {
+ 	mailbox.mu.Lock()
+ 	defer mailbox.mu.Unlock()
+@@ -191,6 +218,15 @@ func (mailbox *outboundMailbox) close() {
+ 
+ func (mailbox *outboundMailbox) discardStreamData(streamID string) {
+ 	mailbox.mu.Lock()
++	// Abort/revocation supersedes any queued orderly terminal marker.
++	controls := mailbox.controls[:0]
++	for _, item := range mailbox.controls {
++		if !item.afterData || item.envelope.StreamID != streamID {
++			controls = append(controls, item)
++		}
++	}
++	clear(mailbox.controls[len(controls):])
++	mailbox.controls = controls
+ 	streamData := mailbox.data[streamID]
+ 	if len(streamData) == 0 {
+ 		mailbox.mu.Unlock()
+@@ -210,10 +246,18 @@ func (mailbox *outboundMailbox) discardStreamData(streamID string) {
+ }
+ 
+ func (mailbox *outboundMailbox) pollLocked() (*outboundMailboxItem, bool) {
+-	if len(mailbox.controls) > 0 {
+-		item := mailbox.controls[0]
+-		mailbox.controls[0] = nil
+-		mailbox.controls = mailbox.controls[1:]
++	for index, item := range mailbox.controls {
++		if item.afterData && mailbox.streamDataCounts[item.envelope.StreamID] > 0 {
++			continue
++		}
++		if index == 0 {
++			mailbox.controls[0] = nil
++			mailbox.controls = mailbox.controls[1:]
++		} else {
++			copy(mailbox.controls[index:], mailbox.controls[index+1:])
++			mailbox.controls[len(mailbox.controls)-1] = nil
++			mailbox.controls = mailbox.controls[:len(mailbox.controls)-1]
++		}
+ 		return item, true
+ 	}
+ 	if len(mailbox.readyStreams) == 0 {
+@@ -239,6 +283,7 @@ func (mailbox *outboundMailbox) completeData(streamID string) {
+ 	mailbox.mu.Lock()
+ 	if mailbox.streamDataCounts[streamID] <= 1 {
+ 		delete(mailbox.streamDataCounts, streamID)
++		mailbox.signalReady()
+ 	} else {
+ 		mailbox.streamDataCounts[streamID]--
+ 	}
+diff --git a/relay/internal/service/service.go b/relay/internal/service/service.go
+index 8975ea2..0eefe43 100644
+--- a/relay/internal/service/service.go
++++ b/relay/internal/service/service.go
+@@ -34,6 +34,9 @@ type Service struct {
+ 	serverCert    tls.Certificate
+ 	clientRoots   *x509.CertPool
+ 
++	// identityMu serializes admission revalidation with persisted revocation.
++	// Never acquire it while holding mu: SQLite must not hold the traffic lock.
++	identityMu           sync.Mutex
+ 	mu                   sync.RWMutex
+ 	agentConnected       bool
+ 	connectedClients     int
+diff --git a/relay/internal/service/session.go b/relay/internal/service/session.go
+index f624452..e95bc49 100644
+--- a/relay/internal/service/session.go
++++ b/relay/internal/service/session.go
+@@ -97,6 +97,8 @@ type stream struct {
+ 	client          *session
+ 	agent           *session
+ 	state           streamState
++	closing         bool
++	closingSender   *session
+ 	openingDeadline time.Time
+ 	lastActivity    time.Time
+ }
+@@ -145,25 +147,30 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
+ 		return
+ 	}
+ 
++	service.identityMu.Lock()
++	currentRole, revoked, err := service.store.identityStatus(request.Context(), serial)
+ 	service.mu.Lock()
+ 	if service.closed {
+ 		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		writeAPIError(writer, http.StatusServiceUnavailable, "not_ready")
+ 		return
+ 	}
+-	currentRole, revoked, err := service.store.identityStatus(request.Context(), serial)
+ 	if err != nil || revoked || currentRole != role {
+ 		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		writeAPIError(writer, http.StatusUnauthorized, "unauthorized")
+ 		return
+ 	}
+ 	if _, exists := service.sessions[serial]; exists || (role == enrollment.RoleAgent && service.agent != nil) {
+ 		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		writeAPIError(writer, http.StatusConflict, "session_conflict")
+ 		return
+ 	}
+ 	if _, exists := service.pendingSessions[serial]; exists || (role == enrollment.RoleAgent && service.agentPending != nil) {
+ 		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		writeAPIError(writer, http.StatusConflict, "session_conflict")
+ 		return
+ 	}
+@@ -175,6 +182,7 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
+ 		service.agentPending = make(chan struct{})
+ 	}
+ 	service.mu.Unlock()
++	service.identityMu.Unlock()
+ 
+ 	connection, err := sessionUpgrader.Upgrade(writer, request, nil)
+ 	if err != nil {
+@@ -184,16 +192,19 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
+ 		return
+ 	}
+ 
++	service.identityMu.Lock()
++	currentRole, revoked, err = service.store.identityStatus(request.Context(), serial)
+ 	service.mu.Lock()
+ 	service.releasePendingSessionLocked(serial, role)
+-	currentRole, revoked, err = service.store.identityStatus(request.Context(), serial)
+ 	if service.closed || err != nil || revoked || currentRole != role {
+ 		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		_ = connection.Close()
+ 		return
+ 	}
+ 	if _, exists := service.sessions[serial]; exists || (role == enrollment.RoleAgent && service.agent != nil) {
+ 		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		_ = connection.Close()
+ 		return
+ 	}
+@@ -212,6 +223,7 @@ func (service *Service) handleSession(writer http.ResponseWriter, request *http.
+ 		go func() { defer service.workers.Done(); service.runStreamJanitor() }()
+ 	})
+ 	service.mu.Unlock()
++	service.identityMu.Unlock()
+ 	defer service.workers.Done()
+ 	activeSession.readLoop()
+ 	activeSession.close("session_closed")
+@@ -349,11 +361,22 @@ func (service *Service) handleClientStreamFrame(client *session, envelope protoc
+ 		service.mu.Unlock()
+ 		return errors.New("client does not own stream")
+ 	}
++	if tracked.closing {
++		return service.absorbClosingStreamFrameLocked(tracked, client, envelope)
++	}
+ 	if envelope.Type == protocol.TypeData && tracked.state != streamOpen {
+ 		service.mu.Unlock()
+ 		return errors.New("data before stream opened")
+ 	}
+ 	agent := tracked.agent
++	if envelope.Type == protocol.TypeClose && envelope.Payload == encodeRelayError("client_closed") && tracked.state == streamOpen {
++		admission := service.queueOrderlyCloseLocked(tracked, client, agent, envelope)
++		service.mu.Unlock()
++		if admission == outboundControlSaturated {
++			agent.close("session_closed")
++		}
++		return nil
++	}
+ 	tracked.lastActivity = time.Now()
+ 	admission := outboundClosed
+ 	var notifications []streamNotification
+@@ -416,6 +439,9 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
+ 		service.mu.Unlock()
+ 		return errors.New("agent stream not found")
+ 	}
++	if tracked.closing {
++		return service.absorbClosingStreamFrameLocked(tracked, agent, envelope)
++	}
+ 	if envelope.Type == protocol.TypeOpened {
+ 		if tracked.state != streamOpening || envelope.Payload != "" {
+ 			service.mu.Unlock()
+@@ -440,6 +466,14 @@ func (service *Service) handleAgentStreamFrame(agent *session, envelope protocol
+ 		return errors.New("invalid stream error code")
+ 	}
+ 	client := tracked.client
++	if envelope.Type == protocol.TypeClose && envelope.Payload == encodeRelayError("target_closed") && tracked.state == streamOpen {
++		admission := service.queueOrderlyCloseLocked(tracked, agent, client, envelope)
++		service.mu.Unlock()
++		if admission == outboundControlSaturated {
++			client.close("session_closed")
++		}
++		return nil
++	}
+ 	tracked.lastActivity = time.Now()
+ 	admission := outboundClosed
+ 	var notifications []streamNotification
+@@ -525,17 +559,19 @@ func (service *Service) closeIdentitySession(serial, code string) {
+ }
+ 
+ func (service *Service) revokeIdentity(ctx context.Context, serial string, now time.Time) error {
+-	service.mu.Lock()
++	service.identityMu.Lock()
+ 	if err := service.store.revokeIdentity(ctx, serial, now); err != nil {
+-		service.mu.Unlock()
++		service.identityMu.Unlock()
+ 		return err
+ 	}
++	service.mu.Lock()
+ 	activeSession := service.sessions[serial]
+ 	var notifications []streamNotification
+ 	if activeSession != nil {
+ 		notifications = service.detachSessionLocked(activeSession, "revoked")
+ 	}
+ 	service.mu.Unlock()
++	service.identityMu.Unlock()
+ 	service.dispatchNotifications(notifications)
+ 	if activeSession != nil {
+ 		activeSession.close("revoked")
+@@ -543,6 +579,70 @@ func (service *Service) revokeIdentity(ctx context.Context, serial string, now t
+ 	return nil
+ }
+ 
++// Keep the stream registered (and its capacity reserved) until its terminal
++// frame finishes. Revocation, session loss, expiry and shutdown can therefore
++// still find it and immediately discard its queued tail.
++func (service *Service) queueOrderlyCloseLocked(tracked *stream, sender, recipient *session, envelope protocol.Envelope) outboundAdmission {
++	tracked.closing = true
++	tracked.closingSender = sender
++	if sender.outbound != nil {
++		sender.outbound.discardStreamData(tracked.id)
++	}
++	if recipient == nil || recipient.outbound == nil {
++		service.removeStreamLocked(tracked)
++		return outboundClosed
++	}
++	if !recipient.outbound.hasStreamData(tracked.id) {
++		service.removeStreamLocked(tracked)
++		return recipient.outbound.enqueue(envelope)
++	}
++	admission := recipient.outbound.enqueueAfterData(envelope, func() {
++		service.mu.Lock()
++		service.removeStreamLocked(tracked)
++		service.mu.Unlock()
++	})
++	if admission != outboundAdmitted {
++		service.removeStreamLocked(tracked)
++	}
++	return admission
++}
++
++// Caller has checked session and stream ownership and holds mu; this releases
++// it like the normal routing exit. Validate late data against the retained
++// stream in O(1), without creating/evicting tombstones for every late frame.
++func (service *Service) absorbClosingStreamFrameLocked(tracked *stream, sender *session, envelope protocol.Envelope) error {
++	if err := envelope.Validate(); err == nil {
++		if envelope.Type == protocol.TypeData && tracked.state == streamOpen {
++			service.mu.Unlock()
++			return nil
++		}
++		if envelope.Type == protocol.TypeClose && validEnvelopeErrorCode(envelope) {
++			orderlyCode := "client_closed"
++			if sender.role == enrollment.RoleAgent {
++				orderlyCode = "target_closed"
++			}
++			if sender == tracked.closingSender && envelope.Payload == encodeRelayError(orderlyCode) {
++				service.mu.Unlock()
++				return nil // Duplicate EOF must not discard its own pending tail.
++			}
++			// The recipient canceled, or the sender replaced EOF with an error.
++			// Either supersedes the pending drain and refunds queued bytes now.
++			recipient := tracked.agent
++			if sender == tracked.agent {
++				recipient = tracked.client
++			}
++			service.removeStreamLocked(tracked)
++			service.mu.Unlock()
++			if recipient != nil {
++				_ = recipient.send(envelope)
++			}
++			return nil
++		}
++	}
++	service.mu.Unlock()
++	return errors.New("invalid frame for closing stream")
++}
++
+ func (service *Service) detachSessionLocked(activeSession *session, code string) []streamNotification {
+ 	if !activeSession.registered {
+ 		return nil
+diff --git a/relay/internal/service/session_race_test.go b/relay/internal/service/session_race_test.go
+index 239e64c..73f1983 100644
+--- a/relay/internal/service/session_race_test.go
++++ b/relay/internal/service/session_race_test.go
+@@ -73,7 +73,7 @@ func TestSessionRegistrationRevalidatesIdentityAfterAuthentication(t *testing.T)
+ 		err               error
+ 	}
+ 	result := make(chan dialResult, 1)
+-	fixture.service.mu.Lock()
++	fixture.service.identityMu.Lock()
+ 	go func() {
+ 		connection, response, err := dialSession(fixture, devices[0].client)
+ 		status := 0
+@@ -89,10 +89,10 @@ func TestSessionRegistrationRevalidatesIdentityAfterAuthentication(t *testing.T)
+ 	}()
+ 	waitForIdentityTouch(t, fixture.service.store, devices[0].serial)
+ 	if err := fixture.service.store.revokeIdentity(context.Background(), devices[0].serial, time.Now().UTC()); err != nil {
+-		fixture.service.mu.Unlock()
++		fixture.service.identityMu.Unlock()
+ 		t.Fatal(err)
+ 	}
+-	fixture.service.mu.Unlock()
++	fixture.service.identityMu.Unlock()
+ 
+ 	select {
+ 	case outcome := <-result:
+diff --git a/relay/internal/service/session_test.go b/relay/internal/service/session_test.go
+index cfaf4b0..80dbce6 100644
+--- a/relay/internal/service/session_test.go
++++ b/relay/internal/service/session_test.go
+@@ -97,6 +97,7 @@ func TestStaleAgentSessionExpiresAndReleasesSlotForReconnect(t *testing.T) {
+ 		t.Fatalf("replacement Agent session failed: response %#v, error %v", response, err)
+ 	}
+ 	defer replacement.Close()
++	confirmSessionReady(t, replacement)
+ 
+ 	fixture.service.mu.RLock()
+ 	activeAgent := fixture.service.agent
+@@ -519,9 +520,20 @@ func mustDialSession(t *testing.T, fixture *relayFixture, client *http.Client) *
+ 	if err != nil {
+ 		t.Fatalf("dial relay session: response %#v, error %v", response, err)
+ 	}
++	confirmSessionReady(t, connection)
+ 	return connection
+ }
+ 
++// Upgrade completion precedes identity revalidation and session registration.
++// An application pong establishes readiness without racing internal state.
++func confirmSessionReady(t *testing.T, connection *websocket.Conn) {
++	t.Helper()
++	writeEnvelope(t, connection, protocol.Envelope{Version: 1, Type: protocol.TypePing})
++	if frame := readEnvelope(t, connection); frame.Type != protocol.TypePong {
++		t.Fatalf("session readiness response = %s, want pong", frame.Type)
++	}
++}
++
+ func openEnvelope(streamID, host string, port int) protocol.Envelope {
+ 	payload, _ := json.Marshal(map[string]any{"host": host, "port": port})
+ 	return protocol.Envelope{

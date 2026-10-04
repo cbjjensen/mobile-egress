@@ -1,34 +1,32 @@
 {
-  "$schema": "./mobile-feature-manifest.schema.v1.json",
-  "schemaVersion": 1,
+  "$schema": "./mobile-feature-manifest.schema.v2.json",
+  "schemaVersion": 2,
   "features": [
     {
       "id": "agent.transport-v2",
-      "title": "Negotiated raw data framing with legacy compatibility",
+      "title": "Explicit direct handshake and binary data framing",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
-            "android/app/src/main/java/com/mobileegress/agent/protocol/AgentTransport.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
-            "android/app/src/main/java/com/mobileegress/agent/session/AgentTargetBridge.kt"
+            "android/app/src/main/java/com/mobileegress/agent/protocol/AgentTransport.kt"
           ],
           "testEvidence": [
-            "android/app/src/test/java/com/mobileegress/agent/protocol/AgentTransportTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionUrlTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionUrlTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/protocol/AgentTransportTest.kt"
           ]
         },
         "ios": {
           "status": "implemented",
           "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift",
             "ios/Sources/MobileEgressCore/Protocol/WireProtocol.swift",
-            "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift",
-            "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift"
+            "ios/Sources/MobileEgressCore/Relay/NetworkRelayWebSocket.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/WireProtocolTests.swift",
-            "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
-            "ios/Tests/MobileEgressCoreTests/RelayRuntimeConfigurationTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectProtocolTests.swift",
+            "ios/Tests/MobileEgressCoreTests/WireProtocolTests.swift"
           ]
         }
       }
@@ -67,69 +65,88 @@
     },
     {
       "id": "agent.enrollment",
-      "title": "Strict QR enrollment and retained Agent identity",
+      "title": "Recoverable direct pairing with a persisted non-exportable phone key",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
-            "android/app/src/main/java/com/mobileegress/agent/pairing/PairingController.kt",
-            "android/app/src/main/java/com/mobileegress/agent/security/DeviceKeyStore.kt"
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRegistry.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectControl.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectBundles.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/DeviceKeyStore.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/SecureIdentityStore.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/DurableCredentialFile.kt"
           ],
           "testEvidence": [
-            "android/app/src/test/java/com/mobileegress/agent/pairing/PairingControllerTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/security/DeviceKeyStorePolicyTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRegistryTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectPendingCleanupTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/security/DirectDurabilityTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectProtocolTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectGoInteropTest.kt"
           ]
         },
         "ios": {
-          "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses Secure Enclave keys and a shared Keychain group instead of Android Keystore while preserving strict QR enrollment and non-exportable P-256 identity semantics.",
+          "status": "implemented",
           "sourceEvidence": [
-            "ios/Sources/MobileEgressCore/Pairing/PairingBundleParser.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectControlClient.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectSecurity.swift",
             "ios/Sources/MobileEgressCore/Identity/SecureEnclaveIdentityKeyManager.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/PairingValidationTests.swift",
-            "ios/Tests/MobileEgressCoreTests/AppleSecurityPrimitiveTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectEnrollmentRejectionTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectProtocolTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectGoInteropTests.swift"
           ]
         }
       }
     },
     {
       "id": "agent.endpoint-migration",
-      "title": "One-use relay endpoint migration",
+      "title": "Authority-signed direct endpoint updates with missed-generation recovery",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
-            "android/app/src/main/java/com/mobileegress/agent/migration/EndpointMigration.kt",
-            "android/app/src/main/java/com/mobileegress/agent/migration/EndpointMigrationClient.kt"
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectBundles.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectControl.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRegistry.kt"
           ],
           "testEvidence": [
-            "android/app/src/test/java/com/mobileegress/agent/migration/EndpointMigrationTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectProtocolTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectGoInteropTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRegistryTest.kt"
           ]
         },
         "ios": {
           "status": "implemented",
           "sourceEvidence": [
-            "ios/Sources/MobileEgressCore/Pairing/EndpointMigrationParser.swift",
-            "ios/Sources/MobileEgressCore/Migration/EndpointMigrationExecution.swift"
+            "ios/Sources/MobileEgressCore/Direct/DirectEndpointUpdate.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
+            "ios/Sources/MobileEgressCore/Pairing/PairingSupport.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectSecurity.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift",
-            "ios/Tests/MobileEgressCoreTests/EndpointMigrationExecutionTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectProtocolTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectGoInteropTests.swift",
+            "ios/Tests/MobileEgressCoreTests/EndpointAuthorityTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectRetainedEndpointTests.swift"
           ]
         }
       }
     },
     {
       "id": "agent.cellular-required-transport",
-      "title": "Cellular-only relay and target transport",
+      "title": "Cellular-only Client and target transport",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/network/CellularNetworkAcquirer.kt",
-            "android/app/src/main/java/com/mobileegress/agent/network/CellularRequiredController.kt"
+            "android/app/src/main/java/com/mobileegress/agent/network/CellularRequiredController.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectControl.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/network/CellularRequiredControllerTest.kt"
@@ -140,56 +157,62 @@
           "nativeEquivalenceNotes": "Uses Network.framework path and connection configuration to require cellular on Apple platforms rather than Android's Network binding API.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Network/CellularPinnedHTTPTransport.swift",
-            "ios/Sources/MobileEgressCore/Network/PinnedCellularTransportConfiguration.swift"
+            "ios/Sources/MobileEgressCore/Network/PinnedCellularTransportConfiguration.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/PinnedCellularTransportTests.swift"
+            "ios/Tests/MobileEgressCoreTests/PinnedCellularTransportTests.swift",
+            "ios/Tests/MobileEgressCoreTests/EndpointAuthorityTests.swift"
           ]
         }
       }
     },
     {
-      "id": "agent.relay-session",
-      "title": "Startable relay session over pinned mTLS",
+      "id": "agent.direct-session",
+      "title": "Independent direct Client sessions over pinned mTLS",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
-            "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
-            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt"
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectPeerSupervisor.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/PeerRuntime.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt"
           ],
           "testEvidence": [
-            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionUrlTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/service/ForegroundControllerTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectPeerSupervisorTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/PeerRuntimeTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/AgentSessionUrlTest.kt"
           ]
         },
         "ios": {
-          "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Runs the Agent workload inside Apple's packet-tunnel extension lifecycle while retaining the same relay protocol, mTLS role, and user start/stop semantics.",
+          "status": "implemented",
           "sourceEvidence": [
-            "ios/MobileEgressTunnelExtension/PacketTunnelProvider.swift",
-            "ios/Sources/MobileEgressCore/Runtime/AgentSessionRuntime.swift"
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/Sources/MobileEgressCore/Runtime/AgentSessionRuntime.swift",
+            "ios/MobileEgressAgent/MobileEgressDependencies.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift",
-            "ios/Tests/MobileEgressCoreTests/TunnelRuntimeControllerTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift",
+            "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift"
           ]
         }
       }
     },
     {
       "id": "agent.stream-capacity",
-      "title": "Uncapped live stream ownership with bounded queues",
+      "title": "Phone-wide bounded queue and in-flight debt with per-stream backpressure",
       "platforms": {
         "android": {
-          "status": "implemented",
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Pauses native target reads when their stream owns 32 outbound frames, including transport-owned frames, and resumes after capacity refunds. The selector disables only read interest and keeps command batches responsive. Idle targets hold no aggregate read reservation; aggregate frame/byte overload retains the existing stream-local close.",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/session/AgentSession.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/AgentTargetBridge.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/StreamAdmission.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/OutboundMailbox.kt",
             "android/app/src/main/java/com/mobileegress/agent/session/TargetIoReactor.kt",
-            "android/app/src/main/java/com/mobileegress/agent/session/OutboundSender.kt"
+            "android/app/src/main/java/com/mobileegress/agent/session/OutboundSender.kt",
+            "android/app/src/main/java/com/mobileegress/agent/session/PhoneBudgets.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/session/AgentTargetBridgeTest.kt",
@@ -197,24 +220,31 @@
             "android/app/src/test/java/com/mobileegress/agent/session/OutboundMailboxTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/session/OutboundSenderTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorIntegrationTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/session/TargetIoReactorIntegrationTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/session/PhoneBudgetTest.kt"
           ]
         },
         "ios": {
-          "status": "implemented",
+          "status": "native-equivalent",
+          "nativeEquivalenceNotes": "Network.framework callbacks retain phone-wide reservations until native completion; Android uses selector reactors. Both share directional 8192-frame/64-MiB debt across Clients, retain 32 frames per stream and charge queued plus in-flight data. Physical sustained fairness and thermal acceptance are separate release gates.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Runtime/AgentRuntimeModels.swift",
             "ios/Sources/MobileEgressCore/Session/SessionPrimitives.swift",
             "ios/Sources/MobileEgressCore/Runtime/AgentSessionStateMachine.swift",
             "ios/Sources/MobileEgressCore/Runtime/AgentSessionRuntime.swift",
-            "ios/Sources/MobileEgressCore/Runtime/TunnelProviderMessaging.swift"
+            "ios/Sources/MobileEgressCore/Runtime/NetworkTargetConnection.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectPhoneBudget.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectReadTurns.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/RelayRuntimeConfigurationTests.swift",
             "ios/Tests/MobileEgressCoreTests/AgentSessionStateMachineTests.swift",
             "ios/Tests/MobileEgressCoreTests/SessionPrimitivesTests.swift",
             "ios/Tests/MobileEgressCoreTests/AgentSessionRuntimeTests.swift",
-            "ios/Tests/MobileEgressCoreTests/ProviderMessagingTests.swift"
+            "ios/Tests/MobileEgressCoreTests/NetworkTargetBackpressureTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectReadTurnTests.swift",
+            "ios/Tests/MobileEgressCoreTests/ProviderMessagingTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift"
           ]
         }
       }
@@ -277,60 +307,74 @@
     },
     {
       "id": "agent.status-surface",
-      "title": "Agent status and action surface",
+      "title": "Client list, independent controls and aggregate sharing status",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/MainViewModel.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRecovery.kt",
             "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRetryAction.kt",
             "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/service/AgentNotificationPresentationTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/direct/PeerRuntimeTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRecoveryTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRetryActionTest.kt"
           ]
         },
         "ios": {
-          "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses a SwiftUI host surface backed by tunnel state rather than Android's coalesced foreground-service notification while preserving visible enrollment, relay, and runtime status; it does not claim Android notification behavior on iOS.",
+          "status": "implemented",
           "sourceEvidence": [
             "ios/MobileEgressAgent/AgentDashboardView.swift",
-            "ios/Sources/MobileEgressCore/Runtime/TunnelConnectionState.swift"
+            "ios/MobileEgressAgent/AgentViewModel.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectPeerRecovery.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectForegroundStatusHost.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/TunnelConnectionStateTests.swift",
-            "ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectPeerRecoveryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectForegroundStatusTests.swift"
           ]
         }
       }
     },
     {
       "id": "agent.cellular-ip-rotation",
-      "title": "Guided cellular IP rotation with Agent restoration",
+      "title": "Phone-wide guided cellular rotation restoring only enabled Clients",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/network/CellularIpRotationController.kt",
-            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt"
+            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectPeerSupervisor.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/network/CellularIpRotationControllerTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectPeerSupervisorTest.kt"
           ]
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and durably restores the prior packet-tunnel and on-demand intent before publishing the outcome; both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes.",
+          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores sharing only for still-enabled Clients while respecting explicit Stop and the approved foreground lifecycle. Both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift",
-            "ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift"
+            "ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectForegroundRotationHost.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/MobileEgressAgent/AgentViewModel.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/CellularIPRotationTests.swift",
-            "ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift"
+            "ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift"
           ]
         }
       }
@@ -404,51 +448,176 @@
         "android": {
           "status": "implemented",
           "sourceEvidence": [
-            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt"
+            "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/PeerRuntime.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRecovery.kt"
           ],
           "testEvidence": [
-            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRecoveryTest.kt"
           ]
         },
         "ios": {
           "status": "implemented",
           "sourceEvidence": [
-            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift",
-            "ios/Sources/MobileEgressCore/Network/SafeNetworkDiagnostics.swift"
+            "ios/Sources/MobileEgressCore/Network/SafeNetworkDiagnostics.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/MobileEgressAgent/AgentViewModel.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectPeerRecovery.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectForegroundStatusHost.swift",
+            "ios/MobileEgressAgent/AgentDashboardView.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",
-            "ios/Tests/MobileEgressCoreTests/CellularPublicIPProbeAdapterTests.swift"
+            "ios/Tests/MobileEgressCoreTests/CellularPublicIPProbeAdapterTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectPeerRecoveryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectForegroundStatusTests.swift"
           ]
         }
       }
     },
     {
-      "id": "agent.cellular-relay-visibility",
-      "title": "Separate cellular and relay health visibility",
+      "id": "agent.cellular-client-visibility",
+      "title": "Separate cellular availability and per-Client connection status",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/status/AgentStatus.kt",
-            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt"
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/PeerRuntime.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRecovery.kt"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/status/AgentStatusTest.kt",
-            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt"
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/PeerRuntimeTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRecoveryTest.kt"
           ]
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Combines an Apple cellular-path observer with packet-tunnel provider state and presents them as independent health tiles, matching Android's distinct cellular and relay visibility without coupling the two signals.",
+          "nativeEquivalenceNotes": "The active app subscribes to the cellular-path observer and displays Unknown, Available or Unavailable independently of sharing intent and each Client session. The same production adapter supplies safe copied status; Android exposes its native cellular availability separately as well.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Network/CellularPathObserver.swift",
-            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift"
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectPeerRecovery.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectForegroundStatusHost.swift",
+            "ios/MobileEgressAgent/AgentViewModel.swift",
+            "ios/MobileEgressAgent/AgentDashboardView.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/CellularPathObserverTests.swift",
-            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectPeerRecoveryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectForegroundStatusTests.swift"
           ]
+        }
+      }
+    },
+    {
+      "id": "agent.multi-client-registry",
+      "title": "Atomic ten-Client registry including pending and disabled entries",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRegistry.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/SecureIdentityStore.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/DurableCredentialFile.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRemovalGate.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectPeerSupervisor.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/MainViewModel.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRegistryTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRemovalGateTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/security/DirectDurabilityTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectPeerSupervisorTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectModels.swift",
+            "ios/Sources/MobileEgressCore/Identity/SharedKeychainIdentityStore.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectRemovalIntents.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
+            "ios/MobileEgressAgent/AgentViewModel.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.sharing-lifecycle",
+      "title": "Platform sharing availability and iOS active-dashboard keep-awake",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectPeerSupervisor.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectPeerSupervisorTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "approved-exception",
+          "exceptionNotes": "Owner approved iOS foreground-active serving only. Inactive/background/manual lock closes traffic; active return resumes only retained Start intent. Default-on Keep screen awake while sharing disables the idle timer only while active sharing is requested, including retries, and restores it on Stop, preference off, inactivity or terminal failure. This is not equivalent Android background execution. Signed physical iPhone auto-lock acceptance remains required.",
+          "decisionEvidence": [
+            "docs/superpowers/plans/2026-10-03-direct-client-phone.md"
+          ],
+          "sourceEvidence": [
+            "ios/MobileEgressAgent/AgentViewModel.swift",
+            "ios/MobileEgressAgent/MobileEgressAgentApp.swift",
+            "ios/MobileEgressAgent/AgentDashboardView.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectModels.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectForegroundRotationHost.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift",
+            "ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift"
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent.legacy-retirement",
+      "title": "Fresh direct pairing and fail-closed retirement of active relay associations",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/security/SecureIdentityStore.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/MainViewModel.kt",
+            "android/app/src/main/java/com/mobileegress/agent/security/DurableCredentialFile.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectBundles.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRegistryTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectProtocolTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/security/DirectDurabilityTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "native-equivalent",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectLegacyVPNCleanup.swift",
+            "ios/MobileEgressAgent/TunnelManager.swift",
+            "ios/MobileEgressTunnelExtension/PacketTunnelProvider.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectLegacyVPNCleanupTests.swift"
+          ],
+          "nativeEquivalenceNotes": "Both platforms require fresh direct trust and do not resume legacy relay identities. iOS additionally blocks Start until app-owned legacy VPN profiles are stopped, disabled and removed, retaining only a fail-closed cleanup extension; other apps' VPNs are untouched."
         }
       }
     }

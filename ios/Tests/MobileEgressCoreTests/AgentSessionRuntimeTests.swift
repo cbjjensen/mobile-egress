@@ -1,8 +1,233 @@
 import Foundation
 import XCTest
 @testable import MobileEgressCore
+#if canImport(Network)
+import Network
+#endif
 
 final class AgentSessionRuntimeTests: XCTestCase {
+    func testFairTurnWaitOwnsSharedDebtAndStreamCancellationRefundsIt() async throws {
+        let budget = DirectPhoneBudget(frameLimit: 1, byteLimit: 4096, controlLimit: 10)
+        let blocker = budget.readTurns.makePeer()
+        let blocking = await budget.readTurns.acquire(blocker)
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let target = RecordingTargetConnection()
+        let runtime = AgentSessionRuntime(relay: relay, targetFactory: RecordingTargetConnectionFactory(target: target), sharedBudget: budget)
+        await runtime.start(); await relay.emit(.connected)
+        let open = try WireProtocol.encode(type: .open, streamID: "held", payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8))
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await target.emit(.ready); await relay.completeNextSend(.success(()))
+        let delivery = Task { await target.emit(.data(Data([1, 2, 3]))) }
+        await waitUntil { budget.readTurns.waitingCount == 1 }
+        XCTAssertNil(budget.acquire(.outbound, bytes: 1), "a chunk waiting for its fair turn must already own shared debt")
+        let close = try WireProtocol.encode(type: .close, streamID: "held")
+        await relay.emit(.message(.init(opcode: .binary, payload: close, isComplete: true)))
+        await delivery.value
+        XCTAssertEqual(budget.readTurns.waitingCount, 0)
+        XCTAssertNotNil(budget.acquire(.outbound, bytes: 1))
+        blocking?.complete()
+        await runtime.stop()
+    }
+    func testTenPeersIsolateSameStreamIDsAndNativeDebtSurvivesStoppedGeneration() async throws {
+        let budget = DirectPhoneBudget(frameLimit: 10, byteLimit: 4096, controlLimit: 30)
+        var runtimes: [AgentSessionRuntime] = []
+        var relays: [RecordingRelayWebSocket] = []
+        var targets: [RecordingTargetConnection] = []
+        for _ in 0..<10 {
+            let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+            let target = RecordingTargetConnection(automaticallyCompletesSends: false)
+            let runtime = AgentSessionRuntime(relay: relay, targetFactory: RecordingTargetConnectionFactory(target: target), sharedBudget: budget)
+            await runtime.start(); await relay.emit(.connected)
+            let open = try WireProtocol.encode(type: .open, streamID: "same-id", payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8))
+            await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+            await target.emit(.ready); await relay.completeNextSend(.success(()))
+            runtimes.append(runtime); relays.append(relay); targets.append(target)
+        }
+        for index in 0..<10 {
+            await targets[index].emit(.data(Data([UInt8(index)])))
+            let frame = try WireProtocol.encode(type: .data, streamID: "same-id", payload: Data([UInt8(index)]))
+            await relays[index].emit(.message(.init(opcode: .binary, payload: frame, isComplete: true)))
+        }
+        XCTAssertNil(budget.acquire(.outbound, bytes: 1))
+        XCTAssertNil(budget.acquire(.inbound, bytes: 1))
+        await runtimes[0].stop()
+        XCTAssertNil(budget.acquire(.outbound, bytes: 1))
+        XCTAssertNil(budget.acquire(.inbound, bytes: 1))
+        for index in 1..<10 {
+            let status = await runtimes[index].snapshot()
+            XCTAssertEqual(status.activeStreamCount, 1)
+            XCTAssertEqual(targets[index].sentData, [Data([UInt8(index)])])
+        }
+        await targets[0].completeNextSend(.failure(.failed))
+        await relays[0].completeNextSend(.failure(.unavailable))
+        XCTAssertNotNil(budget.acquire(.outbound, bytes: 1))
+        XCTAssertNotNil(budget.acquire(.inbound, bytes: 1))
+        for index in 1..<10 {
+            await relays[index].completeNextSend(.success(()))
+            await targets[index].completeNextSend(.success(()))
+            await runtimes[index].stop()
+        }
+    }
+    #if canImport(Network)
+    func testRealNativeTargetDrainsExactDownloadTailThroughStalledRuntimeRelay() async throws {
+        let server = try LoopbackTargetServer()
+        let port = try await server.start()
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let runtime = AgentSessionRuntime(relay: relay, targetFactory: NativeLoopbackTargetFactory(port: port), sharedBudget: DirectPhoneBudget())
+        await runtime.start()
+        await relay.emit(.connected)
+        let open = try WireProtocol.encode(type: .open, streamID: "native-download", payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8))
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await waitUntil { relay.pendingSends > 0 }
+        await relay.completeNextSend(.success(()))
+        await server.waitForConnection()
+        let expected = Data((0 ..< (2 * 1_024 * 1_024 + 37)).map { UInt8($0 % 251) })
+        server.send(expected, end: true)
+        await waitUntil { await runtime.snapshot().bytesDownloaded > 0 }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let paused = await runtime.snapshot()
+        XCTAssertEqual(paused.activeStreamCount, 1)
+        XCTAssertLessThanOrEqual(paused.bytesDownloaded, 32 * 16 * 1_024)
+        XCTAssertLessThan(paused.bytesDownloaded, UInt64(expected.count))
+        for _ in 0 ..< 2_000 {
+            if relay.pendingSends > 0 { await relay.completeNextSend(.success(())) }
+            if await runtime.snapshot().activeStreamCount == 0 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        var received = Data()
+        for bytes in relay.sentBinary {
+            let frame = try WireProtocol.parseAgentOutbound(bytes)
+            if frame.type == .data { received.append(try frame.decodedPayload()) }
+        }
+        XCTAssertEqual(received, expected)
+        let last = try WireProtocol.parseAgentOutbound(XCTUnwrap(relay.sentBinary.last))
+        XCTAssertEqual(last.type, .close)
+        XCTAssertEqual(try last.decodedPayload(), Data("target_closed".utf8))
+        await runtime.stop()
+        server.cancel()
+    }
+    #endif
+
+    func testPausedStreamAllowsOtherTargetProgressAndRemoteCloseReleasesWaiter() async throws {
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let first = RecordingTargetConnection()
+        let second = RecordingTargetConnection()
+        let runtime = AgentSessionRuntime(relay: relay, targetFactory: SequencedTargetConnectionFactory(targets: [first, second]))
+        await runtime.start()
+        await relay.emit(.connected)
+        for (id, target) in [("first", first), ("second", second)] {
+            let open = try WireProtocol.encode(type: .open, streamID: id, payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8))
+            await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+            await target.emit(.ready)
+            await relay.completeNextSend(.success(()))
+        }
+        let producer = Task {
+            for _ in 0 ..< 64 { await first.emit(.data(Data([0x41]))) }
+        }
+        await waitUntil { await runtime.snapshot().bytesDownloaded == 32 }
+        await second.emit(.data(Data([0x42])))
+        let concurrent = await runtime.snapshot()
+        XCTAssertEqual(concurrent.bytesDownloaded, 33)
+        XCTAssertEqual(concurrent.activeStreamCount, 2)
+        let close = try WireProtocol.encode(type: .close, streamID: "first", payload: Data("client_closed".utf8))
+        await relay.emit(.message(.init(opcode: .binary, payload: close, isComplete: true)))
+        await producer.value
+        await relay.completeNextSend(.success(()))
+        let last = try WireProtocol.parseAgentOutbound(XCTUnwrap(relay.sentBinary.last))
+        XCTAssertEqual(last.streamID, "second")
+        XCTAssertEqual(last.type, .data)
+        XCTAssertEqual(try last.decodedPayload(), Data([0x42]))
+        XCTAssertEqual(first.cancelCount, 1)
+        XCTAssertEqual(second.cancelCount, 0)
+        await runtime.stop()
+    }
+
+    func testSlowRelayPausesAndResumesSustainedTargetDownloadWithoutResetInBothModes() async throws {
+        for binary in [false, true] {
+            let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+            let target = RecordingTargetConnection()
+            let runtime = AgentSessionRuntime(relay: relay, targetFactory: RecordingTargetConnectionFactory(target: target))
+            await runtime.start()
+            await relay.emit(.connected)
+            if binary {
+                let advertisement = try WireProtocol.encode(type: .ping, payload: WireProtocol.transportV2Advertisement)
+                await relay.emit(.message(.init(opcode: .binary, payload: advertisement, isComplete: true)))
+                await relay.completeNextSend(.success(()))
+            }
+            let open = try WireProtocol.encode(type: .open, streamID: "download", payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8))
+            await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+            await target.emit(.ready)
+            await relay.completeNextSend(.success(()))
+
+            let progress = DownloadProgress()
+            let producer = Task {
+                for index in 0 ..< 96 {
+                    await target.emit(.data(Data(repeating: UInt8(index), count: 16 * 1_024)))
+                    await progress.advance()
+                }
+                await target.emit(.ended)
+            }
+            await waitUntil { await runtime.snapshot().bytesDownloaded >= 32 * 16 * 1_024 }
+            let stalled = await runtime.snapshot()
+            let completedCallbacks = await progress.count
+            XCTAssertEqual(stalled.bytesDownloaded, 32 * 16 * 1_024)
+            XCTAssertEqual(stalled.activeStreamCount, 1)
+            XCTAssertLessThanOrEqual(completedCallbacks, 32, "the next native read must wait for capacity")
+            XCTAssertEqual(target.cancelCount, 0)
+
+            for _ in 0 ..< 400 {
+                if relay.pendingSends > 0 { await relay.completeNextSend(.success(())) }
+                if await runtime.snapshot().activeStreamCount == 0 { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            let delivered = try relay.sentBinary.compactMap { bytes -> Data? in
+                let frame = try WireProtocol.parseAgentOutbound(bytes, transportV2: binary)
+                return frame.type == .data ? try frame.decodedPayload() : nil
+            }
+            XCTAssertEqual(delivered.count, 96)
+            for (index, bytes) in delivered.enumerated() {
+                XCTAssertEqual(bytes, Data(repeating: UInt8(index), count: 16 * 1_024))
+            }
+            let last = try XCTUnwrap(relay.sentBinary.last)
+            XCTAssertEqual(try WireProtocol.parseAgentOutbound(last, transportV2: binary).type, .close)
+            await runtime.stop()
+            await producer.value
+        }
+    }
+
+    func testStopUnblocksTargetWaitingForRelayCapacity() async throws {
+        let relay = RecordingRelayWebSocket(automaticallyCompletesSends: false)
+        let target = RecordingTargetConnection()
+        let runtime = AgentSessionRuntime(relay: relay, targetFactory: RecordingTargetConnectionFactory(target: target))
+        await runtime.start()
+        await relay.emit(.connected)
+        let open = try WireProtocol.encode(type: .open, streamID: "download", payload: Data(#"{"ip":"8.8.8.8","port":443}"#.utf8))
+        await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
+        await target.emit(.ready)
+        await relay.completeNextSend(.success(()))
+        let producer = Task {
+            for _ in 0 ..< 64 { await target.emit(.data(Data([0x41]))) }
+        }
+        await waitUntil { await runtime.snapshot().bytesDownloaded >= 32 }
+        let before = await runtime.snapshot()
+        XCTAssertEqual(before.activeStreamCount, 1)
+        XCTAssertEqual(target.cancelCount, 0)
+        await runtime.stop()
+        await producer.value
+        XCTAssertEqual(target.cancelCount, 1)
+        let after = await runtime.snapshot()
+        XCTAssertEqual(after.activeStreamCount, 0)
+        XCTAssertEqual(after.connectionState, .stopped)
+    }
+
+    private func waitUntil(_ condition: () async -> Bool) async {
+        for _ in 0 ..< 2_000 {
+            if await condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Timed out waiting for runtime progress")
+    }
+
     func testRuntimeNotifiesTerminalFailureExactlyOnce() async {
         let relay = RecordingRelayWebSocket()
         let failures = RecordingTerminalFailures()
@@ -161,15 +386,20 @@ final class AgentSessionRuntimeTests: XCTestCase {
         await relay.emit(.message(.init(opcode: .binary, payload: open, isComplete: true)))
         await replacementTarget.emit(.ready)
 
-        for byte in 0 ..< 32 {
-            await replacementTarget.emit(.data(Data([UInt8(byte)])))
+        let producer = Task {
+            for byte in 0 ..< 32 { await replacementTarget.emit(.data(Data([UInt8(byte)]))) }
         }
+        await waitUntil { await runtime.snapshot().bytesDownloaded == 32 }
 
         let saturated = await runtime.snapshot()
-        XCTAssertEqual(saturated.activeStreamCount, 0)
-        XCTAssertEqual(replacementTarget.cancelCount, 1)
+        XCTAssertEqual(saturated.activeStreamCount, 1)
+        XCTAssertEqual(replacementTarget.cancelCount, 0)
 
         await relay.completeNextSend(.success(()))
+        await producer.value
+        let resumed = await runtime.snapshot()
+        XCTAssertEqual(resumed.bytesDownloaded, 33, "reused stream waits until the old transport-owned frame is refunded")
+        await runtime.stop()
     }
 
     func testRelaySendCompletionRefundsOnlyCompletedFrameWhileQueuedAndInFlightRemainCharged() async throws {
@@ -200,13 +430,18 @@ final class AgentSessionRuntimeTests: XCTestCase {
         XCTAssertEqual(relay.sentBinary.count, 3, "completion starts exactly one queued send")
         await target.emit(.data(Data([32])))
         XCTAssertEqual(target.cancelCount, 0, "one completion refunds exactly one frame")
-        await target.emit(.data(Data([33])))
-        XCTAssertEqual(target.cancelCount, 1, "31 queued frames plus one in-flight frame fill the retained budget")
+        let waitingRead = Task { await target.emit(.data(Data([33]))) }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(target.cancelCount, 0, "31 queued frames plus one in-flight frame pause native reads")
         let saturated = await runtime.snapshot()
         XCTAssertEqual(saturated.connectionState, .connected)
-        XCTAssertEqual(saturated.activeStreamCount, 0)
+        XCTAssertEqual(saturated.activeStreamCount, 1)
+        XCTAssertEqual(saturated.bytesDownloaded, 33)
         await relay.completeNextSend(.success(()))
-        XCTAssertEqual(target.cancelCount, 1)
+        await waitingRead.value
+        XCTAssertEqual(target.cancelCount, 0)
+        let resumed = await runtime.snapshot()
+        XCTAssertEqual(resumed.bytesDownloaded, 34)
         await runtime.stop()
     }
 
@@ -523,6 +758,7 @@ private final class RecordingRelayWebSocket: RelayWebSocketIO, @unchecked Sendab
     var sentBinary: [Data] { lock.withLock { binary } }
     var closeCalls: [CloseCall] { lock.withLock { closes } }
     var cancelCount: Int { lock.withLock { cancellations } }
+    var pendingSends: Int { lock.withLock { sendCompletions.count } }
 
     func start(eventHandler: @escaping RelayWebSocketEventHandler) {
         lock.withLock { self.eventHandler = eventHandler }
@@ -572,6 +808,24 @@ private final class RecordingRelayWebSocket: RelayWebSocketIO, @unchecked Sendab
     }
 }
 
+private actor DownloadProgress {
+    private(set) var count = 0
+    func advance() { count += 1 }
+}
+
+#if canImport(Network)
+private struct NativeLoopbackTargetFactory: TargetConnectionFactory {
+    let port: NWEndpoint.Port
+
+    func makeConnection(configuration: TargetConnectionConfiguration) throws -> any TargetConnectionIO {
+        NetworkTargetConnection(
+            endpoints: [.hostPort(host: "127.0.0.1", port: port)],
+            parameters: .tcp, readChunkBytes: configuration.readChunkBytes, connectTimeout: 5
+        )
+    }
+}
+#endif
+
 private enum RuntimeTestError: Error {
     case noTargetAvailable
 }
@@ -616,6 +870,7 @@ private final class RecordingTargetConnectionFactory: TargetConnectionFactory, @
 private final class RecordingTargetConnection: TargetConnectionIO, @unchecked Sendable {
     private let lock = NSLock()
     private var eventHandler: TargetConnectionEventHandler?
+    private var readReadiness: TargetConnectionReadReadiness?
     private var cancellations = 0
     private var sends: [Data] = []
     private var sendCompletions: [TargetConnectionSendCompletion] = []
@@ -628,8 +883,11 @@ private final class RecordingTargetConnection: TargetConnectionIO, @unchecked Se
     var cancelCount: Int { lock.withLock { cancellations } }
     var sentData: [Data] { lock.withLock { sends } }
 
-    func start(eventHandler: @escaping TargetConnectionEventHandler) {
-        lock.withLock { self.eventHandler = eventHandler }
+    func start(eventHandler: @escaping TargetConnectionEventHandler, readReadiness: @escaping TargetConnectionReadReadiness) {
+        lock.withLock {
+            self.eventHandler = eventHandler
+            self.readReadiness = readReadiness
+        }
     }
 
     func send(_ data: Data, completion: @escaping TargetConnectionSendCompletion) -> Bool {
@@ -654,6 +912,7 @@ private final class RecordingTargetConnection: TargetConnectionIO, @unchecked Se
             XCTFail("Target was not started")
             return
         }
+        if case .data = event, let readiness = lock.withLock({ readReadiness }), !(await readiness()) { return }
         await handler(event)
     }
 

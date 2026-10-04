@@ -1,0 +1,861 @@
+{
+  "schemaVersion": 1,
+  "measuredDate": "2026-10-03",
+  "conclusion": "The shared home upstream path is a demonstrated constraint near 5.3 Mbps of available payload throughput even when Funnel is bypassed. Exact ISP/router/congestion cause and a higher Funnel ceiling remain unmeasured.",
+  "topology": "Personal Windows PC remains the only local test backend. Mac is a client on the same home LAN using its existing VPN, with a verified different IPv4 Internet exit.",
+  "cloudflareSource": "https://github.com/cloudflare/speedtest",
+  "sourceSHA256": {
+    "initialWan": "999765da68eee07309a7015ca32b55235a74101833e7cbcdaf8a19c24655dac1",
+    "ipv4Wan": "43149fda71c7831cb1aee9b36076f6d0436c9f87961a783da775a7edb53772da",
+    "funnel": "e9a58d63bf3831ff15d610ed9504144914fa18441b24cf9e011763bbc797e47f"
+  },
+  "methodology": [
+    "WAN rates count known payload bytes through a completed transfer including setup/response time; upload API has no exact byte-count echo.",
+    "Original WAN controls use default IP-family selection; explicit IPv4 uploads and simultaneous IPv4 uploads provide the like-for-like Funnel control.",
+    "Mixed WAN aggregate counts both payloads over the full coordinator wall time, including SSH/process overhead.",
+    "Funnel goodput requires complete integrity checks and final byte acknowledgement.",
+    "Parallel Funnel aggregate uses all verified bytes over the union of actual receiver intervals; it does not sum per-flow average rates.",
+    "Overlap lower bounds use only cumulative sample differences fully inside the shared receiving window, excluding ambiguous boundary bytes."
+  ],
+  "limitations": [
+    "Mac shares the physical home WAN and is not a fully independent off-site host.",
+    "No router/ISP configuration or competing-household-traffic counters were inspected; these tests do not identify an ISP plan or a specific shaper.",
+    "An additional Funnel-specific limit is not excluded; its capacity above the constrained upstream path is unknown.",
+    "No complete phone/cellular or production Mobile Egress protocol throughput was measured."
+  ],
+  "ipv4EgressVerification": {
+    "addressFamily": "IPv4",
+    "differentInternetExitAddresses": true,
+    "capturedAtUTC": "2026-10-03T23:13:23.322089Z"
+  },
+  "windowsWan": [
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "download",
+      "sampleValid": true,
+      "requestedBytes": 67108864,
+      "completedBytes": 67108864,
+      "roundTripSeconds": 1.0890011,
+      "Mbps": 492.9939115763979,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "exact_download_body_length",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 1,
+      "client": "windows_personal_pc",
+      "measuredAtUTC": "2026-10-03T23:05:00.550576Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 33554432,
+      "completedBytes": 33554432,
+      "roundTripSeconds": 48.5965456,
+      "Mbps": 5.523755910749343,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 1,
+      "client": "windows_personal_pc",
+      "measuredAtUTC": "2026-10-03T23:05:49.2008845Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "download",
+      "sampleValid": true,
+      "requestedBytes": 67108864,
+      "completedBytes": 67108864,
+      "roundTripSeconds": 1.276353,
+      "Mbps": 420.62886364508876,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "exact_download_body_length",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 2,
+      "client": "windows_personal_pc",
+      "measuredAtUTC": "2026-10-03T23:05:50.4923101Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 33554432,
+      "completedBytes": 33554432,
+      "roundTripSeconds": 50.4338579,
+      "Mbps": 5.322524731942032,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 2,
+      "client": "windows_personal_pc",
+      "measuredAtUTC": "2026-10-03T23:06:40.9394578Z"
+    }
+  ],
+  "macWan": [
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "download",
+      "sampleValid": true,
+      "requestedBytes": 33554432,
+      "completedBytes": 33554432,
+      "roundTripSeconds": 2.593684375,
+      "Mbps": 103.49580642401796,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "exact_download_body_length",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 1,
+      "client": "mac_existing_vpn",
+      "measuredAtUTC": "2026-10-03T23:07:05.9623753Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 16777216,
+      "completedBytes": 16777216,
+      "roundTripSeconds": 28.499750625,
+      "Mbps": 4.70943517247004,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 1,
+      "client": "mac_existing_vpn",
+      "measuredAtUTC": "2026-10-03T23:07:34.8156526Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "download",
+      "sampleValid": true,
+      "requestedBytes": 33554432,
+      "completedBytes": 33554432,
+      "roundTripSeconds": 2.9351875,
+      "Mbps": 91.45427881523752,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "exact_download_body_length",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 2,
+      "client": "mac_existing_vpn",
+      "measuredAtUTC": "2026-10-03T23:07:38.1067844Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 16777216,
+      "completedBytes": 16777216,
+      "roundTripSeconds": 30.389245125,
+      "Mbps": 4.416619348322823,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "run": 2,
+      "client": "mac_existing_vpn",
+      "measuredAtUTC": "2026-10-03T23:08:08.873265Z"
+    }
+  ],
+  "simultaneousWanUploads": {
+    "scenario": "simultaneous_uploads_different_public_egress",
+    "startedAtUTC": "2026-10-03T23:09:16.0894786Z",
+    "batchWallSeconds": 50.8575825,
+    "aggregateConservativeMbps": 5.278179630343224,
+    "windows": {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 16777216,
+      "completedBytes": 16777216,
+      "roundTripSeconds": 38.8965628,
+      "Mbps": 3.4506320954405774,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200
+    },
+    "mac": {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 16777216,
+      "completedBytes": 16777216,
+      "roundTripSeconds": 49.932381125,
+      "Mbps": 2.6879897368403336,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200
+    }
+  },
+  "ipv4WanUploads": [
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 8388608,
+      "completedBytes": 8388608,
+      "roundTripSeconds": 12.2268774,
+      "Mbps": 5.48863473514505,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "httpProtocol": "HTTP/1.1",
+      "ipFamilyRestriction": "IPv4",
+      "client": "windows_personal_pc",
+      "measuredAtUTC": "2026-10-03T23:14:29.2229547Z"
+    },
+    {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 8388608,
+      "completedBytes": 8388608,
+      "roundTripSeconds": 14.857767333,
+      "Mbps": 4.5167529209417046,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "httpProtocol": "HTTP/1.1",
+      "ipFamilyRestriction": "IPv4",
+      "client": "mac_existing_vpn",
+      "measuredAtUTC": "2026-10-03T23:14:44.9380997Z"
+    }
+  ],
+  "simultaneousIPv4WanUploads": {
+    "scenario": "simultaneous_ipv4_uploads_different_public_egress",
+    "startedAtUTC": "2026-10-03T23:14:44.9421692Z",
+    "batchWallSeconds": 25.1554292,
+    "aggregateConservativeMbps": 5.335537188926198,
+    "windows": {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 8388608,
+      "completedBytes": 8388608,
+      "roundTripSeconds": 17.8518886,
+      "Mbps": 3.7592024857246757,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "httpProtocol": "HTTP/1.1",
+      "ipFamilyRestriction": "IPv4"
+    },
+    "mac": {
+      "provider": "cloudflare_speedtest",
+      "direction": "upload",
+      "sampleValid": true,
+      "requestedBytes": 8388608,
+      "completedBytes": 8388608,
+      "roundTripSeconds": 24.699003792,
+      "Mbps": 2.7170676422883315,
+      "tlsVerified": true,
+      "noProxy": true,
+      "serverExactByteAck": false,
+      "receiptEvidence": "completed_successful_response_after_full_request_write",
+      "goVersion": "go1.26.3",
+      "httpStatus": 200,
+      "httpProtocol": "HTTP/1.1",
+      "ipFamilyRestriction": "IPv4"
+    }
+  },
+  "funnel": [
+    {
+      "receiveStartedAtUTC": "2026-10-03T23:10:28.734497Z",
+      "route": "funnel",
+      "direction": "download",
+      "receivedBytes": 10092544,
+      "receiveSeconds": 17.605261792,
+      "Mbps": 4.586148899909525,
+      "wallSeconds": 17.788977667,
+      "intervals": [
+        {
+          "seconds": 1.101266667,
+          "receivedBytes": 524288
+        },
+        {
+          "seconds": 2.070391542,
+          "receivedBytes": 1245184
+        },
+        {
+          "seconds": 3.093561292,
+          "receivedBytes": 1835008
+        },
+        {
+          "seconds": 4.0845115419999996,
+          "receivedBytes": 2424832
+        },
+        {
+          "seconds": 5.000498042,
+          "receivedBytes": 2949120
+        },
+        {
+          "seconds": 6.038337292,
+          "receivedBytes": 3538944
+        },
+        {
+          "seconds": 7.055445334,
+          "receivedBytes": 4128768
+        },
+        {
+          "seconds": 8.02666025,
+          "receivedBytes": 4653056
+        },
+        {
+          "seconds": 9.072786792,
+          "receivedBytes": 5242880
+        },
+        {
+          "seconds": 10.093367584,
+          "receivedBytes": 5832704
+        },
+        {
+          "seconds": 11.081678917,
+          "receivedBytes": 6160384
+        },
+        {
+          "seconds": 12.090972584,
+          "receivedBytes": 6881280
+        },
+        {
+          "seconds": 13.08893575,
+          "receivedBytes": 7471104
+        },
+        {
+          "seconds": 14.091604125,
+          "receivedBytes": 8060928
+        },
+        {
+          "seconds": 15.004985084,
+          "receivedBytes": 8585216
+        },
+        {
+          "seconds": 16.004686959,
+          "receivedBytes": 9175040
+        },
+        {
+          "seconds": 17.020610959,
+          "receivedBytes": 9764864
+        },
+        {
+          "seconds": 17.605261792,
+          "receivedBytes": 10092544
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "scenario": "single",
+      "flow": 1,
+      "client": "mac_existing_vpn"
+    },
+    {
+      "receiveStartedAtUTC": "2026-10-03T23:10:48.0868438Z",
+      "route": "funnel",
+      "direction": "upload",
+      "receivedBytes": 5308416,
+      "receiveSeconds": 10.2280941,
+      "Mbps": 4.15202750236723,
+      "wallSeconds": 10.36564275,
+      "intervals": [
+        {
+          "seconds": 1.075803,
+          "receivedBytes": 196608
+        },
+        {
+          "seconds": 2.0167518,
+          "receivedBytes": 786432
+        },
+        {
+          "seconds": 3.0724888,
+          "receivedBytes": 1310720
+        },
+        {
+          "seconds": 4.0479901,
+          "receivedBytes": 1835008
+        },
+        {
+          "seconds": 5.0275542,
+          "receivedBytes": 2424832
+        },
+        {
+          "seconds": 6.0601155,
+          "receivedBytes": 3014656
+        },
+        {
+          "seconds": 7.0844704,
+          "receivedBytes": 3604480
+        },
+        {
+          "seconds": 8.0632294,
+          "receivedBytes": 4063232
+        },
+        {
+          "seconds": 9.075553,
+          "receivedBytes": 4653056
+        },
+        {
+          "seconds": 10.0035553,
+          "receivedBytes": 5177344
+        },
+        {
+          "seconds": 10.2280941,
+          "receivedBytes": 5308416
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "scenario": "single",
+      "flow": 1,
+      "client": "mac_existing_vpn"
+    },
+    {
+      "receiveStartedAtUTC": "2026-10-03T23:11:01.880789Z",
+      "route": "funnel",
+      "direction": "download",
+      "receivedBytes": 6684672,
+      "receiveSeconds": 21.952472042,
+      "Mbps": 2.4360525729259916,
+      "wallSeconds": 22.082731667,
+      "intervals": [
+        {
+          "seconds": 1.189473167,
+          "receivedBytes": 458752
+        },
+        {
+          "seconds": 2.2539951670000002,
+          "receivedBytes": 786432
+        },
+        {
+          "seconds": 3.027490583,
+          "receivedBytes": 1048576
+        },
+        {
+          "seconds": 4.07015375,
+          "receivedBytes": 1376256
+        },
+        {
+          "seconds": 5.087934458,
+          "receivedBytes": 1703936
+        },
+        {
+          "seconds": 6.303261083,
+          "receivedBytes": 1966080
+        },
+        {
+          "seconds": 7.143981583,
+          "receivedBytes": 2228224
+        },
+        {
+          "seconds": 8.045355542,
+          "receivedBytes": 2555904
+        },
+        {
+          "seconds": 9.196840458,
+          "receivedBytes": 2883584
+        },
+        {
+          "seconds": 10.097263542,
+          "receivedBytes": 3211264
+        },
+        {
+          "seconds": 11.288397792,
+          "receivedBytes": 3538944
+        },
+        {
+          "seconds": 12.280961375,
+          "receivedBytes": 3866624
+        },
+        {
+          "seconds": 13.3064265,
+          "receivedBytes": 4194304
+        },
+        {
+          "seconds": 14.049113708,
+          "receivedBytes": 4390912
+        },
+        {
+          "seconds": 15.008539417,
+          "receivedBytes": 4653056
+        },
+        {
+          "seconds": 16.200350792,
+          "receivedBytes": 5046272
+        },
+        {
+          "seconds": 17.289756583,
+          "receivedBytes": 5373952
+        },
+        {
+          "seconds": 18.020149625,
+          "receivedBytes": 5636096
+        },
+        {
+          "seconds": 19.028059292,
+          "receivedBytes": 5898240
+        },
+        {
+          "seconds": 20.341151625,
+          "receivedBytes": 6291456
+        },
+        {
+          "seconds": 21.173712208,
+          "receivedBytes": 6488064
+        },
+        {
+          "seconds": 21.952472042,
+          "receivedBytes": 6684672
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "scenario": "parallel2",
+      "flow": 1,
+      "client": "mac_existing_vpn"
+    },
+    {
+      "receiveStartedAtUTC": "2026-10-03T23:11:02.090634Z",
+      "route": "funnel",
+      "direction": "download",
+      "receivedBytes": 10682368,
+      "receiveSeconds": 31.38247625,
+      "Mbps": 2.7231421548514674,
+      "wallSeconds": 31.608454041999998,
+      "intervals": [
+        {
+          "seconds": 1.069817459,
+          "receivedBytes": 262144
+        },
+        {
+          "seconds": 2.158411125,
+          "receivedBytes": 524288
+        },
+        {
+          "seconds": 3.181705875,
+          "receivedBytes": 786432
+        },
+        {
+          "seconds": 4.006284917,
+          "receivedBytes": 983040
+        },
+        {
+          "seconds": 5.016162042,
+          "receivedBytes": 1245184
+        },
+        {
+          "seconds": 6.255755334,
+          "receivedBytes": 1441792
+        },
+        {
+          "seconds": 7.200654417,
+          "receivedBytes": 1703936
+        },
+        {
+          "seconds": 8.291741834,
+          "receivedBytes": 1966080
+        },
+        {
+          "seconds": 9.081546125,
+          "receivedBytes": 2162688
+        },
+        {
+          "seconds": 10.091783625,
+          "receivedBytes": 2490368
+        },
+        {
+          "seconds": 11.056809459,
+          "receivedBytes": 2752512
+        },
+        {
+          "seconds": 12.38427925,
+          "receivedBytes": 3080192
+        },
+        {
+          "seconds": 13.408012,
+          "receivedBytes": 3342336
+        },
+        {
+          "seconds": 14.048891375,
+          "receivedBytes": 3473408
+        },
+        {
+          "seconds": 15.110274459,
+          "receivedBytes": 3735552
+        },
+        {
+          "seconds": 16.293606334,
+          "receivedBytes": 4063232
+        },
+        {
+          "seconds": 17.370448625,
+          "receivedBytes": 4325376
+        },
+        {
+          "seconds": 18.038334584,
+          "receivedBytes": 4521984
+        },
+        {
+          "seconds": 19.136665125,
+          "receivedBytes": 4784128
+        },
+        {
+          "seconds": 20.452659667,
+          "receivedBytes": 5111808
+        },
+        {
+          "seconds": 21.361011542,
+          "receivedBytes": 5308416
+        },
+        {
+          "seconds": 22.140326042,
+          "receivedBytes": 5636096
+        },
+        {
+          "seconds": 23.085284834,
+          "receivedBytes": 6029312
+        },
+        {
+          "seconds": 24.020030667,
+          "receivedBytes": 6488064
+        },
+        {
+          "seconds": 25.107129917,
+          "receivedBytes": 7077888
+        },
+        {
+          "seconds": 26.036968375,
+          "receivedBytes": 7602176
+        },
+        {
+          "seconds": 27.086286542,
+          "receivedBytes": 8192000
+        },
+        {
+          "seconds": 28.020583792,
+          "receivedBytes": 8716288
+        },
+        {
+          "seconds": 29.006172125,
+          "receivedBytes": 9306112
+        },
+        {
+          "seconds": 30.044023334,
+          "receivedBytes": 9895936
+        },
+        {
+          "seconds": 31.049669584,
+          "receivedBytes": 10485760
+        },
+        {
+          "seconds": 31.38247625,
+          "receivedBytes": 10682368
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "scenario": "parallel2",
+      "flow": 2,
+      "client": "mac_existing_vpn"
+    },
+    {
+      "receiveStartedAtUTC": "2026-10-03T23:11:39.2156462Z",
+      "route": "funnel",
+      "direction": "upload",
+      "receivedBytes": 2949120,
+      "receiveSeconds": 10.2106925,
+      "Mbps": 2.3106131146344873,
+      "wallSeconds": 10.334819916,
+      "intervals": [
+        {
+          "seconds": 1.214906,
+          "receivedBytes": 327680
+        },
+        {
+          "seconds": 2.1751088,
+          "receivedBytes": 589824
+        },
+        {
+          "seconds": 3.1787751,
+          "receivedBytes": 917504
+        },
+        {
+          "seconds": 4.1276839,
+          "receivedBytes": 1114112
+        },
+        {
+          "seconds": 5.0917181,
+          "receivedBytes": 1376256
+        },
+        {
+          "seconds": 6.1946254,
+          "receivedBytes": 1769472
+        },
+        {
+          "seconds": 7.1575256,
+          "receivedBytes": 2097152
+        },
+        {
+          "seconds": 8.0667878,
+          "receivedBytes": 2293760
+        },
+        {
+          "seconds": 9.4171283,
+          "receivedBytes": 2621440
+        },
+        {
+          "seconds": 10.0512093,
+          "receivedBytes": 2883584
+        },
+        {
+          "seconds": 10.2106925,
+          "receivedBytes": 2949120
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "scenario": "parallel2",
+      "flow": 1,
+      "client": "mac_existing_vpn"
+    },
+    {
+      "receiveStartedAtUTC": "2026-10-03T23:11:37.5240873Z",
+      "route": "funnel",
+      "direction": "upload",
+      "receivedBytes": 2818048,
+      "receiveSeconds": 11.0237362,
+      "Mbps": 2.0450765140769604,
+      "wallSeconds": 11.158202666,
+      "intervals": [
+        {
+          "seconds": 1.0672618,
+          "receivedBytes": 327680
+        },
+        {
+          "seconds": 2.4172456,
+          "receivedBytes": 851968
+        },
+        {
+          "seconds": 3.210162,
+          "receivedBytes": 1114112
+        },
+        {
+          "seconds": 4.1833789,
+          "receivedBytes": 1310720
+        },
+        {
+          "seconds": 5.383592,
+          "receivedBytes": 1572864
+        },
+        {
+          "seconds": 6.0822763,
+          "receivedBytes": 1769472
+        },
+        {
+          "seconds": 7.0470883,
+          "receivedBytes": 1966080
+        },
+        {
+          "seconds": 8.1112048,
+          "receivedBytes": 2228224
+        },
+        {
+          "seconds": 9.0107846,
+          "receivedBytes": 2359296
+        },
+        {
+          "seconds": 10.1561066,
+          "receivedBytes": 2686976
+        },
+        {
+          "seconds": 11.0237362,
+          "receivedBytes": 2818048
+        },
+        {
+          "seconds": 11.0237362,
+          "receivedBytes": 2818048
+        }
+      ],
+      "goVersion": "go1.26.3",
+      "publicIngress": true,
+      "destinationMatched": true,
+      "byteLimitReached": false,
+      "scenario": "parallel2",
+      "flow": 2,
+      "client": "mac_existing_vpn"
+    }
+  ],
+  "funnelParallelAggregates": [
+    {
+      "direction": "download",
+      "flows": 2,
+      "receivedBytes": 17367040,
+      "receiveSpanSeconds": 31.5923212,
+      "aggregateMbps": 4.397787649740659,
+      "overlapSeconds": 21.742627,
+      "overlapConservativeMbps": 4.243953042104802
+    },
+    {
+      "direction": "upload",
+      "flows": 2,
+      "receivedBytes": 5767168,
+      "receiveSpanSeconds": 11.9022514,
+      "aggregateMbps": 3.8763543509087697,
+      "overlapSeconds": 9.3321773,
+      "overlapConservativeMbps": 3.6517437361589775
+    }
+  ],
+  "cleanup": {
+    "funnel": {
+      "mappingRestored": true,
+      "temporaryServerStopped": true,
+      "checkedAtUTC": "2026-10-03T23:11:49.629053Z"
+    },
+    "mac": {
+      "macTemporaryFilesRemoved": true,
+      "macBenchmarkExecutablesNotRunning": true,
+      "checkedAtUTC": "2026-10-03T23:15:47.263151Z"
+    }
+  }
+}

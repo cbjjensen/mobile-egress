@@ -69,7 +69,7 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
         )
         !state.paired -> ScreenStatus(
             headline = "Ready to pair",
-            summary = "Scan the QR from your Windows controller to link this phone.",
+            summary = "Scan an invitation from a reachable workload Client to link this phone.",
             badge = "Phone setup",
             tone = ScreenTone.Accent,
         )
@@ -88,18 +88,18 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
         )
         runtime.relay != RelayHealth.Connected && runtime.errorClass in blockingRelayErrors -> ScreenStatus(
             headline = "Connection needs attention",
-            summary = "The secure relay session could not connect. Review the Agent details below.",
+            summary = "A secure Client connection could not connect. Review the Client list below.",
             badge = "Connection issue",
             tone = ScreenTone.Error,
         )
         runtime.relay != RelayHealth.Connected -> ScreenStatus(
-            headline = "Connecting to relay",
-            summary = "Cellular is ready while the secure relay session comes online.",
+            headline = "Connecting to Clients",
+            summary = "Cellular is ready while secure Client connections come online.",
             badge = "Connecting",
             tone = ScreenTone.Warning,
         )
         else -> ScreenStatus(
-            headline = "Cellular relay active",
+            headline = "Direct Clients active",
             summary = "Paired workloads can now use this phone's cellular connection.",
             badge = "Connected",
             tone = ScreenTone.Success,
@@ -116,10 +116,10 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
         tone = status.tone,
         pairingTone = pairingToneFor(state),
         scanLabel = if (state.pairingInProgress) "Pairing…" else "Scan QR",
-        scanEnabled = !state.pairingInProgress && !runtime.running,
+        scanEnabled = !state.pairingInProgress && !runtime.rotation.isActive(),
         agentPrimaryAction = when {
-            state.pairingInProgress || !state.paired -> AgentPrimaryAction.None
             runtime.running -> AgentPrimaryAction.Stop
+            state.pairingInProgress || !state.paired -> AgentPrimaryAction.None
             else -> AgentPrimaryAction.Start
         },
         inactiveAgentMessage = when {
@@ -192,7 +192,7 @@ private fun rotationScreenStatus(rotation: RotationState): ScreenStatus? = when 
     is RotationState.Completed -> when (rotation.result) {
         RotationResult.Changed -> ScreenStatus(
             "Cellular IP changed",
-            "The cellular relay is ready with a different public address.",
+            "The direct Client connections are ready with a different public address.",
             "Changed",
             ScreenTone.Success,
         )
@@ -204,7 +204,7 @@ private fun rotationScreenStatus(rotation: RotationState): ScreenStatus? = when 
         )
         RotationResult.Unverified -> ScreenStatus(
             "Cellular reconnected",
-            "The Agent restored the relay but could not compare a public address before and after.",
+            "The Agent restored Client connections but could not compare a public address before and after.",
             "Unverified",
             ScreenTone.Warning,
         )
@@ -212,7 +212,7 @@ private fun rotationScreenStatus(rotation: RotationState): ScreenStatus? = when 
     is RotationState.Failed -> when (rotation.failure) {
         RotationFailure.CellularDidNotDisconnect -> ScreenStatus(
             "IP rotation cancelled",
-            "Cellular never disconnected, so the original relay connection was restored.",
+            "Cellular never disconnected, so the previous Client connections were restored.",
             "Not rotated",
             ScreenTone.Warning,
         )
@@ -224,7 +224,7 @@ private fun rotationScreenStatus(rotation: RotationState): ScreenStatus? = when 
         )
         RotationFailure.Cancelled -> ScreenStatus(
             "IP rotation cancelled",
-            "The Agent restored the cellular relay where possible.",
+            "The Agent restored direct Client connections where possible.",
             "Cancelled",
             ScreenTone.Neutral,
         )

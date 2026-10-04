@@ -51,51 +51,23 @@ func TestTrackedMacReleaseInputsAreUsable(t *testing.T) {
 		}
 	}
 
-	menuPNG, err := os.ReadFile("../desktop/zfnf-menu-bar.png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	image, err := png.Decode(bytes.NewReader(menuPNG))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if image.Bounds().Dx() != 36 || image.Bounds().Dy() != 36 {
-		t.Fatalf("menu-bar icon is %dx%d, want 36x36", image.Bounds().Dx(), image.Bounds().Dy())
-	}
-	_, _, _, alpha := image.At(0, 0).RGBA()
-	if alpha != 0 {
-		t.Fatal("menu-bar icon must retain a transparent background")
-	}
-	hasVisiblePixel := false
-	for y := image.Bounds().Min.Y; y < image.Bounds().Max.Y && !hasVisiblePixel; y++ {
-		for x := image.Bounds().Min.X; x < image.Bounds().Max.X; x++ {
-			_, _, _, alpha = image.At(x, y).RGBA()
-			if alpha != 0 {
-				hasVisiblePixel = true
-				break
-			}
-		}
-	}
-	if !hasVisiblePixel {
-		t.Fatal("menu-bar icon is fully transparent")
-	}
 }
 
 func TestMacPlistTemplatesRenderReleaseAndStableKeychainIdentity(t *testing.T) {
-	infoTemplate, err := os.ReadFile("../../macos/Info.plist.tmpl")
+	infoTemplate, err := os.ReadFile("../../macos/client/Info.plist.tmpl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := strings.ReplaceAll(string(infoTemplate), "@@RELEASE_VERSION@@", "1.1.0")
-	info = strings.ReplaceAll(info, "@@BUILD_VERSION@@", "1.1.0")
+	info := strings.ReplaceAll(string(infoTemplate), "@@RELEASE_VERSION@@", "2.0.0")
+	info = strings.ReplaceAll(info, "@@BUILD_VERSION@@", "2.0.0")
 	values := plistValues(t, info)
 	want := map[string]string{
-		"CFBundleDisplayName":        "ZFNF Mobile Egress",
-		"CFBundleExecutable":         "mobile-egress-windows",
-		"CFBundleIdentifier":         "com.cbjjensen.mobile-egress.controller",
+		"CFBundleDisplayName":        "ZFNF Mobile Egress Client",
+		"CFBundleExecutable":         "mobile-egress-client-app",
+		"CFBundleIdentifier":         "com.zfnf.mobile-egress.client.app",
 		"CFBundlePackageType":        "APPL",
-		"CFBundleShortVersionString": "1.1.0",
-		"CFBundleVersion":            "1.1.0",
+		"CFBundleShortVersionString": "2.0.0",
+		"CFBundleVersion":            "2.0.0",
 		"LSMinimumSystemVersion":     "13.0",
 	}
 	for key, expected := range want {
@@ -104,19 +76,18 @@ func TestMacPlistTemplatesRenderReleaseAndStableKeychainIdentity(t *testing.T) {
 		}
 	}
 
-	entitlementsTemplate, err := os.ReadFile("../../macos/controller.entitlements.plist.tmpl")
+}
+
+func TestClientMacReleasePublishesRecordLastAndRemovesOrphanPackage(t *testing.T) {
+	script, err := os.ReadFile("../../../scripts/release-client-macos.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	entitlements := strings.ReplaceAll(string(entitlementsTemplate), "@@TEAM_ID@@", "ABCDEFGHIJ")
-	values = plistValues(t, entitlements)
-	if values["com.apple.application-identifier"] != "ABCDEFGHIJ.com.cbjjensen.mobile-egress.controller" ||
-		values["com.apple.developer.team-identifier"] != "ABCDEFGHIJ" ||
-		values["keychain-access-groups"] != "ABCDEFGHIJ.com.cbjjensen.mobile-egress.controller" {
-		t.Fatalf("unexpected controller entitlements: %#v", values)
-	}
-	if _, present := values["com.apple.security.app-sandbox"]; present {
-		t.Fatal("App Sandbox must be absent")
+	text := string(script)
+	packageMove := strings.Index(text, `/bin/mv "$WORK/$NAME" "$FINAL"`)
+	recordMove := strings.Index(text, `/bin/mv "$WORK/record.json" "$RECORD"`)
+	if packageMove < 0 || recordMove < packageMove || !strings.Contains(text, `[ "$PKG_PROMOTED" = 1 ] && [ ! -e "$RECORD" ]`) || !strings.Contains(text, `/bin/rm -f -- "$FINAL"`) {
+		t.Fatal("Client PKG promotion must retain transactional completion-record semantics")
 	}
 }
 

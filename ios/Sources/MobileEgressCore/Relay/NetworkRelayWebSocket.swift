@@ -26,6 +26,7 @@ struct AppleRelayWebSocketParameterBuilder {
         let webSocket = NWProtocolWebSocket.Options(.version13)
         webSocket.autoReplyPing = configuration.automaticallyRepliesToWebSocketPings
         webSocket.maximumMessageSize = configuration.maximumMessageBytes
+        webSocket.setAdditionalHeaders(configuration.additionalHeaders.map { (name: $0.key, value: $0.value) })
         return webSocket
     }
 

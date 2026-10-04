@@ -1,5 +1,3 @@
-//go:build client_setup
-
 package setup
 
 // Build-time product selection preserves the exact same signer, elevation

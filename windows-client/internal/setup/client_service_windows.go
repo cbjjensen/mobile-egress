@@ -17,23 +17,68 @@ import (
 
 const clientStateDirectory = `C:\ProgramData\MobileEgressClient`
 const standaloneClientInstallRoot = `C:\Program Files\Mobile Egress Client`
+const legacyClientStateDirectory = `C:\ProgramData\MobileEgress\Client`
+const legacyClientExecutable = `C:\Program Files\MobileEgress\mobile-egress-client.exe`
 
 type clientServiceInstall struct {
-	manager                      *mgr.Mgr
-	service                      *mgr.Service
+	manager                      clientServiceManager
+	service                      clientWindowsService
 	previous                     mgr.Config
 	wasRunning, created, stopped bool
+	stateDirectory               string
+}
+
+// Keep SCM operations behind their native boundary so registration and
+// rollback can be exercised without installing a service on the test host.
+type clientWindowsService interface {
+	Query() (svc.Status, error)
+	Control(svc.Cmd) (svc.Status, error)
+	UpdateConfig(mgr.Config) error
+	SetRecoveryActions([]mgr.RecoveryAction, uint32) error
+	Start(...string) error
+	Delete() error
+	Close() error
+}
+
+type clientServiceManager interface {
+	CreateService(string, string, mgr.Config, ...string) (clientWindowsService, error)
+	Disconnect() error
+}
+
+type nativeClientServiceManager struct{ *mgr.Mgr }
+
+func (m nativeClientServiceManager) CreateService(name, path string, config mgr.Config, args ...string) (clientWindowsService, error) {
+	service, err := m.Mgr.CreateService(name, path, config, args...)
+	if err != nil {
+		return nil, err
+	}
+	return service, nil
 }
 
 func standaloneClientCommand() string {
-	return syscall.EscapeArg(filepath.Join(standaloneClientInstallRoot, ClientExecutableName)) + ` serve --standalone --state-dir ` + syscall.EscapeArg(clientStateDirectory)
+	return standaloneClientCommandForState(clientStateDirectory)
+}
+func standaloneClientCommandForState(stateDir string) string {
+	return syscall.EscapeArg(filepath.Join(standaloneClientInstallRoot, ClientExecutableName)) + ` serve --standalone --state-dir ` + syscall.EscapeArg(stateDir)
 }
 
 func validateExistingClientCommand(command string) error {
-	if !strings.EqualFold(command, standaloneClientCommand()) {
-		return errors.New("an existing AWS or other Client installation uses this service; keep managing it through its existing installation")
+	_, err := existingClientStateDirectory(command)
+	return err
+}
+func existingClientStateDirectory(command string) (string, error) {
+	args, err := windows.DecomposeCommandLine(command)
+	if err == nil && len(args) == 4 && strings.EqualFold(args[0], legacyClientExecutable) && args[1] == "serve" && args[2] == "--state-dir" && strings.EqualFold(args[3], legacyClientStateDirectory) {
+		return legacyClientStateDirectory, nil
 	}
-	return nil
+	if err == nil && len(args) == 5 && strings.EqualFold(args[0], filepath.Join(standaloneClientInstallRoot, ClientExecutableName)) && args[1] == "serve" && args[2] == "--standalone" && args[3] == "--state-dir" {
+		for _, allowed := range []string{clientStateDirectory, legacyClientStateDirectory} {
+			if strings.EqualFold(args[4], allowed) {
+				return allowed, nil
+			}
+		}
+	}
+	return "", errors.New("The existing Client service has an unrecognized installation or state path. Restore its known installation before migrating.")
 }
 
 func prepareClientService() (*clientServiceInstall, error) {
@@ -41,7 +86,7 @@ func prepareClientService() (*clientServiceInstall, error) {
 	if err != nil {
 		return nil, errors.New("connect to Windows service manager")
 	}
-	transaction := &clientServiceInstall{manager: manager}
+	transaction := &clientServiceInstall{manager: nativeClientServiceManager{manager}, stateDirectory: clientStateDirectory}
 	service, err := manager.OpenService("MobileEgressClient")
 	if err != nil && !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		manager.Disconnect()
@@ -51,7 +96,10 @@ func prepareClientService() (*clientServiceInstall, error) {
 		transaction.service = service
 		transaction.previous, err = service.Config()
 		if err == nil {
-			err = validateExistingClientCommand(transaction.previous.BinaryPathName)
+			transaction.stateDirectory, err = existingClientStateDirectory(transaction.previous.BinaryPathName)
+			if err == nil && !strings.EqualFold(transaction.previous.ServiceStartName, "LocalSystem") && !strings.EqualFold(transaction.previous.ServiceStartName, `NT AUTHORITY\SYSTEM`) {
+				err = errors.New("The existing Client service must use LocalSystem to preserve its protected credentials.")
+			}
 		}
 		if err == nil {
 			var status svc.Status
@@ -98,13 +146,16 @@ func (s *clientServiceInstall) stop() error {
 }
 
 func protectClientOwner() error {
+	return protectClientOwnerAt(clientStateDirectory)
+}
+func protectClientOwnerAt(stateDirectory string) error {
 	// Only the service/admin can write the persisted owner and DPAPI ciphertext.
 	// No enrollment/bootstrap operation is invoked during installation or repair.
-	if info, err := os.Lstat(clientStateDirectory); err == nil {
+	if info, err := os.Lstat(stateDirectory); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("Client state directory is unsafe")
 		}
-		sd, securityErr := windows.GetNamedSecurityInfo(clientStateDirectory, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+		sd, securityErr := windows.GetNamedSecurityInfo(stateDirectory, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 		if securityErr != nil {
 			return securityErr
 		}
@@ -115,7 +166,7 @@ func protectClientOwner() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(clientStateDirectory, 0700); err != nil {
+	if err := os.MkdirAll(stateDirectory, 0700); err != nil {
 		return err
 	}
 	// Administrators is an assignable owner in the elevated token; assigning
@@ -132,10 +183,10 @@ func protectClientOwner() error {
 	if err != nil {
 		return err
 	}
-	if err := windows.SetNamedSecurityInfo(clientStateDirectory, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil); err != nil {
+	if err := windows.SetNamedSecurityInfo(stateDirectory, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil); err != nil {
 		return err
 	}
-	ownerPath := filepath.Join(clientStateDirectory, "owner.sid")
+	ownerPath := filepath.Join(stateDirectory, "owner.sid")
 	if info, err := os.Lstat(ownerPath); err == nil {
 		if !info.Mode().IsRegular() {
 			return errors.New("Client owner file is unsafe")
@@ -162,13 +213,30 @@ func protectClientOwner() error {
 }
 
 func (s *clientServiceInstall) install() error {
-	if err := protectClientOwner(); err != nil {
+	if s.stateDirectory == "" {
+		s.stateDirectory = clientStateDirectory
+	}
+	if err := protectClientOwnerAt(s.stateDirectory); err != nil {
 		return err
 	}
-	config := mgr.Config{DisplayName: "Mobile Egress Client", Description: "Paired workload Client proxy", StartType: mgr.StartAutomatic, ServiceStartName: "LocalSystem", BinaryPathName: standaloneClientCommand()}
+	return s.installRegistration()
+}
+
+func (s *clientServiceInstall) installRegistration() error {
+	config := mgr.Config{
+		DisplayName:      "Mobile Egress Client",
+		Description:      "Direct cellular workload Client proxy",
+		StartType:        mgr.StartAutomatic,
+		ServiceStartName: "LocalSystem",
+		BinaryPathName:   standaloneClientCommandForState(s.stateDirectory),
+		// UpdateConfig passes these values directly to Windows. The firewall's
+		// service-specific rule requires a service SID in the started token.
+		ServiceType: windows.SERVICE_WIN32_OWN_PROCESS,
+		SidType:     windows.SERVICE_SID_TYPE_UNRESTRICTED,
+	}
 	var err error
 	if s.service == nil {
-		s.service, err = s.manager.CreateService("MobileEgressClient", filepath.Join(standaloneClientInstallRoot, ClientExecutableName), config, "serve", "--standalone", "--state-dir", clientStateDirectory)
+		s.service, err = s.manager.CreateService("MobileEgressClient", filepath.Join(standaloneClientInstallRoot, ClientExecutableName), config, "serve", "--standalone", "--state-dir", s.stateDirectory)
 		if err != nil {
 			return errors.New("register Client background service")
 		}

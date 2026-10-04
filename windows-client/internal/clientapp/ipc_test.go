@@ -45,8 +45,8 @@ func TestIPCExposesOnlySafeStatusAndExplicitCopy(t *testing.T) {
 	if response := exchange(`{"method":"private-key"}`); response.Error == "" || response.Value != "" {
 		t.Fatal("unknown secret request accepted")
 	}
-	if response := exchange(`{"method":"pair","value":"test-invitation"}`); response.Error != "" || service.paired != "test-invitation" {
-		t.Fatal("pair was not delivered")
+	if response := exchange(`{"method":"pair","value":"test-invitation"}`); response.Error == "" || service.paired != "" {
+		t.Fatal("legacy pairing was accepted")
 	}
 	if response := exchange(`{"method":"proxy","value":"http"}`); response.Value != "127.0.0.2:1081:user:secret" {
 		t.Fatal("explicit proxy copy failed")

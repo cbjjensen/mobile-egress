@@ -20,6 +20,10 @@ done
 
 printf '%s' "$RELEASE_VERSION" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || fail 'release version must be SemVer without a v prefix'
 printf '%s' "$SOURCE_COMMIT" | /usr/bin/grep -Eq '^[0-9a-f]{40}$' || fail 'source commit must be exactly 40 lowercase hex characters'
+if [ "${RELEASE_VERSION%%.*}" -ge 2 ]; then
+    SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+    exec /bin/sh "$SCRIPT_DIR/build-client-macos.sh" --release-version "$RELEASE_VERSION" --source-commit "$SOURCE_COMMIT"
+fi
 case "$NODE_MANIFEST" in
     /*) ;;
     *) fail 'node manifest path must be absolute' ;;

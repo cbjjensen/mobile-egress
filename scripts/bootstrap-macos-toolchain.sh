@@ -6,6 +6,12 @@ fail() {
     exit 1
 }
 
+GO_ONLY=0
+if [ "$#" -gt 0 ]; then
+    [ "$#" = 1 ] && [ "$1" = --go-only ] || fail 'only --go-only is supported'
+    GO_ONLY=1
+fi
+
 [ "$(/usr/bin/uname -s)" = "Darwin" ] || fail 'macOS is required'
 [ "$(/usr/bin/uname -m)" = "arm64" ] || fail 'Apple Silicon is required'
 
@@ -96,6 +102,10 @@ if [ ! -x "$GO_FINAL/bin/go" ]; then
     /bin/rm -rf "$work"
 fi
 [ "$($GO_FINAL/bin/go version)" = 'go version go1.26.7 darwin/arm64' ] || fail 'installed Go does not match the lock'
+if [ "$GO_ONLY" = 1 ]; then
+    printf 'Pinned macOS Go toolchain is ready under %s\n' "$BUILD_ROOT"
+    exit 0
+fi
 
 NODE_FINAL="$BUILD_ROOT/toolchains/node/24.20.0"
 if [ ! -x "$NODE_FINAL/bin/node" ]; then

@@ -1,5 +1,3 @@
-//go:build client_setup
-
 package setup
 
 import (

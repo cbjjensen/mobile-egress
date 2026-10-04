@@ -33,7 +33,12 @@ RECORD="$OUTPUT/mobile-egress-client-macos-$RELEASE_VERSION-arm64.verification.j
 /bin/mkdir -p "$OUTPUT"
 WORK=$(/usr/bin/mktemp -d "$OUTPUT/.release-client-macos.XXXXXX")
 /bin/chmod 700 "$WORK"
-trap '/bin/rm -rf "$WORK"' EXIT HUP INT TERM
+PKG_PROMOTED=0
+cleanup_release() {
+    if [ "$PKG_PROMOTED" = 1 ] && [ ! -e "$RECORD" ]; then /bin/rm -f -- "$FINAL"; fi
+    /bin/rm -rf -- "$WORK"
+}
+trap cleanup_release EXIT HUP INT TERM
 STAGE="$WORK/payload"
 /bin/sh "$SCRIPT_DIR/build-client-macos.sh" --release-version "$RELEASE_VERSION" --source-commit "$SOURCE_COMMIT" --stage-dir "$STAGE"
 APP="$STAGE/Applications/ZFNF Mobile Egress Client.app"
@@ -89,5 +94,6 @@ BUILD_ROOT=${MOBILE_EGRESS_MAC_BUILD_ROOT:-"$HOME/Library/Caches/com.cbjjensen.m
 cd "$REPO"
 "$BUILD_ROOT/toolchains/go/1.26.7/bin/go" run ./windows-client/cmd/mobile-egress-macos-release validate-client-record "$WORK/record.json" "$RELEASE_VERSION" "$SOURCE_COMMIT" unused "$HASH" "$APPLICATION_IDENTITY" "$INSTALLER_IDENTITY"
 /bin/mv "$WORK/$NAME" "$FINAL"
+PKG_PROMOTED=1
 /bin/mv "$WORK/record.json" "$RECORD"
 printf 'Notarized Client PKG: %s\nSHA-256: %s\n' "$FINAL" "$HASH"

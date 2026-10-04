@@ -3,6 +3,271 @@ import XCTest
 @testable import MobileEgressCore
 
 final class CellularIPRotationCoordinatorTests: XCTestCase {
+    @MainActor
+    func testInactiveQueuedStartAndLateProbeCannotReplaceObservedCheckpoint() async {
+        let clock = AdvancingRotationClock()
+        let path = RotationPathObserverStub()
+        let store = RotationCheckpointStoreStub()
+        let gate = RotationProbeGate()
+        let probe = RotationProbeStub(gate: gate)
+        let host = ForegroundRotationHostStub(startIntent: true)
+        let coordinator = CellularIPRotationCoordinator(clock: clock, sleeper: RotationSleeperStub(), probe: probe,
+            pathObserver: path, checkpointStore: store, notificationCue: RotationNotificationCueStub(), tunnel: host)
+        await coordinator.resumeAfterActivation(); path.emit(true)
+        await Self.waitForForeground { await coordinator.isCellularAvailable }
+        coordinator.updateAgentAvailability(isEnrolled: true, isAgentRunning: true, activeStreamCount: 0)
+        await coordinator.start()
+        await gate.waitUntilEntered()
+        host.lifecycle.sceneActive = false
+        coordinator.suspendForForegroundOnly()
+        path.emit(false)
+        await Self.waitForForeground { !(await coordinator.isCellularAvailable) }
+        clock.advance(seconds: 12); path.emit(true)
+        await Self.waitForForeground { await coordinator.isCellularAvailable }
+        let saved = store.currentCheckpoint
+        await gate.open()
+        await coordinator.start() // a user action queued immediately before scene deactivation
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertEqual(store.currentCheckpoint, saved, "late work must not replace the inactive observation")
+        let calls = await probe.callCount
+        XCTAssertEqual(calls, 1, "inactive queued actions cannot start another probe")
+        host.lifecycle.stop()
+        host.beginForegroundActivation()
+        await coordinator.resumeAfterActivation()
+        host.completeRotationRecovery(state: coordinator.state)
+        await coordinator.cancel()
+        await Self.waitForForeground { !(await coordinator.state.isActive) }
+        XCTAssertFalse(host.lifecycle.startIntent)
+    }
+
+    @MainActor
+    func testInactiveFullCellularCyclePersistsElapsedHoldWithoutRunningEffectsAndSurvivesRelaunch() async {
+        for relaunch in [false, true] {
+            let clock = AdvancingRotationClock()
+            let path = RotationPathObserverStub()
+            let store = RotationCheckpointStoreStub()
+            let sleeper = RotationSleeperStub()
+            let probe = RotationProbeStub(snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10"), PublicIPSnapshot(ipv4: "198.51.100.11")])
+            let cue = RotationNotificationCueStub()
+            let host = ForegroundRotationHostStub(startIntent: true)
+            let coordinator = CellularIPRotationCoordinator(clock: clock, sleeper: sleeper, probe: probe,
+                pathObserver: path, checkpointStore: store, notificationCue: cue, tunnel: host)
+            coordinator.setStateChangeHandler { host.observeRotationState($0) }
+            await coordinator.resumeAfterActivation()
+            path.emit(true)
+            await Self.waitForForeground { await coordinator.isCellularAvailable }
+            coordinator.updateAgentAvailability(isEnrolled: true, isAgentRunning: true, activeStreamCount: 0)
+            await coordinator.start()
+            await Self.waitForForeground { if case .awaitingAirplaneMode = await coordinator.state { return true }; return false }
+            host.lifecycle.sceneActive = false
+            await host.reconcileDirectSharing()
+            coordinator.suspendForForegroundOnly()
+            coordinator.suspendForForegroundOnly() // inactive followed by background is one suspension
+            path.emit(false)
+            await Self.waitForForeground { !(await coordinator.isCellularAvailable) }
+            clock.advance(seconds: 12)
+            path.emit(true)
+            await Self.waitForForeground { await coordinator.isCellularAvailable }
+            if case .verifying = store.currentCheckpoint?.state {} else { XCTFail("the delivered full cycle must be durable before returning") }
+            let probeCalls = await probe.callCount
+            let scheduledCues = await cue.snapshot().scheduledDeadlines
+            XCTAssertEqual(probeCalls, 1, "inactive observation cannot run the after probe")
+            XCTAssertTrue(scheduledCues.isEmpty, "inactive observation cannot schedule a countdown cue")
+            XCTAssertTrue(host.servingIDs.isEmpty)
+            await Self.waitForForeground { await sleeper.pendingSeconds.isEmpty }
+
+            let active: CellularIPRotationCoordinator<ForegroundRotationHostStub>
+            if relaunch {
+                path.cancel()
+                let nextPath = RotationPathObserverStub()
+                active = CellularIPRotationCoordinator(clock: clock, sleeper: RotationSleeperStub(), probe: probe,
+                    pathObserver: nextPath, checkpointStore: store, notificationCue: cue, tunnel: host)
+                active.setStateChangeHandler { host.observeRotationState($0) }
+            } else { active = coordinator }
+            host.beginForegroundActivation()
+            await active.resumeAfterActivation()
+            host.completeRotationRecovery(state: active.state)
+            await Self.waitForForeground { if case .completed(_, _, _, .changed) = await active.state { return true }; return false }
+            await host.reconcileDirectSharing()
+            XCTAssertEqual(host.servingIDs, host.enabledIDs)
+        }
+    }
+
+    @MainActor
+    func testInactiveEarlyReturnRetainsOnlyUnelapsedHoldAndHonorsStopAndCancel() async {
+        let clock = AdvancingRotationClock()
+        let path = RotationPathObserverStub()
+        let store = RotationCheckpointStoreStub()
+        let sleeper = RotationSleeperStub()
+        let probe = RotationProbeStub(snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10")])
+        let host = ForegroundRotationHostStub(startIntent: true)
+        let coordinator = CellularIPRotationCoordinator(clock: clock, sleeper: sleeper, probe: probe,
+            pathObserver: path, checkpointStore: store, notificationCue: RotationNotificationCueStub(), tunnel: host)
+        coordinator.setStateChangeHandler { host.observeRotationState($0) }
+        await coordinator.resumeAfterActivation(); path.emit(true)
+        await Self.waitForForeground { await coordinator.isCellularAvailable }
+        coordinator.updateAgentAvailability(isEnrolled: true, isAgentRunning: true, activeStreamCount: 0)
+        await coordinator.start()
+        await Self.waitForForeground { if case .awaitingAirplaneMode = await coordinator.state { return true }; return false }
+        host.lifecycle.sceneActive = false
+        coordinator.suspendForForegroundOnly()
+        path.emit(false)
+        await Self.waitForForeground { !(await coordinator.isCellularAvailable) }
+        clock.advance(seconds: 3); path.emit(true)
+        await Self.waitForForeground { await coordinator.isCellularAvailable }
+        clock.advance(seconds: 2)
+        host.lifecycle.stop()
+        host.beginForegroundActivation()
+        await coordinator.resumeAfterActivation()
+        host.completeRotationRecovery(state: coordinator.state)
+        if case let .holding(_, remaining, _, token) = coordinator.state {
+            XCTAssertEqual(remaining, 5); XCTAssertNotNil(token)
+        } else { XCTFail("five elapsed seconds must not restart the ten-second hold") }
+        await coordinator.cancel()
+        await Self.waitForForeground { !(await coordinator.state.isActive) }
+        await host.reconcileDirectSharing()
+        XCTAssertFalse(host.lifecycle.startIntent)
+        XCTAssertTrue(host.servingIDs.isEmpty)
+        XCTAssertNil(store.currentCheckpoint)
+        coordinator.suspendForForegroundOnly(); path.emit(false)
+        await Self.waitForForeground { !(await coordinator.isCellularAvailable) }
+        path.emit(true)
+        await Self.waitForForeground { await coordinator.isCellularAvailable }
+        XCTAssertNil(store.currentCheckpoint, "late path events cannot resurrect a cancelled attempt")
+    }
+
+    @MainActor
+    func testInactiveReturnWithoutObservedLossDoesNotInventRotationEvidence() async {
+        let clock = AdvancingRotationClock()
+        let path = RotationPathObserverStub()
+        let store = RotationCheckpointStoreStub()
+        let host = ForegroundRotationHostStub(startIntent: true)
+        let coordinator = CellularIPRotationCoordinator(clock: clock, sleeper: RotationSleeperStub(),
+            probe: RotationProbeStub(snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10")]),
+            pathObserver: path, checkpointStore: store, notificationCue: RotationNotificationCueStub(), tunnel: host)
+        await coordinator.resumeAfterActivation(); path.emit(true)
+        await Self.waitForForeground { await coordinator.isCellularAvailable }
+        coordinator.updateAgentAvailability(isEnrolled: true, isAgentRunning: true, activeStreamCount: 0)
+        await coordinator.start()
+        await Self.waitForForeground { if case .awaitingAirplaneMode = await coordinator.state { return true }; return false }
+        coordinator.suspendForForegroundOnly()
+        clock.advance(seconds: 12)
+        await coordinator.resumeAfterActivation()
+        if case .awaitingAirplaneMode = coordinator.state {} else { XCTFail("elapsed inactivity is not proof of cellular loss") }
+        await coordinator.cancel()
+    }
+
+    @MainActor
+    func testForegroundPreferenceLoadCannotReactivateSceneAfterDeactivation() async {
+        let host = ForegroundRotationHostStub(startIntent: false)
+        let gate = RotationProbeGate()
+        var saved = DirectRegistryDocument(); saved.startIntent = true
+        let document = saved
+        host.beginForegroundActivation()
+        let task = Task { await host.restoreForegroundPreferences(load: { await gate.wait(); return document },
+            isCurrent: { host.lifecycle.sceneActive }, explicitStop: { false }) }
+        await gate.waitUntilEntered()
+        host.lifecycle.sceneActive = false
+        await gate.open()
+        let applied = await task.value
+        XCTAssertFalse(applied)
+        XCTAssertFalse(host.lifecycle.sceneActive)
+        XCTAssertFalse(host.lifecycle.startIntent)
+        XCTAssertFalse(host.lifecycle.idleTimerDisabled, "a stale actor reply must never keep the screen awake in background")
+    }
+    @MainActor
+    func testForegroundAppReconstructionBlocksServingThroughPausedRotationAndPreservesStop() async {
+        let before = PublicIPSnapshot(ipv4: "198.51.100.10")
+        let states: [CellularIPRotationState] = [
+            .awaitingAirplaneMode(attemptID: 7, originalNetworkToken: "old", holdSeconds: 10, before: before),
+            .holding(attemptID: 7, remainingSeconds: 5, before: before, returnedNetworkToken: nil),
+            .awaitingCellularReturn(attemptID: 7, before: before),
+            .verifying(attemptID: 7, before: before, returnedNetworkToken: "old")
+        ]
+        for savedStart in [true, false] {
+            for savedState in states {
+                let host = ForegroundRotationHostStub(startIntent: savedStart)
+                let checkpoint = CellularIPRotationCheckpoint(state: savedState, savedAt: RotationClockStub().now,
+                    timeoutDeadline: RotationClockStub().now.addingTimeInterval(90),
+                    pauseDisposition: .paused(TunnelRotationReceipt(wasRunning: true, wasOnDemandEnabled: true)))
+                let probeGate = RotationProbeGate()
+                let coordinator = CellularIPRotationCoordinator(clock: RotationClockStub(), sleeper: RotationSleeperStub(),
+                    probe: RotationProbeStub(gate: probeGate), pathObserver: RotationPathObserverStub(),
+                    checkpointStore: RotationCheckpointStoreStub(checkpoint: checkpoint),
+                    notificationCue: RotationNotificationCueStub(), tunnel: host)
+                coordinator.setStateChangeHandler { host.observeRotationState($0) }
+                // These are the same app-facing operations used by AgentViewModel.
+                host.beginForegroundActivation()
+                await host.reconcileDirectSharing()
+                XCTAssertTrue(host.servingIDs.isEmpty, "activation must gate serving before asynchronous recovery")
+                await coordinator.resumeAfterActivation()
+                host.completeRotationRecovery(state: coordinator.state)
+                await host.reconcileDirectSharing()
+                XCTAssertTrue(host.servingIDs.isEmpty, "persisted paused receipt must reconstruct the RAM pause")
+                host.enabledIDs.remove("disabled-during-rotation")
+                await coordinator.cancel()
+                await probeGate.open()
+                for _ in 0..<100 where coordinator.state.isActive { try? await Task.sleep(for: .milliseconds(5)) }
+                XCTAssertFalse(coordinator.state.isActive)
+                await host.reconcileDirectSharing()
+                XCTAssertEqual(host.servingIDs, savedStart ? ["still-enabled"] : [])
+                XCTAssertEqual(host.lifecycle.startIntent, savedStart, "old receipt must never override explicit Stop")
+            }
+        }
+    }
+
+    func testAppRotationActionRetriesUnchangedAddressWithThirtySecondHold() async {
+        let path = RotationPathObserverStub()
+        let same = PublicIPSnapshot(ipv4: "198.51.100.10")
+        let coordinator = await CellularIPRotationCoordinator(clock: RotationClockStub(), sleeper: RotationSleeperStub(immediateUnitSleeps: true),
+            probe: RotationProbeStub(snapshots: [same, same, same]), pathObserver: path,
+            checkpointStore: RotationCheckpointStoreStub(), notificationCue: RotationNotificationCueStub(), tunnel: RotationTunnelStub())
+        await coordinator.resumeAfterActivation(); path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.updateAgentAvailability(isEnrolled: true, isAgentRunning: true, activeStreamCount: 0)
+        await coordinator.start()
+        await waitUntil { if case .awaitingAirplaneMode = await coordinator.state { return true }; return false }
+        path.emit(false); path.emit(true)
+        await waitUntil { if case .completed(_, _, _, .unchanged) = await coordinator.state { return true }; return false }
+        await coordinator.start()
+        await waitUntil { if case .awaitingAirplaneMode = await coordinator.state { return true }; return false }
+        let state = await coordinator.state
+        if case let .awaitingAirplaneMode(_, _, hold, _) = state { XCTAssertEqual(hold, 30) }
+        else { XCTFail("the app action must start the retry") }
+        await coordinator.cancel()
+    }
+    func testForegroundSuspensionRecoversSameCoordinatorAndReplaysCellularLoss() async {
+        let path = RotationPathObserverStub()
+        let sleeper = RotationSleeperStub()
+        let store = RotationCheckpointStoreStub()
+        let tunnel = await RotationTunnelStub()
+        let coordinator = await CellularIPRotationCoordinator(clock: RotationClockStub(), sleeper: sleeper,
+            probe: RotationProbeStub(snapshots: [PublicIPSnapshot(ipv4: "198.51.100.10")]),
+            pathObserver: path, checkpointStore: store, notificationCue: RotationNotificationCueStub(), tunnel: tunnel)
+        await coordinator.resumeAfterActivation()
+        path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.updateAgentAvailability(isEnrolled: true, isAgentRunning: true, activeStreamCount: 0)
+        await coordinator.start(holdSeconds: 10)
+        await waitUntil { if case .awaitingAirplaneMode = await coordinator.state { return true }; return false }
+        await coordinator.suspendForForegroundOnly()
+        path.emit(false)
+        await waitUntil { !(await coordinator.isCellularAvailable) }
+        await coordinator.resumeAfterActivation()
+        await waitUntil { if case .holding = await coordinator.state { return true }; return false }
+        await waitUntil { await sleeper.pendingSeconds.contains(1) }
+        let sleeps = await sleeper.pendingSeconds
+        XCTAssertTrue(sleeps.contains(1), "recovered hold must restart its timer")
+        await coordinator.suspendForForegroundOnly()
+        path.emit(true)
+        await waitUntil { await coordinator.isCellularAvailable }
+        await coordinator.resumeAfterActivation()
+        let state = await coordinator.state
+        if case let .holding(_, _, _, returnedNetworkToken) = state { XCTAssertNotNil(returnedNetworkToken) }
+        else { XCTFail("expected recovered hold") }
+        await coordinator.cancel()
+    }
     func testStartObservesLossAndEarlyReturnPersistsOriginalDeadlineAndCompletes() async {
         let clock = RotationClockStub()
         let sleeper = RotationSleeperStub(immediateUnitSleeps: true)
@@ -1158,6 +1423,18 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
         )
     }
 
+    private static func waitForForeground(
+        _ condition: @escaping @Sendable () async -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<2_000 {
+            if await condition() { return }
+            await Task.yield()
+        }
+        XCTFail("Timed out waiting for foreground rotation state", file: file, line: line)
+    }
+
     private func waitUntil(
         _ condition: @escaping @Sendable () async -> Bool,
         file: StaticString = #filePath,
@@ -1171,10 +1448,29 @@ final class CellularIPRotationCoordinatorTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class ForegroundRotationHostStub: DirectForegroundRotationHosting {
+    var lifecycle: DirectSharingLifecycle
+    var enabledIDs: Set<String> = ["still-enabled", "disabled-during-rotation"]
+    var servingIDs: Set<String> = []
+    init(startIntent: Bool) {
+        lifecycle = DirectSharingLifecycle(startIntent: startIntent)
+        lifecycle.migrationReady = true
+    }
+    func reconcileDirectSharing() async { servingIDs = lifecycle.shouldServe ? enabledIDs : [] }
+}
+
 private struct RotationClockStub: CellularIPRotationClock {
     let now = Date(timeIntervalSince1970: 2_100_000_000)
 
     func currentDate() -> Date { now }
+}
+
+private final class AdvancingRotationClock: CellularIPRotationClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var now = Date(timeIntervalSince1970: 2_100_000_000)
+    func currentDate() -> Date { lock.withLock { now } }
+    func advance(seconds: TimeInterval) { lock.withLock { now.addTimeInterval(seconds) } }
 }
 
 private actor RotationSleeperStub: CellularIPRotationSleeping {
@@ -1220,6 +1516,7 @@ private actor RotationSleeperStub: CellularIPRotationSleeping {
 }
 
 private actor RotationProbeStub: CellularPublicIPProbing {
+    private(set) var callCount = 0
     private var snapshots: [PublicIPSnapshot]
     private let gate: RotationProbeGate?
 
@@ -1229,6 +1526,7 @@ private actor RotationProbeStub: CellularPublicIPProbing {
     }
 
     func probe() async -> PublicIPSnapshot {
+        callCount += 1
         if let gate { await gate.wait() }
         return snapshots.isEmpty ? PublicIPSnapshot() : snapshots.removeFirst()
     }

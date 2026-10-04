@@ -83,7 +83,7 @@ function ConvertTo-MobileEgressPosixLiteral {
 }
 
 function Get-MobileEgressDesktopConfig {
-    param([Parameter(Mandatory)][string]$RepositoryRoot)
+    param([Parameter(Mandatory)][string]$RepositoryRoot,[switch]$ClientOnly)
 
     $localDirectory = Join-Path $RepositoryRoot '.local\mac-build-server'
     $configPath = Join-Path $localDirectory 'release-desktop.psd1'
@@ -105,12 +105,14 @@ function Get-MobileEgressDesktopConfig {
         'MacKeychainPassword',
         'ProvisioningProfilePath'
     )
+    $allowed = $required
+    if ($ClientOnly) { $required = @($required | Where-Object { $_ -notin @('NotaryKeychainProfile','ProvisioningProfilePath') }) }
     foreach ($name in $required) {
         if (-not $data.ContainsKey($name) -or [string]::IsNullOrWhiteSpace([string]$data[$name])) {
             throw "Desktop release configuration value is missing: $name"
         }
     }
-    $unexpected = @($data.Keys | Where-Object { $_ -notin $required })
+    $unexpected = @($data.Keys | Where-Object { $_ -notin $allowed })
     if ($unexpected.Count -ne 0) {
         throw "Unsupported Desktop release configuration value: $($unexpected -join ', ')"
     }
@@ -138,7 +140,7 @@ function Get-MobileEgressDesktopConfig {
     if ([string]$data.NotaryApiIssuerID -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
         throw 'Desktop release NotaryApiIssuerID must be a UUID.'
     }
-    if ([string]$data.ProvisioningProfilePath -notmatch '^/') {
+    if ((-not $ClientOnly -or -not [string]::IsNullOrWhiteSpace([string]$data.ProvisioningProfilePath)) -and [string]$data.ProvisioningProfilePath -notmatch '^/') {
         throw 'Desktop release ProvisioningProfilePath must be an absolute macOS path.'
     }
 
@@ -255,18 +257,24 @@ function Invoke-MobileEgressMacDesktopAction {
             return
         }
         'release' {
-            $scriptPath = ConvertTo-MobileEgressPosixLiteral ($Context.MacRepositoryPath + '/scripts/release-macos.sh')
-            $manifest = ConvertTo-MobileEgressPosixLiteral $Context.RemoteManifestPath
             $version = ConvertTo-MobileEgressPosixLiteral $Context.Version
-            $profile = ConvertTo-MobileEgressPosixLiteral $Context.ProvisioningProfilePath
             $team = ConvertTo-MobileEgressPosixLiteral $Context.TeamID
             $application = ConvertTo-MobileEgressPosixLiteral $Context.ApplicationIdentity
             $installer = ConvertTo-MobileEgressPosixLiteral $Context.InstallerIdentity
-            $notary = ConvertTo-MobileEgressPosixLiteral $Context.NotaryKeychainProfile
             $notaryApiKey = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyPath
             $notaryApiKeyID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyID
             $notaryApiIssuerID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiIssuerID
-            $command = "set -eu; IFS= read -r MOBILE_EGRESS_KEYCHAIN_PASSWORD; MOBILE_EGRESS_KEYCHAIN_PASSWORD=`$(printf '%s' `"`$MOBILE_EGRESS_KEYCHAIN_PASSWORD`" | /usr/bin/tr -d '\r'); /usr/bin/security unlock-keychain -p `"`$MOBILE_EGRESS_KEYCHAIN_PASSWORD`" `"`$HOME/Library/Keychains/login.keychain-db`"; unset MOBILE_EGRESS_KEYCHAIN_PASSWORD; cd -- $repo; /bin/sh $scriptPath --release-version $version --node-manifest $manifest --source-commit $commit --profile $profile --team-id $team --application-identity $application --installer-identity $installer --notary-keychain-profile $notary --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
+            if ($Context.ClientArtifact) {
+                $scriptPath = ConvertTo-MobileEgressPosixLiteral ($Context.MacRepositoryPath + '/scripts/release-client-macos.sh')
+                $releaseArguments = "--release-version $version --source-commit $commit --team-id $team --application-identity $application --installer-identity $installer --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
+            } else {
+                $scriptPath = ConvertTo-MobileEgressPosixLiteral ($Context.MacRepositoryPath + '/scripts/release-macos.sh')
+                $manifest = ConvertTo-MobileEgressPosixLiteral $Context.RemoteManifestPath
+                $profile = ConvertTo-MobileEgressPosixLiteral $Context.ProvisioningProfilePath
+                $notary = ConvertTo-MobileEgressPosixLiteral $Context.NotaryKeychainProfile
+                $releaseArguments = "--release-version $version --node-manifest $manifest --source-commit $commit --profile $profile --team-id $team --application-identity $application --installer-identity $installer --notary-keychain-profile $notary --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
+            }
+            $command = "set -eu; IFS= read -r MOBILE_EGRESS_KEYCHAIN_PASSWORD; MOBILE_EGRESS_KEYCHAIN_PASSWORD=`$(printf '%s' `"`$MOBILE_EGRESS_KEYCHAIN_PASSWORD`" | /usr/bin/tr -d '\r'); /usr/bin/security unlock-keychain -p `"`$MOBILE_EGRESS_KEYCHAIN_PASSWORD`" `"`$HOME/Library/Keychains/login.keychain-db`"; unset MOBILE_EGRESS_KEYCHAIN_PASSWORD; cd -- $repo; /bin/sh $scriptPath $releaseArguments"
             $output = Invoke-MobileEgressDesktopSsh -Context $Context -Command $command -StandardInputText $Context.MacKeychainPassword -Description 'Building signed notarized macOS release'
             if (-not [string]::IsNullOrWhiteSpace($output)) {
                 Write-Host $output
@@ -362,6 +370,14 @@ function Assert-MobileEgressDesktopMacArtifacts {
         [Parameter(Mandatory)][pscustomobject]$Config
     )
 
+    if ([version]$Version -ge [version]'2.0.0') {
+        $pkg = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-macos-$Version-arm64.pkg"
+        $record = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-macos-$Version-arm64.verification.json"
+        foreach ($path in @($pkg,$record)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required direct Client release evidence is missing: $path" } }
+        $hash = (Get-FileHash -LiteralPath $pkg -Algorithm SHA256).Hash.ToLowerInvariant()
+        Invoke-MobileEgressTask5RecordVerifier -RepositoryRoot $RepositoryRoot -RecordPath $record -Version $Version -SourceCommit $SourceCommit -ManifestSha256 'unused' -ArtifactSha256 $hash -ApplicationIdentity $Config.ApplicationIdentity -InstallerIdentity $Config.InstallerIdentity -ClientArtifact
+        return [pscustomobject]@{ArtifactName=[IO.Path]::GetFileName($pkg);ArtifactPath=$pkg;ArtifactSha256=$hash;RecordPath=$record;ManifestPath='';ManifestSha256='unused'}
+    }
     $manifestPath = Join-Path $RepositoryRoot 'windows-client\build\bin\release-manifest.json'
     $releaseDirectory = Join-Path $RepositoryRoot 'windows-client\build\release'
     $pkgPath = Join-Path $releaseDirectory "mobile-egress-macos-$Version-arm64.pkg"
@@ -411,9 +427,10 @@ function Invoke-MobileEgressDesktopBuild {
         [scriptblock]$ValidateRecord
     )
 
+    $direct = [version]$Version -ge [version]'2.0.0'
     $releaseDirectory = Join-Path $RepositoryRoot 'windows-client\build\release'
-    $artifactName = "mobile-egress-macos-$Version-arm64.pkg"
-    $recordName = "mobile-egress-macos-$Version-arm64.verification.json"
+    $artifactName = if ($direct) { "mobile-egress-client-macos-$Version-arm64.pkg" } else { "mobile-egress-macos-$Version-arm64.pkg" }
+    $recordName = if ($direct) { "mobile-egress-client-macos-$Version-arm64.verification.json" } else { "mobile-egress-macos-$Version-arm64.verification.json" }
     $transferID = [guid]::NewGuid().ToString('N')
     $finalPkgPath = Join-Path $releaseDirectory $artifactName
     $finalRecordPath = Join-Path $releaseDirectory $recordName
@@ -433,8 +450,8 @@ function Invoke-MobileEgressDesktopBuild {
         NotaryApiIssuerID = $Config.NotaryApiIssuerID
         MacKeychainPassword = $Config.MacKeychainPassword
         ProvisioningProfilePath = $Config.ProvisioningProfilePath
-        ManifestPath = Join-Path $RepositoryRoot 'windows-client\build\bin\release-manifest.json'
-        ManifestSha256 = ''
+        ManifestPath = if ($direct) { '' } else { Join-Path $RepositoryRoot 'windows-client\build\bin\release-manifest.json' }
+        ManifestSha256 = if ($direct) { 'unused' } else { '' }
         ArtifactName = $artifactName
         RecordName = $recordName
         LocalPkgPath = Join-Path $releaseDirectory (".$artifactName.$transferID.partial")
@@ -448,14 +465,14 @@ function Invoke-MobileEgressDesktopBuild {
         RemotePkgPath = $Config.RepositoryPath.TrimEnd('/') + "/windows-client/build/release/$artifactName"
         RemoteRecordPath = $Config.RepositoryPath.TrimEnd('/') + "/windows-client/build/release/$recordName"
         ArtifactSha256 = ''
-        ClientArtifact = $false
+        ClientArtifact = $direct
     }
     foreach ($path in @($context.FinalPkgPath, $context.FinalRecordPath)) {
         if (Test-Path -LiteralPath $path) {
             throw "Desktop release output already exists and will not be overwritten: $path"
         }
     }
-    if ($Version -notmatch '^1\.1\.[0-6]$') {
+    if (-not $direct -and $Version -notmatch '^1\.1\.[0-6]$') {
         foreach ($name in @("mobile-egress-client-macos-$Version-arm64.pkg", "mobile-egress-client-macos-$Version-arm64.verification.json")) {
             if (Test-Path -LiteralPath (Join-Path $releaseDirectory $name)) { throw 'Existing Mac Client output will not be overwritten.' }
         }
@@ -465,8 +482,9 @@ function Invoke-MobileEgressDesktopBuild {
     if ($null -eq $BuildWindows) {
         $BuildWindows = {
             param($BuildContext)
+            $buildName = if ($BuildContext.ClientArtifact) { 'build-client-windows.ps1' } else { 'build-windows.ps1' }
             Invoke-MobileEgressDesktopPowerShellScript `
-                -Path (Join-Path $PSScriptRoot 'build-windows.ps1') `
+                -Path (Join-Path $PSScriptRoot $buildName) `
                 -Arguments @('-ReleaseVersion', $BuildContext.Version) `
                 -Description 'Signed Windows Desktop release'
         }
@@ -508,10 +526,12 @@ function Invoke-MobileEgressDesktopBuild {
     $pkgPromoted = $false
     try {
         & $BuildWindows $context
-        if (-not (Test-Path -LiteralPath $context.ManifestPath -PathType Leaf)) {
-            throw 'The signed Windows build did not produce release-manifest.json.'
+        if (-not $direct) {
+            if (-not (Test-Path -LiteralPath $context.ManifestPath -PathType Leaf)) {
+                throw 'The signed Windows build did not produce release-manifest.json.'
+            }
+            $context.ManifestSha256 = (Get-FileHash -LiteralPath $context.ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
         }
-        $context.ManifestSha256 = (Get-FileHash -LiteralPath $context.ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
         & $CreateSourceBundle $context
         if (-not (Test-Path -LiteralPath $context.LocalSourceBundlePath -PathType Leaf)) {
@@ -519,7 +539,7 @@ function Invoke-MobileEgressDesktopBuild {
         }
         & $InvokeMacAction 'upload-source' $context
         & $InvokeMacAction 'prepare' $context
-        & $InvokeMacAction 'upload-manifest' $context
+        if (-not $direct) { & $InvokeMacAction 'upload-manifest' $context }
         & $InvokeMacAction 'release' $context
         $remoteHash = (& $InvokeMacAction 'remote-hash' $context | Out-String).Trim()
         if ($remoteHash -notmatch '^[0-9a-f]{64}$') {
@@ -547,7 +567,7 @@ function Invoke-MobileEgressDesktopBuild {
             }
             throw
         }
-        if ($Version -notmatch '^1\.1\.[0-6]$') {
+        if (-not $direct -and $Version -notmatch '^1\.1\.[0-6]$') {
             $clientContext = $context.PSObject.Copy()
             $clientContext.ClientArtifact = $true
             $clientContext.ArtifactName = "mobile-egress-client-macos-$Version-arm64.pkg"
@@ -624,7 +644,7 @@ if ($BuildArtifacts -or $ValidateArtifacts) {
     if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
         throw 'SourceCommit is required for Desktop artifact operations.'
     }
-    $config = Get-MobileEgressDesktopConfig -RepositoryRoot $desktopRepositoryRoot
+    $config = Get-MobileEgressDesktopConfig -RepositoryRoot $desktopRepositoryRoot -ClientOnly:([version]$ReleaseVersion -ge [version]'2.0.0')
     if ($BuildArtifacts) {
         $result = Invoke-MobileEgressDesktopBuild -RepositoryRoot $desktopRepositoryRoot -Version $ReleaseVersion -SourceCommit $SourceCommit -Config $config
     } else {

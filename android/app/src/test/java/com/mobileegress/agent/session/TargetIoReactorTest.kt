@@ -1,5 +1,8 @@
 package com.mobileegress.agent.session
 
+import com.mobileegress.agent.protocol.WireProtocol
+import com.mobileegress.agent.protocol.AgentTransport
+
 import com.mobileegress.agent.status.ErrorClass
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
@@ -19,6 +22,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TargetIoReactorTest {
+    @Test
+    fun phoneBudgetRetainsPartialNativeWritesAcrossPeersAndRefundsOnCancel() {
+        val budget = SharedFrameBudget(1, 4)
+        val connection = FakeConnection("same", connectedImmediately = true, maxWriteBytes = 2)
+        val backend = FakeSelectorBackend(connection)
+        val listener = RecordingListener(openCount = 1)
+        val a = TargetIoReactor(TargetSocketBinder {}, listener, backend = backend, sharedWriteBudget = budget, backpressureReporter = {})
+        val b = TargetIoReactor(TargetSocketBinder {}, RecordingListener(), backend = FakeSelectorBackend(), sharedWriteBudget = budget, backpressureReporter = {})
+        a.start()
+        try {
+            a.open("same", targetAddress())
+            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
+            assertEquals(ReactorSubmitResult.Accepted, a.write("same", byteArrayOf(1, 2, 3, 4)))
+            waitUntil { connection.writeInterested.get() }
+            backend.ready("same", writable = true)
+            waitUntil { connection.written().size == 2 }
+            assertEquals(1 to 4L, budget.snapshot())
+            b.open("same", targetAddress())
+            assertEquals(ReactorSubmitResult.StreamSaturated, b.write("same", byteArrayOf(5)))
+            a.cancel("same")
+            waitUntil { budget.snapshot() == (0 to 0L) }
+        } finally {
+            a.shutdown(); b.shutdown()
+            assertTrue(a.awaitStopped(2, TimeUnit.SECONDS))
+            assertTrue(b.awaitStopped(2, TimeUnit.SECONDS))
+        }
+        assertEquals(0 to 0L, budget.snapshot())
+    }
     @Test
     fun `time spent starting a candidate counts toward its three second allowance`() {
         val clock = MutableNanoClock()
@@ -972,7 +1003,7 @@ class TargetIoReactorTest {
     }
 
     @Test
-    fun `selector processes at most configured commands before each select`() {
+    fun `small queued burst is bounded per cycle without sleeping before remaining commands`() {
         val connections = Array(3) { index ->
             FakeConnection("stream-$index", connectedImmediately = true)
         }
@@ -995,12 +1026,265 @@ class TargetIoReactorTest {
         }
         reactor.start()
         try {
-            waitUntil { openedBeforeFirstSelect.get() >= 0 }
+            assertTrue("remaining command slept behind an idle selector", listener.opens.await(350, TimeUnit.MILLISECONDS))
             assertEquals(2, openedBeforeFirstSelect.get())
-            assertTrue(listener.opens.await(2, TimeUnit.SECONDS))
         } finally {
             reactor.shutdown()
             assertTrue(reactor.awaitStopped(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `slow relay pauses one target before reading and resumes only after transport drains`() {
+        listOf(false, true).forEach(::verifySlowRelayResume)
+    }
+
+    private fun verifySlowRelayResume(negotiated: Boolean) {
+        val slow = FakeConnection("slow", connectedImmediately = true)
+        val peer = FakeConnection("peer", connectedImmediately = true)
+        val backend = FakeSelectorBackend(slow, peer)
+        val mailbox = OutboundMailbox(dataCapacity = 3, perStreamDataCapacity = 1)
+        val failures = Collections.synchronizedList(mutableListOf<ErrorClass>())
+        val transport = AgentTransport()
+        if (negotiated) {
+            transport.parseInbound(WireProtocol.encode("ping", payload = "mobile-egress.transport.v2".encodeToByteArray()))
+        }
+        val bridge = AgentTargetBridge(mailbox, { listener -> reactor(backend, listener) }, failures::add, transport = transport)
+        assertTrue(bridge.start())
+        try {
+            bridge.open("slow", targetAddress())
+            bridge.open("peer", targetAddress())
+            repeat(2) {
+                var opened: OutboundFrame? = null
+                waitUntil { mailbox.poll()?.also { opened = it } != null }
+                assertEquals(OutboundEmission.Emitted, mailbox.emit(requireNotNull(opened)) { true })
+            }
+            slow.enqueueRead(byteArrayOf(1))
+            slow.enqueueRead(byteArrayOf(2))
+            backend.ready("slow", readable = true)
+            val inFlight = awaitFrame(mailbox)
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(inFlight, retainUntilDrained = true) { true })
+            backend.ready("slow", readable = true)
+            waitUntil { !slow.readInterested.get() || slow.closeCalls.get() > 0 }
+            assertEquals("full mailbox must pause before the second native read", 1, slow.readCalls.get())
+            assertEquals(0, slow.closeCalls.get())
+            assertEquals(2, bridge.activeStreamCount)
+
+            peer.enqueueRead(byteArrayOf(9))
+            backend.ready("peer", readable = true)
+            val peerData = awaitFrame(mailbox)
+            assertEquals("peer", peerData.streamId)
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(peerData) { true })
+            assertEquals(1, slow.readCalls.get())
+            mailbox.drained(inFlight)
+            waitUntil { slow.readCalls.get() == 2 }
+            val resumed = awaitFrame(mailbox)
+            assertEquals(listOf(2.toByte()), transport.parseInbound(resumed.bytes).decodePayload().toList())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(resumed) { true })
+            assertTrue(failures.isEmpty())
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
+        }
+    }
+
+    @Test
+    fun `global outbound capacity closes only the contributing target and preserves existing debt`() {
+        val connections = Array(3) { FakeConnection("stream-$it", connectedImmediately = true) }
+        val backend = FakeSelectorBackend(*connections)
+        val mailbox = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1, dataByteCapacity = 32_768)
+        val bridge = AgentTargetBridge(mailbox, { reactor(backend, it) }, { throw AssertionError(it) })
+        assertTrue(bridge.start())
+        try {
+            connections.forEachIndexed { index, connection ->
+                bridge.open(connection.streamId, targetAddress())
+                assertEquals(OutboundEmission.Emitted, mailbox.emit(awaitFrame(mailbox)) { true })
+                connection.enqueueRead(byteArrayOf(index.toByte()))
+            }
+            backend.ready("stream-0", readable = true)
+            val first = awaitFrame(mailbox)
+            backend.ready("stream-1", readable = true)
+            val secondClose = awaitFrame(mailbox)
+            assertEquals("stream-1", secondClose.streamId)
+            assertEquals("agent_unavailable", WireProtocol.parseAgentInbound(secondClose.bytes).decodePayload().decodeToString())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(secondClose) { true })
+            backend.ready("stream-2", readable = true)
+            val thirdClose = awaitFrame(mailbox)
+            assertEquals("stream-2", thirdClose.streamId)
+            assertEquals("agent_unavailable", WireProtocol.parseAgentInbound(thirdClose.bytes).decodePayload().decodeToString())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(thirdClose) { true })
+            assertEquals(1, connections[1].readCalls.get())
+            assertEquals(1, connections[2].readCalls.get())
+            assertEquals(1, bridge.activeStreamCount)
+            assertEquals(1, mailbox.snapshot().outstandingDataFrames)
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(first) { true })
+            assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+            connections[0].enqueueRead(byteArrayOf(9))
+            backend.ready("stream-0", readable = true)
+            val continued = awaitFrame(mailbox)
+            assertEquals(listOf(9.toByte()), WireProtocol.parseAgentInbound(continued.bytes).decodePayload().toList())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(continued) { true })
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
+        }
+    }
+
+    @Test
+    fun `target eof preserves queued response when other streams fill aggregate capacity`() {
+        val target = FakeConnection("target", connectedImmediately = true)
+        val peer = FakeConnection("peer", connectedImmediately = true)
+        val backend = FakeSelectorBackend(target, peer)
+        val mailbox = OutboundMailbox(dataCapacity = 2, perStreamDataCapacity = 2)
+        val bridge = AgentTargetBridge(mailbox, { reactor(backend, it) }, { throw AssertionError(it) })
+        assertTrue(bridge.start())
+        try {
+            listOf(target, peer).forEach { connection ->
+                bridge.open(connection.streamId, targetAddress())
+                assertEquals(OutboundEmission.Emitted, mailbox.emit(awaitFrame(mailbox)) { true })
+            }
+            target.enqueueRead(byteArrayOf(1))
+            peer.enqueueRead(byteArrayOf(2))
+            backend.ready("target", readable = true)
+            waitUntil { mailbox.snapshot().outstandingDataFrames == 1 }
+            backend.ready("peer", readable = true)
+            waitUntil { mailbox.snapshot().outstandingDataFrames == 2 }
+            target.enqueueEof()
+            backend.ready("target", readable = true)
+            waitUntil { target.readCalls.get() == 2 || target.closeCalls.get() > 0 }
+            assertEquals("EOF must not discard an already accepted response tail", 2, mailbox.snapshot().outstandingDataFrames)
+            val data = awaitFrame(mailbox)
+            assertEquals("target", data.streamId)
+            assertEquals(listOf(1.toByte()), WireProtocol.parseAgentInbound(data.bytes).decodePayload().toList())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(data) { true })
+            val remaining = (1..2).map {
+                val frame = awaitFrame(mailbox)
+                val envelope = WireProtocol.parseAgentInbound(frame.bytes)
+                assertEquals(OutboundEmission.Emitted, mailbox.emit(frame) { true })
+                envelope
+            }
+            assertEquals("target_closed", remaining.single { it.streamId == "target" }.decodePayload().decodeToString())
+            assertEquals(listOf(2.toByte()), remaining.single { it.streamId == "peer" }.decodePayload().toList())
+            waitUntil { bridge.activeStreamCount == 1 }
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
+        }
+    }
+
+    @Test
+    fun `short target frame is admitted when actual bytes fit remaining aggregate budget`() {
+        val target = FakeConnection("target", connectedImmediately = true)
+        val backend = FakeSelectorBackend(target)
+        val mailbox = OutboundMailbox(dataCapacity = 2, perStreamDataCapacity = 2, dataByteCapacity = 128)
+        val bridge = AgentTargetBridge(mailbox, { reactor(backend, it) }, { throw AssertionError(it) })
+        assertTrue(bridge.start())
+        try {
+            bridge.open("target", targetAddress())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(awaitFrame(mailbox)) { true })
+            target.enqueueRead(byteArrayOf(9))
+            backend.ready("target", readable = true)
+            val data = awaitFrame(mailbox)
+            assertEquals("data", WireProtocol.parseAgentInbound(data.bytes).type)
+            assertEquals(listOf(9.toByte()), WireProtocol.parseAgentInbound(data.bytes).decodePayload().toList())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(data) { true })
+            assertEquals(1, bridge.activeStreamCount)
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
+        }
+    }
+
+    @Test
+    fun `zero byte native read and eof need no data budget and do not leak a stream`() {
+        val connection = FakeConnection("stream", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val mailbox = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1)
+        val bridge = AgentTargetBridge(mailbox, { reactor(backend, it) }, { throw AssertionError(it) })
+        assertTrue(bridge.start())
+        try {
+            bridge.open("stream", targetAddress())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(awaitFrame(mailbox)) { true })
+            backend.ready("stream", readable = true)
+            waitUntil { connection.readCalls.get() == 1 && mailbox.snapshot().outstandingDataFrames == 0 }
+            assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+            connection.enqueueEof()
+            backend.ready("stream", readable = true)
+            val eof = awaitFrame(mailbox)
+            assertEquals("close", WireProtocol.parseAgentInbound(eof.bytes).type)
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(eof) { true })
+            waitUntil { bridge.activeStreamCount == 0 }
+            assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+            assertEquals(1, connection.closeCalls.get())
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
+        }
+    }
+
+    @Test
+    fun `canceling and shutting down paused targets releases all debt without extra native reads`() {
+        val connection = FakeConnection("stream", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val mailbox = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1)
+        lateinit var targetReactor: TargetIoReactor
+        val bridge = AgentTargetBridge(mailbox, {
+            reactor(backend, it).also { targetReactor = it }
+        }, { throw AssertionError(it) })
+        assertTrue(bridge.start())
+        try {
+            bridge.open("stream", targetAddress())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(awaitFrame(mailbox)) { true })
+            connection.enqueueRead(byteArrayOf(1))
+            connection.enqueueRead(byteArrayOf(2))
+            backend.ready("stream", readable = true)
+            val queued = awaitFrame(mailbox)
+            backend.ready("stream", readable = true)
+            waitUntil { !connection.readInterested.get() }
+            assertEquals(1, targetReactor.snapshot().pausedReadStreams)
+            bridge.closeFromRelay("stream")
+            waitUntil { bridge.activeStreamCount == 0 }
+            assertEquals("canceled socket and read buffer retained in resume queue", 0, targetReactor.snapshot().pausedReadStreams)
+            assertEquals(1, connection.readCalls.get())
+            assertEquals(OutboundEmission.Canceled, mailbox.emit(queued) { throw AssertionError("canceled data escaped") })
+            assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
+            assertEquals(OutboundMailboxSnapshot(0, 0), mailbox.snapshot())
+        }
+    }
+
+    @Test
+    fun `outbound admission pause is not target idleness and deadline resumes after drain`() {
+        val connection = FakeConnection("stream", connectedImmediately = true)
+        val backend = FakeSelectorBackend(connection)
+        val mailbox = OutboundMailbox(dataCapacity = 1, perStreamDataCapacity = 1)
+        val clock = MutableNanoClock()
+        val bridge = AgentTargetBridge(mailbox, {
+            reactor(backend, it, idleTimeoutMillis = 100, nanoTime = clock::read)
+        }, { throw AssertionError(it) })
+        assertTrue(bridge.start())
+        try {
+            bridge.open("stream", targetAddress())
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(awaitFrame(mailbox)) { true })
+            connection.enqueueRead(byteArrayOf(1))
+            backend.ready("stream", readable = true)
+            val queued = awaitFrame(mailbox)
+            backend.ready("stream", readable = true)
+            waitUntil { !connection.readInterested.get() }
+            clock.advanceMillis(1_000)
+            backend.wakeup()
+            assertEquals(OutboundEmission.Emitted, mailbox.emit(queued) { true })
+            waitUntil { connection.readCalls.get() == 2 }
+            assertEquals(1, bridge.activeStreamCount)
+            assertEquals(0, connection.closeCalls.get())
+            clock.advanceMillis(101)
+            backend.wakeup()
+            waitUntil { bridge.activeStreamCount == 0 }
+        } finally {
+            assertTrue(bridge.shutdownAndAwait(2, TimeUnit.SECONDS))
+            mailbox.close()
         }
     }
 
@@ -1325,6 +1609,12 @@ class TargetIoReactorTest {
 
     private fun targetAddress() = InetSocketAddress(InetAddress.getLoopbackAddress(), 9)
 
+    private fun awaitFrame(mailbox: OutboundMailbox): OutboundFrame {
+        var frame: OutboundFrame? = null
+        waitUntil { mailbox.poll()?.also { frame = it } != null }
+        return requireNotNull(frame)
+    }
+
     private fun waitUntil(timeoutMillis: Long = 2_000, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         while (!condition()) {
@@ -1414,7 +1704,7 @@ class TargetIoReactorTest {
         }
 
         override fun select(timeoutMillis: Long): List<ReactorReady> = synchronized(lock) {
-            if (ready.isEmpty() && !wakeup && !failSelect.get()) lock.wait(timeoutMillis)
+            if (timeoutMillis > 0 && ready.isEmpty() && !wakeup && !failSelect.get()) lock.wait(timeoutMillis)
             wakeup = false
             if (failSelect.get()) throw IllegalStateException("selector failed")
             beforeSelectReturn?.invoke()
@@ -1498,6 +1788,8 @@ class TargetIoReactorTest {
         val finishConnectCalls = AtomicInteger()
         val closeCalls = AtomicInteger()
         val writeCalls = AtomicInteger()
+        val readCalls = AtomicInteger()
+        val readInterested = AtomicBoolean(false)
         val writeInterestTrueCalls = AtomicInteger()
         val writeInterested = AtomicBoolean(false)
         val failInterestsNow = AtomicBoolean(failInterests)
@@ -1518,6 +1810,7 @@ class TargetIoReactorTest {
         }
 
         override fun read(buffer: ByteBuffer): Int {
+            readCalls.incrementAndGet()
             val action = synchronized(readActions) {
                 currentRead?.let { return@synchronized ReadAction.Data(it) }
                 readActions.pollFirst()
@@ -1549,6 +1842,7 @@ class TargetIoReactorTest {
             if (failInterestsNow.get()) throw IllegalStateException("interest update failed")
             if (write) writeInterestTrueCalls.incrementAndGet()
             writeInterested.set(write)
+            readInterested.set(read)
         }
 
         override fun close() {

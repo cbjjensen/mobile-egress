@@ -149,7 +149,7 @@ public enum CellularIPRotationState: Codable, Equatable, Sendable {
         }
     }
 
-    fileprivate var nextHoldSeconds: Int {
+    var nextHoldSeconds: Int {
         if case .completed(_, _, _, .unchanged) = self {
             return CellularIPRotationPolicy.retryHoldSeconds
         }

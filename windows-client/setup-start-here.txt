@@ -1,12 +1,14 @@
-Download MobileEgressSetup.exe from the official GitHub release and double-click it.
-The installer contains all Mobile Egress files. No ZIP extraction is needed.
-If using an older ZIP release, extract the whole ZIP and run its Setup executable.
+Download the accepted 2.x MobileEgressClientSetup.exe from the official GitHub release.
+Run it normally and verify the established publisher before Windows elevation.
+The installer contains the Client app and background service.
 
-Setup installs Mobile Egress and, if missing, Microsoft's WebView2 runtime.
-Keep an internet connection available and wait for the app to open.
-The native setup window shows the current stage. This can take several minutes.
-If runtime setup fails, check the connection and choose Retry; this retries only
-WebView2. You can also open Mobile Egress from the Start menu to finish later.
+Open Mobile Egress Client on the workload computer. Configure a reachable public
+HTTPS endpoint (default local TCP listener 8443), then choose Pair phone.
+Scan the private invitation with the compatible Mobile Egress phone app.
 
-Later, open Mobile Egress from the Start menu.
-Follow the Next step card in the app to finish connecting your devices.
+Start sharing on the phone and copy this Client's local HTTP or SOCKS proxy into
+the intended application. On iPhone, leave Mobile Egress open and unlocked;
+keep-awake prevents auto-lock only. Manual lock or app switching pauses traffic.
+
+Upgrades from 1.x require fresh direct pairing. Historical controller installers
+and phone builds are incompatible with direct mode.

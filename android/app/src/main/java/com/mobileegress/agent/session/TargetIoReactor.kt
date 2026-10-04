@@ -41,7 +41,10 @@ internal interface TargetReactorListener {
     fun onTerminal(streamId: String, correlationToken: Long, reason: TargetTerminalReason)
     fun onReleased(streamId: String, correlationToken: Long)
     fun onFatalFailure()
+    fun readAvailability(streamId: String, correlationToken: Long): TargetReadAvailability = TargetReadAvailability.Ready
 }
+
+internal enum class TargetReadAvailability { Ready, Pause, Closed }
 
 internal interface TargetReactorPort {
     fun start(): Boolean
@@ -53,6 +56,7 @@ internal interface TargetReactorPort {
     fun shutdown()
     fun awaitStopped(timeout: Long, unit: TimeUnit): Boolean
     fun isReactorThread(): Boolean
+    fun outboundCapacityAvailable() = Unit
 }
 
 internal data class TargetIoReactorSnapshot(
@@ -60,6 +64,7 @@ internal data class TargetIoReactorSnapshot(
     val queuedDataCommands: Int,
     val outstandingWriteFrames: Int,
     val outstandingWriteBytes: Long,
+    val pausedReadStreams: Int = 0,
 )
 
 internal class TargetIoReactor(
@@ -78,6 +83,10 @@ internal class TargetIoReactor(
     private val backendFactory: () -> TargetSelectorBackend = { NioTargetSelectorBackend() },
     private val nanoTime: () -> Long = System::nanoTime,
     private val backpressureReporter: BackpressureReporter = LogcatBackpressureReporter,
+    private val sharedWriteBudget: SharedFrameBudget? = null,
+    private val sharedControlBudget: SharedFrameBudget? = null,
+    private val peerReadGate: PeerReadGate? = null,
+    private val peerReadId: String = java.util.UUID.randomUUID().toString(),
 ) : TargetReactorPort {
     private val lock = Any()
     private val lifecycleLock = Any()
@@ -92,6 +101,10 @@ internal class TargetIoReactor(
     private val releaseRequests = HashMap<String, Long>()
     private val cancellationRequests = HashMap<String, Long>()
     private val active = HashMap<String, ReactorStream>()
+    private val pausedReads = LinkedHashSet<ReactorStream>()
+    @Volatile private var pausedReadCount = 0
+    private val readCapacityChanged = AtomicBoolean(false)
+    private var remainingReadRetries = 0
     private val started = AtomicBoolean(false)
     private val shutdownRequested = AtomicBoolean(false)
     private val fatalFailureRequested = AtomicBoolean(false)
@@ -105,6 +118,7 @@ internal class TargetIoReactor(
     @Volatile private var reactorThread: Thread? = null
 
     init {
+        peerReadGate?.register(peerReadId, ::outboundCapacityAvailable)
         require(dataCommandCapacity > 0)
         require(totalCommandCapacity >= dataCommandCapacity)
         require(commandsPerCycle > 0)
@@ -186,7 +200,7 @@ internal class TargetIoReactor(
             if (shutdownRequested.get() || streamId in reservations) {
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
-            if (commands.size >= totalCommandCapacity) {
+            if (commands.size >= totalCommandCapacity || sharedControlBudget?.acquire(0) == false) {
                 saturationSource = BackpressureSource.RequiredControlSaturation
                 return@synchronized ReactorSubmitResult.SessionSaturated
             }
@@ -261,6 +275,11 @@ internal class TargetIoReactor(
                 saturationSource = BackpressureSource.TargetCommandQueue
                 return@synchronized ReactorSubmitResult.StreamSaturated
             }
+            if (sharedWriteBudget?.acquire(payload.size) == false) {
+                saturatedStreams[streamId] = generation
+                saturationSource = BackpressureSource.TargetSessionByteLimit
+                return@synchronized ReactorSubmitResult.StreamSaturated
+            }
             currentCount.frames += 1
             currentCount.bytes += payload.size.toLong()
             outstandingWriteFrames += 1
@@ -293,7 +312,7 @@ internal class TargetIoReactor(
             }
             val generation = reservation.generation
             if (shutdownRequested.get()) return@synchronized ReactorSubmitResult.MissingOrClosed
-            if (commands.size >= totalCommandCapacity) {
+            if (commands.size >= totalCommandCapacity || sharedControlBudget?.acquire(0) == false) {
                 saturationSource = BackpressureSource.RequiredControlSaturation
                 return@synchronized ReactorSubmitResult.SessionSaturated
             }
@@ -327,7 +346,7 @@ internal class TargetIoReactor(
                 return@synchronized ReactorSubmitResult.MissingOrClosed
             }
             if (releaseRequests[streamId] == generation) return@synchronized ReactorSubmitResult.Accepted
-            if (commands.size >= totalCommandCapacity) {
+            if (commands.size >= totalCommandCapacity || sharedControlBudget?.acquire(0) == false) {
                 saturationSource = BackpressureSource.RequiredControlSaturation
                 return@synchronized ReactorSubmitResult.SessionSaturated
             }
@@ -359,6 +378,11 @@ internal class TargetIoReactor(
 
     override fun isReactorThread(): Boolean = Thread.currentThread() === reactorThread
 
+    override fun outboundCapacityAvailable() {
+        readCapacityChanged.set(true)
+        wakeup()
+    }
+
     private fun runLoop() {
         var fatalFailure = false
         val backend = requireNotNull(activeBackend)
@@ -366,6 +390,7 @@ internal class TargetIoReactor(
             while (!shutdownRequested.get()) {
                 drainCommands()
                 failSaturatedStreams()
+                resumePausedReads()
                 expireDeadlines()
                 if (shutdownRequested.get()) break
                 val ready = backend.select(nextSelectTimeoutMillis())
@@ -421,6 +446,7 @@ internal class TargetIoReactor(
             queuedDataCommands = queuedDataCommands,
             outstandingWriteFrames = outstandingWriteFrames,
             outstandingWriteBytes = outstandingWriteBytes,
+            pausedReadStreams = pausedReadCount,
         )
     }
 
@@ -428,6 +454,7 @@ internal class TargetIoReactor(
         for (ignored in 0 until commandsPerCycle) {
             val command = synchronized(lock) {
                 commands.pollFirst()?.also { dequeued ->
+                    if (dequeued !is ReactorCommand.Write) sharedControlBudget?.release(0)
                     if (dequeued is ReactorCommand.Write) {
                         queuedDataCommands -= 1
                         check(queuedDataCommands >= 0)
@@ -614,6 +641,35 @@ internal class TargetIoReactor(
     }
 
     private fun readOnce(stream: ReactorStream) {
+        if (stream.readEof) return
+        when (listener.readAvailability(stream.id, stream.correlationToken)) {
+            TargetReadAvailability.Ready -> Unit
+            TargetReadAvailability.Pause -> {
+                peerReadGate?.withdraw(peerReadId)
+                if (pausedReads.add(stream)) {
+                    pausedReadCount += 1
+                    stream.readPausedAtNanos = nanoTime()
+                }
+                updateInterests(stream)
+                return
+            }
+            TargetReadAvailability.Closed -> {
+                terminateStream(stream, TargetTerminalReason.Canceled)
+                return
+            }
+        }
+        if (peerReadGate?.enter(peerReadId) == false) {
+            if (pausedReads.add(stream)) {
+                pausedReadCount += 1
+                stream.readPausedAtNanos = nanoTime()
+            }
+            updateInterests(stream)
+            return
+        }
+        try {
+        if (clearReadPause(stream)) {
+            stream.idleDeadlineNanos = deadlineAfter(stream.idleDeadlineNanos, max(0, nanoTime() - stream.readPausedAtNanos))
+        }
         val buffer = stream.readBuffer
         buffer.clear()
         val read = stream.connection.read(buffer)
@@ -631,6 +687,35 @@ internal class TargetIoReactor(
                 }
             }
         }
+        } finally { peerReadGate?.leave(peerReadId) }
+    }
+
+    private fun resumePausedReads() {
+        if (readCapacityChanged.getAndSet(false)) remainingReadRetries = pausedReads.size
+        // Give previously paused targets first access to refunded capacity, in pause order.
+        // Each nonblocking read finishes before the next target; idle targets cannot stall peers.
+        repeat(minOf(commandsPerCycle, remainingReadRetries, pausedReads.size)) {
+            if (shutdownRequested.get()) return
+            val stream = pausedReads.first()
+            pausedReads.remove(stream)
+            pausedReads.add(stream)
+            remainingReadRetries -= 1
+            if (active[stream.id] !== stream || cancellationRequested(stream.id, stream.generation)) return@repeat
+            try {
+                readOnce(stream)
+                if (active[stream.id] === stream) updateInterests(stream)
+            } catch (_: Exception) {
+                if (active[stream.id] === stream) failConnectionAttempt(stream)
+            }
+        }
+        if (pausedReads.isEmpty()) remainingReadRetries = 0
+    }
+
+    private fun clearReadPause(stream: ReactorStream): Boolean = pausedReads.remove(stream).also { removed ->
+        if (removed) {
+            pausedReadCount -= 1
+            if (pausedReadCount == 0) peerReadGate?.withdraw(peerReadId)
+        }
     }
 
     private fun writeOnce(stream: ReactorStream) {
@@ -638,7 +723,9 @@ internal class TargetIoReactor(
         val written = stream.connection.write(chunk)
         if (written < 0) throw IllegalStateException("Negative target write")
         if (written > 0) {
-            stream.idleDeadlineNanos = deadlineAfter(nanoTime(), idleTimeoutNanos)
+            val now = nanoTime()
+            stream.idleDeadlineNanos = deadlineAfter(now, idleTimeoutNanos)
+            if (stream in pausedReads) stream.readPausedAtNanos = now
             listener.onBytesWritten(stream.id, stream.correlationToken, written)
         }
         if (!chunk.hasRemaining()) {
@@ -653,7 +740,7 @@ internal class TargetIoReactor(
     private fun updateInterests(stream: ReactorStream) {
         stream.connection.setInterests(
             connect = !stream.connected,
-            read = stream.connected && !stream.readEof,
+            read = stream.connected && !stream.readEof && stream !in pausedReads,
             write = stream.connected && stream.writes.isNotEmpty(),
         )
     }
@@ -665,7 +752,7 @@ internal class TargetIoReactor(
                 !stream.connected && now >= stream.connectDeadlineNanos -> {
                     failConnectionAttempt(stream)
                 }
-                stream.connected && now >= stream.idleDeadlineNanos -> {
+                stream.connected && stream !in pausedReads && now >= stream.idleDeadlineNanos -> {
                     terminateStream(stream, TargetTerminalReason.IdleTimeout)
                 }
             }
@@ -673,10 +760,15 @@ internal class TargetIoReactor(
     }
 
     private fun nextSelectTimeoutMillis(): Long {
+        if (synchronized(lock) { commands.isNotEmpty() } || readCapacityChanged.get() || remainingReadRetries > 0) return 0
         val now = nanoTime()
-        val nearest = active.values.minOfOrNull { stream ->
-            if (stream.connected) stream.idleDeadlineNanos else stream.connectDeadlineNanos
-        } ?: return MAX_SELECT_MILLIS
+        var nearest = Long.MAX_VALUE
+        active.values.forEach { stream ->
+            if (stream !in pausedReads) {
+                nearest = minOf(nearest, if (stream.connected) stream.idleDeadlineNanos else stream.connectDeadlineNanos)
+            }
+        }
+        if (nearest == Long.MAX_VALUE) return MAX_SELECT_MILLIS
         val remainingNanos = max(0L, nearest - now)
         val roundedUpMillis = (remainingNanos + NANOS_PER_MILLI - 1) / NANOS_PER_MILLI
         return roundedUpMillis.coerceIn(1L, MAX_SELECT_MILLIS)
@@ -691,6 +783,7 @@ internal class TargetIoReactor(
             return
         }
         if (!active.remove(stream.id, stream)) return
+        clearReadPause(stream)
         try {
             stream.connection.close()
         } catch (_: Exception) {
@@ -705,6 +798,7 @@ internal class TargetIoReactor(
             return
         }
         if (!active.remove(stream.id, stream)) return
+        clearReadPause(stream)
         try {
             stream.connection.close()
         } catch (_: Exception) {
@@ -725,6 +819,7 @@ internal class TargetIoReactor(
 
     private fun closeWithoutTerminal(stream: ReactorStream) {
         if (!active.remove(stream.id, stream)) return
+        clearReadPause(stream)
         try {
             stream.connection.close()
         } catch (_: Exception) {
@@ -741,6 +836,7 @@ internal class TargetIoReactor(
     }
 
     private fun closeEverything(reason: TargetTerminalReason) {
+        peerReadGate?.remove(peerReadId)
         active.values.toList().forEach { stream ->
             if (terminalWasSignaled(stream.id, stream.generation)) {
                 closeWithoutTerminal(stream)
@@ -759,6 +855,8 @@ internal class TargetIoReactor(
             }
         }
         synchronized(lock) {
+            val controlCount = commands.count { it !is ReactorCommand.Write }
+            if (controlCount > 0) sharedControlBudget?.release(0, controlCount)
             commands.clear()
             queuedDataCommands = 0
         }
@@ -825,6 +923,7 @@ internal class TargetIoReactor(
         count.bytes -= byteCount.toLong()
         outstandingWriteFrames -= 1
         outstandingWriteBytes -= byteCount.toLong()
+        sharedWriteBudget?.release(byteCount.toLong())
         check(outstandingWriteFrames >= 0 && outstandingWriteBytes >= 0)
         if (count.frames == 0) {
             check(count.bytes == 0L)
@@ -838,6 +937,7 @@ internal class TargetIoReactor(
         outstandingWrites.remove(streamId)
         outstandingWriteFrames -= count.frames
         outstandingWriteBytes -= count.bytes
+        sharedWriteBudget?.release(count.bytes, count.frames)
         check(outstandingWriteFrames >= 0 && outstandingWriteBytes >= 0)
     }
 
@@ -885,7 +985,7 @@ internal class TargetIoReactor(
         val correlationToken: Long,
     )
 
-    private data class ReactorStream(
+    private class ReactorStream(
         val id: String,
         val generation: Long,
         val correlationToken: Long,
@@ -898,6 +998,7 @@ internal class TargetIoReactor(
         val readBuffer: ByteBuffer,
         var readEof: Boolean = false,
         var releaseAfterWrites: Boolean = false,
+        var readPausedAtNanos: Long = 0,
     )
 
     internal companion object {
@@ -977,7 +1078,7 @@ private class NioTargetSelectorBackend : TargetSelectorBackend {
     }
 
     override fun select(timeoutMillis: Long): List<ReactorReady> {
-        selector.select(timeoutMillis)
+        if (timeoutMillis == 0L) selector.selectNow() else selector.select(timeoutMillis)
         val ready = ArrayList<ReactorReady>(selector.selectedKeys().size)
         val keys = selector.selectedKeys().iterator()
         while (keys.hasNext()) {

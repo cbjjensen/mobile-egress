@@ -16,11 +16,13 @@ public enum HTTP1Error: Error, Equatable {
 }
 
 public struct HTTPRequest: Equatable, Sendable {
+    public let method: String
     public let relayOrigin: String
     public let path: String
     public let body: Data
 
-    public init(relayOrigin: String, path: String, body: Data) {
+    public init(relayOrigin: String, path: String, body: Data, method: String = "POST") {
+        self.method = method
         self.relayOrigin = relayOrigin
         self.path = path
         self.body = body
@@ -78,7 +80,7 @@ public protocol HTTPTransporting: Sendable {
 
 public enum HTTP1Codec {
     public static func encodeRequest(_ request: HTTPRequest) throws -> Data {
-        guard request.body.count <= HTTP1Limits.maximumBodyBytes,
+        guard ["GET", "POST"].contains(request.method), request.body.count <= HTTP1Limits.maximumBodyBytes,
               request.path.hasPrefix("/"),
               request.path.utf8.allSatisfy({ $0 >= 0x21 && $0 <= 0x7E && $0 != 0x20 })
         else {
@@ -86,7 +88,7 @@ public enum HTTP1Codec {
         }
         let endpoint = try RelayEndpoint(origin: request.relayOrigin)
         let head = """
-        POST \(request.path) HTTP/1.1\r
+        \(request.method) \(request.path) HTTP/1.1\r
         Host: \(endpoint.hostHeader)\r
         Content-Type: application/json\r
         Content-Length: \(request.body.count)\r

@@ -1,55 +1,17 @@
-# Signed macOS Keychain integration
+# Mac Client secure storage and native acceptance
 
-The controller uses Security.framework data-protection Keychain APIs under service `com.cbjjensen.mobile-egress.controller`; it never shells out to `security`. Logical store keys become lowercase SHA-256 account names. Items explicitly set `kSecAttrSynchronizable=false` and `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, and replacement preserves the item identity. There is no plaintext or locally encrypted file fallback.
+The root LaunchDaemon uses the file-based System Keychain implementation under logical service `com.zfnf.mobile-egress.client`. It does not depend on a logged-in user's data-protection/login Keychain. Apple documents this requirement for daemons outside a user session in [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 
-Apple requires the restricted Keychain access-group entitlement to be authorized by a Developer ID distribution profile embedded in an app-like bundle. A raw or unsigned `go test` process is therefore not a valid integration host and is intentionally rejected by the production store.
+Each item uses the signed daemon's designated requirement for access. The graphical app does not read these secrets; it uses a local Unix socket with peer-UID validation. The installer preserves the owner UID, daemon identifier, protected state directory and signing identity across upgrades.
 
-Run this only on an Apple Silicon Mac in the logged-in, unlocked operator session. Start in the repository root and supply a Developer ID distribution provisioning profile for bundle ID `com.cbjjensen.mobile-egress.controller` plus the exact locally available Developer ID Application identity label:
+The LaunchDaemon is `com.zfnf.mobile-egress.client`. Its state resides in `/Library/Application Support/MobileEgressClient`; local IPC is `/var/run/mobile-egress-client/control.sock`. Root-owned paths reject symbolic links or unsafe permissions. Boot/logout operation requires macOS to have booted and networking to be available; FileVault pre-boot is outside that guarantee.
 
-```bash
-go run ./windows-client/cmd/mobile-egress-keychain-integration \
-  -profile "/absolute/path/MobileEgressController.provisionprofile" \
-  -identity "Developer ID Application: Operator Name (TEAMID1234)"
-```
+## Source versus signed acceptance
 
-The harness fails closed unless all of the following agree:
+Ordinary Go tests exercise the storage abstraction and failure handling without modifying System Keychain. The explicit native integration suite is guarded by `darwin && cgo && macsystemintegration`. Build its test binary from the exact release source, sign it with the established daemon identifier and Developer ID identity, and run it as root only in the designated acceptance environment.
 
-- the profile is a Developer ID distribution profile and authorizes the controller's private Keychain group;
-- the supplied identity resolves to exactly one currently valid code-signing certificate whose exact SHA-1 fingerprint and DER leaf are present in the profile's `DeveloperCertificates` array;
-- that leaf is a Developer ID Application certificate with the exact identity common name and team ID, digital-signature key usage, code-signing extended key usage, and Developer ID Application purpose;
-- `com.apple.application-identifier` is exactly `TEAMID.com.cbjjensen.mobile-egress.controller`;
-- `com.apple.developer.team-identifier`, the identity's team, the bundle ID, and the signed metadata match;
-- `codesign` is invoked by the resolved certificate fingerprint, each signed bundle's extracted leaf is the same profile-authorized certificate, and the signed executable has exactly the application ID, team ID, and one private `keychain-access-groups` value with no extra entitlements; and
-- both generated app bundles pass strict `codesign` verification.
+`TestSignedRootSystemKeychainCRUD` checks native create/read/update/delete. `TestSystemKeychainSameSignedUpgrade` uses phases A and B of two separately built, same-signed binaries with the same absolute private state path. Phase A records only a random fixture item name; phase B verifies continuity, replacement and cleanup. Its cleanup phase removes the exact test item after interruption. Never operate on arbitrary System Keychain items or export daemon private material.
 
-The harness builds and signs version A and version B app-like bundles with the same application identity. Version A creates a random test item. Version B reads that exact item, verifies its persistent reference, replaces its non-secret fixture value without changing item identity, verifies the new value, and deletes it. A signed cleanup phase runs after a version-B failure when state remains.
+Record those results, signed PKG repair/upgrade, logout and reboot in [the physical acceptance record](templates/physical-acceptance-record.md). Unsigned tests or a successful PKG build are not evidence of signed keychain continuity.
 
-The operator's private key remains in the macOS Keychain and is never read or copied by the harness. The profile and identity label are not credentials. Temporary state contains only a random logical test key and an opaque persistent reference, is written with owner-only permissions, and is removed with the temporary bundles after the run.
-
-The command above contains placeholder profile/identity examples only. The signed harness remains an external release gate until it is run on the authorized Mac with the approved production profile and identity; portable unit tests do not prove Keychain entitlement continuity.
-
-## Signed capacity acceptance host
-
-The developer-only capacity runner can use the production controller Owner on macOS only while the complete `run` path is executing inside a temporary app signed for that same private Keychain group. Build the ignored non-release launcher before handling the one-time token, then invoke it directly with capacity mode:
-
-```bash
-mkdir -p .local/capacity-harness
-if go build -tags capacityharness -trimpath -o .local/capacity-harness/mobile-egress-keychain-integration ./windows-client/cmd/mobile-egress-keychain-integration; then
-  ./.local/capacity-harness/mobile-egress-keychain-integration \
-    -profile "/absolute/path/MobileEgressController.provisionprofile" \
-    -identity "Developer ID Application: Operator Name (TEAMID1234)" \
-    -capacity-run
-else
-  printf '%s\n' 'Signed capacity launcher build failed before secret entry.' >&2
-fi
-```
-
-The build must finish before secret entry. After launch, wait until the signed child emits exactly `{"phase":"input","attempted":0,"open":0,"verified":0,"closed":0,"failure":"none"}`; only then enter the strict run-secret JSON document on stdin and send EOF. If profile validation, signing, or child startup fails first, enter nothing. Do not put the token or target in an argument, environment variable, shell history, temporary file, or log. The launcher disables terminal echo before profile validation or signing and fails closed if a detected terminal cannot be protected. It never parses the document: after starting the signed child behind a private readiness gate, it flushes input queued before the handoff, transfers terminal ownership, and launches the child's fixed capacity `run` mode. A pre-handoff failure flushes unread terminal input before echo is restored. The signed child loads the Owner through the production `KeychainStore` and repository; it never returns Owner certificate or private-key material to the launcher.
-
-The host accepts only the capacity runner's bounded JSON event schema on stdout and stderr. Unknown fields, invalid values, partial lines, lines over 512 bytes, or more than 1,024 lines per stream fail closed without forwarding the rejected content. On interruption it signals the child first, allows the runner's bounded cleanup and identity revocation to finish, and force-terminates only after the cleanup grace expires. The temporary bundle is removed after the run.
-
-Both the signed-host code and capacity command remain behind the `capacityharness` build tag and are absent from normal controller and release dependency graphs. This command is acceptance tooling, not macOS package/version metadata and not a release artifact. Delete `.local/capacity-harness/mobile-egress-keychain-integration` after the run; never distribute or attach it to a release.
-
-Follow the complete [paced stream admission acceptance runbook](capacity-acceptance.md) for the one-time target, strict stdin fields, dedicated-relay preconditions, required result, and cleanup policy.
-
-The access-group and app-like-bundle requirements follow Apple's [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) and [`kSecAttrAccessGroup` documentation](https://developer.apple.com/documentation/security/ksecattraccessgroup).
+The old controller data-protection Keychain harness is retired. Historical controller evidence is not direct Client service acceptance.

@@ -47,16 +47,26 @@ public final class CellularPinnedHTTPTransport: HTTPTransporting, @unchecked Sen
             port: port,
             using: parameters
         )
-        return try await withCheckedThrowingContinuation { continuation in
-            let exchange = NWHTTPExchange(
-                connection: connection,
-                request: encoded,
-                timeout: timeout,
-                continuation: continuation
-            )
-            exchange.start()
-        }
+        let cancellation = HTTPExchangeCancellation(connection: connection)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                let exchange = NWHTTPExchange(connection: connection, request: encoded, timeout: timeout, continuation: continuation)
+                exchange.start()
+                cancellation.started()
+            }
+        } onCancel: { cancellation.cancel() }
     }
+}
+
+private final class HTTPExchangeCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private let connection: NWConnection
+    private var cancelled = false
+    private var didStart = false
+    init(connection: NWConnection) { self.connection = connection }
+    func started() { lock.withLock { didStart = true; if cancelled { connection.cancel() } } }
+    func cancel() { lock.withLock { cancelled = true; if didStart { connection.cancel() } } }
 }
 
 struct ApplePinnedTransportParameterBuilder {

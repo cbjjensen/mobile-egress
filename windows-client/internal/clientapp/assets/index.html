@@ -1,11 +1,143 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mobile Egress Client</title>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mobile Egress Client</title>
 <style>
-:root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#e8eef7;background:#101823;color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:34px;line-height:1.55}main{max-width:760px;margin:auto}h1{font-size:26px;letter-spacing:-.6px;margin:0}h2{font-size:17px;margin:0 0 10px}p{color:#aebed0;margin:8px 0 18px}.eyebrow{color:#6ce5ca;font-size:12px;font-weight:650;letter-spacing:1.5px;text-transform:uppercase}.card{background:#192535;border:1px solid #304157;border-radius:14px;padding:22px;margin:20px 0}.status{display:flex;justify-content:space-between;align-items:center;gap:16px}.badge{background:#293e53;color:#b9d9f0;border-radius:100px;padding:5px 12px;font-size:13px;white-space:nowrap}.badge.ready{background:#193e35;color:#83efbc}.badge.error{background:#512e34;color:#ffc0c0}textarea{resize:vertical;min-height:100px;width:100%;background:#101b29;color:#dce7f3;border:1px solid #496079;border-radius:8px;padding:12px;font:13px ui-monospace,monospace}label{display:block;font-size:13px;font-weight:600;margin-bottom:7px}button{background:#6ce5ca;color:#10281f;font:600 14px inherit;border:0;border-radius:8px;padding:11px 16px;cursor:pointer;margin:12px 8px 0 0}button.secondary{background:#2b4158;color:#e3ecf5}button:disabled{opacity:.45;cursor:default}button:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid #6ce5ca;outline-offset:3px}.endpoints{font:13px ui-monospace,monospace;color:#c9d7e8;display:grid;gap:6px}.note{font-size:12px;color:#98aec4;margin:14px 0 0}#feedback{min-height:25px;color:#8aefd0;font-size:14px}details{margin-top:20px}summary{cursor:pointer;font-weight:600}details p{margin-top:12px}.hidden{display:none}footer{font-size:12px;color:#8098b3;display:flex;justify-content:space-between}
-</style></head><body><main>
-<div class="eyebrow">Your local application proxy</div><h1>Mobile Egress Client</h1><p>Connect this computer to your personal relay and mobile Agent.</p>
-<section class="card" aria-labelledby="connection-heading"><div class="status"><h2 id="connection-heading">Connection</h2><span class="badge" id="phase">Checking service</span></div><p id="message" role="status">Connecting to the installed Client service…</p><div class="endpoints"><span id="httpAddress"></span><span id="socksAddress"></span></div><div><button id="copyHttp" class="secondary" disabled>Copy proxy line</button><button id="copySocks" class="secondary" disabled>Copy SOCKS URL</button></div><p class="note">Copies include your proxy credentials. Paste them only into applications you trust.</p></section>
-<section class="card" id="pairCard" aria-labelledby="pair-heading"><h2 id="pair-heading">Pair this computer</h2><p>In your controller, add a Windows or Mac Client and copy its invitation. Keep the controller open until setup is confirmed.</p><label for="invitation">Complete pairing invitation</label><textarea id="invitation" spellcheck="false" autocomplete="off" placeholder="Paste the complete invitation here"></textarea><button id="pair">Pair Client</button></section>
-<details class="card"><summary>Import a connection update</summary><p>If your relay address changed, copy this Client’s connection update from your controller and paste it below.</p><label for="update">Complete connection update</label><textarea id="update" spellcheck="false" autocomplete="off" placeholder="Paste the complete connection update here"></textarea><button id="import">Import update</button><p class="note">For software updates or repair, run the latest signed Client installer. Your pairing and proxy credentials are preserved.</p></details>
-<div id="feedback" role="status" aria-live="polite"></div><footer><span>Traffic passes through your personal relay.</span><span id="version"></span></footer>
-</main><script src="app.js"></script></body></html>
+:root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#e8eef7;background:#101823;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;padding:28px;line-height:1.55}main{max-width:820px;margin:auto}
+h1{font-size:27px;letter-spacing:-.6px;margin:0}h2{font-size:19px;margin:0 0 10px}p{color:#aebed0;margin:8px 0 18px}
+.eyebrow{color:#6ce5ca;font-size:11px;font-weight:650;letter-spacing:1.5px;text-transform:uppercase}
+.card{background:#192535;border:1px solid #304157;border-radius:14px;padding:22px;margin:18px 0}
+.status,.heading{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.badge{background:#293e53;color:#b9d9f0;border-radius:100px;padding:5px 12px;font-size:12px;white-space:nowrap}
+.badge.ready{background:#193e35;color:#83efbc}.badge.error{background:#512e34;color:#ffc0c0}
+input,textarea,select{width:100%;background:#101b29;color:#dce7f3;border:1px solid #496079;border-radius:8px;padding:11px;font:14px system-ui}
+input,textarea{font-family:ui-monospace,monospace}textarea{resize:vertical;min-height:85px}
+label{display:block;font-size:13px;font-weight:600;margin:14px 0 7px}
+button{background:#6ce5ca;color:#10281f;font:600 14px system-ui;border:0;border-radius:8px;padding:11px 16px;cursor:pointer;margin:12px 8px 0 0}
+button.secondary{background:#2b4158;color:#e3ecf5}button.quiet{background:transparent;color:#b9cedf;padding:8px}
+button.danger{background:#512e34;color:#ffc0c0}button:disabled{opacity:.45;cursor:default}
+button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible,select:focus-visible{outline:2px solid #6ce5ca;outline-offset:3px}
+.endpoints{font:13px ui-monospace,monospace;color:#c9d7e8;display:grid;gap:8px}
+.note{font-size:13px;color:#a3b8cd;margin:14px 0 0}#feedback,#pending{color:#8aefd0;font-size:14px}#feedback{min-height:25px}
+details{margin-top:18px}summary{cursor:pointer;font-weight:600}details p{margin-top:12px}.hidden{display:none!important}
+.qr{display:block;max-width:100%;width:280px;border:10px solid white;border-radius:8px;margin:18px auto}
+.columns{display:grid;grid-template-columns:1fr 1fr;gap:16px}.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:18px 0 20px}
+.steps button{font-size:11px;margin:0;padding:9px 4px;background:#192535;color:#aebed0;border:1px solid #304157;font-weight:500}
+.steps button[aria-current="step"]{border-color:#6ce5ca;color:#8aefd0;background:#1b3937}.steps span{display:block;font-size:13px;margin-bottom:3px}
+.milestones{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:16px 0 0}
+.milestones div{border-top:1px solid #304157;padding-top:8px;font-size:11px;color:#8da6bf}.milestones strong{display:block;color:#dce7f3;font-size:12px;font-weight:550}
+#connectionSummary{padding:16px 20px}#connectionSummary p{font-size:13px;margin-bottom:0}#connectionSummary h2{margin:0;font-size:15px}
+#networkInstructions{white-space:pre-line}.firewall{padding:14px 16px;background:#101b29;border-radius:9px;margin:18px 0}
+.firewall p{margin-bottom:0}.firewall strong{font-size:14px}footer{font-size:11px;color:#8098b3;display:flex;justify-content:space-between;gap:12px;margin:18px 0}
+ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
+@media(max-width:560px){body{padding:16px}.card{padding:18px}.columns{grid-template-columns:1fr}.status{align-items:start}.steps button{font-size:10px}.milestones{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body><main>
+<div class="eyebrow">Direct cellular connection</div>
+<h1>Mobile Egress Client</h1>
+<p>Use your phone’s cellular connection for applications on this computer.</p>
+
+<section id="servicePanel" class="card" aria-labelledby="serviceHeading">
+  <h2 id="serviceHeading">Connecting to the Client service</h2>
+  <p id="serviceMessage" role="status">Waiting for the installed Client service…</p>
+  <button id="serviceRetry" class="hidden">Retry connection</button>
+</section>
+<div id="dashboardHeader" class="heading hidden"><h2 id="dashboardHeading" tabindex="-1">Your Client</h2><button id="reviewSetup" class="secondary">Review setup</button></div>
+<p id="unfinishedSetup" class="hidden" role="status">Setup is unfinished. Your settings are saved. Choose Review setup to continue pairing and verify a live phone connection.</p>
+<div id="wizardHeader" class="hidden">
+  <nav class="steps" aria-label="Setup steps">
+    <button id="stepAddress"><span>1</span>Computer address</button>
+    <button id="stepNetwork"><span>2</span>Network access</button>
+    <button id="stepPair"><span>3</span>Pair phone</button>
+    <button id="stepVerify"><span>4</span>Verify connection</button>
+    <button id="stepProxy"><span>5</span>Use your proxy</button>
+  </nav>
+  <div class="heading"><div><div id="stepCount" class="eyebrow">Step 1 of 5</div><h2 id="stepTitle" tabindex="-1">Computer address</h2></div><button id="finishLater" class="quiet">Finish later</button></div>
+</div>
+<section id="connectionSummary" class="card hidden" aria-labelledby="connectionHeading">
+  <div class="status"><h2 id="connectionHeading">Connection</h2><span id="phase" class="badge">Checking service</span></div>
+  <p id="message" role="status"></p>
+  <div class="milestones" aria-label="Connection progress">
+    <div>Service<strong id="installedState">Checking</strong></div><div>Local listener<strong id="listeningState">Not confirmed</strong></div>
+    <div>Phone pairing<strong id="pairedState">Not paired</strong></div><div>Live session<strong id="connectedState">Waiting</strong></div>
+  </div>
+  <p id="pending" role="status"></p>
+</section>
+
+<section id="addressPanel" class="card hidden" aria-labelledby="addressHeading">
+  <h2 id="addressHeading">This computer’s address</h2>
+  <p>Your phone connects to this computer over cellular. Enter a public hostname or IP address that can accept incoming connections.</p>
+  <label for="displayName">Computer name</label><input id="displayName" maxlength="80" placeholder="My workload computer" autocomplete="off">
+  <label for="endpoint">Public hostname or IP address</label><input id="endpoint" placeholder="client.example.com" spellcheck="false" autocomplete="off" aria-describedby="discoveryMessage discoveryPrivacy">
+  <p id="discoveryMessage" class="note" role="status"></p><button id="retryDiscovery" class="secondary">Retry address lookup</button>
+  <p id="discoveryPrivacy" class="note">The ipify lookup service sees your outgoing public IP. A suggested address is not yet verified: VPNs, NAT and CGNAT may make it unsuitable for incoming connections. You can always enter your own address.</p>
+  <details><summary>Advanced: listener and public port</summary>
+    <div class="columns"><div><label for="bindAddress">Local listener address</label><input id="bindAddress" value=":8443" spellcheck="false" autocomplete="off"></div>
+    <div><label for="publicPort">Public TCP port</label><input id="publicPort" type="number" min="1" max="65535" value="8443"></div></div>
+    <p class="note">Both ports default to 8443. Forward the public port to the local listener port if they differ. Keep the local HTTP and SOCKS proxy ports 1080 and 1081 private.</p>
+  </details>
+  <button id="configure" disabled>Save and continue</button>
+  <p class="note">Changing an existing endpoint may interrupt connections. Pairing and proxy credentials are retained; the paired phone may need a connection update.</p>
+</section>
+
+<section id="networkPanel" class="card hidden" aria-labelledby="networkHeading">
+  <h2 id="networkHeading">Allow your phone to reach this computer</h2>
+  <p id="networkEndpoint" class="endpoints"></p>
+  <div class="firewall"><strong id="firewallState">Check local access</strong><p id="firewallMessage" class="note" role="status"></p>
+    <button id="checkFirewall" class="secondary">Check local firewall</button><button id="retryFirewall" class="secondary">Retry firewall</button>
+  </div>
+  <label for="networkLocation">Where is this computer?</label>
+  <select id="networkLocation"><option value="home">Home / router</option><option value="aws">AWS EC2</option><option value="hosted">Other hosted server</option></select>
+  <p id="networkInstructions" class="note"></p>
+  <p class="note">These choices change the instructions only. The public listener accepts authenticated Agent traffic. It is not a public proxy.</p>
+  <button id="networkNext">Continue to phone pairing</button>
+</section>
+
+<section id="pairPanel" class="card hidden" aria-labelledby="pairHeading">
+  <h2 id="pairHeading">Pair your phone</h2><p id="pairNote"></p>
+  <button id="issue" disabled>Create invitation</button>
+  <div id="invitationDetails" class="hidden">
+    <img id="invitationQR" class="qr" alt="Private one-use phone pairing invitation"><p id="expiry"></p>
+    <details><summary>Copy the complete invitation</summary><label for="invitation">Complete invitation</label><textarea id="invitation" readonly spellcheck="false"></textarea><button id="copyInvitation" class="secondary">Copy invitation</button></details>
+    <button id="cancelInvitation" class="secondary">Cancel invitation</button>
+    <p class="note">Invitations expire after ten minutes. Keep them private.</p>
+  </div>
+  <p class="note">Once paired, start sharing in the phone app. Android can share in its foreground service. On iPhone, keep the app open and unlocked; keep-awake is enabled by default while sharing.</p>
+  <button id="pairNext" class="secondary">Continue to verification</button>
+  <div id="removePhone" class="hidden"><button id="revoke" class="danger" disabled>Remove paired phone</button>
+    <div id="revokeConfirmation" class="hidden"><p>Remove this phone and immediately close its connections? Pairing again will require a new invitation.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
+  </div>
+</section>
+
+<section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
+  <h2 id="verifyHeading">Connect over cellular</h2><p id="verificationMessage" role="status"></p>
+  <p>Turn off Wi-Fi on the phone for this check, then start sharing. On iPhone, leave Mobile Egress open and unlocked. Keep-awake helps the screen stay on; it does not enable background sharing.</p>
+  <details open><summary>Still waiting?</summary><ul>
+    <li>Check the public address and public port. A VPN or CGNAT can make a suggested address unreachable.</li>
+    <li>Check this computer’s firewall and its listener port.</li>
+    <li>Check router forwarding or the hosted server’s firewall, security group and internet route.</li>
+    <li>Confirm the phone has working cellular data and has started sharing.</li>
+  </ul><p class="note">A bound listener or allowed firewall rule cannot confirm external access. Verification completes only when an authenticated phone session is live.</p></details>
+  <button id="verifyBack" class="secondary">Review network access</button><button id="cancelPairing" class="secondary hidden">Cancel pending pairing</button><button id="verifyNext" disabled>Continue to proxy details</button>
+</section>
+
+<section id="proxyPanel" class="card hidden" aria-labelledby="proxyHeading">
+  <h2 id="proxyHeading">Use your proxy</h2><p id="proxyConnection"></p>
+  <div class="endpoints"><span id="httpAddress"></span><span id="socksAddress"></span></div>
+  <button id="copyHttp" class="secondary" disabled>Copy HTTP proxy</button><button id="copySocks" class="secondary" disabled>Copy SOCKS URL</button>
+  <p class="note">Use these proxies only in applications on this computer. Copies include your proxy credentials. Never expose ports 1080 or 1081.</p>
+  <button id="finishSetup">Go to dashboard</button>
+</section>
+<details id="recoveryPanel" class="card hidden"><summary>Recover after an address change</summary>
+  <p>The phone receives connection updates while connected. If it cannot reach the old address, scan or import this signed update on the paired phone.</p>
+  <button id="exportUpdate" class="secondary" disabled>Show connection update</button><button id="copyUpdate" class="secondary" disabled>Copy connection update</button>
+  <div id="updateDetails" class="hidden"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></div>
+  <p class="note">For software updates or repair, run the latest signed Client installer. Direct pairing and proxy credentials are preserved.</p>
+</details>
+<div id="feedback" role="status" aria-live="polite"></div>
+<footer><span>Client ⇄ phone ⇄ cellular Internet</span><span id="version"></span></footer>
+</main><script src="app.js"></script></body>
+</html>

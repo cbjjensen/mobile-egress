@@ -12,6 +12,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "MobileEgressCore"),
-        .testTarget(name: "MobileEgressCoreTests", dependencies: ["MobileEgressCore"]),
+        .testTarget(name: "MobileEgressCoreTests", dependencies: ["MobileEgressCore"], resources: [.copy("Fixtures")]),
     ]
 )

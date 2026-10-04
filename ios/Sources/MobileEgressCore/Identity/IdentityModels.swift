@@ -8,9 +8,11 @@ public enum IdentityError: Error, Equatable {
     case persistenceFailed
     case certificatePersistenceFailed
     case identityLookupFailed
+    case keyMissing
+    case secureStorageUnavailable
 }
 
-public struct IdentityKeyMaterial: Equatable, Sendable {
+public struct IdentityKeyMaterial: Codable, Equatable, Sendable {
     public let keyTag: String
     public let publicKeyPEM: String
     public let publicKeySPKIDER: Data

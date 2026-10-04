@@ -2,21 +2,138 @@ package clientapp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"mobile-egress/windows-client/internal/nodeservice"
+	"sync"
+
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 type App struct {
-	service   Service
-	clipboard func(string) error
+	service    Service
+	clipboard  func(string) error
+	mu         sync.Mutex
+	invitation string
 }
 
 func New(service Service, clipboard func(string) error) *App {
 	return &App{service: service, clipboard: clipboard}
 }
 func (app *App) Status() nodeservice.StandaloneStatus { return app.service.Status() }
-func (app *App) Pair(bundle string) error             { return app.service.Pair(context.Background(), bundle) }
-func (app *App) Import(bundle string) error           { return app.service.Import(context.Background(), bundle) }
+
+type BundleView struct {
+	Bundle    string `json:"bundle"`
+	QRDataURL string `json:"qrDataUrl"`
+}
+
+func renderBundle(bundle string) (BundleView, error) {
+	png, err := qrcode.Encode(bundle, qrcode.Medium, 512)
+	if err != nil {
+		return BundleView{}, errors.New("Unable to display this QR. Use the complete invitation text.")
+	}
+	return BundleView{Bundle: bundle, QRDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)}, nil
+}
+func (app *App) direct() (DirectService, error) {
+	direct, ok := app.service.(DirectService)
+	if !ok {
+		return nil, errors.New("Update the Client service to use direct pairing.")
+	}
+	return direct, nil
+}
+func (app *App) Configure(bindAddress, endpoint, displayName string) error {
+	direct, err := app.direct()
+	if err != nil {
+		return err
+	}
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	// Saving the endpoint can succeed before host-firewall setup reports an error.
+	// Never let a previous, invalidated invitation survive either outcome.
+	app.invitation = ""
+	return direct.Configure(context.Background(), nodeservice.DirectConfiguration{BindAddress: bindAddress, Endpoint: endpoint, DisplayName: displayName})
+}
+func (app *App) IssueInvitation() (BundleView, error) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	direct, err := app.direct()
+	if err != nil {
+		return BundleView{}, err
+	}
+	bundle, err := direct.IssueInvitation(context.Background())
+	if err != nil {
+		return BundleView{}, err
+	}
+	view, err := renderBundle(bundle)
+	if err != nil {
+		return BundleView{}, err
+	}
+	app.invitation = bundle
+	return view, nil
+}
+func (app *App) CopyInvitation() error {
+	app.mu.Lock()
+	bundle := app.invitation
+	app.mu.Unlock()
+	if bundle == "" {
+		return errors.New("Generate a pairing invitation first.")
+	}
+	return app.copy(bundle)
+}
+func (app *App) CancelInvitation() error {
+	direct, err := app.direct()
+	if err != nil {
+		return err
+	}
+	if err = direct.CancelInvitation(context.Background()); err != nil {
+		return err
+	}
+	app.mu.Lock()
+	app.invitation = ""
+	app.mu.Unlock()
+	return nil
+}
+func (app *App) ExportEndpointUpdate() (BundleView, error) {
+	direct, err := app.direct()
+	if err != nil {
+		return BundleView{}, err
+	}
+	bundle, err := direct.ExportEndpointUpdate(context.Background())
+	if err != nil {
+		return BundleView{}, err
+	}
+	return renderBundle(bundle)
+}
+func (app *App) CopyEndpointUpdate() error {
+	direct, err := app.direct()
+	if err != nil {
+		return err
+	}
+	bundle, err := direct.ExportEndpointUpdate(context.Background())
+	if err != nil {
+		return err
+	}
+	return app.copy(bundle)
+}
+func (app *App) Revoke() error {
+	direct, err := app.direct()
+	if err != nil {
+		return err
+	}
+	if err = direct.Revoke(context.Background()); err != nil {
+		return err
+	}
+	app.mu.Lock()
+	app.invitation = ""
+	app.mu.Unlock()
+	return nil
+}
+func (app *App) copy(value string) error {
+	if app.clipboard == nil {
+		return errors.New("Clipboard is unavailable.")
+	}
+	return app.clipboard(value)
+}
 func (app *App) CopyProxy(kind string) error {
 	if kind != "http" && kind != "socks" {
 		return errors.New("Unknown proxy format.")
@@ -25,8 +142,5 @@ func (app *App) CopyProxy(kind string) error {
 	if err != nil {
 		return err
 	}
-	if app.clipboard == nil {
-		return errors.New("Clipboard is unavailable.")
-	}
-	return app.clipboard(value)
+	return app.copy(value)
 }

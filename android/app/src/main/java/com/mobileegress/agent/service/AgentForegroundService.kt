@@ -29,6 +29,7 @@ import com.mobileegress.agent.network.RotationEvent
 import com.mobileegress.agent.network.RotationFailure
 import com.mobileegress.agent.network.RotationState
 import com.mobileegress.agent.network.isActive
+import com.mobileegress.agent.direct.*
 import com.mobileegress.agent.security.DeviceKeyStore
 import com.mobileegress.agent.security.SecureIdentityStore
 import com.mobileegress.agent.session.AgentSession
@@ -58,20 +59,31 @@ class AgentForegroundService : LifecycleService() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var selectedNetwork: Network? = null
     private var selectedToken: String? = null
-    private var session: AgentSession? = null
-    private var reconnectJob: Job? = null
+    private lateinit var directRegistry: DirectRegistry
+    private lateinit var directSupervisor: DirectPeerSupervisor
+    private var removeRetryHandler: (() -> Unit)? = null
+
     private var rotationProbeJob: Job? = null
     private var rotationLossTimeoutJob: Job? = null
     private var rotationHoldJob: Job? = null
     private var rotationReturnTimeoutJob: Job? = null
     private var generation = 0L
     private var rotationAttemptId = 0L
-    private var reconnectAttempt = 0
+
 
     override fun onCreate() {
         super.onCreate()
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         identityStore = SecureIdentityStore(this)
+        directRegistry = DirectRegistry(identityStore)
+        val directRepository = DirectRepository(directRegistry, deviceKeyStore, CellularNetworkAcquirer(this))
+        directSupervisor = DirectPeerSupervisor(directRegistry, deviceKeyStore, lifecycleScope, directRepository::maintain)
+        removeRetryHandler = DirectRetrySignals.register(directSupervisor::retry)
+        lifecycleScope.launch {
+            DirectRegistrySignals.revision.collectLatest {
+                directSupervisor.reconcile()
+            }
+        }
         foregroundController.reduce(ForegroundEvent.ServiceCreated)
         lifecycleScope.launch {
             AgentStatusBus.status.collectLatest { status ->
@@ -106,7 +118,9 @@ class AgentForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        removeRetryHandler?.invoke()
         stopCellularRuntime()
+        directSupervisor.close()
         super.onDestroy()
     }
 
@@ -141,7 +155,7 @@ class AgentForegroundService : LifecycleService() {
 
     private fun startCellularRuntime() {
         val hasIdentity = try {
-            identityStore.load() != null
+            directRegistry.snapshot().records.any { it.enabled }
         } catch (_: Exception) {
             false
         }
@@ -203,21 +217,15 @@ class AgentForegroundService : LifecycleService() {
 
             override fun onLost(network: Network) {
                 val token: String
-                val oldSession: AgentSession?
                 synchronized(runtimeLock) {
                     if (selectedNetwork != network) return
                     token = selectedToken ?: return
                     selectedNetwork = null
                     selectedToken = null
                     generation++
-                    reconnectJob?.cancel()
-                    reconnectJob = null
-                    oldSession = session
-                    session = null
+                    directSupervisor.stop()
                 }
                 pathController.reduce(PathEvent.NetworkLost(token))
-                oldSession?.close()
-                reconnectAttempt = 0
                 if (rotationController.state.isActive()) {
                     processRotation(RotationEvent.CellularLost)
                 }
@@ -247,81 +255,12 @@ class AgentForegroundService : LifecycleService() {
     }
 
     private fun connectRelay(network: Network, token: String) {
-        val attemptGeneration = synchronized(runtimeLock) { generation }
-        val identity = try {
-            identityStore.load()
-        } catch (_: Exception) {
-            AgentStatusBus.update { it.copy(errorClass = ErrorClass.Credential) }
-            return
-        } ?: return
-        val newSession = try {
-            AgentSession(
-                network = network,
-                identity = identity,
-                deviceKeyStore = deviceKeyStore,
-                parentScope = lifecycleScope,
-                listener = object : AgentSessionListener {
-                    override fun onConnected() {
-                        synchronized(runtimeLock) {
-                            if (generation != attemptGeneration || session == null) return
-                            reconnectAttempt = 0
-                        }
-                        pathController.reduce(PathEvent.RelayConnected(token))
-                        AgentStatusBus.update {
-                            it.copy(relay = RelayHealth.Connected, errorClass = ErrorClass.None)
-                        }
-                    }
-
-                    override fun onTerminated(errorClass: ErrorClass) {
-                        val shouldReconnect = synchronized(runtimeLock) {
-                            if (generation != attemptGeneration || selectedNetwork != network) return
-                            session = null
-                            true
-                        }
-                        if (shouldReconnect) {
-                            pathController.reduce(PathEvent.RelayDisconnected(token))
-                            AgentStatusBus.update {
-                                it.copy(
-                                    relay = RelayHealth.Connecting,
-                                    activeStreams = 0,
-                                    errorClass = errorClass,
-                                )
-                            }
-                            scheduleReconnect(network, token, attemptGeneration)
-                        }
-                    }
-                },
-            )
-        } catch (_: Exception) {
-            AgentStatusBus.update { it.copy(relay = RelayHealth.Disconnected, errorClass = ErrorClass.Credential) }
-            return
-        }
         synchronized(runtimeLock) {
-            if (generation != attemptGeneration || selectedNetwork != network) {
-                newSession.close()
-                return
-            }
-            session?.close()
-            session = newSession
+            if (networkCallback == null || selectedNetwork != network || selectedToken != token || rotationController.state.isActive()) return
+            directSupervisor.selectNetwork(network)
         }
-        newSession.connect()
+        directSupervisor.reconcile()
     }
-
-    private fun scheduleReconnect(network: Network, token: String, expectedGeneration: Long) {
-        synchronized(runtimeLock) {
-            reconnectJob?.cancel()
-            val delayMillis = (2_000L shl reconnectAttempt.coerceAtMost(4)).coerceAtMost(30_000L)
-            reconnectAttempt++
-            reconnectJob = lifecycleScope.launch {
-                delay(delayMillis)
-                val allowed = synchronized(runtimeLock) {
-                    generation == expectedGeneration && selectedNetwork == network && session == null
-                }
-                if (allowed) connectRelay(network, token)
-            }
-        }
-    }
-
     private fun requestIpRotation(holdSeconds: Int) {
         val request = synchronized(runtimeLock) {
             val token = selectedToken ?: return
@@ -375,19 +314,9 @@ class AgentForegroundService : LifecycleService() {
     }
 
     private fun closeRelayForRotation() {
-        val oldSession = synchronized(runtimeLock) {
-            generation++
-            reconnectJob?.cancel()
-            reconnectJob = null
-            session.also { session = null }
-        }
-        oldSession?.close()
-        reconnectAttempt = 0
-        AgentStatusBus.update {
-            it.copy(relay = RelayHealth.Disconnected, activeStreams = 0, errorClass = ErrorClass.None)
-        }
+        synchronized(runtimeLock) { generation++; directSupervisor.stop() }
+        AgentStatusBus.update { it.copy(relay = RelayHealth.Disconnected, activeStreams = 0, errorClass = ErrorClass.None) }
     }
-
     private fun probeForRotation(networkToken: String, before: Boolean) {
         rotationProbeJob?.cancel()
         val expectedAttempt = rotationController.state.attemptId()
@@ -458,17 +387,13 @@ class AgentForegroundService : LifecycleService() {
 
     private fun stopCellularRuntime() {
         val callback: ConnectivityManager.NetworkCallback?
-        val oldSession: AgentSession?
         synchronized(runtimeLock) {
             generation++
             callback = networkCallback
             networkCallback = null
             selectedNetwork = null
             selectedToken = null
-            reconnectJob?.cancel()
-            reconnectJob = null
-            oldSession = session
-            session = null
+            directSupervisor.stop()
         }
         cancelRotationJobs()
         processRotation(RotationEvent.Reset)
@@ -479,9 +404,7 @@ class AgentForegroundService : LifecycleService() {
                 // Callback was already released by the platform.
             }
         }
-        oldSession?.close()
         pathController.reduce(PathEvent.StopRequested)
-        reconnectAttempt = 0
         AgentStatusBus.reset()
     }
 

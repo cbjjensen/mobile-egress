@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # Desktop setup simplification implementation plan
 
 **Goal:** Implement all six findings approved in the setup review directly on main.

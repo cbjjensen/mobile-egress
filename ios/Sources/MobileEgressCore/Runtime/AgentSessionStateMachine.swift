@@ -19,13 +19,19 @@ struct AgentSessionStateMachine {
     private struct TargetWrite {
         let id: UInt64
         let data: Data
+        let lease: DirectBudgetLease?
+    }
+    private struct TargetPayload {
+        let data: Data
+        let lease: DirectBudgetLease?
+        var count: Int { data.count }
     }
 
     private struct Stream {
         let token: UInt64
         var phase: StreamPhase
         var hasTarget: Bool
-        let inboundQueue: BoundedDeque<Data>
+        let inboundQueue: BoundedDeque<TargetPayload>
         var queuedInboundBytes = 0
         var writeInFlight: TargetWrite?
         var writeFailed = false
@@ -58,6 +64,8 @@ struct AgentSessionStateMachine {
     }
 
     private let limits: AgentRuntimeLimits
+    private let sharedBudget: DirectPhoneBudget?
+    private let budgetOwner = UUID().uuidString
     private let admission: StreamAdmission
     private let outbound: OutboundMailbox
     private var tombstones: TombstoneWindow
@@ -74,15 +82,17 @@ struct AgentSessionStateMachine {
     private var transportV2 = false
     private(set) var terminalFailure: AgentRuntimeErrorClass?
 
-    init(limits: AgentRuntimeLimits = .production) {
+    init(limits: AgentRuntimeLimits = .production, sharedBudget: DirectPhoneBudget? = nil) {
         self.limits = limits
+        self.sharedBudget = sharedBudget
         admission = StreamAdmission()
         outbound = OutboundMailbox(
             controlCapacity: limits.outboundControls,
             dataCapacity: limits.outboundData,
             perStreamDataCapacity: limits.outboundDataPerStream,
             dataByteCapacity: limits.outboundDataBytes,
-            cancellationHistoryCapacity: limits.tombstones
+            cancellationHistoryCapacity: limits.tombstones,
+            sharedBudget: sharedBudget
         )
         tombstones = TombstoneWindow(limit: limits.tombstones)
     }
@@ -167,15 +177,35 @@ struct AgentSessionStateMachine {
         return startNextTargetWrite(streamID: streamID, token: token)
     }
 
+    struct PreparedTargetData {
+        let frame: Data
+        let payloadBytes: Int
+        let lease: DirectBudgetLease?
+    }
+
     mutating func targetReceived(streamID: String, token: UInt64, data: Data) -> [AgentRuntimeEffect] {
-        guard let stream = streams[streamID], stream.token == token, stream.phase == .open else { return [] }
-        guard !data.isEmpty else { return [] }
+        let (prepared, effects) = prepareTargetData(streamID: streamID, token: token, data: data)
+        guard let prepared else { return effects }
+        return acceptTargetData(streamID: streamID, token: token, prepared: prepared)
+    }
+
+    mutating func prepareTargetData(streamID: String, token: UInt64, data: Data) -> (PreparedTargetData?, [AgentRuntimeEffect]) {
+        guard let stream = streams[streamID], stream.token == token, stream.phase == .open, !data.isEmpty else { return (nil, []) }
         guard data.count <= limits.targetReadChunkBytes,
               let frame = try? WireProtocol.encode(type: .data, streamID: streamID, payload: data, transportV2: transportV2)
         else {
-            return failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect)
+            return (nil, failStream(streamID: streamID, token: token, code: "target_failure", error: .targetConnect))
         }
-        guard outbound.offerData(frame, streamID: streamID) else {
+        let lease = outbound.reserveData(frame, streamID: streamID)
+        guard sharedBudget == nil || lease != nil else {
+            return (nil, failStream(streamID: streamID, token: token, code: "agent_unavailable", error: .backpressure, updatesPersistentErrorClass: false))
+        }
+        return (PreparedTargetData(frame: frame, payloadBytes: data.count, lease: lease), [])
+    }
+
+    mutating func acceptTargetData(streamID: String, token: UInt64, prepared: PreparedTargetData) -> [AgentRuntimeEffect] {
+        guard let stream = streams[streamID], stream.token == token, stream.phase == .open else { return [] }
+        guard outbound.offerData(prepared.frame, streamID: streamID, reservedLease: prepared.lease) else {
             return failStream(
                 streamID: streamID,
                 token: token,
@@ -184,8 +214,17 @@ struct AgentSessionStateMachine {
                 updatesPersistentErrorClass: false
             )
         }
-        bytesDownloaded = adding(bytesDownloaded, data.count)
+        bytesDownloaded = adding(bytesDownloaded, prepared.payloadBytes)
         return []
+    }
+
+    func targetReadIsPossible(streamID: String, token: UInt64) -> Bool {
+        guard !terminal, let stream = streams[streamID], stream.token == token else { return false }
+        return stream.phase == .open
+    }
+
+    func targetReadCanProceed(streamID: String, token: UInt64) -> Bool {
+        targetReadIsPossible(streamID: streamID, token: token) && outbound.hasStreamDataCapacity(streamID)
     }
 
     mutating func targetEnded(streamID: String, token: UInt64) -> [AgentRuntimeEffect] {
@@ -376,11 +415,16 @@ struct AgentSessionStateMachine {
                 updatesPersistentErrorClass: false
             )
         }
+        let lease = sharedBudget?.acquire(.inbound, bytes: payload.count, streamKey: budgetOwner + "/" + envelope.streamID)
+        guard sharedBudget == nil || lease != nil else {
+            releaseTargetIngress(frameCount: 1, byteCount: payload.count)
+            return failStream(streamID: envelope.streamID, token: stream.token, code: "agent_unavailable", error: .backpressure, updatesPersistentErrorClass: false)
+        }
         if stream.canWrite, stream.writeInFlight == nil {
-            return beginTargetWrite(streamID: envelope.streamID, token: stream.token, data: payload)
+            return beginTargetWrite(streamID: envelope.streamID, token: stream.token, data: payload, lease: lease)
         }
         guard var queuedStream = streams[envelope.streamID], queuedStream.token == stream.token,
-              queuedStream.inboundQueue.append(payload)
+              queuedStream.inboundQueue.append(TargetPayload(data: payload, lease: lease))
         else {
             releaseTargetIngress(frameCount: 1, byteCount: payload.count)
             return failStream(
@@ -414,14 +458,15 @@ struct AgentSessionStateMachine {
     private mutating func beginTargetWrite(
         streamID: String,
         token: UInt64,
-        data: Data
+        data: Data,
+        lease: DirectBudgetLease? = nil
     ) -> [AgentRuntimeEffect] {
         guard var stream = streams[streamID], stream.token == token,
               stream.canWrite, stream.writeInFlight == nil
         else { return [] }
         let writeID = nextWriteID
         nextWriteID &+= 1
-        stream.writeInFlight = TargetWrite(id: writeID, data: data)
+        stream.writeInFlight = TargetWrite(id: writeID, data: data, lease: lease)
         streams[streamID] = stream
         return [.writeTarget(streamID: streamID, token: token, writeID: writeID, data: data)]
     }
@@ -433,7 +478,12 @@ struct AgentSessionStateMachine {
         else { return [] }
         stream.queuedInboundBytes -= data.count
         streams[streamID] = stream
-        return beginTargetWrite(streamID: streamID, token: token, data: data)
+        return beginTargetWrite(streamID: streamID, token: token, data: data.data, lease: data.lease)
+    }
+
+    func targetWriteLease(streamID: String, token: UInt64, writeID: UInt64) -> DirectBudgetLease? {
+        guard let stream = streams[streamID], stream.token == token, stream.writeInFlight?.id == writeID else { return nil }
+        return stream.writeInFlight?.lease
     }
 
     private mutating func enqueueGracefulCloseIfDrained(

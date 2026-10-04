@@ -99,9 +99,10 @@ public enum TargetConnectionEvent: Equatable, Sendable {
 
 public typealias TargetConnectionEventHandler = @Sendable (TargetConnectionEvent) async -> Void
 public typealias TargetConnectionSendCompletion = @Sendable (Result<Void, TargetConnectionFailure>) async -> Void
+public typealias TargetConnectionReadReadiness = @Sendable () async -> Bool
 
 public protocol TargetConnectionIO: Sendable {
-    func start(eventHandler: @escaping TargetConnectionEventHandler)
+    func start(eventHandler: @escaping TargetConnectionEventHandler, readReadiness: @escaping TargetConnectionReadReadiness)
     func send(_ data: Data, completion: @escaping TargetConnectionSendCompletion) -> Bool
     func cancel()
 }
@@ -148,6 +149,7 @@ public struct TargetConnectionConfiguration: Equatable, Hashable, Sendable {
 }
 
 public struct RelayWebSocketConfiguration: Equatable, Sendable {
+    public let additionalHeaders: [String: String]
     public let url: URL
     public let hostname: String
     public let port: Int
@@ -164,6 +166,14 @@ public struct RelayWebSocketConfiguration: Equatable, Sendable {
     public let maximumMessageBytes = WireProtocol.maximumWebSocketMessageBytes
 
     public init(identity: AgentIdentity) throws {
+        try self.init(identity: identity, direct: false)
+    }
+
+    public init(directIdentity: AgentIdentity) throws {
+        try self.init(identity: directIdentity, direct: true)
+    }
+
+    private init(identity: AgentIdentity, direct: Bool) throws {
         guard identity.role == "agent",
               !identity.keyTag.isEmpty,
               !identity.caCertificateDER.isEmpty
@@ -175,7 +185,8 @@ public struct RelayWebSocketConfiguration: Equatable, Sendable {
             throw CoreValidationError.invalidRelayOrigin
         }
         components.scheme = "wss"
-        components.path = "/v1/session"
+        components.path = direct ? "/v2/direct/session" : "/v1/session"
+        additionalHeaders = direct ? ["X-Mobile-Egress-Protocol": "direct/1"] : [:]
         components.queryItems = [URLQueryItem(name: "transport", value: "2")]
         guard let url = components.url else { throw CoreValidationError.invalidRelayOrigin }
         self.url = url

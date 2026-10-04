@@ -1,81 +1,101 @@
 # Mobile Egress
 
-**Permanent routing requirement:** Traffic must pass through the owner's personal Windows PC or Mac. Cloud-hosted, VPS-hosted, EC2-hosted, and managed Mobile Egress relays are not allowed and must not be suggested as deployment or performance alternatives. Keep Tailscale Funnel and the local relay; optimize within that topology. EC2 nodes remain workload Clients only.
+**Use your phone’s cellular connection from your Windows PC or Mac.**
 
-Supporting peers negotiate raw binary data framing and bounded destination-address fallback while remaining compatible with older peers. These optimizations keep the existing personal-computer routing and single-session topology; see [protocol details](docs/protocol.md#negotiated-transport-extensions).
+Mobile Egress routes traffic from proxy-compatible applications through your own Android phone or iPhone. Browse, run automation, or test an application over a mobile connection while keeping the application on your computer.
 
-Mobile Egress lets selected applications on Windows and Apple Silicon Mac workload machines use an Android or iOS Agent device's cellular connection. AWS is optional; EC2/SSM remains an alternative Client management path. The private relay/controller runs on Windows 10/11 or Apple Silicon macOS 13+; Tailscale Funnel carries raw Mobile Egress TLS to that loopback-only relay.
+One product, two companion apps: **Mobile Egress Client** runs on your computer or server, and the **Mobile Egress phone app** supplies the cellular connection. You provide the computer, phone, and mobile data plan.
+
+> **Version 2.0 is in pre-release validation.** Signed installation and physical-device testing are still pending; 2.0 downloads are not release-ready. Published 1.x builds use the previous architecture and cannot be used with this setup.
+
+## What you can do
+
+- **Use familiar proxy settings.** Connect applications that support authenticated HTTP/HTTPS CONNECT or SOCKS5 over TCP.
+- **Use your own cellular connection.** Traffic exits through your phone’s carrier network. The Client-to-phone connection is encrypted and authenticated.
+- **Connect several computers.** Save up to ten Clients on one phone, with independent connection status and enable/disable controls. They share the same phone and cellular capacity.
+- **Manage access locally.** Pair by QR code, copy proxy details, remove a paired phone, and recover after a computer’s public address changes.
+- **Run directly.** No separate relay computer, AWS account, Tailscale, or Funnel setup is required.
+
+## How it works
 
 ```text
-Windows or Mac application -> local HTTP/CONNECT or SOCKS5 -> Client service
-  -> Tailscale Funnel -> owner's personal-computer relay -> Agent -> cellular Internet
+Your application → local Client proxy ⇄ your phone → cellular Internet
 ```
 
-Ordinary HTTP, HTTPS through CONNECT, and SOCKS are browser/application opt-ins on the same workload machine as the Client. Windows uses `127.0.0.2` and Mac uses `127.0.0.1`, on HTTP port `1081` and SOCKS port `1080`. They do not change default routes or system proxies and are not VPN, public, UDP, or QUIC proxy behavior. There is no relay EC2 instance, inbound workload rule, Elastic IP, router change, local port-forward, or public proxy listener. The personal relay computer and Agent device must remain powered on and connected. Standalone Clients support x64 Windows 10/11 and Server 2019+, and Apple Silicon macOS 13+. See [standalone Client setup and recovery](docs/standalone-clients.md). On a personal Mac relay, the controlling administrator must remain logged in because its Tailscale GUI is per-user; this does not apply to the separate workload Client LaunchDaemon.
+The phone connects to the Client on your computer over cellular. Your application connects to a local proxy on that same computer. Only applications configured to use the proxy send their traffic through Mobile Egress.
 
-## Downloads
+**Your computer must be reachable from the phone’s cellular network.** It needs a public address or router port forwarding. The phone does not need an inbound port, and the devices do not need to be on the same network.
 
-Use only accepted artifacts exposed through the managed **Downloads** links on the official [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). The next normal **Desktop** release keeps the Windows/Mac controller installers, Windows/Mac standalone Client installers, and existing raw Windows EC2 Client on one tag. Android is independently selectable. New Client installers still require the release and physical acceptance recorded in the implementation plan. The immutable v1.1.0 prerelease contains Windows, the EC2 Client, and Android. The explicitly approved v1.1.1 proxy hotfix contains only the current Windows bundle and EC2 Client; its notes fall back to the published v1.1.0 Android APK and mark macOS unavailable pending Apple Developer Program enrollment. A Mac PKG cannot be added later to either published tag, so the first signed/notarized Mac release must use a version later than v1.1.1. Mac publication/acceptance and the iOS TestFlight build remain pending in the [current status](docs/status.md).
+## What you need
 
-## Friend quick start
+The initial 2.0 platform targets are:
 
-Each friend self-hosts a separate bridge and chooses one controller platform after that platform's accepted artifact has been published. Until the pending Mac and iOS gates are complete, use the managed v1.1.1 Windows downloads with the published v1.1.0 Android APK fallback after the hotfix is accepted.
+| Device | Requirements |
+|---|---|
+| Windows computer or server | x64 Windows 10/11 or Windows Server 2019+ |
+| Mac | Apple Silicon, macOS 13+ |
+| Android phone | Android 10+ with working cellular data |
+| iPhone | iOS 17+ with working cellular data; app must remain open and active |
 
-### Windows controller
+You also need permission to install the Client and allow its incoming connection, plus an application with authenticated proxy support. Linux and Intel Macs are outside the initial release.
 
-1. Releases built with simplified setup provide the signed `MobileEgressSetup.exe` from the official [GitHub Releases](https://github.com/cbjjensen/mobile-egress/releases). It contains the complete controller payload; no extraction or adjacent folder is needed. Previously published releases retain their original ZIP downloads. Use the accepted mobile Agent artifact for your platform. Obtain the publisher certificate fingerprint through a separate trusted channel and use the official download source.
-2. You may independently compare the signer certificate Windows shows for the exact `MobileEgressSetup.exe` with the SHA-256 fingerprint received through the separate channel. **Properties → Digital Signatures** and trusted system Windows PowerShell are optional checks described in the [Windows friend quick start](windows-client/README.md#friend-quick-start), not required launchers. Directly double-clicking setup remains supported; confirm its displayed fingerprint reminder with **Yes**, approve one UAC prompt, and let it transactionally install and launch the controller.
-3. Choose **Set up this computer** in the **Next step** card. Setup installs Tailscale only when missing, opens browser sign-in, and continues to the local bridge. Approve Windows installation/service permissions and the official Tailscale Funnel browser prompt when requested. The app shows the current stage. **Cancel setup** stops subsequent steps and waits for an already-running native installer to finish safely. To resume, choose the setup action again; completed stages are skipped.
-4. In **Agent**, generate the short-lived Agent QR. Install/open the Android or iOS app, scan it, and start the Agent. Both implementations require cellular and do not fall back to Wi-Fi.
-5. When you want a best-effort new carrier address, choose **Rotate cellular IP** in the Android or iOS/iPadOS Agent and confirm before any active streams are disconnected. Follow the platform guidance to turn Airplane Mode on, wait for the displayed hold interval, and turn it off. Android can guide you through its system Internet controls; on iOS/iPadOS, open Control Center manually. A local notification can cue the end of the hold interval when permission is granted, but notification permission is optional. Both Agents compare the available cellular public address families, reconnect automatically, and report **Changed**, **Unchanged**, or **Unverified** without copying the addresses. An unchanged normal attempt offers a longer retry.
-6. By default, open **Clients → Add Windows/Mac Client** and follow the [graphical install and pairing guide](docs/standalone-clients.md). For EC2 instead, choose **Add from AWS** and use **AWS (optional)** with the **IAM user access key** path. The controller is fixed to `us-east-1`.
-   - If the friend only has the AWS root login, they may use root in the browser to create an IAM user named `mobile-egress`. Root is for console setup only; never create or paste root access keys.
-   - Create an access key for the `mobile-egress` IAM user and paste that access key into Mobile Egress.
-   - IAM Identity Center remains available under **Advanced** for people who already know their Start URL. That URL looks like `https://d-xxxxxxxxxx.awsapps.com/start`, not the normal EC2 console URL.
-7. For the optional AWS path, in **Clients → Add from AWS**, select up to ten running x86-64 Windows Server 2019 instances. Choose **Prepare SSM** only when a node is not already SSM online. An attached profile is inspected without being replaced; the app asks before adding the SSM policy only when it is missing. For a new profile, AWS attachment propagation errors are retried automatically with bounded backoff for up to one minute. The controller then gives the already-running SSM Agent 30 seconds to refresh its credentials. If registration is still absent, choose **Restart EC2 and continue** and confirm the brief interruption; the controller requests a reboot only for that selected instance, waits for a fresh Agent ping, and installs the Client automatically. It never reboots without confirmation and never terminates or recreates the instance. On later runs, an online node shows **SSM ready** and skips profile setup entirely. **Install Client** remains available for retrying an interrupted install.
-8. For a Client version `1.1.1` or later, choose **Copy proxy line** and paste the returned `127.0.0.2:1081:<username>:<password>` line into Refract running on that same EC2 instance. Port `1081` forwards ordinary HTTP requests and uses CONNECT for HTTPS destinations. Both copy actions remain disabled for older managed nodes: choose **Update**, wait for Client `1.1.1` or later, and copy the value again so a stale `.1` value is not reused. **Copy SOCKS5 URL** returns the SOCKS-aware form at `127.0.0.2:1080`. Configure only the intended application; do not set a Windows system proxy, default route, VPN, firewall exposure, or EC2 ingress rule.
+The setup wizard configures the Client's local firewall access where permitted. Windows uses an executable/service/port rule; macOS uses an application exception for the Client daemon. Existing managed or block-all policies can require administrator help.
 
-Friends do not clone the repository, run Docker, execute setup scripts, open inbound EC2 ports, or handle Owner invitations. They do need permission to approve Tailscale, use an AWS account only for EC2 management, and install the accepted Android APK or, once available, the accepted TestFlight iOS build.
+For a computer behind a home router, forward **TCP 8443** to that computer, or use the public/local ports you chose in Advanced settings. Mobile Egress does not change your router automatically.
 
-### macOS controller
+**Hosted servers, including AWS EC2, may require an additional firewall rule.** Allow inbound TCP on your Client's configured listener port—8443 by default—in the provider firewall or EC2 security group. Your server must also have a publicly reachable address and network route. The installer does not change cloud security groups or router settings. Never expose proxy ports 1080 or 1081. See the [server networking guide](docs/standalone-clients.md#hosted-servers-and-aws-ec2).
 
-These steps apply only after the signed/notarized Mac PKG completes the pending release and physical-acceptance gates and is published. Then use an administrator account on an Apple Silicon Mac running macOS 13 or later.
+If your ISP uses carrier-grade NAT (CGNAT), ordinary router forwarding may not make the computer reachable. Arrange a reachable address with your provider or use a supported computer/server that already has one. Automatic NAT traversal is not included.
 
-1. Download the managed, quarantined `mobile-egress-macos-<version>-arm64.pkg` directly from GitHub Releases and install it normally with Apple Installer into `/Applications/ZFNF Mobile Egress.app`. Do not remove quarantine or bypass Gatekeeper. A production release must have the expected Developer ID Installer signature, notarization ticket, and staple.
-2. Open ZFNF Mobile Egress and choose **Set up this computer**. Setup verifies and installs official standalone Tailscale only when needed, then opens sign-in. Approve the Tailscale system extension and VPN configuration when requested. A correctly signed existing standalone or App Store Tailscale app is accepted.
-3. If **Login Items approval required** appears, approve ZFNF Mobile Egress in the System Settings page that opens. Keep setup running: it observes approval and automatically finishes the local bridge and Tailscale Funnel setup. No Owner key is created while approval is pending. Cancellation or a timeout stops automatic continuation; choose the setup action again to resume. Follow the Agent pairing, cellular sharing, Client pairing (or optional AWS/EC2), and application verification steps in the **Next step** card. Keep the controlling administrator logged in.
+## Setup
 
-## Capacity and safety boundaries
+Use matching 2.x computer and phone builds once accepted downloads are available.
 
-- At most ten combined paired and AWS-managed Clients per controller, including pending reservations.
-- No fixed active-stream ceiling in the relay, Windows Client, Android, or iOS. DNS admission has 256 concurrent worker permits, independent of established streams, with no waiting queue; excess DNS work rejects with `agent_unavailable`. Canceled workers retain their permit until they return.
-- Senders prefer 16 KiB data frames while accepting valid frames up to 32 KiB. Every retained data lane allows 32 frames per stream and is capped at 8,192 frames and 64 MiB. Client-to-Agent and Agent-to-Client data use separate 64 MiB directional budgets. Data saturation closes only the contributing stream; required-control saturation or writer failure closes the affected session.
-- Mobile Egress mTLS authenticates Owner, Client, and Agent identities. Tailscale supplies ingress, not application identity.
-- EC2 Client private keys and configuration private keys are generated on-node and never returned through SSM.
-- SSM receives only signed-install commands, public CSR/bootstrap output, and sealed configuration ciphertext. Proxy credentials and raw certificate/configuration values are not placed in SSM input, output, or logs.
-- The app never creates or terminates EC2 instances, changes public IPs, or opens security-group ingress.
-- A Mac logout, Tailscale loss, or Agent cellular loss fails proxy traffic closed; the product never changes a Mac default route and the Agent never falls back to Wi-Fi.
-- The first later Mac-bearing release is clean-install-only for a new Mac bridge: Windows private state is not migrated. Same-Mac signed PKG update/repair preserves identities/state. Intel/universal support, Linux Clients, ZFNF Mac App Store distribution, and automatic updates are out of scope.
-- This is for light, personal, interruption-tolerant traffic. Tailscale Funnel availability and bandwidth limits apply.
+1. **Install both apps.** Install the Windows Client or Mac Client on the computer running your applications, and the compatible phone app on your phone.
+2. **Run the installer and follow the setup wizard.** Mobile Egress suggests your public address, configures local access where permitted, and guides you through pairing your phone. You can edit the address and port before continuing. If the Mac app does not open automatically, open Mobile Egress Client from Applications.
+3. **Complete network access and pair your phone.** Follow the wizard's Home/router, AWS EC2, or Other hosted server instructions. Scan its private pairing QR in the phone app; invitations expire after ten minutes for initial pairing.
+4. **Verify the connection.** Tap **Start** on the phone and wait for **Connected** in the wizard. A suggested address or a successful firewall check alone does not prove the phone can reach your computer. Follow the platform requirements below.
+5. **Connect your application.** Use **Copy HTTP proxy** or **Copy SOCKS URL**, then enter those details in your application's proxy settings. Copies include the username and password; keep them private.
 
-Automated component tests exercise more than 1,024 live streams and independently bounded data queues. Physical throughput and sustained-load evidence are reported separately in [the browser throughput report](docs/browser-throughput-measurements.md). Socket and device memory limits still apply; older peers may enforce their former stream caps.
+Address suggestions use ipify, which receives your computer's outgoing public IP. Suggestions may describe a VPN or NAT gateway instead of a reachable computer. You can enter a hostname or IP manually if discovery fails; ongoing sharing does not depend on the lookup service. **Finish later** preserves setup, and **Review setup** lets you revisit settings without resetting an existing pairing.
 
-## Documentation
+The HTTP copy uses `host:port:username:password`; enter these as separate fields if your application requires them. The SOCKS copy is a URL.
 
-- [Standalone Windows/Mac Clients](docs/standalone-clients.md)
-- [Architecture](docs/architecture.md)
-- [Release, deployment, and step-by-step physical acceptance](docs/deployment.md)
-- [Paced stream admission acceptance](docs/capacity-acceptance.md)
-- [Physical acceptance record template](docs/templates/physical-acceptance-record.md)
-- [Operations](docs/operations.md)
-- [Mac build server over SSH](docs/ios-build-server.md)
-- [Security model](docs/security-model.md)
-- [Protocol](docs/protocol.md)
-- [Controller status monitoring](docs/controller-status-monitoring.md) and [native measurements](docs/controller-status-measurements.md)
-- [Current status](docs/status.md)
-- [Signed macOS Keychain integration](docs/macos-keychain-integration.md)
-- [Desktop controller and headless Windows Client](windows-client/README.md)
-- [Android Agent](android/README.md)
-- [iOS Agent](ios/README.md)
+| Computer | HTTP / HTTPS CONNECT | SOCKS5 |
+|---|---|---|
+| Windows | `127.0.0.2:1081` | `127.0.0.2:1080` |
+| Mac | `127.0.0.1:1081` | `127.0.0.1:1080` |
 
-Developers can run `& .\scripts\test-all.ps1` from Windows PowerShell. The normal coupled Desktop entry point is `& .\scripts\release-desktop.ps1 -ReleaseVersion '<version>'`; `release-android.ps1` remains Android-only, and `release-all.ps1 -Components Desktop,Android` coordinates a complete release. The immutable v1.1.0 exception is `release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android`. The approved v1.1.1 hotfix exception is `release-all.ps1 -ReleaseVersion 1.1.1 -Components Windows`; it does not select Android or macOS. `-Publish` separately authorizes pushing source/tag state and changing GitHub. Follow the [deployment runbook](docs/deployment.md) before invoking a release.
+These proxy addresses are local to the computer. **Keep ports 1080 and 1081 private.** Only the phone connection listener needs incoming access. Configure individual applications rather than a system-wide proxy.
+
+## Keeping your phone connected
+
+**Android:** after you tap Start, sharing runs through a foreground service with a visible notification. You can leave the app or turn off the screen. After rebooting or force-stopping the app, open it and tap Start again.
+
+**iPhone:** leave Mobile Egress open, active, and unlocked while sharing. **Keep screen awake while sharing** is enabled by default and prevents automatic locking during active sharing. Manually locking the phone, switching apps, or an interruption that makes the app inactive pauses traffic. Returning to the app reconnects if sharing is still requested; tapping Stop clears that request and restores normal automatic locking. Turning keep-awake off allows normal auto-lock, which pauses sharing when it occurs. Keep-awake does not enable background operation.
+
+For longer iPhone sessions, use a dedicated phone and keep it powered. The computer must also remain awake and connected. Its Client service can continue after logout; the Client management window does not need to stay open.
+
+## Performance and limits
+
+- **Cellular only.** Both the connection to your computer and outgoing Internet traffic use cellular data. If cellular becomes unavailable, traffic stops; it does not fall back to phone Wi-Fi.
+- **Speed depends on your connection.** There is no fixed Mbps throttle. Cellular upload and download, carrier congestion, computer networking, and device resources affect performance. Even downloading a page requires the phone to upload that data back to your computer. No minimum speed is guaranteed.
+- **Bring your own data plan.** Traffic consumes your phone’s mobile data. Mobile Egress does not supply cellular service or a pool of proxy IP addresses.
+- **One phone per Client.** Each Client pairs with one phone. Each phone saves up to ten Clients, including pending and disabled entries.
+- **Public Internet destinations over TCP.** Private-network destinations, UDP, and QUIC are unsupported. Applications must send the intended traffic through their configured proxy.
+- **Carrier-controlled addresses.** Guided cellular IP rotation requires manual Airplane Mode steps and interrupts every connected Client. A new address is not guaranteed. Separate Clients on one phone do not receive separate dedicated IPs.
+
+## Downloads and existing installations
+
+Check [official releases](https://github.com/cbjjensen/mobile-egress/releases) for availability and compatibility notes. The 2.x computer packages are the **Windows Client installer** (`MobileEgressClientSetup.exe`) and **Apple Silicon Mac Client PKG**, paired with compatible Android or iPhone builds. The pre-release notice above remains in effect; historical 1.x downloads are not substitutes.
+
+Upgrading from 1.x requires fresh pairing and a reachable Client endpoint. Follow the [installation and migration guide](docs/standalone-clients.md). Retire a former controller computer using the [separate retirement instructions](docs/controller-retirement.md).
+
+## Help and technical documentation
+
+- [Install, pair, upgrade, and repair](docs/standalone-clients.md)
+- [Connection troubleshooting and endpoint recovery](docs/operations.md)
+- [Android guide](android/README.md) and [iPhone guide](ios/README.md)
+- [Architecture](docs/architecture.md), [security](docs/security-model.md), and [protocol](docs/protocol.md)
+- [Release validation status](docs/direct-acceptance.md) and [release process](docs/deployment.md)
+- [Development plan](docs/superpowers/plans/2026-10-03-direct-client-phone.md) and [historical relay measurements](docs/latency-benchmarks.md)

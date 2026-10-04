@@ -1,3 +1,5 @@
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
+
 # iOS Functional Parity Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILLS: use `superpowers:subagent-driven-development`, `superpowers:test-driven-development`, and `.agents/skills/mobile-egress-mac-build-server` as applicable. Work only in the existing `codex/ios-agent` worktree.

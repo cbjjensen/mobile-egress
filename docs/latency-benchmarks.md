@@ -1,8 +1,205 @@
-# Local transport latency benchmarks
+> Historical 1.x relay architecture evidence. Superseded for current product behavior by the approved direct Client-to-phone plan; measurements below are not direct-mode acceptance.
 
-These benchmarks measure local transport behavior with controlled peers. They do
-not measure cellular RTT, deployed relay latency, Internet destination response
-time, or user browsing performance.
+# Transport measurements
+
+Each section identifies whether it measures local transport behavior or public
+Funnel throughput. None measures the complete phone/cellular traffic path or
+user browsing performance.
+
+## Public Funnel throughput (2026-10-03)
+
+Six sequential, completed transfers through the public Funnel ingress measured
+approximately **4–5 Mbps** of payload goodput. These are observations of this
+particular path. Tailscale documents
+[non-configurable Funnel bandwidth limits](https://tailscale.com/docs/features/tailscale-funnel)
+without publishing a numerical limit, so these results do not establish its
+policy cap.
+
+| Direction, from test client | Run 1 (Mbps) | Run 2 (Mbps) | Run 3 (Mbps) | Median (Mbps) | Median (decimal MB/s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Download | 4.028 | 4.832 | 4.188 | 4.188 | 0.524 |
+| Upload | 4.604 | 4.367 | 4.591 | 4.591 | 0.574 |
+
+The temporary client and authenticated TLS backend both ran on the owner's
+personal Windows PC, with Tailscale 1.102.3 and Go 1.26.3. The client explicitly
+dialed a public ingress IP on port 10000, verified against Google and Cloudflare
+DNS-over-HTTPS responses. Every socket's actual destination was checked, and
+TLS used the real Funnel hostname with a pinned temporary CA. Windows routed
+the public connection through Ethernet with no Tailscale exit node; HTTP
+proxies, redirects, and compression were disabled. This avoids MagicDNS
+silently selecting a direct tailnet connection.
+
+Traffic left the PC through public Funnel and returned to a loopback backend
+on that same PC. Both test directions therefore used the home's WAN uplink
+and downlink, as well as Funnel's transport. The test cannot separate a Funnel
+limit from home connection limits or congestion. It includes neither the
+Mobile Egress relay protocol nor a phone Agent or cellular connection. It also
+does not distinguish limits per connection from limits shared across Clients.
+
+Each invocation discarded a warmup capped at 512 KiB, then produced data for
+up to ten seconds with a 256 MiB safety maximum. A bounded 60-second grace
+allowed buffered data to drain. Downloads measured verified bytes received by
+the client and matched the server's final byte count; uploads measured bytes
+received and verified by the server, then checked its acknowledgement. All six
+transfers completed with matching bytes and no byte cap reached. The receive
+windows were 20.43–30.04 seconds for downloads and 10.08–10.51 seconds for
+uploads: the ten-second setting bounds production, not the total receiving
+interval. Rates use the actual receiving intervals, including the tail.
+
+Matching loopback controls completed 256 MiB at 5.92 Gbps download and 4.30 Gbps
+upload, each in under one second. They establish ample local test capacity,
+not sustained WAN performance. Earlier incomplete public attempts used an
+insufficient eight-second drain grace; their partial results are excluded.
+
+The existing production mapping on port 8443 remained intact. The temporary
+TCP mapping and its AllowFunnel permission were removed, the test server was
+stopped, and the original Funnel configuration was verified exactly restored.
+The installed relay and Tailscale services remained running.
+
+[Sanitized results and interval samples](benchmarks/funnel-2026-10-03.json)
+include the harness source hash and cleanup confirmation. The temporary
+harness, private routing audit, and credentials remain in the ignored local
+benchmark directory; private endpoints and credentials are excluded from this
+record.
+
+## WAN isolation follow-up (2026-10-03)
+
+The follow-up demonstrates a constraint in the **shared home upstream path**:
+roughly **5.3 Mbps of available payload throughput even when Funnel is
+bypassed**. This explains why the earlier public-Funnel path could only deliver
+about 4–5 Mbps. The measurements do not identify an ISP plan, router setting,
+or competing household traffic, and do not exclude an additional Funnel limit.
+
+| Test | Download (Mbps) | Upload (Mbps) |
+| --- | ---: | ---: |
+| Personal Windows PC directly to Cloudflare, two runs | 421–493 | 5.32–5.52 |
+| Mac through its existing VPN to Cloudflare, two runs | 91–103 | 4.42–4.71 |
+| Mac through public Funnel, one transfer | 4.59 | 4.15 |
+| Mac through public Funnel, two overlapping transfers combined | 4.40 | 3.88 |
+
+Simultaneous direct Internet uploads from the PC and Mac delivered **5.28 Mbps
+combined**. The Mac and PC have different public IPv4 exits, but share the
+physical home connection. Adding the second source split the available rate
+instead of doubling it. To control for default IPv6 selection on the PC, a
+further test forced IPv4: the PC alone uploaded at **5.49 Mbps**, the Mac alone
+at **4.52 Mbps**, and both together at **5.34 Mbps combined**. The Mac's IPv4
+route to both Cloudflare and the selected Funnel ingress used its existing VPN.
+The VPN and all network settings were left unchanged.
+
+The WAN controls used Cloudflare's
+[official speed-test endpoints](https://github.com/cloudflare/speedtest).
+Downloads checked exact payload length. Uploads sent generated test bytes with
+a known Content-Length, required the full request to finish before the response
+began, and required a complete successful response. That public API provides no
+exact server byte-count echo. Reported WAN rates include connection and response
+time; the simultaneous rates divide both payloads by the entire batch wall time,
+including SSH/process overhead. Earlier default-family upload tests used
+16–32 MiB per transfer; the forced-IPv4 controls used 8 MiB per transfer.
+
+The Mac ran only temporary client executables. The authenticated test backend
+remained on the owner's personal Windows PC behind public Funnel port 10000.
+The Mac is a different machine and Internet exit, **not an independent off-site
+host**. Six complete Funnel transfers passed TLS, destination, payload, and byte
+acknowledgement checks. The scratch server admitted exactly two simultaneous
+test transfers. Combined rates use verified bytes over the union of their
+actual receiving intervals, not the sum of individual average rates. The two
+download windows overlapped for 21.74 seconds; the upload windows overlapped
+for 9.33 seconds. No production transport connection count was changed.
+
+The present evidence supports addressing the available home upload bandwidth
+before attributing this observed ceiling to Mobile Egress or a Funnel policy.
+Funnel's capacity above the constrained upstream path remains unmeasured, as
+does complete phone/cellular throughput.
+
+[Sanitized follow-up evidence](benchmarks/funnel-isolation-2026-10-03.json)
+contains 14 completed WAN control samples, six complete Funnel samples,
+aggregation details, source hashes, and cleanup confirmation. The original
+Funnel configuration was restored, the temporary PC listener stopped, and the
+Mac's temporary test executables and credentials were removed. The installed
+relay and Tailscale services remained running.
+
+## Bridge correctness and scheduling review (2026-10-03)
+
+The review baseline is `04d8c4c`. A deterministic relay reproduction queued two
+16 KiB data frames, then an orderly target close, while its writer was paused.
+Both legacy and binary forwarding discarded all 32 KiB and delivered only the
+close. The regression now requires complete data delivery before the close,
+in both directions and both framing modes, while unrelated controls can pass.
+Aborts retain immediate discard behavior and all retained data stays charged.
+
+A separate reproduction held the relay's sole SQLite connection while revoking
+an unrelated identity. Established-stream routing waited until the connection
+was released, approximately 150.6 ms later. That delay was injected, not a
+measurement of typical SQLite latency. Regression tests require routing to
+finish while the database is still blocked, for both revocation and admission.
+Identity coordination remains serialized to prevent admission/revocation races.
+
+The Android selector reproduction queued three commands with a two-command
+batch limit and no socket readiness. It took 1.046 seconds because the selector
+slept with a command still queued. The regression requires the queued work to
+finish within 350 ms without another wakeup; the scheduler uses a nonblocking
+select while commands remain. This is a controlled reactor test, not a phone
+latency measurement.
+
+The scoped slow-consumer fix pauses native target reads at the existing
+32-frame per-stream outbound limit on Android and iOS. Tests stall transport
+completion, then require an exact response and ordered EOF after draining.
+The 8,192-frame/64-MiB aggregate overload fallback remains a stream-local close;
+this is not end-to-end receive-credit flow control. An experimental iOS native
+readiness layer was rejected because real Network.framework loopback tests
+exposed EOF overtaking paused data. The final approach preserves the existing
+native receive path and adds a wait before the next receive.
+
+The same local `BenchmarkRelayMixedContention` fixture described below was run
+on the review baseline with `-benchtime=1000x -count=3 -benchmem`, on Windows
+amd64 / Ryzen 7 3700X / Go 1.26.3 / GOMAXPROCS=16. Median p95 was 0.501 ms
+for idle traffic, 10.000 ms with eight legacy bulk streams, and 3.001 ms with
+eight binary bulk streams. Binary bulk payload throughput was 211.2 MiB/s.
+Each bulk stream has only one echo outstanding, so these measurements do not
+exercise saturation, a queued EOF tail, or a slow WAN consumer. They do not
+justify changing the personal-computer relay or single-session topology.
+
+The final relay source was measured after local build/test jobs stopped, with
+the same command and fixture. Each value is the median of three reports:
+
+| Transport | Bulk streams | Baseline p95 (ms) | Fixed p95 (ms) | Baseline bulk (MiB/s) | Fixed bulk (MiB/s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Legacy | 0 | 0.501 | 0.501 | 0 | 0 |
+| Binary | 0 | 0.501 | 0.500 | 0 | 0 |
+| Legacy | 1 | 2.500 | 2.498 | 23.83 | 25.15 |
+| Binary | 1 | 1.000 | 1.000 | 97.05 | 94.30 |
+| Legacy | 8 | 10.000 | 8.502 | 59.69 | 61.08 |
+| Binary | 8 | 3.001 | 3.001 | 211.2 | 197.3 |
+
+The mixed-traffic fixture shows similar latency and variable bulk throughput,
+not a general speedup. Binary eight-stream p95 ranged from 3.000 to 3.879 ms
+before and 3.001 to 3.542 ms after. The fixes address reproducible stalls and
+lost data; three local runs do not establish a throughput change or predict
+cellular performance.
+
+Validation of the working-tree implementation on `main`:
+
+- Windows gate passed: all Go tests, installer contracts, vet/build, 53 frontend
+  tests, typecheck/build, and release-orchestration checks.
+- Android gate passed: 231 tests, lint, debug assembly, and parity validation.
+  Regressions include pending command batches, per-stream pause/resume in both
+  framing modes, paused-stream cancellation, EOF with a full aggregate lane,
+  and short frames that fit the remaining byte budget. A real selector delivers
+  an exact 128 KiB + 17-byte response across a deliberately stalled writer.
+- Native Go race checks passed on macOS arm64 / Go 1.26.7 for the relay service,
+  Client relay transport, HTTP CONNECT, and SOCKS using a hashed source snapshot.
+- Native Swift, warnings-as-errors, and Xcode package suites each passed with
+  314 tests, two existing device/entitled-Keychain acceptance skips, and no
+  failures. Unsigned iPhoneOS and Simulator app/extension builds also passed.
+  The native snapshot's 106 source hashes matched the working tree and remote
+  files. Real Network.framework tests verify exact 2 MiB + 37-byte delivery and
+  EOF, including the runtime with a stalled relay sender.
+- Mobile feature manifest validation and independent cross-platform review
+  passed. No installed application was replaced or release published.
+
+Physical phone/cellular/Funnel validation, sustained soak, and full end-to-end
+flow control remain outside this evidence. Existing aggregate overload handling
+is retained deliberately; these tests do not establish deployed capacity.
 
 ## Negotiated binary framing and mixed traffic (2026-09-05)
 

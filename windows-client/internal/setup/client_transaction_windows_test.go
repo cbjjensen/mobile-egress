@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestClientServiceRepairOnlyAcceptsTheStandaloneInstallation(t *testing.T) {
+func TestClientServiceRepairOnlyAcceptsKnownClientInstallations(t *testing.T) {
 	if err := validateExistingClientCommand(`"C:\Program Files\Mobile Egress Client\mobile-egress-client.exe" serve --standalone --state-dir C:\ProgramData\MobileEgressClient`); err != nil {
 		t.Fatal(err)
 	}
@@ -21,6 +21,26 @@ func TestClientServiceRepairOnlyAcceptsTheStandaloneInstallation(t *testing.T) {
 	} {
 		if err := validateExistingClientCommand(command); err == nil {
 			t.Fatalf("repair adopted a different existing installation: %q", command)
+		}
+	}
+}
+
+func TestClientServiceMigratesKnownEC2StateInPlace(t *testing.T) {
+	for _, command := range []string{
+		`"C:\Program Files\MobileEgress\mobile-egress-client.exe" serve --state-dir "C:\ProgramData\MobileEgress\Client"`,
+		`"C:\Program Files\Mobile Egress Client\mobile-egress-client.exe" serve --standalone --state-dir "C:\ProgramData\MobileEgress\Client"`,
+	} {
+		if err := validateExistingClientCommand(command); err != nil {
+			t.Fatalf("known local migration rejected: %v", err)
+		}
+	}
+	for _, command := range []string{
+		`"C:\Program Files\MobileEgress\mobile-egress-client.exe" serve --state-dir "C:\other"`,
+		`"C:\untrusted\mobile-egress-client.exe" serve --state-dir "C:\ProgramData\MobileEgress\Client"`,
+		`"C:\Program Files\MobileEgress\mobile-egress-client.exe" serve --state-dir "C:\ProgramData\MobileEgress\Client" --extra`,
+	} {
+		if err := validateExistingClientCommand(command); err == nil {
+			t.Fatal("unrecognized migration accepted")
 		}
 	}
 }
