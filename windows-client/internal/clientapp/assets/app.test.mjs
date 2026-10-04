@@ -186,11 +186,12 @@ test('pending update cannot complete setup and acknowledgement clears exported r
  assert.equal(h.get('updateQR').src,'');assert.equal(h.get('feedback').textContent,'');
 });
 
-test('recovery stays available for direct mode and manual exports after acknowledgement',async()=>{
+test('acknowledged recovery leaves the dashboard and remains in Phone settings',async()=>{
  const h=await harness({status:{transport:'direct',paired:true,updatePending:true}});
  assert.equal(visible(h,'recoveryPanel'),true);assert.equal(h.get('recoveryPanel').open,true);
  h.status.updatePending=false;await h.refresh();
- assert.equal(h.get('recoveryPanel').open,false);assert.equal(visible(h,'recoveryPanel'),true);
+ assert.equal(h.get('recoveryPanel').open,false);assert.equal(visible(h,'recoveryPanel'),false);
+ await h.get('managePhone').onclick();assert.equal(visible(h,'recoveryPanel'),true);
  h.get('recoveryPanel').open=true;await h.get('exportUpdate').onclick();await h.refresh();
  assert.equal(h.get('recoveryPanel').open,true);assert.equal(h.get('update').value,'signed-update');
 });
@@ -312,9 +313,78 @@ test('invitation and stale poll resolving in the same tick preserve the new QR',
  assert.equal(visible(h,'invitationDetails'),true);assert.equal(h.get('issue').disabled,true);
 });
 test('removing a phone requires explicit confirmation and preserves copy and update operations',async()=>{
- const h=await harness({status:{paired:true}});await h.get('revoke').onclick();assert.deepEqual(operations(h),[]);
- await h.get('copyHttp').onclick();await h.get('copySocks').onclick();await h.get('copyUpdate').onclick();await h.get('confirmRevoke').onclick();
+ const h=await harness({status:{paired:true}});
+ await h.get('copyHttp').onclick();await h.get('copySocks').onclick();await h.get('managePhone').onclick();
+ assert.equal(visible(h,'phoneSettingsPanel'),true);assert.equal(visible(h,'removePhone'),true);
+ await h.get('copyUpdate').onclick();await h.get('revoke').onclick();
+ assert.equal(h.calls.some(c=>c[0]==='revoke'),false);await h.get('confirmRevoke').onclick();
  assert.deepEqual(operations(h),[['proxy','http'],['proxy','socks'],['copy-update'],['revoke']]);
+ assert.equal(visible(h,'pairPanel'),true);assert.equal(visible(h,'phoneSettingsPanel'),false);
+ assert.equal(h.get('issue').disabled,false);assert.equal(h.calls.some(c=>c[0]==='issue'),false);
+});
+
+for (const transport of ['hosted','direct']) test(`${transport} connected dashboard contains status and proxies, not setup`,async()=>{
+ const h=await harness({status:{transport,activationState:'authorized',gatewayState:'connected',paired:true,connected:true}});
+ assert.equal(visible(h,'dashboardHeader'),true);assert.equal(visible(h,'connectionSummary'),true);assert.equal(visible(h,'proxyPanel'),true);
+ for(const id of ['wizardHeader','hostedPanel','addressPanel','transportChoice','pairPanel','verifyPanel','recoveryPanel','phoneSettingsPanel','dashboardNotice'])assert.equal(visible(h,id),false,id);
+ assert.equal(h.get('connectionDetails').open,false);assert.equal(h.get('copyHttp').disabled,false);
+ await h.get('managePhone').onclick();assert.equal(visible(h,'phoneSettingsHeader'),true);assert.equal(visible(h,'phoneSettingsPanel'),true);
+ assert.equal(visible(h,'proxyPanel'),false);assert.equal(visible(h,'pairPanel'),false);
+ await h.get('backToDashboard').onclick();assert.equal(visible(h,'proxyPanel'),true);assert.equal(visible(h,'phoneSettingsPanel'),false);
+ assert.deepEqual(operations(h),[]);
+});
+
+test('offline dashboard tells the owner what to do on the phone without restarting setup',async()=>{
+ const h=await harness({status:{paired:true,phase:'awaiting_phone'}});
+ assert.equal(visible(h,'dashboardNotice'),true);assert.equal(visible(h,'noticeAction'),false);
+ assert.match(h.get('noticeMessage').textContent,/Start cellular Agent.*Start sharing/);
+ assert.match(h.get('noticeMessage').textContent,/iPhone.*open.*unlocked/);
+ assert.equal(visible(h,'pairPanel'),false);assert.equal(visible(h,'proxyPanel'),true);
+ h.status.connected=true;await h.refresh();assert.equal(visible(h,'dashboardNotice'),false);
+ assert.equal(visible(h,'dashboardHeader'),true);assert.deepEqual(operations(h),[]);
+});
+
+test('dashboard activation notice takes priority over pairing and pending phone update',async()=>{
+ const h=await harness({status:{transport:'hosted',paired:true,activationState:'access_rejected',gatewayState:'authorization_rejected',updatePending:true}});
+ assert.equal(visible(h,'dashboardNotice'),true);assert.match(h.get('noticeHeading').textContent,/Inevitable/);
+ assert.equal(visible(h,'recoveryPanel'),false);assert.equal(visible(h,'hostedPanel'),false);
+ await h.get('noticeAction').onclick();assert.equal(visible(h,'hostedPanel'),true);
+ assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');assert.equal(h.status.paired,true);assert.deepEqual(operations(h),[]);
+});
+
+test('Finish later gives a resume action that preserves the current invitation',async()=>{
+ const h=await harness();await h.get('networkNext').onclick();await h.get('issue').onclick();
+ await h.get('finishLater').onclick();assert.equal(visible(h,'pairPanel'),false);assert.equal(visible(h,'dashboardNotice'),true);
+ await h.get('noticeAction').onclick();assert.equal(visible(h,'pairPanel'),true);assert.equal(h.get('invitation').value,'invitation');
+ assert.equal(h.calls.filter(c=>c[0]==='issue').length,1);
+});
+
+test('leaving a QR view clears its instruction without deleting the saved bundle',async()=>{
+ const h=await harness();await h.get('networkNext').onclick();await h.get('issue').onclick();
+ assert.match(h.get('feedback').textContent,/Scan/);await h.get('finishLater').onclick();
+ assert.equal(h.get('feedback').textContent,'');assert.equal(h.get('invitation').value,'invitation');
+ const paired=await harness({status:{paired:true,connected:true}});
+ await paired.get('managePhone').onclick();await paired.get('exportUpdate').onclick();
+ assert.match(paired.get('feedback').textContent,/Scan/);await paired.get('backToDashboard').onclick();
+ assert.equal(paired.get('feedback').textContent,'');assert.equal(paired.get('update').value,'signed-update');
+ paired.get('feedback').textContent='Proxy line copied.';await paired.get('managePhone').onclick();await paired.get('backToDashboard').onclick();
+ assert.equal(paired.get('feedback').textContent,'Proxy line copied.');
+});
+
+test('dashboard uses the saved transport after abandoning a mode change',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'access_rejected',paired:true}});
+ await h.get('reviewSetup').onclick();await h.get('advancedDirect').onclick();edit(h,'endpoint','unsaved.example');
+ await h.get('finishLater').onclick();await h.refresh();
+ assert.equal(visible(h,'addressPanel'),false);assert.match(h.get('noticeHeading').textContent,/Inevitable/);
+ await h.get('noticeAction').onclick();assert.equal(visible(h,'hostedPanel'),true);assert.deepEqual(operations(h),[]);
+});
+
+test('service loss suppresses stale dashboard guidance and gateway health',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true}});
+ h.api.Status=async()=>{throw new Error('offline');};await h.refresh();
+ assert.equal(visible(h,'servicePanel'),true);assert.equal(visible(h,'dashboardNotice'),false);
+ assert.equal(visible(h,'hostedPanel'),false);assert.equal(h.get('copyHttp').disabled,true);
+ assert.doesNotMatch(h.get('listeningState').textContent,/connected/);
 });
 
 test('fresh hosted setup activates without address lookup or firewall',async()=>{

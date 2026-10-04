@@ -1,0 +1,26 @@
+# Separate the Client dashboard from setup
+
+## Request and current behavior
+
+The owner confirmed that the Windows desktop Client dashboard feels partly like setup. Its render function currently displays activation/address configuration, mode selection, pairing, connection updates and proxies together after pairing. This is a presentation/navigation correction to the shared Windows/Mac Client frontend, not a service, protocol, mobile runtime or Inevitable website change.
+
+## Implementation and acceptance
+
+- [x] Keep the everyday dashboard focused on connection status and proxy copies. Hide setup forms, invitations and inactive recovery controls.
+- [x] Show the specific action required for unfinished setup, lost hosted authorization, a pending phone connection update or a disconnected phone. Preserve authorization-before-update priority and acknowledgement-before-Connected semantics.
+- [x] Put manual connection updates and confirmed phone removal in an explicit Phone settings view with a return action. Keep Review setup as an explicit entry into the existing wizard. Removal leads to fresh pairing without automatically issuing an invitation.
+- [x] Preserve paired-offline startup, Finish later, saved invitations, pending acknowledgements, manual edits, direct-mode configuration, service retry/repair and protected operations. Dashboard state reflects saved service configuration, never an abandoned mode selection.
+- [x] Add state/navigation regressions, run frontend and Windows gates, visually inspect synthetic connected/offline/recovery/settings states, and obtain an independent review.
+- [ ] Synchronize operations/onboarding and the sibling pilot record; prepare a signed local validation installer without automatically interrupting the owner's working connection.
+
+## Interfaces and limits
+
+Use existing protected local operations only. No new binding, backend request, persistence field, pairing replacement, usage collection, infrastructure change, deployment, merge or public release. Keep the native Android/iOS Start labels and approved lifecycle distinction. Mobile source/evidence and signing identities remain unchanged. The existing installer preserves settings on upgrade; reverting the frontend restores the previous presentation without a state migration.
+
+## Validation
+
+New navigation/state tests failed against the original dashboard and passed after implementation. The full Windows gate passed Go tests, vet/build, installer/release contract checks, mobile manifest/schema validation, frontend syntax and the initial 57 frontend tests. Independent review identified contextual QR feedback remaining visible after leaving the QR view. An additional regression failed before that correction; the final 58 frontend tests and syntax check pass, including an independent rerun. No remaining actionable review findings.
+
+Synthetic actual-asset renderer checks use installed Edge at 940×760 and 620×650 for connected, offline, pending-update and Phone settings states. All eight screens have no renderer errors or horizontal overflow; the connected dashboard fits the native window, and smaller/recovery screens scroll normally. The ignored harness contains no real service credentials and leaves no capture process running. This is browser-renderer evidence, not a native installation or new phone-traffic acceptance test.
+
+Onboarding/operations and the sibling Inevitable pilot record are synchronized. Native mobile source and manifest evidence are unchanged. The established Windows signer validates. Signed local build preparation remains pending; the recovered installed connection has not been interrupted. No signing, native Mac installation or new physical-device result is implied by these source/renderer checks.

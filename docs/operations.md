@@ -12,13 +12,19 @@
 
 Status is deliberately secret-safe. Copy proxy credentials or invitations only through the explicit app actions. Never paste credentials, QR capabilities or private diagnostic dumps into issue reports.
 
+## Dashboard and setup
+
+The paired Client opens a dashboard with connection status and local proxy copy actions. An offline phone does not restart setup: follow the dashboard's phone-app Start instructions. **Phone settings** is a separate view for manual connection updates and confirmed phone removal. **Review setup** returns to the wizard for activation, connection mode, address and network guidance while preserving the existing pairing. **Finish later** keeps unfinished work visible through **Continue setup**.
+
+Pending connection updates surface **Reconnect your phone** on the dashboard. If hosted access needs reactivation, restore account access first; only then export the current connection update. A bound listener or connected gateway does not substitute for an authenticated phone session.
+
 ## Hosted connection recovery
 
 Check Inevitable access and the workload's outbound Internet connection. Resume pending browser activation from the Client app; its proof stays in the service. Expired/denied activation requires a new request. If the one-time authorization response is lost before durable storage, reactivate the same Client. Account device revocation stops hosted access; local pairing is retained. A gateway outage never silently changes mode or opens a public workload listener. Only an authenticated phone connection completes verification.
 
 Removing the computer in Inevitable and activating it again can change its gateway address. The phone keeps its pairing but may still have the retired address. After browser activation completes, use **Reconnect your phone → Show connection update** in the Client and scan that QR in the phone app. Keep the saved Client enabled and start sharing if stopped. The update preserves pairing and remains pending until the phone acknowledges it; do not remove the phone or create another invitation for an address update. If another account removal interrupts recovery, complete browser activation again before exporting the new update.
 
-If the Client was also removed from the phone app, its pairing key is gone and a connection update cannot restore it. On the desktop dashboard, choose **Remove paired phone**, create a fresh invitation and scan it on the phone. This replaces the phone association while retaining Inevitable activation and proxy settings.
+If the Client was also removed from the phone app, its pairing key is gone and a connection update cannot restore it. On the desktop dashboard, open **Phone settings → Remove paired phone** and confirm. The Client returns to **Pair phone**, where you can create a fresh invitation and scan it on the phone. Merely opening Phone settings or removing the old association does not generate an invitation. This replaces the phone association while retaining Inevitable activation and proxy settings.
 
 On Inevitable, use the separate Mobile health/readiness and sanitized connection/error/resource indicators. Keep existing Core traffic and accounting enabled. Mobile gateway deployment/drain/rollback uses its own service and target registrations; disabling it must not replace healthy Core ASG nodes. Follow the sibling Inevitable requirements/runbook for certificates, fleet scope, signed configuration expiry and route-owner recovery. No Mobile usage dispatch is part of recovery.
 

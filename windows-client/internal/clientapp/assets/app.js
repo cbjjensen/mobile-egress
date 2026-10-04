@@ -9,6 +9,7 @@ const connectionUpdateMessage = "Scan this connection update with Mobile Egress 
 const labels = {waiting:"Setup needed", migration_required:"Fresh pairing required", listening:"Listening", awaiting_phone:"Waiting for phone", pairing:"Pairing", acknowledging:"Confirming pairing", ready:"Waiting for phone", connected:"Waiting for phone", expired:"Invitation expired", revoked:"Phone removed", error:"Needs attention", unavailable:"Service unavailable"};
 let status = null, setup = {localAddresses:[], defaultBindAddress:":8443", defaultPublicPort:8443};
 let step = "address", dashboard = false, initialized = false, metadataReady = false;
+let managingPhone = false, noticeStep = "";
 let renderedScreen = "";
 let refreshing = null, busy = false, mutation = 0, editing = false, addressEdited = false;
 let discoveryStarted = false, discovering = false, suggestedAddress = "";
@@ -62,15 +63,21 @@ function fillInputs() {
 }
 function resumeStep() {
   if (!status.endpoint) return "address";
+  if (status.transport === "hosted" && !hostedAuthorized()) return "address";
   if (status.phase === "acknowledging") return "verify";
-  if (activeInvitation()) return "pair";
+  if (activeInvitation() || status.phase === "revoked") return "pair";
   return "network";
+}
+function returnToDashboard() {
+  if (busy) return;
+  dashboard = true; managingPhone = false; selectedTransport = "";
+  show("revokeConfirmation", false); render();
 }
 function selectStep(next) {
   if (busy || !available()) return;
   if (next !== "address" && !status.endpoint) return;
   if (next === "proxy" && !phoneConnected()) return;
-  step = next; dashboard = false; render();
+  step = next; dashboard = false; managingPhone = false; show("revokeConfirmation", false); render();
   if (next === "network" && !firewall && !hostedSelected()) void checkFirewall(false);
 }
 function renderNetwork() {
@@ -94,13 +101,44 @@ function renderNetwork() {
   el("firewallMessage").textContent = firewall ? (firewall.message || "") + (firewall.scope === "application" ? " This check applies to the Client service application." : " This check applies to local TCP port " + firewall.port + ".") + " Local firewall results do not prove cellular reachability." : "Check this computer's firewall, then review the network instructions below.";
   el("checkFirewall").disabled = el("retryFirewall").disabled = busy || firewallBusy || !available() || !status.endpoint;
 }
+function renderDashboardNotice() {
+  let heading = "", message = "", action = "";
+  noticeStep = "";
+  if (dashboard && !managingPhone && available()) {
+    if (status.transport === "hosted" && !hostedAuthorized()) {
+      heading = "Connect to Inevitable";
+      message = status.activationState === "pending" ? "Complete the saved activation in your browser. Your phone pairing is kept." : "Open setup to activate this computer in your browser. If it was removed from Inevitable, reactivate it here; your phone pairing is kept.";
+      action = "Continue activation"; noticeStep = "address";
+    } else if (!status.paired) {
+      heading = status.phase === "acknowledging" ? "Finish pairing on your phone" : "Finish setting up this computer";
+      message = status.phase === "acknowledging" ? "Keep Mobile Egress open on your phone while it confirms pairing. You do not need to scan again." : "Continue where you left off to pair your phone and connect.";
+      action = "Continue setup"; noticeStep = resumeStep();
+    } else if (!pendingPhoneUpdate() && !phoneConnected()) {
+      if (status.phase === "error" || !status.running) {
+        heading = "Connection needs attention"; message = status.message || "The Client could not start. Review its saved connection settings.";
+        action = "Review connection setup"; noticeStep = "address";
+      } else if (status.transport === "hosted" && status.gatewayState !== "connected") {
+        heading = "Reconnecting to Inevitable"; message = "The Client will retry automatically. Check this computer’s Internet connection. Your phone pairing is saved.";
+      } else {
+        heading = "Start sharing on your phone";
+        message = "Open Mobile Egress on your phone. Tap Start cellular Agent on Android or Start sharing on iPhone. If sharing is already running, leave it on and check that this computer is enabled and mobile data is available. On iPhone, keep the app open and unlocked.";
+      }
+    }
+  }
+  show("dashboardNotice", !!heading); show("noticeAction", !!action);
+  show("unfinishedSetup", !!heading && !status?.paired);
+  el("noticeHeading").textContent = heading; el("noticeMessage").textContent = message;
+  el("noticeAction").textContent = action; el("noticeAction").disabled = busy || !available();
+}
 function render() {
   const ready = available(), connected = phoneConnected(), pendingUpdate = pendingPhoneUpdate();
   const canUpdatePhone = pendingUpdate && (status.transport !== "hosted" || status.activationState === "authorized");
   show("servicePanel", !ready); show("serviceRetry", !ready && readinessExpired);
   el("serviceMessage").textContent = readinessExpired ? "The Client service has not become available. Retry, or run the latest signed installer to repair the installation. Your saved pairing and proxy credentials are preserved." : "Waiting for the installed Client service. Setup will wait up to 30 seconds.";
-  show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard);
-  show("unfinishedSetup", initialized && dashboard && !status?.paired);
+  show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard && !managingPhone);
+  show("phoneSettingsHeader", initialized && managingPhone);
+  show("phoneSettingsPanel", initialized && managingPhone);
+  renderDashboardNotice();
   el("stepTitle").textContent = hostedSelected() && step === "address" ? "Activate Inevitable" : hostedSelected() && step === "network" ? "Gateway connection" : titles[steps.indexOf(step)];
   if (step === "verify" && pendingUpdate) el("stepTitle").textContent = "Reconnect your phone";
   el("verifyStepLabel").textContent = pendingUpdate ? "Reconnect your phone" : "Start on your phone";
@@ -113,12 +151,12 @@ function render() {
     button.disabled = busy || !ready || (index > 0 && !status.endpoint) || (name === "proxy" && !connected);
   }
   for (const name of ["address", "network", "pair", "verify", "proxy"]) {
-    show(name + "Panel", initialized && (dashboard ? ["address","pair","proxy"].includes(name) : step === name));
+    show(name + "Panel", initialized && (dashboard ? !managingPhone && name === "proxy" : step === name));
   }
-  show("addressPanel", initialized && !hostedSelected() && (dashboard || step === "address"));
+  show("addressPanel", initialized && !dashboard && !hostedSelected() && step === "address");
   show("networkPanel", initialized && !dashboard && !hostedSelected() && step === "network");
-  show("hostedPanel", initialized && hostedSelected() && (dashboard || step === "address"));
-  show("transportChoice", initialized && (dashboard || step === "address"));
+  show("hostedPanel", initialized && !dashboard && hostedSelected() && step === "address");
+  show("transportChoice", initialized && !dashboard && step === "address");
   show("gatewayPanel", initialized && hostedSelected() && !dashboard && step === "network");
   show("directTroubleshooting", !hostedSelected());show("hostedTroubleshooting", hostedSelected());
   el("activationMessage").textContent = status?.activationState === "pending" ? "Waiting for browser approval. Your activation request is saved." : status?.activationState === "authorized" ? "Inevitable activation approved." : status?.activationState === "denied" ? "Activation denied. You can try again." : status?.activationState === "expired" ? "Activation expired. Start a new request." : "Activate this Client to use hosted connectivity.";
@@ -132,19 +170,24 @@ function render() {
   el("gatewayNext").disabled = busy || !ready || status?.transport !== "hosted" || !status?.endpoint;
   el("gatewayMessage").textContent = "Gateway " + (status?.gatewayState || "disconnected") + ". " + (status?.gatewayState === "connected" ? "Waiting for the authenticated phone session." : "The Client reconnects to its saved gateway. Check this computer's Internet connection.");
   if (status?.gatewayState === "authorization_rejected") el("gatewayMessage").textContent = "Gateway access was rejected. Check your Mobile Egress account access or reactivate this Client. Your local phone pairing is preserved.";
-  show("recoveryPanel", initialized && (dashboard || canUpdatePhone)); show("removePhone", initialized && dashboard);
+  const recoveryVisible = initialized && (canUpdatePhone || (managingPhone && status?.paired));
+  show("recoveryPanel", recoveryVisible);
+  if ((dashboard || step !== "pair") && el("feedback").textContent === invitationReadyMessage) el("feedback").textContent = "";
+  if (!recoveryVisible && el("feedback").textContent === connectionUpdateMessage) el("feedback").textContent = "";
+  show("removePhone", initialized && managingPhone && status?.paired);
   if (canUpdatePhone && !recoveryWasPending) el("recoveryPanel").open = true;
   if (!canUpdatePhone && recoveryWasPending) el("recoveryPanel").open = false;
   recoveryWasPending = canUpdatePhone;
   el("recoveryHeading").textContent = canUpdatePhone ? "Reconnect your phone" : "Connection updates";
   el("recoveryMessage").textContent = canUpdatePhone ? "This computer's connection changed. Show the connection update below, then scan it in Mobile Egress on your phone. Your existing pairing is kept." : pendingUpdate ? "Complete Inevitable activation in your browser first. Once approved, show the connection update and scan it on your phone." : "If your phone cannot reach this computer after a connection change, show an update and scan it in Mobile Egress on the paired phone.";
-  show("connectionSummary", initialized);
+  show("connectionSummary", initialized && !managingPhone);
   el("phase").textContent = connected ? "Connected" : labels[status?.phase] || "Checking service";
   el("phase").className = "badge " + (!ready || status?.phase === "error" ? "error" : connected ? "ready" : "");
-  el("message").textContent = status?.message || "Configure a reachable address to pair your phone.";
+  el("message").textContent = connected ? "Applications using your local proxy can connect through your phone’s cellular connection." : status?.message || "Finish setup to pair your phone.";
   el("installedState").textContent = ready ? "Installed" : "Checking";
   el("listeningState").textContent = ready && status.running && status.endpoint && !["waiting","migration_required","error"].includes(status.phase) ? "Listening" : "Not confirmed";
-  if (status?.transport === "hosted") el("listeningState").textContent = "Gateway " + (status.gatewayState || "disconnected");
+  el("connectionType").textContent = status?.transport === "hosted" ? "Inevitable gateway" : "Local listener";
+  if (status?.transport === "hosted") el("listeningState").textContent = ready ? "Gateway " + (status.gatewayState || "disconnected") : "Not confirmed";
   el("pairedState").textContent = status?.paired ? "Paired" : status?.phase === "acknowledging" ? "Confirming" : "Not paired";
   el("connectedState").textContent = connected ? "Connected" : "Waiting";
   el("httpAddress").textContent = status?.httpAddress ? "HTTP / CONNECT  " + status.httpAddress : "";
@@ -154,7 +197,11 @@ function render() {
   el("configure").disabled = busy || !ready;
   el("configure").textContent = dashboard ? "Save endpoint" : "Save and continue";
   show("finishSetup", !dashboard); show("pairNext", !dashboard);
-  el("finishLater").disabled = el("finishSetup").disabled = el("reviewSetup").disabled = busy;
+  el("finishLater").disabled = el("finishSetup").disabled = el("backToDashboard").disabled = busy;
+  el("reviewSetup").disabled = busy || !ready;
+  el("managePhone").disabled = busy || !ready || !status?.paired;
+  el("confirmRevoke").disabled = busy || !ready || !status?.paired;
+  el("cancelRevoke").disabled = busy;
   el("networkNext").disabled = busy || !ready || !status.endpoint;
   el("verifyNext").disabled = busy || !connected;
   show("verifyNext", connected);
@@ -168,7 +215,7 @@ function render() {
   show("cancelPairing", status?.phase === "acknowledging");
   el("cancelPairing").disabled = busy || !ready;
   el("pending").textContent = pendingUpdate ? (canUpdatePhone ? "Phone connection update needed. Use Reconnect your phone." : "Complete Inevitable activation in your browser, then update the phone's connection.") : "";
-  el("pairNote").textContent = status?.paired ? "A phone is already paired. Continue to verify its live connection. Use the dashboard to remove it before pairing a replacement." : status?.phase === "acknowledging" ? "The phone is confirming pairing. Leave it open on cellular and let it retry; a new invitation is not needed." : "Create or show this computer's invitation, then scan it in the Mobile Egress phone app using cellular data.";
+  el("pairNote").textContent = status?.paired ? "A phone is already paired. Continue to verify its live connection. To replace it, return to the dashboard and open Phone settings." : status?.phase === "acknowledging" ? "The phone is confirming pairing. Leave it open on cellular and let it retry; a new invitation is not needed." : "Create or show this computer's invitation, then scan it in the Mobile Egress phone app using cellular data.";
   const expires = activeInvitation() ? new Date(status.invitationExpiresAt) : null;
   el("expiry").textContent = expires ? "Invitation expires " + expires.toLocaleTimeString() + "." : "";
   const confirmingPairing = status?.phase === "acknowledging";
@@ -179,10 +226,11 @@ function render() {
   el("proxyConnection").textContent = connected ? "Your phone is connected. Copy a proxy into an application on this computer." : "The phone is not connected. Saved proxy details are available, but traffic needs a live phone connection.";
   el("version").textContent = status?.version ? "Client " + status.version : "";
   renderNetwork();
-  const screen = initialized ? (dashboard ? "dashboard" : step) : "";
+  const screen = initialized ? (managingPhone ? "phoneSettings" : dashboard ? "dashboard" : step) : "";
   if (screen && screen !== renderedScreen) {
     renderedScreen = screen;
-    el(dashboard ? "dashboardHeading" : "stepTitle").focus();
+    el("connectionDetails").open = !dashboard;
+    el(managingPhone ? "phoneSettingsHeading" : dashboard ? "dashboardHeading" : "stepTitle").focus();
   }
 }
 function startReadinessWait() {
@@ -207,6 +255,7 @@ function refresh() {
       clearInvitation(); clearUpdate();
     } else {
       status = next; readinessExpired = false;
+      if (managingPhone && !status.paired) managingPhone = false;
       if (previous?.endpoint && configKey(previous) !== configKey(next)) { firewall = null; clearUpdate(); if (previous.transport !== next.transport) selectedTransport = next.transport; }
       if (!status.paired || (previous?.updatePending && !status.updatePending) || (status.transport === "hosted" && !hostedAuthorized())) clearUpdate();
       if (el("invitation").value && (status.paired || !activeInvitation() || invitationConfiguration !== configKey(status) || (invitationExpiry && invitationExpiry !== status.invitationExpiresAt))) clearInvitation();
@@ -272,13 +321,16 @@ async function action(button, callback, success) {
 for (const id of ["bindAddress","endpoint","displayName","publicPort"]) el(id).oninput = () => { editing = true; if (id === "endpoint") addressEdited = true; };
 for (const name of steps) el("step" + name[0].toUpperCase() + name.slice(1)).onclick = () => selectStep(name);
 el("reviewSetup").onclick = () => selectStep("address");
+el("noticeAction").onclick = () => { if (noticeStep) selectStep(noticeStep); };
+el("managePhone").onclick = () => { if (!busy && available() && status.paired) { managingPhone = true; render(); } };
+el("backToDashboard").onclick = returnToDashboard;
 el("advancedDirect").onclick = () => { if (!busy && available()) { selectedTransport = "direct"; step = "address"; dashboard = false; render(); maybeDiscover(); } };
 el("chooseHosted").onclick = () => { if (!busy && available()) { selectedTransport = "hosted"; step = "address"; dashboard = false; render(); } };
 el("activateHosted").onclick = () => hostedAuthorized() ? selectStep("network") : action(el("activateHosted"), () => api().StartHostedActivation(el("hostedName").value.trim()), "Approve this Client in your browser. Your phone pairs locally afterward.");
 el("resumeActivation").onclick = () => action(el("resumeActivation"), () => api().ResumeHostedActivation(), "Continue activation in your browser.");
 el("cancelActivation").onclick = () => action(el("cancelActivation"), () => api().CancelHostedActivation(), "Activation canceled.");
 el("gatewayNext").onclick = () => selectStep(status?.paired ? "verify" : "pair");
-el("finishLater").onclick = el("finishSetup").onclick = () => { if (!busy) { dashboard = true; render(); } };
+el("finishLater").onclick = el("finishSetup").onclick = returnToDashboard;
 el("networkLocation").onchange = renderNetwork;
 el("retryDiscovery").onclick = discover;
 el("checkFirewall").onclick = () => checkFirewall(false);
@@ -322,6 +374,7 @@ el("revoke").onclick = () => { show("revokeConfirmation", true); };
 el("cancelRevoke").onclick = () => { show("revokeConfirmation", false); };
 el("confirmRevoke").onclick = () => action(el("confirmRevoke"), async () => {
   await api().Revoke(); clearInvitation(); clearUpdate(); show("revokeConfirmation", false);
+  managingPhone = false; dashboard = false; step = "pair"; selectedTransport = "";
 }, "Phone removed. Existing connections are closed. You can pair another phone.");
 startReadinessWait(); render();
 void (async () => {

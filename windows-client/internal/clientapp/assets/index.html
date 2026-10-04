@@ -7,9 +7,11 @@
 :root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#e8eef7;background:#101823;color-scheme:dark}
 *{box-sizing:border-box}body{margin:0;padding:28px;line-height:1.55}main{max-width:820px;margin:auto}
 h1{font-size:27px;letter-spacing:-.6px;margin:0}h2{font-size:19px;margin:0 0 10px}p{color:#aebed0;margin:8px 0 18px}
+h2[tabindex="-1"]:focus{outline:none}
 .eyebrow{color:#6ce5ca;font-size:11px;font-weight:650;letter-spacing:1.5px;text-transform:uppercase}
 .card{background:#192535;border:1px solid #304157;border-radius:14px;padding:22px;margin:18px 0}
 .status,.heading{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.heading{flex-wrap:wrap}.heading h2{margin:0}.heading button{margin-top:0}.heading nav{display:flex;flex-wrap:wrap;gap:4px}
 .badge{background:#293e53;color:#b9d9f0;border-radius:100px;padding:5px 12px;font-size:12px;white-space:nowrap}
 .badge.ready{background:#193e35;color:#83efbc}.badge.error{background:#512e34;color:#ffc0c0}
 input,textarea,select{width:100%;background:#101b29;color:#dce7f3;border:1px solid #496079;border-radius:8px;padding:11px;font:14px system-ui}
@@ -46,8 +48,8 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <p id="serviceMessage" role="status">Waiting for the installed Client service…</p>
   <button id="serviceRetry" class="hidden">Retry connection</button>
 </section>
-<div id="dashboardHeader" class="heading hidden"><h2 id="dashboardHeading" tabindex="-1">Your Client</h2><button id="reviewSetup" class="secondary">Review setup</button></div>
-<p id="unfinishedSetup" class="hidden" role="status">Setup is unfinished. Your settings are saved. Choose Review setup to continue pairing and verify a live phone connection.</p>
+<div id="dashboardHeader" class="heading hidden"><h2 id="dashboardHeading" tabindex="-1">Dashboard</h2><nav aria-label="Client settings"><button id="managePhone" class="secondary">Phone settings</button><button id="reviewSetup" class="quiet">Review setup</button></nav></div>
+<div id="phoneSettingsHeader" class="heading hidden"><h2 id="phoneSettingsHeading" tabindex="-1">Phone settings</h2><button id="backToDashboard" class="secondary">Back to dashboard</button></div>
 <div id="wizardHeader" class="hidden">
   <nav class="steps" aria-label="Setup steps">
     <button id="stepAddress"><span>1</span><b id="addressStepLabel">Computer address</b></button>
@@ -58,12 +60,17 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   </nav>
   <div class="heading"><div><div id="stepCount" class="eyebrow">Step 1 of 5</div><h2 id="stepTitle" tabindex="-1">Computer address</h2></div><button id="finishLater" class="quiet">Finish later</button></div>
 </div>
+<section id="dashboardNotice" class="card hidden" aria-labelledby="noticeHeading">
+  <h2 id="noticeHeading"></h2><p id="noticeMessage" role="status"></p>
+  <p id="unfinishedSetup" class="note hidden">Your setup progress is saved.</p>
+  <button id="noticeAction" class="hidden">Continue setup</button>
+</section>
 <details id="recoveryPanel" class="card hidden"><summary id="recoveryHeading">Connection updates</summary>
   <p id="recoveryMessage"></p>
   <button id="exportUpdate" disabled>Show connection update</button><button id="copyUpdate" class="secondary" disabled>Copy connection update</button>
   <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"></div><p class="note">On your phone, open Mobile Egress and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the complete connection update</summary><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
   <p class="note">Keep this computer enabled in the phone app. If sharing is stopped, tap Start cellular Agent on Android or Start sharing on iPhone after scanning.</p>
-  <details><summary>Removed this computer from the phone app?</summary><p>The phone needs a new pairing. On this computer, go to the dashboard, choose Remove paired phone, then create a new invitation and scan it on your phone. Your Inevitable activation stays in place.</p></details>
+  <details><summary>Removed this computer from the phone app?</summary><p>The phone needs a new pairing. From the dashboard, open Phone settings and choose Remove paired phone. Then create a new invitation and scan it on your phone. Your Inevitable activation stays in place.</p></details>
 </details>
 <section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
   <h2 id="verifyHeading">Start sharing on your phone</h2><p id="verificationMessage" role="status"></p>
@@ -90,10 +97,10 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 <section id="connectionSummary" class="card hidden" aria-labelledby="connectionHeading">
   <div class="status"><h2 id="connectionHeading">Connection</h2><span id="phase" class="badge">Checking service</span></div>
   <p id="message" role="status"></p>
-  <div class="milestones" aria-label="Connection progress">
-    <div>Service<strong id="installedState">Checking</strong></div><div>Local listener<strong id="listeningState">Not confirmed</strong></div>
+  <details id="connectionDetails"><summary>Connection details</summary><div class="milestones" aria-label="Connection status">
+    <div>Service<strong id="installedState">Checking</strong></div><div><span id="connectionType">Local listener</span><strong id="listeningState">Not confirmed</strong></div>
     <div>Phone pairing<strong id="pairedState">Not paired</strong></div><div>Live session<strong id="connectedState">Waiting</strong></div>
-  </div>
+  </div></details>
   <p id="pending" role="status"></p>
 </section>
 
@@ -157,6 +164,9 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   </div>
   <p class="note">Once paired, start sharing in the phone app. Android can share in its foreground service. On iPhone, keep the app open and unlocked; keep-awake is enabled by default while sharing.</p>
   <button id="pairNext" class="secondary">Continue to verification</button>
+</section>
+<section id="phoneSettingsPanel" class="card hidden" aria-labelledby="pairedPhoneHeading">
+  <h2 id="pairedPhoneHeading">Paired phone</h2><p>Removing the paired phone closes its connections. You can then pair a phone using a new QR code. Your computer’s activation and proxy settings are kept.</p>
   <div id="removePhone" class="hidden"><button id="revoke" class="danger" disabled>Remove paired phone</button>
     <div id="revokeConfirmation" class="hidden"><p>Remove this phone and immediately close its connections? Pairing again will require a new invitation.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
   </div>
