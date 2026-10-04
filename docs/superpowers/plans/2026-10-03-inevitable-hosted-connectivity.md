@@ -62,7 +62,7 @@ Mobile Egress access is entitlement-based, initially admin-granted pilot access.
 - [ ] Physical Windows/Mac + Android/iPhone HTTP/CONNECT/SOCKS without router changes, including cellular IPv6/NAT64, iOS keep-awake and lifecycle. Signed installation/repair/upgrade acceptance remains mandatory before release readiness.
 - [ ] Sustained one-/ten-Client throughput/latency/fairness/memory/CPU/thermal measurements, no correctness/new Core overload failures, at most 5% Core throughput/p95 setup regression under agreed combined load. No promised Mbps rate.
 - [x] Update `ai-instructions.txt` with actual frontend patterns: typed access states, focused queries, terminal polling, thin routes, feature-owned controls, safe diagnostics, correct CSS ownership. Preserve existing conventions.
-- [ ] Record commits, evidence, rollback and blockers; push reviewed feature branches after applicable checks. Keep infra off by default. No merge, deployment or release publication.
+- [x] Record commits, evidence, rollback and blockers; push reviewed feature branches after applicable checks. Keep infra off by default. No merge, deployment or release publication.
 
 ## Interfaces and execution record
 
@@ -89,3 +89,11 @@ Passed applicable software gates:
 Validation limits: four real PostgreSQL concurrency tests could not run without a local database (Docker Desktop API unavailable). Signed Windows/Mac installation, physical Android/iPhone cellular/NAT64/lifecycle/keep-awake, actual enabled AWS/deployment/node-loss/certificate-renewal, sustained one-/ten-Client capacity/thermals and combined Core load within the agreed 5% bound remain explicit acceptance blockers. Mocked infrastructure and socket/unit tests do not satisfy these unchecked gates. Nothing was deployed, merged or released.
 
 Execution deviations: existing feature-branch checkouts were used as requested. Native verification used isolated hashed snapshots and existing Mac toolchains. Disk exhaustion interrupted two new files; both were recovered from recorded patches and retested, with regenerable caches/build output moved or redirected to G:. Existing source, pairing/signing material and benchmark evidence were preserved. No new frontend architecture was introduced: contract-backed server state remains in Inevitable's `ui/src/api/queries.ts`, with thin routes and feature-owned panels. `ai-instructions.txt` records the actual patterns.
+
+### Commits and handoff
+
+- Mobile baseline on local main: `14c9d35`; approved-plan commit: `4589c96`; hosted implementation: `971a9eb` (`feat: add Inevitable hosted Client connectivity`).
+- Inevitable approved-plan commit: `9b11ec1b`; independently reviewable Core repairs: `43a66d43`; hosted implementation: `f9d7b297` (`feat: host Mobile Egress beside existing gateways`).
+- Both `feature/mobile-egress-inevitable-gateway` branches were pushed successfully to their existing GitHub origins on 2026-10-04. Final documentation records follow the implementation commits. No main merge, deployment, tag or release was performed.
+- Native logs and immutable input snapshots are preserved locally on G:. The exact task-owned Mac scratch directory was removed and its absence verified after logs were copied; shared Mac checkout/toolchains were preserved.
+- Remaining unchecked acceptance items are deployment/release blockers, not claims of completed physical testing. See Mobile `docs/hosted-acceptance.md` and Inevitable `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/implementation-summary.md`.
