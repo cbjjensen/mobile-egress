@@ -2,6 +2,8 @@
 
 > Follow-up approved 2026-10-04: prepare the owner-only Windows/Android pilot, restrict website navigation to enabled eligible accounts or administrators, and prepare required production environments/certificates using existing Caddy/ACME issuance. The concrete sequence and validation are tracked in the sibling `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/pilot-rollout-plan.md`. The latest workspace instructions retain the no-deploy/no-merge/no-publication boundary. The signed Windows Client has since been installed and verified locally; physical phone and deployed acceptance remain pending.
 
+> DNS follow-up 2026-10-04: the owner saved the broker (`mobile-gateway`) and phone-route (`*.mobile`) CNAME records in Namecheap. Read-only checks confirmed both against the existing Core NLB target through both authoritative nameservers and Google/Cloudflare, with the existing `core` record unchanged. Certificate issuance, service deployment, entitlement activation and physical traffic remain pending; no agent deployment or production-secret publication occurred.
+
 Approved 2026-10-03. Implement in the existing checkouts on `feature/mobile-egress-inevitable-gateway`; do not merge, deploy, or publish releases. Inevitable requirements and implementation records live under `technical-requirement-docs/2026-10-03-inevitable-hosted-connectivity/` in the sibling repository. Keep both records synchronized.
 
 ## Contract
