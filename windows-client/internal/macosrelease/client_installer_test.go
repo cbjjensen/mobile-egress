@@ -24,6 +24,10 @@ func TestClientMacInstallerHandsOffOnlyToActiveSavedOwner(t *testing.T) {
 		{"headless repair", "501", "0", "no", "ok", false},
 		{"missing GUI domain", "501", "501", "no", "ok", false},
 		{"console lookup unavailable", "501", "error", "yes", "ok", false},
+		{"empty console lookup", "501", "empty", "yes", "ok", false},
+		{"nested UID only", "501", "nested", "yes", "ok", false},
+		{"duplicate console UID", "501", "duplicate", "yes", "ok", false},
+		{"malformed console UID", "501", "malformed", "yes", "ok", false},
 		{"launch failure", "501", "501", "yes", "fail", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,11 +96,31 @@ func TestClientMacInstallerBoundsGUISessionLookup(t *testing.T) {
 	}
 }
 
+func TestClientMacInstallerBoundsConsoleUserLookup(t *testing.T) {
+	t.Parallel()
+	fixture := newClientInstallerFixture(t)
+	started := time.Now()
+	output, err := fixture.run(t, "hang", "yes", "ok")
+	if err != nil || time.Since(started) > 8*time.Second {
+		t.Fatalf("console user lookup held up installation: %v\n%s", err, output)
+	}
+	if strings.Contains(fixture.journal(t), "open uid=") || !strings.Contains(string(output), "Applications") {
+		t.Fatalf("unavailable console user lookup must skip launch and provide fallback: %s", output)
+	}
+	if !strings.Contains(fixture.journal(t), "scutil\n") {
+		t.Fatal("console-user lookup was not attempted")
+	}
+}
+
 type clientInstallerFixture struct {
 	shell, script, state, log, owner string
 }
 
 func newClientInstallerFixture(t *testing.T) clientInstallerFixture {
+	return newClientInstallerScriptFixture(t, "postinstall", true)
+}
+
+func newClientInstallerScriptFixture(t *testing.T, scriptName string, existing bool) clientInstallerFixture {
 	t.Helper()
 	shell := "/bin/sh"
 	if runtime.GOOS == "windows" {
@@ -107,8 +131,10 @@ func newClientInstallerFixture(t *testing.T) clientInstallerFixture {
 	}
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
-	if err := os.MkdirAll(filepath.Join(state, "bin"), 0o700); err != nil {
-		t.Fatal(err)
+	if existing {
+		if err := os.MkdirAll(filepath.Join(state, "bin"), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	write := func(path, value string) {
 		t.Helper()
@@ -116,12 +142,14 @@ func newClientInstallerFixture(t *testing.T) clientInstallerFixture {
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(state, "owner.uid"), "501\n")
-	write(filepath.Join(state, "retained-state"), "preserve fixture state")
-	write(filepath.Join(state, "bin", "mobile-egress-client"), "fixture daemon")
+	if existing {
+		write(filepath.Join(state, "owner.uid"), "501\n")
+		write(filepath.Join(state, "retained-state"), "preserve fixture state")
+		write(filepath.Join(state, "bin", "mobile-egress-client"), "fixture daemon")
+	}
 	log := filepath.Join(root, "commands.log")
 	write(log, "")
-	source, err := os.ReadFile("../../macos/client/scripts/postinstall")
+	source, err := os.ReadFile("../../macos/client/scripts/" + scriptName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,15 +158,30 @@ func newClientInstallerFixture(t *testing.T) clientInstallerFixture {
 	script = strings.ReplaceAll(script, "/Library/LaunchDaemons/com.zfnf.mobile-egress.client.plist", filepath.ToSlash(filepath.Join(root, "daemon.plist")))
 	commands := map[string]string{
 		"/usr/bin/id": `printf '0\n'`,
-		"/usr/bin/stat": `if [ "$FIXTURE_CONSOLE" = error ]; then exit 1; fi
-printf '%s\n' "$FIXTURE_CONSOLE"`,
+		// A remote GUI session can belong to UID 501 while /dev/console
+		// remains root-owned. File metadata is not the active-user authority.
+		"/usr/bin/stat": `case "$2" in %u) printf '0\n';; %Lp) printf '700\n';; *) exit 46;; esac`,
+		"/usr/sbin/scutil": `printf 'scutil\n' >> "$FIXTURE_LOG"
+case "$FIXTURE_CONSOLE" in
+  error) printf '<dictionary> {\n  UID : 501\n}\n'; exit 1;;
+  hang) exec /bin/sleep 30;;
+  empty) exit 0;;
+  nested) printf '<dictionary> {\n  SessionInfo : <array> {\n    0 : <dictionary> {\n      UID : 501\n    }\n  }\n}\n';;
+  duplicate) printf '<dictionary> {\n  UID : 501\n  UID : 501\n}\n';;
+  malformed) printf '<dictionary> {\n  UID : 501oops\n}\n';;
+  *) printf '<dictionary> {\n  Name : fixture-user\n  SessionInfo : <array> {\n    0 : <dictionary> {\n      UID : 999\n    }\n  }\n  UID : %s\n}\n' "$FIXTURE_CONSOLE";;
+esac`,
 		"/usr/sbin/chown":   `exit 0`,
 		"/bin/chmod":        `exit 0`,
 		"/usr/bin/codesign": `exit 0`,
 		"/bin/launchctl": `printf '%s\n' "$*" >> "$FIXTURE_LOG"
 case "$1" in
-  print) if [ "$FIXTURE_GUI" = hang ]; then exec /bin/sleep 30; fi
-    [ "$2" = "gui/$FIXTURE_OWNER" ] && [ "$FIXTURE_GUI" = yes ];;
+  print) case "$2" in
+    gui/*) if [ "$FIXTURE_GUI" = hang ]; then exec /bin/sleep 30; fi
+      [ "$2" = "gui/$FIXTURE_OWNER" ] && [ "$FIXTURE_GUI" = yes ];;
+    system/*) exit 1;;
+    *) exit 42;;
+    esac;;
   asuser) [ "$2" = "$FIXTURE_OWNER" ] || exit 41; shift 2; exec "$@";;
   enable|bootstrap|kickstart) exit 0;;
   *) exit 42;;
@@ -159,7 +202,7 @@ esac`,
 		write(path, "#!/bin/sh\nset -eu\n"+body+"\n")
 		script = strings.ReplaceAll(script, command, "'"+strings.ReplaceAll(filepath.ToSlash(path), "'", "'\\''")+"'")
 	}
-	path := filepath.Join(root, "postinstall")
+	path := filepath.Join(root, scriptName)
 	write(path, script)
 	return clientInstallerFixture{shell: shell, script: path, state: state, log: log, owner: "501"}
 }

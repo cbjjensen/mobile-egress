@@ -13,8 +13,13 @@ if [ -e "$STATE/owner.uid" ]; then
     [ -f "$STATE/owner.uid" ] && [ ! -L "$STATE/owner.uid" ] || exit 1
     [ "$(/usr/bin/stat -f %u "$STATE/owner.uid")" = 0 ] || exit 1
 else
-    OWNER_UID=$(/usr/bin/stat -f %u /dev/console)
-    [ "$OWNER_UID" -ge 501 ] || { printf 'Install while the intended Client owner is logged in.\n' >&2; exit 1; }
+    # A remote GUI login can leave /dev/console owned by root. Use the OS's
+    # active session identity, not the device node's filesystem ownership.
+    OWNER_INFO=$(printf 'show State:/Users/ConsoleUser\n' | /usr/sbin/scutil) || { printf 'Cannot read the signed-in Mac account. Reopen the installer from your desktop session.\n' >&2; exit 1; }
+    OWNER_UID=$(printf '%s\n' "$OWNER_INFO" | /usr/bin/awk '/^  UID : / { if (NF == 3) print $3; else print "invalid" }')
+    case "$OWNER_UID" in ''|*[!0-9]*) printf 'Cannot identify one signed-in Mac account. Reopen the installer from your desktop session.\n' >&2; exit 1;; esac
+    [ "${#OWNER_UID}" -le 10 ] && [ "$OWNER_UID" -ge 501 ] && [ "$OWNER_UID" -le 4294967294 ] || { printf 'Install while the intended Client owner is logged in.\n' >&2; exit 1; }
+    /bin/launchctl print "gui/$OWNER_UID" >/dev/null 2>&1 || { printf 'The signed-in Mac account has no desktop session. Sign in and reopen the installer.\n' >&2; exit 1; }
     /bin/mkdir -p "$STATE"
     /usr/sbin/chown root:wheel "$STATE"
     /bin/chmod 700 "$STATE"

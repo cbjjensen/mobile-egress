@@ -20,6 +20,8 @@ The main screens describe the next action in everyday language. **Connection det
 
 The Windows installer opens the app unelevated after installation. The Mac PKG opens it only when the saved installation owner is the active GUI user; otherwise open Mobile Egress Client from Applications as that owner. A fresh Mac installation still requires its intended owner to be logged in. Headless upgrades/repair retain the owner and do not open a GUI. Never run the Mac Client app as root.
 
+Mac owner detection uses macOS's active session record, including remote desktops on hosted Macs. The physical `/dev/console` device can remain root-owned during a valid remote login and is not used to select the Client owner. Fresh installation requires a valid user session; upgrades and repair retain the saved owner.
+
 ### Advanced direct mode: home routers
 
 Open **Advanced connection settings → Direct connection → Set up direct connection** explicitly to operate without Inevitable activation. **Computer address** suggests an unverified public IP using ipify; the provider sees the outgoing address but no pairing credentials. Keep editable hostname/IP and separate public/local ports (8443 by default). **Network access** configures the existing Windows executable/service/port rule or Mac application exception where policy allows. Check/Retry preserves pairing. Direct is never an automatic fallback when hosted access fails.
