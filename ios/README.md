@@ -81,6 +81,8 @@ Native component commands from ios/:
 
 Do not commit signing keys, profiles, Apple accounts, expanded team identifiers, or local SSH configuration. Installing profiles, changing developer-account state, device installation, Archive, TestFlight, and publication require separate authorization.
 
+For authorized distribution, archive with signing enabled and verify the final exported app **and** cleanup extension. Re-signing an unsigned archive during export can succeed while omitting custom Keychain/App Group/Network Extension entitlements; an export-success message alone is insufficient. Existing Xcode-managed distribution profiles cannot be selected as manual profiles. Use the established identity with compatible signing configuration; the [signed iPhone pilot record](../docs/superpowers/plans/2026-10-05-ios-signed-pilot.md) records the dedicated manual-profile path and actual package verification. Keep signing overrides and profiles outside tracked source. Internal TestFlight builds must retain `TFInternalTestingOnly = true`; inspect existing automatic test-group distribution before promising owner-only access.
+
 ## Acceptance and evidence limits
 
 The app declares `ITSAppUsesNonExemptEncryption = NO` for the audited Apple-OS-only cryptography: Security/Secure Enclave signing and key storage, Network.framework TLS and platform trust evaluation. CSR/DER formatting is not a separate cryptographic implementation; the package has no external dependencies or bundled crypto library. Reassess this declaration when adding cryptographic implementations or SDKs. See [Apple's encryption guidance](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations).
