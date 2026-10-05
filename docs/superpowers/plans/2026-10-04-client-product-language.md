@@ -13,7 +13,7 @@ The owner says the Client reads too technically. Rewrite the shared Windows/Mac 
 - [x] Explain proxy use in terms of the user's app, keep HTTP/SOCKS choices and formats accurate, and state that only configured apps use the phone's data.
 - [x] Keep recovery/removal instructions precise: updates repair saved phone connections, removal requires a new QR, and expired or pending setup never claims completion.
 - [x] Validate state truthfulness and existing navigation, inspect connected/setup/recovery/error screens at normal and narrow sizes, run the Windows gate and independent review.
-- [ ] Update onboarding/operations and sibling pilot evidence; prepare a signed immutable local build. Do not automatically install it, deploy, merge or publish.
+- [x] Update onboarding/operations and sibling pilot evidence; prepare a signed immutable local build. Do not automatically install it, deploy, merge or publish.
 
 ## Acceptance and rollback
 
@@ -25,4 +25,6 @@ Nine new presentation/state regressions failed before their respective fixes. Fi
 
 The full Windows gate passed Go tests/vet/build, installer/release contracts, mobile manifest/schema validation and the 71 frontend tests. Independent review has no remaining actionable findings. Sixteen synthetic actual-asset screenshots cover connected dashboard, fresh hosted setup, approved account review, phone connection, Start sharing, pending recovery, native error and Phone settings at 940×760 and 620×650. No renderer errors or horizontal overflow; navigation remains stable. Diagnostics/advanced choices stay collapsed normally, while a new error opens its exact native repair instructions once. Redundant copy identified during visual review was removed. Synthetic rendering used no live credentials or service operations and left no capture processes running.
 
-Current onboarding/operations and sibling pilot records are synchronized. Native phone behavior, manifest evidence and existing API/protocol/storage contracts are unchanged. Signed local build preparation is pending. This change has no new native Mac or physical-device acceptance, and it has not been installed over the owner's working Client.
+Current onboarding/operations and sibling pilot records are synchronized. Native phone behavior, manifest evidence and existing API/protocol/storage contracts are unchanged. Final wording-only dashboard polish passed all 71 tests and both viewport captures again.
+
+Source `02e0ba302e0c9355d7f2e4739421c608758cfcdd` produced signed Windows validation `2.0.0-hosted-validation.20261004.7`. Established-signer/timestamp, source/version/platform and embedded-payload verification passed. Installer SHA-256: `0192042EEE215FFC81225AD1028ADB2B3D17B544306588DF32768D498F077963`. The artifact is prepared, not installed. This change has no new native Mac or physical-device acceptance and does not interrupt the owner's working Client. No production deployment, main merge or public release occurred.
