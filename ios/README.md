@@ -83,6 +83,8 @@ Do not commit signing keys, profiles, Apple accounts, expanded team identifiers,
 
 ## Acceptance and evidence limits
 
+The app declares `ITSAppUsesNonExemptEncryption = NO` for the audited Apple-OS-only cryptography: Security/Secure Enclave signing and key storage, Network.framework TLS and platform trust evaluation. CSR/DER formatting is not a separate cryptographic implementation; the package has no external dependencies or bundled crypto library. Reassess this declaration when adding cryptographic implementations or SDKs. See [Apple's encryption guidance](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations).
+
 Unit tests and unsigned builds do not establish signed-device behavior. Before release, a signed physical iPhone must demonstrate:
 
 - Ten direct Clients concurrently, an eleventh rejected, cellular-only peer and target sockets with Wi-Fi present, and HTTP/CONNECT/SOCKS exact traffic.

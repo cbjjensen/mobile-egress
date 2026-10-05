@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>MobileEgressAppGroupIdentifier</key>
 	<string>$(MOBILE_EGRESS_APP_GROUP_IDENTIFIER)</string>
 	<key>MobileEgressKeychainAccessGroup</key>
