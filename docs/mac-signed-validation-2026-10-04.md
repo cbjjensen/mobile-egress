@@ -2,6 +2,8 @@
 
 Native System Keychain acceptance remains blocked by existing noninteractive root permissions. Signing and designated-requirement verification passed after the documented configured login-keychain unlock; this check does not establish signed root storage continuity or installed-package acceptance.
 
+The current hosted Client PKG was subsequently built, signed, notarized and verified successfully as recorded under **Current hosted Client installer** below. Installed service/storage and physical-device acceptance remain separate.
+
 ## Evidence
 
 Read the Mac build-server and release skills, `docs/macos-keychain-integration.md`, and the complete guarded `windows-client/internal/securestore/system_keychain_darwin_integration_test.go` before checking the Mac. The project SSH key is ignored and untracked. Existing SSH access succeeded to `chad.jensen@Y9YD7JN54M.local`.
@@ -51,3 +53,35 @@ A fresh private scratch directory received the same hash-verified archive. Pinne
 Signed binary SHA-256: `0435B6547ECE635496F22C9EF3C6823AB7A720DBC66BB7DB70A174C29D95F19D`. Preserved `configured-unlock-sign.log` SHA-256: `0DC606D7C146878E09641977536B8AF3302A27C9C3EA602B29C229D9D66C267B`. The owned scratch was removed and its absence verified. No native fixture tests were executed and no System Keychain fixture items were created.
 
 Final result: compile **PASS**; certificate discovery **PASS**; configured Developer ID signing and designated-requirement verification **PASS**; native CRUD and same-signed upgrade acceptance **ROOTBLOCKED** because existing noninteractive sudo still requires a password. No signed PKG installation, notarization, release publication, or installed-daemon lifecycle test occurred.
+
+## Current hosted Client installer
+
+The owner requested the current Mac installer on October 4 (local time). Package verification finished October 5, 2026 UTC. The [preparation plan](superpowers/plans/2026-10-04-mac-client-installer.md) was saved and committed before building. Source `75f1120ff0684f7ff93138c5e056ca1cc4a319b6` includes current desktop wording/navigation and footer removal. No product implementation change was required.
+
+Artifact: `mobile-egress-client-macos-2.0.0-hosted-validation.20261004.8-arm64.pkg`, 13,766,003 bytes.
+
+- Windows: `C:/Users/Chad/workspace/mobile-egress/windows-client/build/release/mobile-egress-client-macos-2.0.0-hosted-validation.20261004.8-arm64.pkg`.
+- Mac owner-accessible copy: `/Users/Shared/mobile-egress-client-macos-2.0.0-hosted-validation.20261004.8-arm64.pkg`.
+- Package SHA-256: `f71aefa63b910bfad8db3db1de872315d5cd119df1749856f303cfa5d2f1b9c8` on the build host, downloaded copy and Shared copy.
+- Private source/version/signing verification JSON remains adjacent to the Windows package; it is not a public release asset.
+
+Fresh read-only prerequisites confirmed macOS 26.2/arm64, a clean build checkout, configured notary input and pinned Go 1.26.7. Exact source bundle SHA-256 `cb27797fc9ccfff9ec4485d228c5a0df5e0a1ae805c0cd33cd9fcb1e284cb3dd` matched before checkout. The existing `release-client-macos.sh` local packaging entry point and desktop SSH/configuration/record-verifier helpers preserved the established signing/notary handling. No general Desktop publication/tag operation ran.
+
+Passed:
+
+- Native pinned Go full uncached tests, vet and race tests; native pinned Node syntax and all 71 frontend tests.
+- Publisher workstation release-all/desktop/direct contract suites, Mac verification-record/CLI tests, Client installer contracts, 71 frontend tests/syntax, mobile manifest validation and validator regression suite.
+- Developer ID Application app/daemon signatures, exact identifiers/team, hardened runtime and existing Developer ID Installer PKG signature/timestamp.
+- Apple notarization **Accepted**, stapling and staple validation; Gatekeeper accepted both the app and package as Notarized Developer ID.
+- Download/source/version/hash/signing verification using the existing Go Client-record validator. Repeated independent package signature, ticket and Gatekeeper checks passed.
+- Extracted payload signatures, both executable version checks, arm64 and minimum macOS 13, embedded exact VCS revision and `vcs.modified=false`. Packaged preinstall/postinstall scripts match source byte-for-byte, are executable and parse; app and LaunchDaemon plists validate.
+
+Extracted daemon SHA-256: `c0a18e5cd0d356ac342192b7ca444f38ed9d39fdefe4c0cbac2825cc2f0c5958`. Extracted GUI executable SHA-256: `36e81866ca484806fbe80e431531872316c84391feb068a144285c75612df2f2`. Temporary inspection files were removed; immutable packages and private verification evidence were retained.
+
+Evidence directory: `G:/codex-build-cache/mobile-egress-hosted-20261004/mac-client-installer-8/`.
+
+- `native-tests.log`: `C2197F28249B05E9642D41DAE3DBF9C62FEC20580052C642F53A893B6B0AD740`.
+- `package-build.log`: `8BD51BE0FF935C2EDB846F9DD4D1A04AFA2BF4069ABC3DBC159CDE8C3F0DDE8F`.
+- `payload-inspection.log`: `3DB2FC51987464D7DD5F51326448F054D4FE767CF27ACB6F33CCC4D9CE2763E9`.
+
+Remaining: a fresh `sudo -n true` still requires authentication, and the active GUI user differs from the SSH/build user. No administrator credential was requested, inferred, or reused; no ownership/privilege change or installation was attempted. Root System Keychain CRUD/same-signed upgrade, fresh install/upgrade/repair, owner GUI handoff, daemon boot/logout and physical Android/iPhone traffic are **NOT RUN**. Install while logged into the intended Mac owner account; normal macOS Installer administrator authorization is required. The signed/notarized package is ready for owner installation/testing, not stable production promotion. No GitHub release, tag, main merge, Inevitable deployment, or existing installation change occurred.
