@@ -20,8 +20,8 @@ References: [CameraX analysis resolution](https://developer.android.com/referenc
 - [x] Verify single-frame ownership, exactly-once callbacks, disposal, no-code continuation, decoder failure and missing-native-library behavior. Remove the unused Java decoder from runtime.
 - [x] Update mobile parity evidence, Android guidance and the sibling pilot record. No Inevitable frontend pattern or accepted infrastructure responsibility changes.
 - [x] Run full Android tests/lint/build, native detector regression, manifest/schema and release checks plus independent review.
-- [ ] Build and verify a same-signer local code-23 APK from committed source; preserve previous artifacts. Record exact source/hash and physical camera acceptance still required.
-- [ ] Commit/push only the current feature/docs branches. No deployment, main merge or release publication.
+- [x] Build and verify a same-signer local code-23 APK from committed source; preserve previous artifacts. Record exact source/hash and physical camera acceptance still required.
+- [x] Commit/push only the current feature/docs branches. No deployment, main merge or release publication.
 
 ## Acceptance, scope and rollback
 
@@ -40,3 +40,11 @@ Implementation, full Android and signed artifact checks follow. Private evaluati
 Behavioral RED reproduced five expected failures in the focused suite: missing-native initialization/read failures, decoder options, oversized resolution acceptance, and stale presentation text. The preceding compile-only attempt raced a source/test edit and was rerun before drawing behavioral conclusions. Independent final source review found no actionable defect in frame bounds/ownership, null/no-code continuation, error sanitization, one-shot/disposed callbacks, CameraX API compatibility or JNI keep rules. Device execution remains separate.
 
 The full Android JVM suite passes 309 tests across 46 suites, with zero failures, errors or skips. Debug lint passes with zero errors and 18 existing warnings; debug APK assembly passes. The pairing card renders complete actionable scanner error text below its compact status badge, and retry/cancel restores the saved pairing status. Source-only test/lint reports are preserved in `android-qr-camera-evaluation/code23-green-validation/` before the clean signed build.
+
+## Signed local artifact and remaining acceptance
+
+From clean source `8556040bd2d6a5cfe75758f3723b1141f286234d`, guarded `scripts/release-android.ps1` passed clean release assembly, R8, release lint and exact original-signer verification. Package `com.mobileegress.agent`, version `2.0.0`, code `23`, minimum SDK 29 and target SDK 35 were independently confirmed. The APK has one signer using scheme v3. All four native ABIs are present, with 16-KiB ELF load alignment; `zipalign -c -P 16 -v 4` passes. The final R8 configuration/mapping preserves JNI names, and license/attribution assets are included.
+
+Immutable local file: `G:/codex-build-cache/mobile-egress-hosted-20261004/android-qr-camera-code23/zfnf-mobile-egress-android-2.0.0-code23.apk`, 11,864,968 bytes. SHA-256: `0792B2C42A9A547A6B9633FF9B377CC44D20A20A91FAE52D1C4147E3F40430EC`. Code 21 and 22 artifacts remain intact. Install this update over the existing app, without uninstalling or clearing saved Clients, then scan a fresh nonexpired Mac invitation.
+
+Physical Android JNI loading, camera scanning and Mac cellular traffic remain unverified until the owner tests the phone; no device or emulator is available locally. Portable core tests and packaged-library checks do not close that gate. Mac `.9`, invitation/trust format, gateway runtime, iOS behavior and existing pairings were not changed. The only scope addition was the directly related generic scanner-error presentation repair. No deployment, main merge or public release occurred.

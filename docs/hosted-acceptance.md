@@ -74,6 +74,12 @@ The owner's follow-up identifies the Windows Client dashboard as mixing setup wi
 
 This is a desktop presentation/navigation change. Inevitable runtime, website, commercial proxy traffic, usage accounting and Android/iOS behavior are unchanged. New signed-installer and physical acceptance are not established by the source change; use the linked plan for validation results. Existing pre-release and platform/device gates remain in force.
 
+## Android camera-reader follow-up
+
+The owner installed code 22 and confirmed that Android still did not recognize the Mac invitation, despite earlier Windows pairing on the same phone. The [camera-reader repair](superpowers/plans/2026-10-04-android-qr-camera-reader.md) replaces the detector with a pinned bundled offline native reader, bounded higher-resolution analysis and full preview. Public camera-frame regressions reproduce the old reader's failure and pass with the replacement. No live invitation is tracked, and Mac trust/pairing, gateway and Inevitable traffic behavior are unchanged.
+
+Code 23 from source `8556040bd2d6a5cfe75758f3723b1141f286234d` passes 309 JVM tests, 45 required native-core optical cases, lint/debug assembly, release contracts, manifest/schema and independent review. Its guarded clean signed release APK matches the original identity; native ABI/JNI keep-rule and 16-KiB packaging checks pass. [Artifact evidence](signed-validation-2026-10-04.md) includes the exact local file/hash. Physical Android JNI loading, camera scanning and Mac cellular traffic remain owner acceptance. Downloads remain pre-release; no public release, deployment or main merge occurred.
+
 ## Rollback procedure
 
 Subsequent hosted reactivation recovery is recorded in the [recovery repair](superpowers/plans/2026-10-04-hosted-reactivation-recovery.md). The owner removed the Client from both Inevitable and Android. The computer reactivated at generation 2; because Android's pairing key had also been deleted, the owner paired again through a fresh invitation after normal local revocation of the obsolete phone association. Authenticated connection returned, and HTTP/CONNECT/SOCKS5 smoke requests all passed again with the same non-PC public exit IP. Saved-pairing signed-update recovery is covered by automated tests; that distinct hardware path remains unverified. The desktop now makes pending connection updates visible and explains phone-side deletion separately.
