@@ -13,15 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.BinaryBitmap
 import com.google.zxing.ChecksumException
-import com.google.zxing.DecodeHintType
 import com.google.zxing.FormatException
-import com.google.zxing.MultiFormatReader
 import com.google.zxing.NotFoundException
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -85,14 +79,7 @@ fun QrCodeScanner(
                         val preview = Preview.Builder().build().also { preview ->
                             preview.surfaceProvider = previewView.surfaceProvider
                         }
-                        val reader = MultiFormatReader().apply {
-                            setHints(
-                                mapOf(
-                                    DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                                    DecodeHintType.TRY_HARDER to true,
-                                ),
-                            )
-                        }
+                        val decoder = QrFrameDecoder()
                         val analysis = ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
@@ -104,18 +91,13 @@ fun QrCodeScanner(
                                         val buffer = luminance.buffer
                                         val bytes = ByteArray(buffer.remaining())
                                         buffer.get(bytes)
-                                        val source = PlanarYUVLuminanceSource(
+                                        val result = decoder.decode(
                                             bytes,
-                                            luminance.rowStride,
-                                            imageProxy.height,
-                                            0,
-                                            0,
                                             imageProxy.width,
                                             imageProxy.height,
-                                            false,
+                                            luminance.rowStride,
                                         )
-                                        val result = reader.decodeWithState(BinaryBitmap(HybridBinarizer(source)))
-                                        dispatchAcceptedResult { latestOnQrDecoded.value(result.text) }
+                                        dispatchAcceptedResult { latestOnQrDecoded.value(result) }
                                     } catch (_: NotFoundException) {
                                         // Keep scanning until a QR code is visible.
                                     } catch (_: FormatException) {
@@ -123,7 +105,6 @@ fun QrCodeScanner(
                                     } catch (_: ChecksumException) {
                                         dispatchAcceptedResult { latestOnQrNotRecognized.value() }
                                     } finally {
-                                        reader.reset()
                                         imageProxy.close()
                                     }
                                 }
