@@ -1,6 +1,6 @@
 # Mac signed native-storage validation, 2026-10-04
 
-Native System Keychain acceptance remains blocked by existing noninteractive root permissions. Signing and designated-requirement verification passed after the documented configured login-keychain unlock; this check does not establish signed root storage continuity or installed-package acceptance.
+The initial local build-server System Keychain acceptance was blocked by noninteractive root permissions. Later owner-authorized testing on a separate rented Mac passed native signed storage, fresh installation and repair after fixing GUI-owner detection, as recorded under **Remote desktop installer repair and native acceptance** below.
 
 The current hosted Client PKG was subsequently built, signed, notarized and verified successfully as recorded under **Current hosted Client installer** below. Installed service/storage and physical-device acceptance remain separate.
 
@@ -85,3 +85,24 @@ Evidence directory: `G:/codex-build-cache/mobile-egress-hosted-20261004/mac-clie
 - `payload-inspection.log`: `3DB2FC51987464D7DD5F51326448F054D4FE767CF27ACB6F33CCC4D9CE2763E9`.
 
 Remaining: a fresh `sudo -n true` still requires authentication, and the active GUI user differs from the SSH/build user. No administrator credential was requested, inferred, or reused; no ownership/privilege change or installation was attempted. Root System Keychain CRUD/same-signed upgrade, fresh install/upgrade/repair, owner GUI handoff, daemon boot/logout and physical Android/iPhone traffic are **NOT RUN**. Install while logged into the intended Mac owner account; normal macOS Installer administrator authorization is required. The signed/notarized package is ready for owner installation/testing, not stable production promotion. No GitHub release, tag, main merge, Inevitable deployment, or existing installation change occurred.
+
+## Remote desktop installer repair and native acceptance
+
+The owner's screenshots and Installer Log revealed both 1.1.7 and `.8` failed during preinstall on their separate EC2 Mac. Existing verified SSH access confirmed macOS 27.0/arm64, a real UID-501 GUI login and `gui/501`, but a root-owned `/dev/console`. System Configuration correctly reported active UID 501. No Client state, app, daemon or receipt existed after the failures. The transferred `.8` hash and Gatekeeper checks passed, ruling out a damaged/unsigned transfer as this failure's cause.
+
+The [repair plan](superpowers/plans/2026-10-04-mac-installer-session-owner.md) records regression-first correction of both preinstall owner selection and postinstall handoff. Exact final source `c36c758116c73677c7530861964c146b7358e1b1` includes fix `fc8097a` and a test-only fixture-concurrency correction. An initial native race run timed out in two shell fixtures; limiting concurrent fixture processes fixed test-host contention while preserving all production/test timeout assertions. Final native full tests/vet/race, 71 frontend cases/syntax, Windows installer/record checks, release contracts, manifest/schema checks and independent review passed.
+
+Current artifact: `mobile-egress-client-macos-2.0.0-hosted-validation.20261004.9-arm64.pkg`, 13,766,321 bytes; SHA-256 `09e60569c1bf488d9062b95a1cd7ed7d43c326d19d6e9df885e61e06487422d1`. Existing identities/hardened runtime, signing/timestamp, Apple notarization Accepted, stapling, Gatekeeper, minimum macOS 13/arm64 and source/version/hash-bound record verification passed. Downloaded and rental-transferred bytes match. Copies are in the Windows `windows-client/build/release` directory, the build Mac's `/Users/Shared`, and the rental's `/Users/ec2-user/Transfers`. Historical `.8` remains unchanged.
+
+Fresh installation through normal `installer -pkg ... -target /` succeeded on the owner's rental. It saved UID 501, started the root LaunchDaemon and launched the GUI as UID 501. Owner IPC confirmed exact `.9` version, stable identity and initial hosted account-setup state; no account activation, pairing or connection was falsely claimed. State directory/owner file are root-owned 0700/0600, runtime directory is 0755, and protected IPC rejects a tested nonowner UID while the owner's status call succeeds. Installed executable SHA-256 values:
+
+- Daemon: `565b0d0cd7491233112d861d60865c6e775e5e9197a17b00e946ad39d22ab78e`.
+- GUI: `a8431e1bfe259471067976602d9df237904a4eb61d4d71f74d664c0546912fb1`.
+
+Same-package repair also succeeded through the ordinary installer. The daemon restarted and owner, stable Client ID and Mac local proxy endpoints survived. This was an unpaired fresh Client; it does not establish a different-version package upgrade or retention of a live paired session.
+
+Native signed root storage acceptance now **PASS** on the rental: `TestSignedRootSystemKeychainCRUD`, then phases A and B of `TestSystemKeychainSameSignedUpgrade` across separately built test binaries signed with the existing Developer ID Application and `com.zfnf.mobile-egress.client` identifier. Fixture source was `fc8097a`, whose secure-store implementation is identical to final package source; B stripped debug information to ensure a different binary. Both designated requirements verified. Binary hashes: A `58da85fbfac9d8d85bed9974752a7774f220ebfef119990c47ab01cfe98e3868`, B `afdabdbe342fad10cec1a8b12c7051095b2f104f8a550a6ddc5b7af1f84e45bc`. Random test items and upgrade phase state were deleted by the tests; private fixture directories on both Macs and temporary installation-status files were removed. No production Keychain item was exported or deleted.
+
+Private evidence is retained under `G:/codex-build-cache/mobile-egress-hosted-20261004/mac-client-installer-9/`: `native-tests.log`, `package-build.log`, `package-inspection.log`, `storage-build.log`, `storage-acceptance.log`, `fresh-install.log`, `repair-install.log`, `installed-identity.log`, exact source bundles and verified package record. Source bundle for final `c36c758` matched SHA-256 `4bc9dd971a91b5aa22f5231ab8734e4a1965749d4798c42dd5370ec45f82b441` before checkout.
+
+Still **NOT RUN**: physical Mac-to-phone HTTP/CONNECT/SOCKS, reboot/logout, different-version installed upgrade and paired-state retention. The app is installed and ready for the owner's account/phone setup; stable release readiness is not claimed. No host allocation, rental expiry, security group, router, DCV, Inevitable deployment, unrelated app or existing Windows/phone pairing changed. No public release/tag or main merge occurred.
