@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mobile Egress Client</title>
+<title>Mobile Egress</title>
 <style>
 :root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#e8eef7;background:#101823;color-scheme:dark}
 html{scrollbar-gutter:stable}
@@ -44,13 +44,13 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 </head>
 <body><main>
 <div class="eyebrow">Private cellular connection</div>
-<h1>Mobile Egress Client</h1>
-<p>Use your phone’s cellular connection for applications on this computer.</p>
+<h1>Mobile Egress</h1>
+<p>Use your phone’s mobile data in the apps you choose on this computer.</p>
 
 <section id="servicePanel" class="card" aria-labelledby="serviceHeading">
-  <h2 id="serviceHeading">Connecting to the Client service</h2>
-  <p id="serviceMessage" role="status">Waiting for the installed Client service…</p>
-  <button id="serviceRetry" class="hidden">Retry connection</button>
+  <h2 id="serviceHeading">Starting Mobile Egress</h2>
+  <p id="serviceMessage" role="status">Getting your saved settings ready…</p>
+  <button id="serviceRetry" class="hidden">Try again</button>
 </section>
 <nav id="clientNavigation" class="viewTabs hidden" aria-label="Client pages">
   <button id="backToDashboard">Dashboard</button><button id="managePhone">Phone settings</button><button id="reviewSetup">Review setup</button>
@@ -61,9 +61,9 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <nav class="steps" aria-label="Setup steps">
     <button id="stepAddress"><span>1</span><b id="addressStepLabel">Computer address</b></button>
     <button id="stepNetwork"><span>2</span><b id="networkStepLabel">Network access</b></button>
-    <button id="stepPair"><span>3</span>Pair phone</button>
-    <button id="stepVerify"><span>4</span><b id="verifyStepLabel">Start on your phone</b></button>
-    <button id="stepProxy"><span>5</span>Use your proxy</button>
+    <button id="stepPair"><span>3</span>Connect phone</button>
+    <button id="stepVerify"><span>4</span><b id="verifyStepLabel">Start sharing</b></button>
+    <button id="stepProxy"><span>5</span>Use in your apps</button>
   </nav>
   <div class="heading"><div><div id="stepCount" class="eyebrow">Step 1 of 5</div><h2 id="stepTitle" tabindex="-1">Computer address</h2></div><button id="finishLater" class="quiet">Finish later</button></div>
 </div>
@@ -74,10 +74,10 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 </section>
 <details id="recoveryPanel" class="card hidden"><summary id="recoveryHeading">Connection updates</summary>
   <p id="recoveryMessage"></p>
-  <button id="exportUpdate" disabled>Show connection update</button><button id="copyUpdate" class="secondary" disabled>Copy connection update</button>
-  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Signed connection update for the paired phone"></div><p class="note">On your phone, open Mobile Egress and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the complete connection update</summary><label for="update">Complete connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
+  <button id="exportUpdate" disabled>Show update QR</button><button id="copyUpdate" class="secondary" disabled>Copy update</button>
+  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Connection update QR code for your paired phone"></div><p class="note">On your phone, open Mobile Egress and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the update instead</summary><label for="update">Connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
   <p class="note">Keep this computer enabled in the phone app. If sharing is stopped, tap Start cellular Agent on Android or Start sharing on iPhone after scanning.</p>
-  <details><summary>Removed this computer from the phone app?</summary><p>The phone needs a new pairing. From the dashboard, open Phone settings and choose Remove paired phone. Then create a new invitation and scan it on your phone. Your Inevitable activation stays in place.</p></details>
+  <details><summary>Removed this computer from the phone app?</summary><p>You’ll need to pair again. Open Phone settings here and choose Remove phone. Then show a new QR code and scan it on your phone. Your Inevitable account connection and proxy settings are kept.</p></details>
 </details>
 <section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
   <h2 id="verifyHeading">Start sharing on your phone</h2><p id="verificationMessage" role="status"></p>
@@ -89,32 +89,32 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
     <p class="note">Keep mobile data on. On iPhone, keep the app open and unlocked.</p>
   </div>
   <details id="connectionHelp"><summary>Phone not connecting?</summary>
-    <p>If your phone already shows Stop, leave sharing running. Make sure this computer is enabled in the phone app and cellular data is available.</p>
+    <p>If your phone already shows Stop, leave sharing running. Make sure this computer is enabled in the phone app and mobile data is on.</p>
     <div id="directTroubleshooting"><ul>
       <li>Check the public address and public port. A VPN or CGNAT can make a suggested address unreachable.</li>
       <li>Check this computer’s firewall and its listener port.</li>
       <li>Check router forwarding or the hosted server’s firewall, security group and internet route.</li>
     </ul></div>
-    <p id="hostedTroubleshooting" class="note hidden">Check that Inevitable activation is approved and the gateway is connected.</p>
-    <p class="note">For a cellular connection check, try turning off Wi-Fi on the phone. On iPhone, keep-awake prevents automatic locking while sharing; it does not enable background sharing.</p>
+    <p id="hostedTroubleshooting" class="note hidden">Check that you approved this computer in Inevitable and that this computer has internet access.</p>
+    <p class="note">Try turning off Wi-Fi on your phone to check its mobile data connection. On iPhone, keep-awake prevents automatic locking while sharing. Locking your phone or switching apps pauses sharing.</p>
     <button id="verifyBack" class="secondary">Review connection setup</button>
   </details>
-  <button id="cancelPairing" class="secondary hidden">Cancel pending pairing</button><button id="verifyNext" class="hidden" disabled>Continue to proxy details</button>
+  <button id="cancelPairing" class="secondary hidden">Cancel pairing</button><button id="verifyNext" class="hidden" disabled>Continue to app settings</button>
 </section>
 <section id="connectionSummary" class="card hidden" aria-labelledby="connectionHeading">
-  <div class="status"><h2 id="connectionHeading">Connection</h2><span id="phase" class="badge">Checking service</span></div>
+  <div class="status"><h2 id="connectionHeading">Your connection</h2><span id="phase" class="badge">Getting ready</span></div>
   <p id="message" role="status"></p>
   <details id="connectionDetails"><summary>Connection details</summary><div class="milestones" aria-label="Connection status">
-    <div>Service<strong id="installedState">Checking</strong></div><div><span id="connectionType">Local listener</span><strong id="listeningState">Not confirmed</strong></div>
-    <div>Phone pairing<strong id="pairedState">Not paired</strong></div><div>Live session<strong id="connectedState">Waiting</strong></div>
-  </div></details>
+    <div>App<strong id="installedState">Checking</strong></div><div><span id="connectionType">Account connection</span><strong id="listeningState">Not confirmed</strong></div>
+    <div>Phone added<strong id="pairedState">Not paired</strong></div><div>Sharing<strong id="connectedState">Waiting</strong></div>
+  </div><p id="diagnosticMessage" class="note"></p></details>
   <p id="pending" role="status"></p>
 </section>
 
 <section id="addressPanel" class="card hidden" aria-labelledby="addressHeading">
   <h2 id="addressHeading">This computer’s address</h2>
   <p>Your phone connects to this computer over cellular. Enter a public hostname or IP address that can accept incoming connections.</p>
-  <label for="displayName">Computer name</label><input id="displayName" maxlength="80" placeholder="My workload computer" autocomplete="off">
+  <label for="displayName">Computer name</label><input id="displayName" maxlength="80" placeholder="My computer" autocomplete="off">
   <label for="endpoint">Public hostname or IP address</label><input id="endpoint" placeholder="client.example.com" spellcheck="false" autocomplete="off" aria-describedby="discoveryMessage discoveryPrivacy">
   <p id="discoveryMessage" class="note" role="status"></p><button id="retryDiscovery" class="secondary">Retry address lookup</button>
   <p id="discoveryPrivacy" class="note">The ipify lookup service sees your outgoing public IP. A suggested address is not yet verified: VPNs, NAT and CGNAT may make it unsuitable for incoming connections. You can always enter your own address.</p>
@@ -124,26 +124,26 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
     <p class="note">Both ports default to 8443. Forward the public port to the local listener port if they differ. Keep the local HTTP and SOCKS proxy ports 1080 and 1081 private.</p>
   </details>
   <button id="configure" disabled>Save and continue</button>
-  <p class="note">Changing an existing endpoint may interrupt connections. Pairing and proxy credentials are retained; the paired phone may need a connection update.</p>
+  <p class="note">Changing this address may disconnect your phone until you scan an update QR code. Your paired phone and proxy settings are kept.</p>
 </section>
 
 <section id="hostedPanel" class="card hidden" aria-labelledby="hostedHeading">
-  <h2 id="hostedHeading">Activate Inevitable</h2>
-  <p>Activate this Client in your browser, then pair your phone locally. Your phone does not need an Inevitable login. The Client and phone connect outbound; application traffic exits through cellular.</p>
-  <label for="hostedName">Computer name</label><input id="hostedName" maxlength="80" placeholder="My workload computer" autocomplete="off">
+  <h2 id="hostedHeading">Connect your account</h2>
+  <p id="hostedDescription">Sign in to Inevitable and approve this computer in your browser. Come back here to connect your phone—no sign-in needed on your phone.</p>
+  <div id="hostedNameField"><label for="hostedName">Computer name</label><input id="hostedName" maxlength="80" placeholder="My computer" autocomplete="off"></div>
   <p id="activationMessage" role="status"></p>
-  <button id="activateHosted">Activate in browser</button><button id="resumeActivation" class="secondary hidden">Continue in browser</button><button id="cancelActivation" class="secondary hidden">Cancel activation</button>
-  <p class="note">Keep this app open while approving. Activation can resume after restarting the Client service. Only a live authenticated phone connection verifies setup.</p>
+  <button id="activateHosted">Continue in browser</button><button id="resumeActivation" class="secondary hidden">Continue in browser</button><button id="cancelActivation" class="secondary hidden">Cancel request</button>
+  <p id="hostedApprovalHelp" class="note">Keep this app open. Setup continues automatically after you approve this computer.</p>
 </section>
-<section id="transportChoice" class="card hidden">
- <p>Hosted connectivity is the default for new Clients. Existing direct Clients keep their saved mode until you choose to switch.</p>
- <button id="chooseHosted" class="secondary">Use Inevitable hosted connectivity</button>
- <details><summary>Advanced: direct connection</summary><p>Direct mode requires a reachable authenticated Agent listener and your own network access configuration.</p><button id="advancedDirect" class="secondary">Configure direct mode</button></details>
-</section>
+<details id="transportChoice" class="card hidden"><summary>Advanced connection settings</summary>
+ <p>Inevitable connects your computer and phone without router changes. Changing this setting may require a connection update on your phone.</p>
+ <button id="chooseHosted" class="secondary">Connect through Inevitable</button>
+ <details><summary>Direct connection</summary><p>Direct mode requires a public address and incoming connections to this computer. You manage the firewall and any router forwarding. Only your authenticated phone can use this connection; it does not expose your local proxies.</p><button id="advancedDirect" class="secondary">Set up direct connection</button></details>
+</details>
 <section id="gatewayPanel" class="card hidden" aria-labelledby="gatewayHeading">
- <h2 id="gatewayHeading">Gateway connection</h2><p id="gatewayMessage" role="status"></p>
- <p>No inbound workload listener, router forwarding or public address lookup is needed. Pair your phone and start sharing over cellular.</p>
- <button id="gatewayNext">Continue to phone pairing</button>
+ <h2 id="gatewayHeading">Check connection</h2><p id="gatewayMessage" role="status"></p>
+ <p>Inevitable connects your computer and phone. You don’t need to change your router settings.</p>
+ <button id="gatewayNext">Continue to your phone</button>
 </section>
 
 <section id="networkPanel" class="card hidden" aria-labelledby="networkHeading">
@@ -155,38 +155,40 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <label for="networkLocation">Where is this computer?</label>
   <select id="networkLocation"><option value="home">Home / router</option><option value="aws">AWS EC2</option><option value="hosted">Other hosted server</option></select>
   <p id="networkInstructions" class="note"></p>
-  <p class="note">These choices change the instructions only. The public listener accepts authenticated Agent traffic. It is not a public proxy.</p>
-  <button id="networkNext">Continue to phone pairing</button>
+  <p class="note">These choices show the instructions for your network; they don’t change its settings. This connection accepts only your authenticated phone, not public proxy traffic.</p>
+  <button id="networkNext">Continue to your phone</button>
 </section>
 
 <section id="pairPanel" class="card hidden" aria-labelledby="pairHeading">
-  <h2 id="pairHeading">Pair your phone</h2><p id="pairNote"></p>
-  <button id="issue" disabled>Create invitation</button>
+  <h2 id="pairHeading">Connect your phone</h2><p id="pairNote"></p>
+  <button id="issue" disabled>Show QR code</button>
   <div id="invitationDetails" class="hidden">
-    <div class="qrFrame"><img id="invitationQR" class="qr" alt="Private one-use phone pairing invitation"></div><p id="expiry"></p>
+    <div class="qrFrame"><img id="invitationQR" class="qr" alt="Private one-use phone pairing QR code"></div><p id="expiry"></p>
     <p class="note">Keep the entire code visible while scanning. Enlarge this window if needed.</p>
-    <details><summary>Copy the complete invitation</summary><label for="invitation">Complete invitation</label><textarea id="invitation" readonly spellcheck="false"></textarea><button id="copyInvitation" class="secondary">Copy invitation</button></details>
-    <button id="cancelInvitation" class="secondary">Cancel invitation</button>
-    <p class="note">Invitations expire after ten minutes. Keep them private.</p>
+    <details><summary>Copy a setup code instead</summary><label for="invitation">Setup code</label><textarea id="invitation" readonly spellcheck="false"></textarea><button id="copyInvitation" class="secondary">Copy setup code</button></details>
+    <button id="cancelInvitation" class="secondary">Cancel this code</button>
+    <p class="note">This code works once and expires after ten minutes. Keep it private.</p>
   </div>
-  <p class="note">Once paired, start sharing in the phone app. Android can share in its foreground service. On iPhone, keep the app open and unlocked; keep-awake is enabled by default while sharing.</p>
-  <button id="pairNext" class="secondary">Continue to verification</button>
+  <p class="note">After scanning, start sharing in the phone app. Android can keep sharing while you use other apps. On iPhone, leave Mobile Egress open and your phone unlocked; keep-awake is on by default while sharing.</p>
+  <button id="pairNext" class="secondary">Continue to sharing</button>
 </section>
 <section id="phoneSettingsPanel" class="card hidden" aria-labelledby="pairedPhoneHeading">
-  <h2 id="pairedPhoneHeading">Paired phone</h2><p>Removing the paired phone closes its connections. You can then pair a phone using a new QR code. Your computer’s activation and proxy settings are kept.</p>
-  <div id="removePhone" class="hidden"><button id="revoke" class="danger" disabled>Remove paired phone</button>
-    <div id="revokeConfirmation" class="hidden"><p>Remove this phone and immediately close its connections? Pairing again will require a new invitation.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
+  <h2 id="pairedPhoneHeading">Your phone</h2><p>Remove this phone to pair it again or use a different phone. Any apps using its connection will disconnect. Your Inevitable account connection and proxy settings are kept.</p>
+  <div id="removePhone" class="hidden"><button id="revoke" class="danger" disabled>Remove phone</button>
+    <div id="revokeConfirmation" class="hidden"><p>Remove this phone now? This computer will lose its phone connection immediately. You’ll need to scan a new QR code to pair again.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
   </div>
 </section>
 
 <section id="proxyPanel" class="card hidden" aria-labelledby="proxyHeading">
-  <h2 id="proxyHeading">Use your proxy</h2><p id="proxyConnection"></p>
+  <h2 id="proxyHeading">Use in your apps</h2><p id="proxyConnection"></p>
+  <p class="note">Only apps using these proxy settings use your phone’s mobile data.</p>
   <div class="endpoints"><span id="httpAddress"></span><span id="socksAddress"></span></div>
-  <button id="copyHttp" class="secondary" disabled>Copy HTTP proxy</button><button id="copySocks" class="secondary" disabled>Copy SOCKS URL</button>
-  <p class="note">Use these proxies only in applications on this computer. Copies include your proxy credentials. Never expose ports 1080 or 1081.</p>
+  <button id="copyHttp" class="secondary" disabled>Copy HTTP proxy</button><button id="copySocks" class="secondary" disabled>Copy SOCKS5 proxy</button>
+  <p class="note">For apps on this computer only. Copied details include your proxy password; keep them private.</p>
+  <details><summary>Which option should I choose?</summary><p>Choose HTTP if your app uses an HTTP proxy; it supports HTTPS browsing too. Choose SOCKS5 if your app asks for SOCKS5.</p><p>The HTTP copy uses <code>host:port:username:password</code>. The SOCKS5 copy is a <code>socks5://username:password@host:port</code> URL. Some apps accept the full copy; others need the address, port, username and password entered separately.</p><p>These proxies work only on this computer. Never open proxy ports 1080 or 1081 to your network or the internet.</p></details>
   <button id="finishSetup">Go to dashboard</button>
 </section>
 <div id="feedback" role="status" aria-live="polite"></div>
-<footer><span>Client ⇄ phone ⇄ cellular Internet</span><span id="version"></span></footer>
+<footer><span>Your apps · Your phone · Mobile data</span><span id="version"></span></footer>
 </main><script src="app.js"></script></body>
 </html>

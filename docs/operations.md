@@ -2,13 +2,12 @@
 
 ## Reading connection state
 
-- Activation required: activate hosted access in your browser, or explicitly choose Advanced direct mode.
-- Gateway connecting / unavailable: inspect account access, outbound TCP 443 and service readiness; this is separate from phone pairing.
-- Set up endpoint / Migration required: complete the selected mode and pair a phone.
-- Listening / Awaiting phone: local listener is ready; cellular reachability is not yet proved.
-- Connected: the paired phone has an authenticated direct session. A target may still reject a particular request.
-- Connection update pending: desired endpoint is persisted but not acknowledged by the phone.
-- Service unavailable / Needs attention: use the stated storage, installation, port, trust or network recovery action.
+- **Setup needed**: complete **Your account** and **Connect this computer**, or explicitly choose Advanced direct mode, then connect a phone. Legacy installations still require fresh pairing.
+- **Waiting for phone**: the phone has not established a usable connection. **Connection details** distinguishes account/gateway readiness, a direct listener and the saved phone; none alone proves cellular traffic.
+- **Adding phone**: leave Mobile Egress open on the phone while pairing finishes; do not create another code merely because acknowledgement is pending.
+- **Connected**: the paired phone has an authenticated session and required connection updates are acknowledged. A target may still reject a particular request.
+- **Reconnect your phone**: the saved connection changed and the phone has not acknowledged its update.
+- **App unavailable / Needs attention**: use the stated storage, installation, port, trust or network recovery action. The app retains native error details under **Connection details** and opens them when a connection error first appears.
 
 Status is deliberately secret-safe. Copy proxy credentials or invitations only through the explicit app actions. Never paste credentials, QR capabilities or private diagnostic dumps into issue reports.
 
@@ -16,15 +15,19 @@ Status is deliberately secret-safe. Copy proxy credentials or invitations only t
 
 The paired Client opens a dashboard with connection status and local proxy copy actions. An offline phone does not restart setup: follow the dashboard's phone-app Start instructions. **Phone settings** is a separate view for manual connection updates and confirmed phone removal. **Review setup** returns to the wizard for activation, connection mode, address and network guidance while preserving the existing pairing. **Finish later** keeps unfinished work visible through **Continue setup**.
 
+The hosted setup headings are **Your account**, **Connect this computer**, **Connect phone**, **Start sharing** and **Use in your apps**. They describe customer actions; the underlying account approval, gateway attachment and authenticated phone checks are unchanged. Approved account review says **Your account is connected** without displaying the activation name field or requesting a new sign-in. **Advanced connection settings** contains mode selection, and **Connection details** retains diagnostic information rather than making protocol terms the main dashboard copy.
+
+**Show QR code** creates or resumes a phone-pairing invitation; **Copy setup code** is its text fallback. **Copy HTTP proxy** and **Copy SOCKS5 proxy** retain their existing credential-bearing formats. Only applications configured to use these local proxies use the phone's mobile data; the Client does not redirect all computer traffic. Keep copied details private.
+
 Pending connection updates surface **Reconnect your phone** on the dashboard. If hosted access needs reactivation, restore account access first; only then export the current connection update. A bound listener or connected gateway does not substitute for an authenticated phone session.
 
 ## Hosted connection recovery
 
 Check Inevitable access and the workload's outbound Internet connection. Resume pending browser activation from the Client app; its proof stays in the service. Expired/denied activation requires a new request. If the one-time authorization response is lost before durable storage, reactivate the same Client. Account device revocation stops hosted access; local pairing is retained. A gateway outage never silently changes mode or opens a public workload listener. Only an authenticated phone connection completes verification.
 
-Removing the computer in Inevitable and activating it again can change its gateway address. The phone keeps its pairing but may still have the retired address. After browser activation completes, use **Reconnect your phone → Show connection update** in the Client and scan that QR in the phone app. Keep the saved Client enabled and start sharing if stopped. The update preserves pairing and remains pending until the phone acknowledges it; do not remove the phone or create another invitation for an address update. If another account removal interrupts recovery, complete browser activation again before exporting the new update.
+Removing the computer in Inevitable and activating it again can change its gateway address. The phone keeps its pairing but may still have the retired address. After browser activation completes, use **Reconnect your phone → Show update QR** in the Client and scan that QR in the phone app; **Copy update** retains the text export. Keep the saved Client enabled and start sharing if stopped. The update preserves pairing and remains pending until the phone acknowledges it; do not remove the phone or create another invitation for an address update. If another account removal interrupts recovery, complete browser activation again before exporting the new update.
 
-If the Client was also removed from the phone app, its pairing key is gone and a connection update cannot restore it. On the desktop dashboard, open **Phone settings → Remove paired phone** and confirm. The Client returns to **Pair phone**, where you can create a fresh invitation and scan it on the phone. Merely opening Phone settings or removing the old association does not generate an invitation. This replaces the phone association while retaining Inevitable activation and proxy settings.
+If the Client was also removed from the phone app, its pairing key is gone and a connection update cannot restore it. On the desktop dashboard, open **Phone settings → Remove phone** and confirm. The Client returns to **Connect phone**, where **Show QR code** creates a fresh invitation to scan on the phone. Merely opening Phone settings or removing the old association does not generate an invitation. This replaces the phone association while retaining Inevitable activation and proxy settings. It does not stop other computers saved on the phone.
 
 On Inevitable, use the separate Mobile health/readiness and sanitized connection/error/resource indicators. Keep existing Core traffic and accounting enabled. Mobile gateway deployment/drain/rollback uses its own service and target registrations; disabling it must not replace healthy Core ASG nodes. Follow the sibling Inevitable requirements/runbook for certificates, fleet scope, signed configuration expiry and route-owner recovery. No Mobile usage dispatch is part of recovery.
 
@@ -42,9 +45,9 @@ If a port is occupied, stop the conflicting owned service or choose an explicit 
 
 ## Phone availability
 
-Android must have sharing started and its foreground service/cellular access available. Reboot and force-stop require Start again. Wi-Fi availability does not substitute for cellular.
+On Android, tap **Start cellular Agent** in Mobile Egress. Sharing continues through its foreground service while cellular access remains available. Reboot and force-stop require Start again. Wi-Fi availability does not substitute for cellular.
 
-iOS must stay active, open and unlocked. Keep-awake defaults on during sharing and prevents only idle auto-lock. Stop or disabling the option restores normal auto-lock. Manual lock, app switching and inactive interruptions disconnect current streams; returning active creates new sessions only when Start intent remains enabled. Existing browser transfers may need retrying.
+On iPhone, tap **Start sharing** and keep Mobile Egress active, open and the phone unlocked. Keep-awake defaults on during sharing and prevents only idle auto-lock. Stop or disabling the option restores normal auto-lock. Manual lock, app switching and inactive interruptions disconnect current streams; returning active creates new sessions only when Start intent remains enabled. Existing browser transfers may need retrying. Keep-awake does not provide background sharing.
 
 Airplane Mode rotation affects every Client. Stop sessions, follow the native rotation guidance, and restore only still-enabled Clients after cellular recovery (and active foreground on iOS). Rotation is best-effort and does not guarantee a new carrier address.
 

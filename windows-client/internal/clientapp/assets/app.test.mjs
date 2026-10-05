@@ -40,6 +40,70 @@ const visible=(h,id)=>!h.get(id).classList.contains('hidden');
 const edit=(h,id,value)=>{h.get(id).value=value;h.get(id).oninput();};
 const operations=h=>h.calls.filter(c=>!['check-firewall','discover'].includes(c[0]));
 
+test('routine dashboard translates service language and keeps details optional',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true,message:'Awaiting authenticated Agent transport session.'}});
+ assert.doesNotMatch(h.get('message').textContent,/authenticated|Agent|transport|session|gateway/i);
+ assert.equal(h.get('diagnosticMessage').textContent,h.status.message);
+ assert.equal(h.get('connectionDetails').open,false);assert.equal(h.get('phase').textContent,'Waiting for phone');
+ assert.equal(h.get('verifyNext').disabled,true);
+});
+
+test('reviewing an approved account does not present activation or renaming as unfinished',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true}});
+ await h.get('reviewSetup').onclick();
+ assert.equal(visible(h,'hostedNameField'),false);assert.match(h.get('hostedHeading').textContent,/account.*connected/i);
+ assert.match(h.get('hostedDescription').textContent,/already approved/i);
+ assert.equal(visible(h,'connectionSummary'),false);
+ await h.get('activateHosted').onclick();assert.equal(visible(h,'gatewayPanel'),true);assert.deepEqual(operations(h),[]);
+});
+
+test('unknown connection states do not display raw enums or claim sharing',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'future_internal_state',phase:'future_phase',paired:true,message:'Opaque internal state.'}});
+ for(const id of ['message','gatewayMessage','listeningState','noticeMessage'])assert.doesNotMatch(h.get(id).textContent,/future_internal_state|Opaque internal/);
+ assert.equal(h.get('phase').textContent,'Checking connection');assert.equal(h.get('verifyNext').disabled,true);
+ assert.match(h.get('listeningState').textContent,/checking/i);
+});
+
+for(const message of ['HTTP proxy port 1081 is occupied. Close the application using it, then restart the Client.','Access is disabled because revocation could not be saved. Repair protected storage.'])test(`actionable error details are retained: ${message.split('.')[0]}`,async()=>{
+ const h=await harness({status:{paired:true,phase:'error',running:false,message}});
+ assert.match(h.get('message').textContent,/Connection details/);assert.equal(h.get('diagnosticMessage').textContent,message);
+ assert.equal(h.get('connectionDetails').open,true);assert.equal(h.get('verifyNext').disabled,true);
+ assert.doesNotMatch(h.get('noticeMessage').textContent,/Internet connection/);
+ h.get('connectionDetails').open=false;await h.refresh();assert.equal(h.get('connectionDetails').open,false);
+});
+
+test('pending phone updates stay incomplete even when a session is already open',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true,connected:true,updatePending:true}});
+ assert.notEqual(h.get('phase').textContent,'Connected');assert.match(h.get('message').textContent,/update|Reconnect/i);
+ assert.equal(h.get('verifyNext').disabled,true);assert.equal(visible(h,'recoveryPanel'),true);
+ h.status.updatePending=false;await h.refresh();assert.equal(h.get('phase').textContent,'Connected');
+ assert.match(h.get('message').textContent,/phone.*mobile data/i);
+});
+
+test('proxy instructions explain application setup without claiming to route the whole computer',async()=>{
+ const h=await harness({status:{paired:true,connected:true}});
+ assert.match(h.get('proxyConnection').textContent,/app.*proxy settings/i);
+ await h.get('copyHttp').onclick();assert.match(h.get('feedback').textContent,/app.*proxy settings/i);
+ await h.get('copySocks').onclick();assert.match(h.get('feedback').textContent,/app.*proxy settings/i);
+ assert.deepEqual(operations(h),[['proxy','http'],['proxy','socks']]);
+});
+
+test('hosted setup errors take priority over a saved gateway connection or retry message',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true,connected:true,phase:'error',message:'Access is disabled because revocation could not be saved. Repair protected storage.'}});
+ await h.get('reviewSetup').onclick();await h.get('stepNetwork').onclick();
+ assert.equal(visible(h,'connectionSummary'),true);assert.match(h.get('gatewayMessage').textContent,/Connection details/);
+ assert.doesNotMatch(h.get('gatewayMessage').textContent,/start sharing|retry automatically/i);assert.notEqual(h.get('phase').textContent,'Connected');
+ h.status.gatewayState='disconnected';await h.refresh();assert.match(h.get('gatewayMessage').textContent,/Connection details/);
+ assert.equal(h.get('verifyNext').disabled,true);
+});
+
+test('completed browser approval removes its obsolete instruction without clearing other feedback',async()=>{
+ const h=await harness({status:{transport:'hosted',endpoint:'',phase:'waiting',activationState:'inactive'},api:{StartHostedActivation:async()=>{Object.assign(h.status,{endpoint:'https://route.example',activationState:'authorized',gatewayState:'connected'});}}});
+ await h.get('activateHosted').onclick();assert.equal(h.get('feedback').textContent,'');
+ assert.equal(visible(h,'hostedApprovalHelp'),false);
+ h.get('feedback').textContent='An unrelated action failed.';await h.refresh();assert.equal(h.get('feedback').textContent,'An unrelated action failed.');
+});
+
 test('fresh setup starts at address, suggests name and public address once',async()=>{
  const h=await harness({status:{endpoint:'',bindAddress:'',displayName:'',phase:'waiting',generation:0}});
  assert.equal(h.get('stepTitle').textContent,'Computer address');
@@ -180,25 +244,25 @@ test('status polling preserves edited endpoint inputs',async()=>{
 });
 test('resuming an active invitation offers its existing QR without auto-issuing',async()=>{
  const h=await harness({status:{phase:'awaiting_phone',invitationExpiresAt:'2026-10-03T12:10:00Z'}});
- assert.equal(h.get('stepTitle').textContent,'Pair phone');assert.equal(h.calls.some(c=>c[0]==='issue'),false);
+ assert.equal(h.get('stepTitle').textContent,'Connect phone');assert.equal(h.calls.some(c=>c[0]==='issue'),false);
  await h.get('issue').onclick();await h.refresh();await h.refresh();assert.equal(h.get('invitation').value,'invitation');
  assert.equal(h.calls.filter(c=>c[0]==='issue').length,1);assert.equal(h.get('issue').disabled,true);
 });
 test('lost pairing acknowledgement resumes verification without replacing invitation',async()=>{
  const h=await harness({status:{phase:'acknowledging',invitationExpiresAt:'2026-10-03T12:10:00Z'}});
- assert.equal(h.get('stepTitle').textContent,'Start on your phone');assert.equal(h.calls.some(c=>c[0]==='issue'),false);
- assert.match(h.get('verificationMessage').textContent,/confirm|pairing/i);assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(h.get('stepTitle').textContent,'Start sharing');assert.equal(h.calls.some(c=>c[0]==='issue'),false);
+ assert.match(h.get('verificationMessage').textContent,/finishes|finishing/i);assert.equal(h.get('verifyNext').disabled,true);
  assert.equal(visible(h,'phoneStartInstructions'),false);assert.equal(visible(h,'cancelPairing'),true);
 });
 test('verification requires connected status even if paired or phase says ready',async()=>{
  const h=await harness();await h.get('networkNext').onclick();await h.get('issue').onclick();
  Object.assign(h.status,{paired:true,phase:'ready',connected:false});await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Start on your phone');assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(h.get('stepTitle').textContent,'Start sharing');assert.equal(h.get('verifyNext').disabled,true);
  assert.equal(h.get('verifyHeading').textContent,'Start sharing on your phone');
  assert.equal(visible(h,'phoneStartInstructions'),true);assert.equal(visible(h,'verifyNext'),false);
  assert.match(h.get('verificationMessage').textContent,/automatically/);assert.equal(h.get('feedback').textContent,'');
  Object.assign(h.status,{connected:true});await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Use your proxy');assert.equal(h.get('connectedState').textContent,'Connected');
+ assert.equal(h.get('stepTitle').textContent,'Use in your apps');assert.equal(h.get('connectedState').textContent,'Connected');
  assert.equal(visible(h,'phoneStartInstructions'),false);
 });
 
@@ -232,7 +296,7 @@ test('pending update cannot complete setup and acknowledgement clears exported r
  assert.equal(h.get('stepTitle').textContent,'Reconnect your phone');assert.equal(h.get('verifyNext').disabled,true);
  await h.get('stepProxy').onclick();assert.equal(h.get('stepTitle').textContent,'Reconnect your phone');
  h.status.updatePending=false;await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Use your proxy');assert.equal(h.get('update').value,'');
+ assert.equal(h.get('stepTitle').textContent,'Use in your apps');assert.equal(h.get('update').value,'');
  assert.equal(h.get('updateQR').src,'');assert.equal(h.get('feedback').textContent,'');
 });
 
@@ -249,8 +313,8 @@ test('acknowledged recovery leaves the dashboard and remains in Phone settings',
 test('hosted recovery prioritizes activation before exporting a pending route update',async()=>{
  const h=await harness({status:{transport:'hosted',paired:true,updatePending:true,activationState:'access_rejected',gatewayState:'authorization_rejected'}});
  assert.equal(h.get('exportUpdate').disabled,true);assert.equal(h.get('copyUpdate').disabled,true);
- assert.match(h.get('pending').textContent,/activation.*browser/i);assert.match(h.get('recoveryMessage').textContent,/activation.*browser/i);
- assert.equal(h.get('activateHosted').textContent,'Reactivate in browser');
+ assert.match(h.get('pending').textContent,/Approve.*browser/i);assert.match(h.get('recoveryMessage').textContent,/Approve.*browser/i);
+ assert.equal(h.get('activateHosted').textContent,'Reconnect in browser');
  h.status.activationState='pending';await h.refresh();assert.equal(h.get('exportUpdate').disabled,true);
  h.status.activationState='authorized';await h.refresh();
  assert.equal(h.get('exportUpdate').disabled,false);assert.equal(h.get('recoveryPanel').open,true);
@@ -399,7 +463,7 @@ test('dashboard activation notice takes priority over pairing and pending phone 
  assert.equal(visible(h,'dashboardNotice'),true);assert.match(h.get('noticeHeading').textContent,/Inevitable/);
  assert.equal(visible(h,'recoveryPanel'),false);assert.equal(visible(h,'hostedPanel'),false);
  await h.get('noticeAction').onclick();assert.equal(visible(h,'hostedPanel'),true);
- assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');assert.equal(h.status.paired,true);assert.deepEqual(operations(h),[]);
+ assert.equal(h.get('stepTitle').textContent,'Your account');assert.equal(h.status.paired,true);assert.deepEqual(operations(h),[]);
 });
 
 test('Finish later gives a resume action that preserves the current invitation',async()=>{
@@ -439,7 +503,7 @@ test('service loss suppresses stale dashboard guidance and gateway health',async
 
 test('fresh hosted setup activates without address lookup or firewall',async()=>{
  const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',displayName:'',phase:'waiting',generation:0},api:{StartHostedActivation:async name=>{h.calls.push(['activate',name]);h.status.activationState='pending';return {state:'pending'};}}});
- assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');
+ assert.equal(h.get('stepTitle').textContent,'Your account');
  assert.equal(h.calls.some(c=>c[0]==='discover'||c[0]==='check-firewall'),false);
  assert.equal(visible(h,'hostedPanel'),true);assert.equal(visible(h,'addressPanel'),false);
  await h.get('activateHosted').onclick();
@@ -448,7 +512,7 @@ test('fresh hosted setup activates without address lookup or firewall',async()=>
 
 test('hosted gateway attachment never verifies a phone connection',async()=>{
  const h=await harness({status:{transport:'hosted',bindAddress:'',endpoint:'https://route.example',gatewayState:'connected',activationState:'authorized',paired:true,connected:false}});
- assert.equal(h.get('connectedState').textContent,'Waiting');assert.equal(h.get('listeningState').textContent,'Gateway connected');
+ assert.equal(h.get('connectedState').textContent,'Waiting');assert.equal(h.get('listeningState').textContent,'Computer connected');
  assert.equal(h.get('verifyNext').disabled,true);assert.equal(h.calls.some(c=>c[0]==='check-firewall'),false);
  await h.get('reviewSetup').onclick();await h.get('advancedDirect').onclick();
  assert.equal(visible(h,'addressPanel'),true);assert.equal(h.get('stepTitle').textContent,'Computer address');
@@ -456,8 +520,8 @@ test('hosted gateway attachment never verifies a phone connection',async()=>{
 
 test('hosted access rejection directs reactivation and preserves phone pairing',async()=>{
  const h=await harness({status:{transport:'hosted',endpoint:'https://route.example',bindAddress:'',paired:true,connected:false,gatewayState:'authorization_rejected',activationState:'access_rejected'}});
- assert.match(h.get('activationMessage').textContent,/account access or reactivate/);
- assert.match(h.get('gatewayMessage').textContent,/pairing is preserved/);
+ assert.match(h.get('activationMessage').textContent,/account access.*approve/);
+ assert.match(h.get('gatewayMessage').textContent,/saved phone is kept/);
  assert.doesNotMatch(h.get('gatewayMessage').textContent,/Internet connection/);
  assert.equal(h.status.paired,true);assert.equal(h.get('verifyNext').disabled,true);
 });
@@ -466,10 +530,10 @@ test('browser approval advances fresh hosted setup without verifying the phone',
  const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'pending'}});
  Object.assign(h.status,{endpoint:'https://route.example',activationState:'authorized',gatewayState:'connected',phase:'awaiting_phone'});
  await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Gateway connection');
+ assert.equal(h.get('stepTitle').textContent,'Connect this computer');
  assert.equal(visible(h,'gatewayPanel'),true);assert.equal(h.get('verifyNext').disabled,true);
  await h.get('gatewayNext').onclick();
- assert.equal(h.get('stepTitle').textContent,'Pair phone');
+ assert.equal(h.get('stepTitle').textContent,'Connect phone');
  assert.deepEqual(operations(h),[]);
 });
 
@@ -480,26 +544,26 @@ test('approval completed before the first post-action poll advances without a se
   return {state:'pending'};
  }}});
  await h.get('activateHosted').onclick();
- assert.equal(h.get('stepTitle').textContent,'Gateway connection');
+ assert.equal(h.get('stepTitle').textContent,'Connect this computer');
  assert.equal(h.get('verifyNext').disabled,true);assert.deepEqual(operations(h),[['activate']]);
 });
 
 test('an authorization snapshot before endpoint readiness still advances when configuration finishes',async()=>{
  const h=await harness({status:{transport:'hosted',endpoint:'',bindAddress:'',phase:'waiting',activationState:'pending'}});
  Object.assign(h.status,{activationState:'authorized'});await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');
+ assert.equal(h.get('stepTitle').textContent,'Your account');
  Object.assign(h.status,{endpoint:'https://route.example',gatewayState:'connected',phase:'awaiting_phone'});await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Gateway connection');assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(h.get('stepTitle').textContent,'Connect this computer');assert.equal(h.get('verifyNext').disabled,true);
  assert.deepEqual(operations(h),[]);
 });
 
 test('reviewing approved hosted setup continues without replacing activation',async()=>{
  const h=await harness({status:{transport:'hosted',endpoint:'https://route.example',bindAddress:'',activationState:'authorized',paired:true},api:{StartHostedActivation:async()=>{h.calls.push(['activate']);}}});
  await h.get('reviewSetup').onclick();await h.refresh();
- assert.equal(h.get('stepTitle').textContent,'Activate Inevitable');
- assert.equal(h.get('activateHosted').textContent,'Continue to gateway connection');
+ assert.equal(h.get('stepTitle').textContent,'Your account');
+ assert.equal(h.get('activateHosted').textContent,'Continue');
  await h.get('activateHosted').onclick();
- assert.equal(h.get('stepTitle').textContent,'Gateway connection');
+ assert.equal(h.get('stepTitle').textContent,'Connect this computer');
  assert.deepEqual(operations(h),[]);assert.equal(h.status.paired,true);
 });
 
