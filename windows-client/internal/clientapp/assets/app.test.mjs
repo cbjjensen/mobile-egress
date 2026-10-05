@@ -58,6 +58,56 @@ test('existing paired installation opens dashboard even while offline',async()=>
  await h.get('reviewSetup').onclick();assert.equal(h.get('stepTitle').textContent,'Computer address');
  await h.get('configure').onclick();assert.equal(h.calls.some(c=>c[0]==='configure'),false);assert.equal(h.status.paired,true);
 });
+
+test('review setup uses stable active page navigation and a dashboard return label',async()=>{
+ const h=await harness({status:{paired:true,connected:false}});
+ const active=id=>assert.equal(h.get(id)['aria-current'],'page');
+ assert.equal(visible(h,'clientNavigation'),true);active('backToDashboard');
+ await h.get('reviewSetup').onclick();active('reviewSetup');
+ assert.equal(h.get('finishLater').textContent,'Back to dashboard');
+ assert.equal(h.get('backToDashboard')['aria-current'],'false');
+ for(const id of ['stepNetwork','stepPair','stepVerify']){
+  await h.get(id).onclick();assert.equal(visible(h,'clientNavigation'),true);active('reviewSetup');
+  assert.equal(h.get('finishLater').textContent,'Back to dashboard');
+ }
+ await h.get('managePhone').onclick();active('managePhone');
+ assert.equal(visible(h,'wizardHeader'),false);assert.equal(visible(h,'phoneSettingsPanel'),true);
+ await h.get('backToDashboard').onclick();active('backToDashboard');
+ assert.equal(visible(h,'phoneSettingsPanel'),false);assert.equal(visible(h,'proxyPanel'),true);
+ assert.deepEqual(operations(h),[]);
+});
+
+test('fresh setup keeps Finish later while revisiting it is an explicit review',async()=>{
+ const h=await harness({status:{endpoint:'',phase:'waiting'}});
+ assert.equal(visible(h,'clientNavigation'),false);assert.equal(h.get('finishLater').textContent,'Finish later');
+ await h.get('finishLater').onclick();assert.equal(visible(h,'clientNavigation'),true);
+ await h.get('reviewSetup').onclick();assert.equal(h.get('finishLater').textContent,'Back to dashboard');
+ assert.equal(visible(h,'clientNavigation'),true);assert.equal(h.get('managePhone').disabled,true);
+});
+
+test('review tab preserves the current step and unsaved input across page navigation',async()=>{
+ const h=await harness({status:{paired:true}});
+ await h.get('reviewSetup').onclick();edit(h,'endpoint','edited.example');
+ await h.get('stepNetwork').onclick();await h.get('reviewSetup').onclick();
+ assert.equal(h.get('stepTitle').textContent,'Network access');
+ await h.get('managePhone').onclick();await h.get('reviewSetup').onclick();
+ assert.equal(h.get('endpoint').value,'edited.example');
+ assert.equal(visible(h,'phoneSettingsPanel'),false);assert.equal(visible(h,'addressPanel'),true);
+ assert.deepEqual(operations(h),[]);
+});
+
+test('review retains its dashboard exit during service loss and blocks navigation during a save',async()=>{
+ const h=await harness({status:{paired:true}});
+ await h.get('reviewSetup').onclick();edit(h,'endpoint','edited.example');
+ const saving=deferred();h.api.Configure=()=>saving.promise;const action=h.get('configure').onclick();
+ for(const id of ['backToDashboard','managePhone','reviewSetup'])assert.equal(h.get(id).disabled,true);
+ await h.get('backToDashboard').onclick();await h.get('managePhone').onclick();
+ assert.equal(visible(h,'wizardHeader'),true);
+ saving.resolve();await action;
+ h.api.Status=async()=>{throw new Error('offline');};await h.refresh();
+ assert.equal(h.get('finishLater').textContent,'Back to dashboard');assert.equal(h.get('backToDashboard').disabled,false);
+ await h.get('backToDashboard').onclick();assert.equal(visible(h,'dashboardHeader'),true);
+});
 test('reviewing a saved default HTTPS port never rewrites configuration',async()=>{
  const h=await harness({status:{endpoint:'https://client.example',paired:true}});
  await h.get('reviewSetup').onclick();await h.get('configure').onclick();

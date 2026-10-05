@@ -9,7 +9,7 @@ const connectionUpdateMessage = "Scan this connection update with Mobile Egress 
 const labels = {waiting:"Setup needed", migration_required:"Fresh pairing required", listening:"Listening", awaiting_phone:"Waiting for phone", pairing:"Pairing", acknowledging:"Confirming pairing", ready:"Waiting for phone", connected:"Waiting for phone", expired:"Invitation expired", revoked:"Phone removed", error:"Needs attention", unavailable:"Service unavailable"};
 let status = null, setup = {localAddresses:[], defaultBindAddress:":8443", defaultPublicPort:8443};
 let step = "address", dashboard = false, initialized = false, metadataReady = false;
-let managingPhone = false, noticeStep = "";
+let managingPhone = false, reviewingSetup = false, noticeStep = "";
 let renderedScreen = "";
 let refreshing = null, busy = false, mutation = 0, editing = false, addressEdited = false;
 let discoveryStarted = false, discovering = false, suggestedAddress = "";
@@ -70,13 +70,14 @@ function resumeStep() {
 }
 function returnToDashboard() {
   if (busy) return;
-  dashboard = true; managingPhone = false; selectedTransport = "";
+  dashboard = true; managingPhone = false; reviewingSetup = false; selectedTransport = "";
   show("revokeConfirmation", false); render();
 }
 function selectStep(next) {
   if (busy || !available()) return;
   if (next !== "address" && !status.endpoint) return;
   if (next === "proxy" && !phoneConnected()) return;
+  reviewingSetup = reviewingSetup || dashboard;
   step = next; dashboard = false; managingPhone = false; show("revokeConfirmation", false); render();
   if (next === "network" && !firewall && !hostedSelected()) void checkFirewall(false);
 }
@@ -136,6 +137,11 @@ function render() {
   show("servicePanel", !ready); show("serviceRetry", !ready && readinessExpired);
   el("serviceMessage").textContent = readinessExpired ? "The Client service has not become available. Retry, or run the latest signed installer to repair the installation. Your saved pairing and proxy credentials are preserved." : "Waiting for the installed Client service. Setup will wait up to 30 seconds.";
   show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard && !managingPhone);
+  show("clientNavigation", initialized && (dashboard || reviewingSetup));
+  for (const [id, current] of [["backToDashboard", dashboard && !managingPhone], ["managePhone", managingPhone], ["reviewSetup", !dashboard]]) {
+    el(id).setAttribute("aria-current", current ? "page" : "false");
+  }
+  el("finishLater").textContent = reviewingSetup ? "Back to dashboard" : "Finish later";
   show("phoneSettingsHeader", initialized && managingPhone);
   show("phoneSettingsPanel", initialized && managingPhone);
   renderDashboardNotice();
@@ -320,9 +326,14 @@ async function action(button, callback, success) {
 }
 for (const id of ["bindAddress","endpoint","displayName","publicPort"]) el(id).oninput = () => { editing = true; if (id === "endpoint") addressEdited = true; };
 for (const name of steps) el("step" + name[0].toUpperCase() + name.slice(1)).onclick = () => selectStep(name);
-el("reviewSetup").onclick = () => selectStep("address");
+el("reviewSetup").onclick = () => { if (dashboard) selectStep("address"); };
 el("noticeAction").onclick = () => { if (noticeStep) selectStep(noticeStep); };
-el("managePhone").onclick = () => { if (!busy && available() && status.paired) { managingPhone = true; render(); } };
+el("managePhone").onclick = () => {
+  if (!busy && available() && status.paired && !managingPhone) {
+    dashboard = true; managingPhone = true; reviewingSetup = false; selectedTransport = "";
+    show("revokeConfirmation", false); render();
+  }
+};
 el("backToDashboard").onclick = returnToDashboard;
 el("advancedDirect").onclick = () => { if (!busy && available()) { selectedTransport = "direct"; step = "address"; dashboard = false; render(); maybeDiscover(); } };
 el("chooseHosted").onclick = () => { if (!busy && available()) { selectedTransport = "hosted"; step = "address"; dashboard = false; render(); } };
@@ -374,7 +385,7 @@ el("revoke").onclick = () => { show("revokeConfirmation", true); };
 el("cancelRevoke").onclick = () => { show("revokeConfirmation", false); };
 el("confirmRevoke").onclick = () => action(el("confirmRevoke"), async () => {
   await api().Revoke(); clearInvitation(); clearUpdate(); show("revokeConfirmation", false);
-  managingPhone = false; dashboard = false; step = "pair"; selectedTransport = "";
+  managingPhone = false; dashboard = false; reviewingSetup = true; step = "pair"; selectedTransport = "";
 }, "Phone removed. Existing connections are closed. You can pair another phone.");
 startReadinessWait(); render();
 void (async () => {

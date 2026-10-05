@@ -14,6 +14,8 @@ Finish later preserves configuration and provides **Continue setup**. Reopening 
 
 After pairing, the dashboard shows connection status and proxy copy actions. A phone going offline keeps you on the dashboard with instructions to start sharing in the phone app. **Phone settings** holds connection updates and confirmed phone removal; **Review setup** opens the wizard to review activation, connection mode or address without resetting pairing. Routine dashboard use does not show activation forms or pairing invitations. A pending connection update or rejected hosted access shows the recovery action currently needed. Retrying firewall access does not generate a new invitation.
 
+Dashboard, Phone settings and Review setup share the same page navigation, with the current page highlighted. Reviewing setup offers **Back to dashboard**; **Finish later** is reserved for the initial setup flow. Moving between these pages does not save edited settings or issue a new invitation.
+
 The Windows installer opens the app unelevated after installation. The Mac PKG opens it only when the saved installation owner is the active GUI user; otherwise open Mobile Egress Client from Applications as that owner. A fresh Mac installation still requires its intended owner to be logged in. Headless upgrades/repair retain the owner and do not open a GUI. Never run the Mac Client app as root.
 
 ### Advanced direct mode: home routers
