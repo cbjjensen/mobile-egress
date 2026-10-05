@@ -8,8 +8,8 @@ import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 
-/** Owned by the scanner's single analysis executor; never retains a camera frame. */
-internal class QrFrameDecoder {
+/** Historical build-22 decoder, retained only for optical comparison tests. */
+internal class LegacyJavaQrFrameDecoder {
     private val reader = MultiFormatReader().apply {
         setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true))
     }

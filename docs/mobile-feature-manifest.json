@@ -316,14 +316,19 @@
       "platforms": {
         "android": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses Android camera scanning UI to acquire the shared enrollment and migration QR payloads, with one bounded rotated-frame retry for dense QR detection. Enrollment payloads and one-shot scanner lifecycle are unchanged.",
+          "nativeEquivalenceNotes": "Uses CameraX with a bundled offline QR detector, bounded analysis resolution and an uncropped preview to acquire the shared enrollment and migration QR payloads. Retains one-shot scanner lifecycle and reports scanner unavailability visibly. Portable native-core fixtures do not establish physical camera acceptance.",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/ui/QrCodeScanner.kt",
-            "android/app/src/main/java/com/mobileegress/agent/ui/QrFrameDecoder.kt",
-            "android/app/src/main/java/com/mobileegress/agent/ui/ScanPairingCoordinator.kt"
+            "android/app/src/main/java/com/mobileegress/agent/ui/QrFrameAnalysis.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/QrCameraPolicy.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreenPresentation.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt"
           ],
           "testEvidence": [
-            "android/app/src/test/java/com/mobileegress/agent/ui/QrFrameDecoderTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/QrFrameAnalysisTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/QrCameraPolicyTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
+            "scripts/test-android-qr-detector.py",
             "android/app/src/test/resources/qr/direct-v2-upright.txt",
             "android/app/src/test/java/com/mobileegress/agent/ui/ScanPairingCoordinatorTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/ui/PairingScanSessionTest.kt"
@@ -331,7 +336,7 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses VisionKit through a one-shot portable scanner session to acquire the same shared enrollment and migration QR payloads, report scanner unavailability, and suppress duplicate or late callbacks. Native optical detection is unchanged by the Android rotated-frame repair; no new physical iPhone scan acceptance is claimed.",
+          "nativeEquivalenceNotes": "Uses VisionKit through a one-shot portable scanner session to acquire the same shared enrollment and migration QR payloads, report scanner unavailability, and suppress duplicate or late callbacks. Native optical detection is unchanged by the Android detector replacement; no new physical iPhone scan acceptance is claimed.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Pairing/QRScannerSession.swift",
             "ios/MobileEgressAgent/QRScannerView.swift",

@@ -1,5 +1,7 @@
 # Android pairing QR orientation repair
 
+Follow-up: the owner installed code 22 and confirmed that the camera still did not recognize the Mac QR. The automated evidence below remains valid, but did not establish camera acceptance. Continue with the [native camera-reader correction](2026-10-04-android-qr-camera-reader.md); code 22 is preserved as historical evidence.
+
 ## Analysis and scope
 
 The owner cannot scan the newly installed Mac Client's pairing QR. Read-only service status confirms hosted authorization, a connected gateway, and an unredeemed invitation. The submitted screenshot preserves a 612-pixel square QR, four pixels per module and its quiet zone. ZXing 3.5.3 fails to detect it upright; the same pixels decode to identical bytes at 90, 180 and 270 degrees across five tested scales. Pure-symbol decoding also succeeds. No invitation capability, certificate or endpoint is recorded here or added to tests.

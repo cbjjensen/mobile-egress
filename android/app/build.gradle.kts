@@ -23,7 +23,7 @@ android {
         applicationId = "com.mobileegress.agent"
         minSdk = 29
         targetSdk = 35
-        versionCode = 22
+        versionCode = 23
         versionName = androidVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -114,10 +114,16 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.81")
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("io.github.zxing-cpp:android:3.1.1") {
+        // The wrapper uses existing ImageProxy APIs; retain this app's tested platform/toolchain.
+        exclude(group = "androidx.camera", module = "camera-core")
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+    }
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // Historical optical regression evidence only; this decoder is no longer shipped.
+    testImplementation("com.google.zxing:core:3.5.3")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }

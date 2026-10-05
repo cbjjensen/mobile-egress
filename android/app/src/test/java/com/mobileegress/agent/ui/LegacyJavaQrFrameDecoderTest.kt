@@ -15,7 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
-class QrFrameDecoderTest {
+class LegacyJavaQrFrameDecoderTest {
     private val expected = generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
         .map { File(it, "testdata/direct-v2-wire.json") }.first { it.isFile }.readText()
         .let { Json.parseToJsonElement(it).jsonObject.getValue("invitation").jsonPrimitive.content }
@@ -38,11 +38,11 @@ class QrFrameDecoderTest {
                 fixture.bytes, fixture.stride, fixture.height, 0, 0, fixture.width, fixture.height, false,
             ))))
         }
-        assertEquals(expected, decode(QrFrameDecoder(), fixture))
+        assertEquals(expected, decode(LegacyJavaQrFrameDecoder(), fixture))
     }
 
     @Test fun `all four orientations preserve the invitation bytes`() {
-        val decoder = QrFrameDecoder()
+        val decoder = LegacyJavaQrFrameDecoder()
         var frame = fixture
         repeat(4) {
             assertEquals(expected, decode(decoder, frame))
@@ -51,7 +51,7 @@ class QrFrameDecoderTest {
     }
 
     @Test fun `ordinary detectable orientation still decodes without changing payload`() {
-        assertEquals(expected, decode(QrFrameDecoder(), rotate(fixture)))
+        assertEquals(expected, decode(LegacyJavaQrFrameDecoder(), rotate(fixture)))
     }
 
     @Test fun `padded non-square camera rows and short final padding are supported`() {
@@ -63,11 +63,11 @@ class QrFrameDecoderTest {
         repeat(fixture.height) { row ->
             fixture.bytes.copyInto(bytes, (row + 12) * stride + 24, row * fixture.stride, row * fixture.stride + fixture.width)
         }
-        assertEquals(expected, decode(QrFrameDecoder(), Frame(width, height, stride, bytes)))
+        assertEquals(expected, decode(LegacyJavaQrFrameDecoder(), Frame(width, height, stride, bytes)))
     }
 
     @Test fun `frames without a QR do not prevent a later successful decode`() {
-        val decoder = QrFrameDecoder()
+        val decoder = LegacyJavaQrFrameDecoder()
         for (shade in listOf(0, 255)) {
             assertThrows(NotFoundException::class.java) {
                 decode(decoder, Frame(128, 96, 128, ByteArray(128 * 96) { shade.toByte() }))
@@ -76,7 +76,26 @@ class QrFrameDecoderTest {
         assertEquals(expected, decode(decoder, rotate(fixture)))
     }
 
-    private fun decode(decoder: QrFrameDecoder, frame: Frame) =
+    @Test fun `camera sized public frame still defeats the build 22 rotation retry`() {
+        val width = 1280
+        val height = 960
+        val symbolSize = 480
+        val modules = fixture.width / 4
+        val bytes = ByteArray(width * height) { 90 }
+        // The native-core regression script covers this exact frame too. Work
+        // from public modules, preserving the quiet zone and fractional sampling.
+        repeat(symbolSize) { y ->
+            repeat(symbolSize) { x ->
+                bytes[(y + 240) * width + x + 400] =
+                    fixture.bytes[(y * modules / symbolSize * 4) * fixture.stride + x * modules / symbolSize * 4]
+            }
+        }
+        assertThrows(NotFoundException::class.java) {
+            decode(LegacyJavaQrFrameDecoder(), Frame(width, height, width, bytes))
+        }
+    }
+
+    private fun decode(decoder: LegacyJavaQrFrameDecoder, frame: Frame) =
         decoder.decode(frame.bytes, frame.width, frame.height, frame.stride)
 
     private fun rotate(frame: Frame): Frame {

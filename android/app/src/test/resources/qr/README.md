@@ -20,3 +20,19 @@ go test ./windows-client/internal/clientapp -run '^TestDensePairingQRPreservesWh
 Sample each 4-by-4 pixel module of that directory's `direct.png` into the text
 grid (`1` black, `0` white, one row per line). Do not substitute a real invitation
 or customer screenshot.
+
+## Native detector camera-frame regression
+
+From the repository root, run `python scripts/test-android-qr-detector.py --help`.
+The script requires Pillow and exactly `zxing-cpp==3.1.1` in an isolated Python
+environment; it never installs dependencies or downloads models. It reconstructs
+only this grid and compares the decoded bytes to the shared public fixture.
+
+The required cases use 1280x960 sensor frames with different QR sizes, four
+orientations, off-center placement, padded rows and mild resampling. Additional low-resolution
+observations document optical limits without requiring those frames to decode.
+`--verbose` prints safe per-frame results; `--json-report <new-file>` preserves
+the same evidence. Neither option prints decoded content or writes images.
+
+These are tests of the native core. Android JNI/ABI packaging, camera lifecycle,
+autofocus and scanning a physical display require separate Android/device checks.

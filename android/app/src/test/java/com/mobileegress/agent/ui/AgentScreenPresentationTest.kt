@@ -13,6 +13,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentScreenPresentationTest {
+    @Test fun scannerErrorsReplaceStalePairingTextWithoutExposingExceptions() {
+        for ((scanState, message) in listOf(
+            PairingScanState.ScannerUnavailable to "Scanner unavailable. Tap Scan QR to try again.",
+            PairingScanState.CameraPermissionRequired to "Allow camera access to scan the QR code.",
+            PairingScanState.QrNotRecognized to "QR not recognized. Scan a Mobile Egress QR code.",
+        )) {
+            val presentation = presentAgentScreen(MainUiState(
+                paired = true, pairingStatus = "Paired", pairingScanState = scanState,
+            ))
+            assertEquals(message, presentation.pairingStatus)
+            assertEquals(ScreenTone.Error, presentation.pairingTone)
+            assertTrue(presentation.scanEnabled)
+        }
+    }
+
+    @Test fun retryAndCancellationRestoreSavedPairingStatus() {
+        for (scanState in listOf(PairingScanState.Scanning, PairingScanState.Idle)) {
+            assertEquals("Paired", presentAgentScreen(MainUiState(
+                paired = true, pairingStatus = "Paired", pairingScanState = scanState,
+            )).pairingStatus)
+        }
+    }
+
     @Test fun stopRemainsAvailableDuringManagementAndAfterLastClientRemoval() {
         for ((paired, managing) in listOf(true to true, false to false, false to true)) {
             val presentation = presentAgentScreen(MainUiState(paired = paired, pairingInProgress = managing,

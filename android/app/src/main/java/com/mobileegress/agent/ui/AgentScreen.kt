@@ -231,9 +231,16 @@ private fun PairingCard(
         SectionHeader(
             step = "01",
             label = "PAIRING",
-            status = state.pairingStatus,
+            status = presentation.pairingStatus,
             tone = presentation.pairingTone,
         )
+        if (presentation.pairingStatus != state.pairingStatus) {
+            Text(
+                text = presentation.pairingStatus,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
         Text(
             text = if (state.paired) "Phone paired" else "Link this phone",
             style = MaterialTheme.typography.titleLarge,

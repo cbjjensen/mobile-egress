@@ -36,6 +36,7 @@ data class AgentScreenPresentation(
     val badge: String,
     val tone: ScreenTone,
     val pairingTone: ScreenTone,
+    val pairingStatus: String,
     val scanLabel: String,
     val scanEnabled: Boolean,
     val agentPrimaryAction: AgentPrimaryAction,
@@ -115,6 +116,12 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
         badge = status.badge,
         tone = status.tone,
         pairingTone = pairingToneFor(state),
+        pairingStatus = when (state.pairingScanState) {
+            PairingScanState.ScannerUnavailable -> "Scanner unavailable. Tap Scan QR to try again."
+            PairingScanState.CameraPermissionRequired -> "Allow camera access to scan the QR code."
+            PairingScanState.QrNotRecognized -> "QR not recognized. Scan a Mobile Egress QR code."
+            else -> state.pairingStatus
+        },
         scanLabel = if (state.pairingInProgress) "Pairing…" else "Scan QR",
         scanEnabled = !state.pairingInProgress && !runtime.rotation.isActive(),
         agentPrimaryAction = when {

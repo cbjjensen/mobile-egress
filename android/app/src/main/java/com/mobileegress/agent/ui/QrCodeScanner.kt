@@ -1,9 +1,13 @@
 package com.mobileegress.agent.ui
 
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -13,12 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import com.google.zxing.ChecksumException
-import com.google.zxing.FormatException
-import com.google.zxing.NotFoundException
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import zxingcpp.BarcodeReader
 
 internal inline fun guardScannerInitialization(
     onScannerUnavailable: () -> Unit,
@@ -27,6 +29,8 @@ internal inline fun guardScannerInitialization(
     try {
         block()
     } catch (_: Exception) {
+        onScannerUnavailable()
+    } catch (_: LinkageError) {
         onScannerUnavailable()
     }
 }
@@ -40,7 +44,7 @@ fun QrCodeScanner(
     onScannerUnavailable: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val previewView = remember { PreviewView(context) }
+    val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER } }
     val latestOnQrDecoded = rememberUpdatedState(onQrDecoded)
     val latestOnQrNotRecognized = rememberUpdatedState(onQrNotRecognized)
     val latestOnScannerUnavailable = rememberUpdatedState(onScannerUnavailable)
@@ -79,34 +83,26 @@ fun QrCodeScanner(
                         val preview = Preview.Builder().build().also { preview ->
                             preview.surfaceProvider = previewView.surfaceProvider
                         }
-                        val decoder = QrFrameDecoder()
+                        val decoder = BarcodeReader(nativeQrOptions())
                         val analysis = ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setResolutionSelector(
+                                ResolutionSelector.Builder()
+                                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                    .setResolutionStrategy(ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER))
+                                    .setResolutionFilter { sizes, _ -> sizes.filter { qrAnalysisSizeAllowed(it.width, it.height) } }
+                                    .build(),
+                            )
                             .build()
                             .also { imageAnalysis ->
                                 imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                                    try {
-                                        val luminance = imageProxy.planes.firstOrNull()
-                                            ?: return@setAnalyzer
-                                        val buffer = luminance.buffer
-                                        val bytes = ByteArray(buffer.remaining())
-                                        buffer.get(bytes)
-                                        val result = decoder.decode(
-                                            bytes,
-                                            imageProxy.width,
-                                            imageProxy.height,
-                                            luminance.rowStride,
-                                        )
-                                        dispatchAcceptedResult { latestOnQrDecoded.value(result) }
-                                    } catch (_: NotFoundException) {
-                                        // Keep scanning until a QR code is visible.
-                                    } catch (_: FormatException) {
-                                        dispatchAcceptedResult { latestOnQrNotRecognized.value() }
-                                    } catch (_: ChecksumException) {
-                                        dispatchAcceptedResult { latestOnQrNotRecognized.value() }
-                                    } finally {
-                                        imageProxy.close()
-                                    }
+                                    analyzeQrFrame(
+                                        imageProxy,
+                                        read = { frame -> decoder.read(frame).firstOrNull()?.let { it.text ?: "" } },
+                                        onDecoded = { value -> dispatchAcceptedResult { latestOnQrDecoded.value(value) } },
+                                        onUnrecognized = { dispatchAcceptedResult { latestOnQrNotRecognized.value() } },
+                                        onUnavailable = { dispatchAcceptedResult { latestOnScannerUnavailable.value() } },
+                                    )
                                 }
                             }
                         val provider = providerFuture.get()
