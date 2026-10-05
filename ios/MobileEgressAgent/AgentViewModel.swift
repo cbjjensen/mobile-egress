@@ -134,11 +134,12 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
             guard let self, let dependencies else { return }
             isBusy = true; errorMessage = nil; defer { isBusy = false }
             do {
-                if (try? DirectInvitation.parse(encoded)) != nil {
-                    let id = try await dependencies.repository.add(encoded)
+                let normalized = try CompactQRInput.normalize(encoded)
+                if (try? DirectInvitation.parse(normalized)) != nil {
+                    let id = try await dependencies.repository.add(normalized)
                     await dependencies.supervisor.clearRemovalSuppression(id)
                     try await dependencies.repository.recover(id)
-                } else { try await dependencies.repository.importUpdate(encoded) }
+                } else { try await dependencies.repository.importUpdate(normalized) }
                 try Task.checkCancellation()
                 await refresh()
             } catch is CancellationError { } catch DirectAgentError.removalIntentPersistence {

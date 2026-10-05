@@ -17,7 +17,7 @@ and run:
 go test ./windows-client/internal/clientapp -run '^TestDensePairingQRPreservesWholeReadableModules$' -count=1
 ```
 
-Sample each 4-by-4 pixel module of that directory's `direct.png` into the text
+Sample each 4-by-4 pixel module of that directory's `direct-original.png` into the text
 grid (`1` black, `0` white, one row per line). Do not substitute a real invitation
 or customer screenshot.
 
@@ -26,7 +26,10 @@ or customer screenshot.
 From the repository root, run `python scripts/test-android-qr-detector.py --help`.
 The script requires Pillow and exactly `zxing-cpp==3.1.1` in an isolated Python
 environment; it never installs dependencies or downloads models. It reconstructs
-only this grid and compares the decoded bytes to the shared public fixture.
+the historical grid and `compact-v1-upright.txt`, comparing decoded bytes to their
+shared public fixtures. The compact grid uses the direct case in
+`testdata/compact-qr-v1.json` and is sampled from `direct.png` from the same Go test;
+the historical grid continues to use `direct-original.png`.
 
 The required cases use 1280x960 sensor frames with different QR sizes, four
 orientations, off-center placement, padded rows and mild resampling. Additional low-resolution

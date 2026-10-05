@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.mobileegress.agent.direct.*
 import com.mobileegress.agent.network.CellularNetworkAcquirer
 import com.mobileegress.agent.network.isActive
+import com.mobileegress.agent.pairing.CompactQrEnvelope
 import com.mobileegress.agent.security.DeviceKeyStore
 import com.mobileegress.agent.security.SecureIdentityStore
 import com.mobileegress.agent.service.AgentForegroundService
@@ -96,9 +97,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         importBundle(scannedBundle)
     }
     fun importBundle(bundle: String) = operate {
-        when (DirectBundles.type(bundle.trim())) {
-            "mobile-egress-direct-invitation" -> repository.pair(bundle.trim())
-            "mobile-egress-direct-endpoint-update" -> repository.importEndpoint(bundle.trim())
+        val normalized = CompactQrEnvelope.normalizeUserInput(bundle)
+        when (DirectBundles.type(normalized)) {
+            "mobile-egress-direct-invitation" -> repository.pair(normalized)
+            "mobile-egress-direct-endpoint-update" -> repository.importEndpoint(normalized)
             else -> throw DirectException("legacy_pairing_rejected")
         }
     }

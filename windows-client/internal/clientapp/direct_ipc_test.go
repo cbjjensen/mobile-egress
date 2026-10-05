@@ -2,6 +2,7 @@ package clientapp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -36,7 +37,7 @@ func TestConfigureInvalidatesCachedInvitationEvenWhenFirewallFailsAfterSave(t *t
 }
 
 func (*invitationService) IssueInvitation(context.Context) (string, error) {
-	return "direct-invitation", nil
+	return base64.RawURLEncoding.EncodeToString([]byte(`{"type":"direct-invitation"}`)), nil
 }
 func (s *invitationService) CancelInvitation(context.Context) error { s.canceled = true; return nil }
 func (*invitationService) ExportEndpointUpdate(context.Context) (string, error) {
@@ -61,7 +62,8 @@ func directExchange(t *testing.T, service Service, request string) Response {
 
 func TestDirectInvitationAndEndpointExportUseAuthenticatedIPC(t *testing.T) {
 	service := &invitationService{}
-	for _, tc := range []struct{ method, want string }{{"issue-invitation", "direct-invitation"}, {"export-update", "signed-update"}} {
+	invitation, _ := service.IssueInvitation(context.Background())
+	for _, tc := range []struct{ method, want string }{{"issue-invitation", invitation}, {"export-update", "signed-update"}} {
 		response := directExchange(t, service, `{"method":"`+tc.method+`"}`)
 		if response.Error != "" || response.Value != tc.want {
 			t.Fatalf("%s failed: %#v", tc.method, response)

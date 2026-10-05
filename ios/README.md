@@ -12,7 +12,9 @@ Android uses a foreground service; iOS serves only in the active foreground. Thi
 
 ## Pairing and maintenance
 
-Create a direct invitation in the workload Client app and scan or paste it into the phone. Direct invitations have a ten-minute initial redemption window. The phone saves its per-Client Secure Enclave key and CSR before sending enrollment, then saves the issued identity before acknowledgement. Interrupted enrollment and lost acknowledgement remain visible as pending; **Retry pairing** reuses the same key. Pending and disabled records occupy one of the ten slots.
+Create an invitation in the workload Client app and scan or paste it into the phone. Invitations have a ten-minute initial redemption window. The phone saves its per-Client Secure Enclave key and CSR before sending enrollment, then saves the issued identity before acknowledgement. Interrupted enrollment and lost acknowledgement remain visible as pending; **Retry pairing** reuses the same key. Pending and disabled records occupy one of the ten slots.
+
+Updated builds accept the Client's smaller compact QRs and older plain setup codes, restoring identical bytes before normal trust validation. Older iOS builds need the complete text setup code instead. Existing pairings remain unchanged. See the [compact QR repair](../docs/superpowers/plans/2026-10-05-compact-pairing-qr.md); native parser/build checks do not replace signed physical iPhone acceptance.
 
 An expired invitation releases its local slot and key when the durable record proves enrollment was never attempted, or the pinned enrollment endpoint definitively reports that the same invitation is invalid or expired. The phone records an attempt before sending; an uncertain, malformed or unrelated rejection keeps that same key available for recovery. Confirmed rejection removes the pending record durably before deleting its unissued key, and cannot remove a replaced invitation or issued identity. Generate a fresh invitation on the workload Client after confirmed rejection. Remove explicitly cancels a local pending record. Issued identities and pending acknowledgements never expire as invitation reservations.
 

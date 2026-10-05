@@ -53,7 +53,11 @@ func TestDensePairingQRPreservesWholeReadableModules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			qr, err := qrcode.New(bundle, qrcode.Medium)
+			compact, err := compactQRBundle(bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			qr, err := qrcode.New(compact, qrcode.Medium)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,8 +82,18 @@ func TestDensePairingQRPreservesWholeReadableModules(t *testing.T) {
 				if err := os.WriteFile(dir+"/"+name+".png", data, 0600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(dir+"/"+name+".txt", []byte(bundle), 0600); err != nil {
+				if err := os.WriteFile(dir+"/"+name+".txt", []byte(compact), 0600); err != nil {
 					t.Fatal(err)
+				}
+				// Preserve regeneration of the historical uncompressed camera fixture.
+				if name == "direct" {
+					original, err := qrcode.Encode(bundle, qrcode.Medium, -4)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(dir+"/direct-original.png", original, 0600); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 		})

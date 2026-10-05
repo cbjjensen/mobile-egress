@@ -316,9 +316,11 @@
       "platforms": {
         "android": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses CameraX with a bundled offline QR detector, bounded analysis resolution and an uncropped preview to acquire the shared enrollment and migration QR payloads. Retains one-shot scanner lifecycle and reports scanner unavailability visibly. Portable native-core fixtures do not establish physical camera acceptance.",
+          "nativeEquivalenceNotes": "Uses CameraX with a bundled offline QR detector, bounded analysis resolution and an uncropped preview. Compact QR/paste input is bounded and restored to exact original bytes before existing invitation/update validation; older plain codes remain accepted. Retains one-shot scanner lifecycle and visible unavailability. Portable native-core fixtures do not establish physical camera acceptance.",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/ui/QrCodeScanner.kt",
+            "android/app/src/main/java/com/mobileegress/agent/pairing/CompactQrEnvelope.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/MainViewModel.kt",
             "android/app/src/main/java/com/mobileegress/agent/ui/QrFrameAnalysis.kt",
             "android/app/src/main/java/com/mobileegress/agent/ui/QrCameraPolicy.kt",
             "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreenPresentation.kt",
@@ -326,6 +328,9 @@
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/ui/QrFrameAnalysisTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/pairing/CompactQrEnvelopeTest.kt",
+            "testdata/compact-qr-v1.json",
+            "android/app/src/test/resources/qr/compact-v1-upright.txt",
             "android/app/src/test/java/com/mobileegress/agent/ui/QrCameraPolicyTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
             "scripts/test-android-qr-detector.py",
@@ -336,14 +341,18 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses VisionKit through a one-shot portable scanner session to acquire the same shared enrollment and migration QR payloads, report scanner unavailability, and suppress duplicate or late callbacks. Native optical detection is unchanged by the Android detector replacement; no new physical iPhone scan acceptance is claimed.",
+          "nativeEquivalenceNotes": "Uses VisionKit through a one-shot portable scanner session with visible unavailability and duplicate/late callback suppression. Compact QR/paste input is bounded and restored to exact original bytes before existing invitation/update validation; older plain codes remain accepted. Native optical detection is unchanged; no new physical iPhone scan acceptance is claimed.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Pairing/QRScannerSession.swift",
+            "ios/Sources/MobileEgressCore/Direct/CompactQRInput.swift",
+            "ios/MobileEgressAgent/AgentDashboardView.swift",
             "ios/MobileEgressAgent/QRScannerView.swift",
             "ios/MobileEgressAgent/AgentViewModel.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/QRScannerSessionTests.swift",
+            "ios/Tests/MobileEgressCoreTests/CompactQRInputTests.swift",
+            "ios/Tests/MobileEgressCoreTests/Fixtures/compact-qr-v1.json",
             "ios/Tests/MobileEgressCoreTests/PairingValidationTests.swift",
             "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift"
           ]

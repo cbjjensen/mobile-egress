@@ -2,6 +2,14 @@
 
 Mobile Egress uses phone-initiated cellular TLS/WebSocket sessions terminating at the workload Client. Default hosted mode carries them through Inevitable's gateway; Advanced direct uses a public workload listener. The authoritative inner API and signatures are in [the direct protocol contract](direct-protocol-v2.md), with [hosted mode and live-update additions](hosted-transport-contract.md). Existing 1.x relay endpoints and invitations remain incompatible; there is no automatic fallback.
 
+## User-scanned codes
+
+New Client QRs use `MEQR1:` followed by canonical unpadded base64url of one zlib stream containing the original decoded invitation or signed-update JSON bytes. This is a presentation wrapper only. Phone QR/paste imports reconstruct the exact original canonical base64url bundle before existing type, expiry, signature, identity and generation validation. Generic binary decoders and network messages do not accept this wrapper. Copyable setup codes and exported update files retain their original format.
+
+Reject raw input above 87,384 characters before trimming, compressed or expanded data above 65,536 bytes, empty output, unknown wrapper versions, noncanonical base64url, dictionaries, truncation, invalid checksums, and trailing or concatenated streams. Expansion is bounded during decoding. Errors contain no input or decoder details. Apple additionally bounds raw UTF-8 bytes, which does not restrict the ASCII wire format.
+
+Compact QRs require Android code 24 or a correspondingly updated iOS app. Updated apps continue accepting older uncompressed codes; copying the complete setup code remains the compatible fallback for older apps. No saved-pairing migration or transport-version change is involved. See the [compact QR repair](superpowers/plans/2026-10-05-compact-pairing-qr.md) and public `testdata/compact-qr-v1.json` interoperability cases.
+
 ## Transport semantics
 
 The public Client listener uses TLS1.3 with independent per-Client CA trust, SAN checking and scoped Agent ClientAuth certificates. Enrollment alone uses a bounded one-use capability without an existing certificate. ACK, session, configuration and renewal require durable admission in addition to mTLS.

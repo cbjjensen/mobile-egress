@@ -521,7 +521,7 @@ Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent $trackedAndroidBuildFile `
     -ExpectedVersion '2.0.0' `
     -MaximumPriorVersionCode 20
-Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*23\s*$') 'The Android v2.0.0 native QR scanner update must use versionCode 23.'
+Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*24\s*$') 'The Android v2.0.0 compact QR update must use versionCode 24.'
 
 $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-release-zip-test-" + [guid]::NewGuid().ToString('N'))
 try {

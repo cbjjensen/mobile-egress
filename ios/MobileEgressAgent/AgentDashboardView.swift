@@ -39,7 +39,7 @@ struct AgentDashboardView: View {
                 Section("Pair or update a Client") {
                     Button("Scan Client QR") { model.isScannerPresented = true }.disabled(model.isBusy)
                     TextField("Paste invitation or connection update", text: $importedCode, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button("Import code") { let code = importedCode.trimmingCharacters(in: .whitespacesAndNewlines); importedCode = ""; model.acceptScannedCode(code) }.disabled(model.isBusy || importedCode.isEmpty)
+                    Button("Import code") { let code = importedCode; importedCode = ""; model.acceptScannedCode(code) }.disabled(model.isBusy || importedCode.isEmpty)
                     Button("Import update file") { importFile = true }.disabled(model.isBusy)
                 }
                 Section("Cellular IP rotation") {
@@ -66,9 +66,9 @@ struct AgentDashboardView: View {
                 guard case let .success(url) = result else { return }
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 90_000,
+                guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 87_384,
                       let code = try? String(contentsOf: url, encoding: .utf8) else { return }
-                model.acceptScannedCode(code.trimmingCharacters(in: .whitespacesAndNewlines))
+                model.acceptScannedCode(code)
             }
             .confirmationDialog("Remove this Client from the phone?", isPresented: Binding(get: { removeCandidate != nil }, set: { if !$0 { removeCandidate = nil } })) {
                 if let client = removeCandidate { Button("Remove", role: .destructive) { model.remove(client); removeCandidate = nil } }

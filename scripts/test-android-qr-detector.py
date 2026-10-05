@@ -6,18 +6,22 @@ No images, decoded text, customer inputs or network requests are produced.
 """
 
 import argparse
+import base64
 from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
 import statistics
 import sys
 import time
+import zlib
 
 
 ENGINE_VERSION = "3.1.1"
 ROOT = Path(__file__).resolve().parent.parent
 GRID = ROOT / "android/app/src/test/resources/qr/direct-v2-upright.txt"
 WIRE = ROOT / "testdata/direct-v2-wire.json"
+COMPACT_GRID = ROOT / "android/app/src/test/resources/qr/compact-v1-upright.txt"
+COMPACT_WIRE = ROOT / "testdata/compact-qr-v1.json"
 
 
 def dependencies():
@@ -36,19 +40,38 @@ def dependencies():
     return zxingcpp, Image, ImageFilter
 
 
-def fixture(Image):
-    rows = GRID.read_text(encoding="ascii").splitlines()
+def grid_image(Image, path):
+    rows = path.read_text(encoding="ascii").splitlines()
     if not 29 <= len(rows) <= 185 or any(
         len(row) != len(rows) or set(row) - {"0", "1"} for row in rows
     ):
         raise ValueError("The tracked disposable QR grid must be square binary modules.")
-    expected = json.loads(WIRE.read_text(encoding="utf-8"))["invitation"].encode("utf-8")
     modules = Image.frombytes(
         "L", (len(rows), len(rows)), bytes(0 if bit == "1" else 255 for row in rows for bit in row)
     )
     # First reconstruct the real four-pixel-per-module desktop rendering.
     # Fractional camera resampling must operate on that rendering, not a pure-symbol shortcut.
-    return modules.resize((len(rows) * 4, len(rows) * 4), Image.Resampling.NEAREST), expected
+    return modules.resize((len(rows) * 4, len(rows) * 4), Image.Resampling.NEAREST)
+
+
+def fixtures(Image):
+    original = json.loads(WIRE.read_text(encoding="utf-8"))["invitation"]
+    samples = json.loads(COMPACT_WIRE.read_text(encoding="utf-8"))["valid"]
+    sample = next((item for item in samples if item["name"] == "direct"), None)
+    if sample is None or sample["original"] != original or not sample["compact"].startswith("MEQR1:"):
+        raise ValueError("The compact fixture must wrap the original public direct invitation.")
+    encoded = sample["compact"][6:]
+    compressed = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+    if base64.urlsafe_b64encode(compressed).decode("ascii").rstrip("=") != encoded:
+        raise ValueError("The compact fixture must use canonical unpadded base64url.")
+    decoder = zlib.decompressobj()
+    expanded = decoder.decompress(compressed, 65_537)
+    if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail or not 0 < len(expanded) <= 65_536 or (
+        base64.urlsafe_b64encode(expanded).decode("ascii").rstrip("=") != original
+    ):
+        raise ValueError("The compact fixture must restore the exact original public bundle bytes.")
+    yield "direct-v2", grid_image(Image, GRID), original.encode("ascii")
+    yield "compact-v1", grid_image(Image, COMPACT_GRID), sample["compact"].encode("ascii")
 
 
 def cases(qr, Image, ImageFilter):
@@ -104,37 +127,39 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         engine, Image, ImageFilter = dependencies()
-        qr, expected = fixture(Image)
         results = []
-        for name, frame, required in cases(qr, Image, ImageFilter):
-            image = frame
-            if name.startswith("padded-row-"):
-                width, height = frame.size
-                stride = width + 17
-                pixels = frame.tobytes()
-                # Keep storage alive throughout the native call. Padding has a
-                # distinct shade and must not become part of the image columns.
-                storage = bytearray([23]) * (stride * height)
-                for row in range(height):
-                    storage[row * stride:row * stride + width] = pixels[row * width:(row + 1) * width]
-                image = engine.ImageView(memoryview(storage), width, height, engine.ImageFormat.Lum, stride, 1)
-            started = time.perf_counter()
-            # Match Android's QR-only, rotating/downscaling, non-inverting reader.
-            # read_barcode limits results to one; pure mode is deliberately disabled.
-            code = engine.read_barcode(
-                image, formats=engine.BarcodeFormat.QRCode,
-                try_rotate=True, try_downscale=True, try_invert=False,
-                text_mode=engine.TextMode.Plain, binarizer=engine.Binarizer.LocalAverage,
-                is_pure=False, return_errors=False,
-            )
-            outcome = "none" if code is None else "exact" if code.bytes == expected else "mismatch"
-            result = {
-                "name": name, "required": required, "outcome": outcome,
-                "milliseconds": round((time.perf_counter() - started) * 1000, 2),
-            }
-            results.append(result)
-            if args.verbose:
-                print(json.dumps(result, separators=(",", ":")))
+        fixture_modules = {}
+        for fixture_name, qr, expected in fixtures(Image):
+            fixture_modules[fixture_name] = qr.width // 4
+            for name, frame, required in cases(qr, Image, ImageFilter):
+                image = frame
+                if name.startswith("padded-row-"):
+                    width, height = frame.size
+                    stride = width + 17
+                    pixels = frame.tobytes()
+                    # Keep storage alive throughout the native call. Padding has a
+                    # distinct shade and must not become part of the image columns.
+                    storage = bytearray([23]) * (stride * height)
+                    for row in range(height):
+                        storage[row * stride:row * stride + width] = pixels[row * width:(row + 1) * width]
+                    image = engine.ImageView(memoryview(storage), width, height, engine.ImageFormat.Lum, stride, 1)
+                started = time.perf_counter()
+                # Match Android's QR-only, rotating/downscaling, non-inverting reader.
+                # read_barcode limits results to one; pure mode is deliberately disabled.
+                code = engine.read_barcode(
+                    image, formats=engine.BarcodeFormat.QRCode,
+                    try_rotate=True, try_downscale=True, try_invert=False,
+                    text_mode=engine.TextMode.Plain, binarizer=engine.Binarizer.LocalAverage,
+                    is_pure=False, return_errors=False,
+                )
+                outcome = "none" if code is None else "exact" if code.bytes == expected else "mismatch"
+                result = {
+                    "fixture": fixture_name, "name": name, "required": required, "outcome": outcome,
+                    "milliseconds": round((time.perf_counter() - started) * 1000, 2),
+                }
+                results.append(result)
+                if args.verbose:
+                    print(json.dumps(result, separators=(",", ":")))
         required = [item for item in results if item["required"]]
         failed = [item for item in results if item["outcome"] == "mismatch" or (
             item["required"] and item["outcome"] != "exact"
@@ -145,6 +170,14 @@ def main(argv=None):
             "lowResolutionObservations": len(results) - len(required),
             "failures": len(failed),
             "medianMilliseconds": round(statistics.median(item["milliseconds"] for item in results), 2),
+            "fixtures": [
+                {
+                    "name": name, "modules": modules,
+                    "required": sum(item["fixture"] == name for item in required),
+                    "requiredPassed": sum(item["fixture"] == name and item["outcome"] == "exact" for item in required),
+                }
+                for name, modules in fixture_modules.items()
+            ],
             "scope": "Native core only; Android JNI and physical camera acceptance remain separate.",
         }
         if args.json_report:
@@ -154,9 +187,9 @@ def main(argv=None):
                 report.write("\n")
         print(json.dumps(summary, indent=2))
         for item in failed:
-            print(f"FAIL: {item['name']} ({item['outcome']})", file=sys.stderr)
+            print(f"FAIL: {item['fixture']}/{item['name']} ({item['outcome']})", file=sys.stderr)
         return 1 if failed else 0
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, ValueError, RuntimeError, zlib.error) as error:
         print(f"QR detector check failed: {error}", file=sys.stderr)
         return 2
 

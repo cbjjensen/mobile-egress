@@ -26,7 +26,7 @@ Each Client generates independent authority/server credentials in protected stor
 
 The phone registry admits ten records, including pending and disabled records. Each Client accepts one paired phone. Revocation persists before disconnecting streams and denying reconnects. Signed updates bind transport mode, endpoint, Client/pairing identity and monotonic generation. Capable connected phones receive updates through the authenticated session; polling remains supported. Offline/older phones import QR/file recovery. Mode switching preserves authority, pairing and proxy credentials; it reissues the hostname-bound server certificate. Updates remain pending until acknowledgement. See [hosted wire additions](hosted-transport-contract.md).
 
-See [wire contract](direct-protocol-v2.md) for exact schemas and paths.
+Client QRs use a compact bounded zlib presentation envelope; phone import restores the original bytes before trust validation. Copyable text and exported update files retain the original format. This adds no network service or pairing-state migration. See [QR compatibility](protocol.md#user-scanned-codes) and the [wire contract](direct-protocol-v2.md) for exact schemas and paths.
 
 ## Phone runtime and capacity
 

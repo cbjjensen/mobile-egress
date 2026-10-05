@@ -23,7 +23,7 @@ android {
         applicationId = "com.mobileegress.agent"
         minSdk = 29
         targetSdk = 35
-        versionCode = 23
+        versionCode = 24
         versionName = androidVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
