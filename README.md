@@ -6,7 +6,7 @@ Mobile Egress routes traffic from proxy-compatible applications through your own
 
 One product, two companion apps: **Mobile Egress Client** runs on your computer or server, and the **Mobile Egress phone app** supplies the cellular connection. You provide the computer, phone, and mobile data plan.
 
-> **Version 2.0 is in pre-release validation.** Signed installation and physical-device testing are still pending; 2.0 downloads are not release-ready. Published 1.x builds use the previous architecture and cannot be used with this setup.
+> **Version 2.0 is in pilot validation.** Signed Windows and Mac installers are available in the [2.0.0 prerelease](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.0). Full signed-installation and physical-device acceptance, including iPhone traffic and lifecycle checks, remains incomplete. Published 1.x builds use the previous architecture and cannot be used with this setup.
 
 ## What you can do
 
@@ -53,7 +53,7 @@ If your ISP uses carrier-grade NAT (CGNAT), ordinary router forwarding may not m
 
 ## Setup
 
-Use matching 2.x computer and phone builds once accepted downloads are available.
+Use matching 2.x computer and phone pilot builds. iPhone testing uses an invitation through TestFlight; external availability depends on Apple's beta review. The public installer release does not include an Android APK.
 
 1. **Install both apps.** Install the Windows Client or Mac Client on the computer running your applications, and the compatible phone app on your phone.
 2. **Run the installer and follow the setup wizard.** Activate the Client in your Inevitable browser account. The Client keeps activation credentials in protected service storage. If the Mac app does not open automatically, open Mobile Egress Client from Applications.
@@ -93,7 +93,7 @@ For longer iPhone sessions, use a dedicated phone and keep it powered. The compu
 
 ## Downloads and existing installations
 
-Check [official releases](https://github.com/cbjjensen/mobile-egress/releases) for availability and compatibility notes. The 2.x computer packages are the **Windows Client installer** (`MobileEgressClientSetup.exe`) and **Apple Silicon Mac Client PKG**, paired with compatible Android or iPhone builds. The pre-release notice above remains in effect; historical 1.x downloads are not substitutes.
+The [2.0.0 pilot release](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.0) provides the signed **Windows Client installer** (`MobileEgressClientSetup.exe`) and signed/notarized **Apple Silicon Mac Client PKG**. Pair them with a compatible 2.x phone build. iPhone builds are distributed through TestFlight invitations; no compatible Android APK is published in this installer release. The pilot-validation notice above remains in effect; historical 1.x downloads are not substitutes.
 
 Upgrading from 1.x requires fresh pairing. Existing direct 2.x installations keep their settings until you explicitly switch to hosted mode. Follow the [installation and migration guide](docs/standalone-clients.md). Retire a former controller computer using the [separate retirement instructions](docs/controller-retirement.md).
 
