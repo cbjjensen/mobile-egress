@@ -2,6 +2,33 @@ import Foundation
 import XCTest
 
 final class XcodeProjectStructureTests: XCTestCase {
+    func testPrivacyManifestDeclaresRetainedRequiredReasonAPIsAndIsPackagedInBothBundles() throws {
+        let manifest = try plist(at: "MobileEgressAgent/PrivacyInfo.xcprivacy")
+        XCTAssertEqual(Set(manifest.keys), ["NSPrivacyAccessedAPITypes"])
+        let entries = try XCTUnwrap(manifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]])
+        var reasons: [String: Set<String>] = [:]
+        for entry in entries {
+            XCTAssertEqual(Set(entry.keys), ["NSPrivacyAccessedAPIType", "NSPrivacyAccessedAPITypeReasons"])
+            let category = try XCTUnwrap(entry["NSPrivacyAccessedAPIType"] as? String)
+            XCTAssertNil(reasons[category], "Duplicate required-reason category")
+            reasons[category] = Set(try XCTUnwrap(entry["NSPrivacyAccessedAPITypeReasons"] as? [String]))
+        }
+        XCTAssertEqual(reasons, [
+            "NSPrivacyAccessedAPICategoryUserDefaults": ["CA92.1", "1C8F.1"],
+            "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
+        ])
+        let project = try text(at: "MobileEgressAgent.xcodeproj/project.pbxproj")
+        XCTAssertTrue(project.contains("B00000000000000000000018 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = \"<group>\"; };"))
+        XCTAssertTrue(project.contains("C00000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* PrivacyInfo.xcprivacy */; };"))
+        let resourcePhase = try XCTUnwrap(project.range(of: "E00000000000000000000003 /* Resources */ = {"))
+        let phaseEnd = try XCTUnwrap(project.range(of: "runOnlyForDeploymentPostprocessing", range: resourcePhase.upperBound..<project.endIndex))
+        XCTAssertTrue(project[resourcePhase.upperBound..<phaseEnd.lowerBound].contains("C00000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */"))
+        XCTAssertTrue(project.contains("C00000000000000000000016 /* PrivacyInfo.xcprivacy in Extension Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* PrivacyInfo.xcprivacy */; };"))
+        let extensionPhase = try XCTUnwrap(project.range(of: "E00000000000000000000007 /* Resources */ = {"))
+        let extensionEnd = try XCTUnwrap(project.range(of: "runOnlyForDeploymentPostprocessing", range: extensionPhase.upperBound..<project.endIndex))
+        XCTAssertTrue(project[extensionPhase.upperBound..<extensionEnd.lowerBound].contains("C00000000000000000000016 /* PrivacyInfo.xcprivacy in Extension Resources */"))
+    }
+
     func testProjectHasExactlyTwoProductsWithLocalCoreLinkageAndExtensionEmbedding() throws {
         let project = try text(at: "MobileEgressAgent.xcodeproj/project.pbxproj")
 

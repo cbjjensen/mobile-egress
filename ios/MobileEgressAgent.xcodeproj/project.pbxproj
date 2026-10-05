@@ -20,6 +20,8 @@
 		C00000000000000000000011 /* NoRoutesTunnelSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000021 /* NoRoutesTunnelSettings.swift */; };
 		C00000000000000000000012 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000022 /* PacketTunnelProvider.swift */; };
 		C00000000000000000000014 /* MobileEgressCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000003 /* MobileEgressCore */; };
+		C00000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* PrivacyInfo.xcprivacy */; };
+		C00000000000000000000016 /* PrivacyInfo.xcprivacy in Extension Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +59,7 @@
 		B00000000000000000000015 /* TunnelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelManager.swift; sourceTree = "<group>"; };
 		B00000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B00000000000000000000017 /* MobileEgressAgent.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MobileEgressAgent.entitlements; sourceTree = "<group>"; };
+		B00000000000000000000018 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B00000000000000000000020 /* ExtensionConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionConfiguration.swift; sourceTree = "<group>"; };
 		B00000000000000000000021 /* NoRoutesTunnelSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoRoutesTunnelSettings.swift; sourceTree = "<group>"; };
 		B00000000000000000000022 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
@@ -110,6 +113,7 @@
 				B00000000000000000000015 /* TunnelManager.swift */,
 				B00000000000000000000016 /* Info.plist */,
 				B00000000000000000000017 /* MobileEgressAgent.entitlements */,
+				B00000000000000000000018 /* PrivacyInfo.xcprivacy */,
 			);
 			path = MobileEgressAgent;
 			sourceTree = "<group>";
@@ -246,6 +250,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C00000000000000000000007 /* AppAssets.xcassets in Resources */,
+				C00000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,6 +258,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C00000000000000000000016 /* PrivacyInfo.xcprivacy in Extension Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

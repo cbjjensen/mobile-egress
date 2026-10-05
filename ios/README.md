@@ -56,6 +56,10 @@ The dashboard reports cellular availability separately from sharing intent and e
 
 ## Build and signing
 
+The app bundles `MobileEgressAgent/PrivacyInfo.xcprivacy` for the required-reason APIs it uses. `AgentViewModel` keeps the explicit Stop latch in the app's `UserDefaults` (`CA92.1`) and gives `UserDefaultsNotificationFirstUseStore` the existing App Group defaults for the rotation notification prompt (`1C8F.1`). `NetworkTargetConnection` uses `ProcessInfo.systemUptime` only for elapsed connection-attempt deadlines (`35F9.1`); it does not send the device's boot time. These reasons follow [Apple's required API categories](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype) and [approved reasons](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitypereasons).
+
+The manifest declares these API uses only; it does not substitute for App Store Connect privacy or encryption answers. Release binary inspection confirmed that the retired extension retains `UserDefaultsNotificationFirstUseStore` and `NetworkTargetConnection` from the linked core library, including the preference and `systemUptime` calls. Both app and extension bundles therefore receive the same manifest. The extension's entrypoint still fails closed and does not serve traffic. The project-structure test checks both resource memberships; distribution validation must also inspect the Release archive's embedded products and privacy report.
+
 The deployment target remains iOS/iPadOS 17+, with Swift 6 strict concurrency. Both targets use the local MobileEgressCore package. Identifiers stay:
 
 - App: com.mobileegress.agent
