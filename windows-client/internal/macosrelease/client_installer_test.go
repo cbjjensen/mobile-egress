@@ -116,6 +116,12 @@ type clientInstallerFixture struct {
 	shell, script, state, log, owner string
 }
 
+// Each fixture launches several real shell processes. Bound that fan-out so
+// parallel race builds do not turn host scheduling contention into installer
+// timeout failures. Acquire before callers start their elapsed-time checks;
+// the production handoff and per-command timeout budgets remain unchanged.
+var clientInstallerFixtureSlots = make(chan struct{}, 3)
+
 func newClientInstallerFixture(t *testing.T) clientInstallerFixture {
 	return newClientInstallerScriptFixture(t, "postinstall", true)
 }
@@ -129,6 +135,8 @@ func newClientInstallerScriptFixture(t *testing.T, scriptName string, existing b
 	if _, err := os.Stat(shell); err != nil {
 		t.Skip("installer fixture requires a POSIX shell")
 	}
+	clientInstallerFixtureSlots <- struct{}{}
+	t.Cleanup(func() { <-clientInstallerFixtureSlots })
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
 	if existing {
