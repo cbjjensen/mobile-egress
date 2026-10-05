@@ -49,3 +49,11 @@ No Android device was attached to ADB; no iPhone was visible to the Mac device t
 See [Mac signed validation](mac-signed-validation-2026-10-04.md): identity discovery and guarded native test compilation passed. An initial signing failure was resolved using the release workflow's existing configured login-keychain unlock; Developer ID signing and designated-requirement verification then passed. Root fixture execution still requires a password. No identity/ACL/account changes or substitute signing identity were used.
 
 Logs remain under `G:/codex-build-cache/mobile-egress-hosted-20261004/`, including `windows-signed-build.log`, `android-signer-validation.log`, and `android-signed-build-retry.log`. Physical-device, signed installation and deployment gates remain in [hosted acceptance](hosted-acceptance.md).
+
+## Android QR scanner update — code 22
+
+The [orientation repair](superpowers/plans/2026-10-04-android-qr-orientation.md) produced a new local signed APK from clean source `ec619129e4f47b798df45aec6702a73dffdf6c26`. The guarded signing script passed clean release assembly, R8, release lint and verification against the original recorded certificate. The APK has one signer using signature scheme v3, package `com.mobileegress.agent`, version name `2.0.0` and version code `22`.
+
+Immutable local file: `G:/codex-build-cache/mobile-egress-hosted-20261004/android-qr-orientation/zfnf-mobile-egress-android-2.0.0-code22.apk`, 5,314,211 bytes, SHA-256 `39392054E1E882DD493E81A6C80625B4CB16286BBB15A519F72E2D843EA302CD`. The canonical Android release build path now holds code 22; the prior code-21 APK above was hash-verified and preserved as `zfnf-mobile-egress-android-2.0.0-code21.apk` in the same private evidence directory.
+
+All 298 Android tests, lint/debug assembly, manifest/schema, release contracts and independent review passed. The production decoder read the reported screenshot upright; no live QR payload is tracked. Workstation memory/disk failures and the verified generated-cache/output move to G are recorded in the repair plan. No ADB phone was attached, so installing the update, physical scanning and Mac cellular traffic remain owner acceptance. No public release, tag, deployment or main merge occurred.
