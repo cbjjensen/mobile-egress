@@ -23,8 +23,8 @@ The original public sample occupied 149 modules (596 pixels at four pixels/modul
 - [x] Emit compact desktop QRs with unchanged copyable setup codes. Test exact bytes, reduced density, quiet zone/module sizing and invalid input. Update optical harness coverage.
 - [x] Update mobile manifest, protocol/onboarding guidance and sibling Inevitable pilot record. Final artifact acceptance records follow packaging. No Inevitable frontend patterns or accepted infrastructure responsibilities change.
 - [x] Run relevant Go/frontend/release-contract gates, Android tests/lint/build, native Swift/iOS build checks, manifest/schema and independent security review; record the Xcode runner limitation below.
-- [ ] Commit source, build same-identity local Android code 24 and signed/notarized Mac validation installer using existing guarded local build paths. Keep earlier artifacts immutable. No release orchestration/tag/publication or main merge.
-- [ ] Verify exact hashes/versions/signers and report any unavailable native/signing/physical checks. Preserve the owner's working Mac/phone pairing; installing/testing must not silently revoke it.
+- [x] Commit source, build same-identity local Android code 24 and signed/notarized Mac validation installer using existing guarded local build paths. Keep earlier artifacts immutable. No release orchestration/tag/publication or main merge.
+- [x] Verify exact hashes/versions/signers and report unavailable native/physical checks. Preserve the owner's working Mac/phone pairing; installation on the owner devices is not performed by this change.
 
 ## Acceptance and rollback
 
@@ -44,4 +44,13 @@ Independent review found one caller-boundary issue: iOS paste/file callers trimm
 
 The full Windows integration gate passes: all Go packages, installer contracts, vet/build, 71 frontend tests/syntax, Desktop/direct/release contracts and mobile manifest/schema. Android Git signing-path regression and changed documentation local links pass. The native optical harness passes all 90 required frames (45 historical, 45 compact), plus six informational low-resolution observations. Its compact grid is generated from the real Go renderer and restores exactly the shared fixture. Historical grids remain unchanged. The existing IPC test's placeholder was replaced with canonical public test input because rendering now strictly rejects malformed source bundles.
 
-Preserved evidence: `G:/codex-build-cache/mobile-egress-hosted-20261004/android-compact-qr-code24/` and `ios-compact-qr-20261005/`. The diagnostic sample's physical success and existing text-import traffic are separate from fresh compact pairing with final artifacts. Signed packaging and native Mac Client checks are pending at this source checkpoint.
+Preserved evidence: `G:/codex-build-cache/mobile-egress-hosted-20261004/android-compact-qr-code24/`, `ios-compact-qr-20261005/` and `mac-client-compact-20261005/`. The diagnostic sample's physical success and existing text-import traffic are separate from fresh compact pairing with final artifacts.
+
+## Local signed artifacts and remaining acceptance
+
+Clean source `23f748c44434ffa604aa2f41aa1e45252dd5b8b4` is committed/pushed on the feature branch. The native Apple Silicon Client package tests, vet, race detector and 71 frontend tests pass. The existing guarded local signing paths produced:
+
+- Android `2.0.0` / code `24`, 11,864,970 bytes, SHA-256 `ed3a06f85d765dd49d4af7fe2e6d49932587a9ac1cee122204fa472cea58dff8`. Original signer verified; R8/release lint/assembly passed. Package/minimum SDK/target SDK verified; all four ABI library sets and license asset are byte-identical to verified code 23, and APK 16-KiB alignment passes. Immutable artifact: `android-compact-qr-code24/zfnf-mobile-egress-android-2.0.0-code24.apk` under the evidence root.
+- Mac `2.0.0-hosted-validation.20261005.1`, 13,767,283 bytes, SHA-256 `a7b6c0e7c79b5bb382097d164cd309d2d0657260b79c775243eb2c425f571004`. Existing Developer ID Application/Installer identities, notarization, staple, Gatekeeper, exact source/version/provenance and transfer hash all pass. Immutable artifact: `mac-client-compact-20261005/mobile-egress-client-macos-2.0.0-hosted-validation.20261005.1-arm64.pkg` under the evidence root.
+
+Earlier artifacts remain untouched. No owner-device installation, pairing removal, deployment, tag, public release or main merge occurred. Physical signed-upgrade/pairing retention and fresh compact invitation/update scanning remain owner acceptance on Android and iPhone. iOS unsigned builds/native tests pass, with the separate Xcode testmanagerd and opt-in security gates recorded above. Existing release blockers remain; do not describe the signed local artifacts as generally release-ready.
