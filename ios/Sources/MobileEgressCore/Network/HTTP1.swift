@@ -3,6 +3,8 @@ import Foundation
 public enum HTTP1Limits {
     public static let maximumHeaderBytes = 32 * 1024
     public static let maximumBodyBytes = 256 * 1024
+    public static let maximumChunkMetadataBytes = 32 * 1024
+    static let maximumResponseBytes = maximumHeaderBytes + 4 + maximumBodyBytes + maximumChunkMetadataBytes
 }
 
 public enum HTTP1Error: Error, Equatable {
@@ -55,6 +57,8 @@ public enum HTTP1ResponseAccumulatorOutcome: Equatable, Sendable {
 
 public struct HTTP1ResponseAccumulator: Sendable {
     private var data = Data()
+    private var head: HTTP1Codec.ParsedHead?
+    private var chunks: HTTP1ChunkedBody?
 
     public init() {}
 
@@ -62,12 +66,81 @@ public struct HTTP1ResponseAccumulator: Sendable {
         _ content: some DataProtocol,
         isComplete: Bool
     ) throws -> HTTP1ResponseAccumulatorOutcome {
+        guard content.count <= HTTP1Limits.maximumResponseBytes - data.count else { throw HTTP1Error.bodyTooLarge }
         data.append(contentsOf: content)
-        if let expected = try HTTP1Codec.expectedResponseBytes(in: data), data.count > expected {
-            throw HTTP1Error.ambiguousResponse
+        if head == nil { head = try HTTP1Codec.parseHead(in: data) }
+        guard let head else {
+            if data.count > HTTP1Limits.maximumHeaderBytes { throw HTTP1Error.headerTooLarge }
+            if isComplete { throw HTTP1Error.truncatedResponse }
+            return .awaitingMoreData
         }
+        let expected: Int?
+        switch head.framing {
+        case let .contentLength(length): expected = head.bodyOffset + length
+        case .chunked:
+            if chunks == nil { chunks = HTTP1ChunkedBody(cursor: head.bodyOffset) }
+            expected = try chunks?.advance(in: data)
+        }
+        if let expected, data.count > expected { throw HTTP1Error.ambiguousResponse }
         guard isComplete else { return .awaitingMoreData }
-        return .complete(try HTTP1Codec.parseResponse(data))
+        guard let expected, data.count == expected else { throw HTTP1Error.truncatedResponse }
+        let body: Data
+        if let chunks {
+            body = chunks.bodyRanges.reduce(into: Data()) { $0.append(data[$1]) }
+        } else {
+            body = data.subdata(in: head.bodyOffset..<expected)
+        }
+        return .complete(HTTPResponse(statusCode: head.statusCode, headers: head.headers, body: body))
+    }
+}
+
+/// Advances once over each chunk. Keep wire bytes bounded, and materialize the
+/// decoded body only after exact framing and clean EOF have both been observed.
+private struct HTTP1ChunkedBody: Sendable {
+    var cursor: Int
+    private var chunkSize: Int?
+    private var decodedBytes = 0
+    private var metadataBytes = 0
+    private var end: Int?
+    private(set) var bodyRanges: [Range<Int>] = []
+
+    init(cursor: Int) { self.cursor = cursor }
+
+    mutating func advance(in data: Data) throws -> Int? {
+        if let end { return end }
+        while true {
+            if chunkSize == nil {
+                let searchEnd = min(data.count, cursor + 18)
+                guard let separator = data.range(of: Data([13, 10]), in: cursor..<searchEnd) else {
+                    if data.count - cursor > 17 { throw HTTP1Error.invalidResponse }
+                    return nil
+                }
+                let digits = data[cursor..<separator.lowerBound]
+                guard !digits.isEmpty, digits.count <= 16,
+                      digits.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+                      let literal = String(data: digits, encoding: .ascii), let size = Int(literal, radix: 16)
+                else { throw HTTP1Error.invalidResponse }
+                guard size <= HTTP1Limits.maximumBodyBytes - decodedBytes else { throw HTTP1Error.bodyTooLarge }
+                try chargeMetadata(digits.count + 2)
+                decodedBytes += size
+                cursor = separator.upperBound
+                chunkSize = size
+            }
+            guard let size = chunkSize else { throw HTTP1Error.invalidResponse }
+            let chunkEnd = cursor + size
+            guard data.count >= chunkEnd + 2 else { return nil }
+            guard data[chunkEnd] == 13, data[chunkEnd + 1] == 10 else { throw HTTP1Error.invalidResponse }
+            try chargeMetadata(2)
+            if size > 0 { bodyRanges.append(cursor..<chunkEnd) }
+            cursor = chunkEnd + 2
+            chunkSize = nil
+            if size == 0 { end = cursor; return cursor }
+        }
+    }
+
+    private mutating func chargeMetadata(_ count: Int) throws {
+        guard count <= HTTP1Limits.maximumChunkMetadataBytes - metadataBytes else { throw HTTP1Error.headerTooLarge }
+        metadataBytes += count
     }
 }
 
@@ -105,30 +178,14 @@ public enum HTTP1Codec {
     }
 
     public static func parseResponse(_ data: Data) throws -> HTTPResponse {
-        guard let parsedHead = try parseHead(in: data) else {
-            if data.count > HTTP1Limits.maximumHeaderBytes { throw HTTP1Error.headerTooLarge }
+        var accumulator = HTTP1ResponseAccumulator()
+        guard case let .complete(response) = try accumulator.receive(data, isComplete: true) else {
             throw HTTP1Error.truncatedResponse
         }
-        let expectedCount = parsedHead.bodyOffset + parsedHead.contentLength
-        guard data.count == expectedCount else {
-            throw data.count < expectedCount ? HTTP1Error.truncatedResponse : HTTP1Error.ambiguousResponse
-        }
-        return HTTPResponse(
-            statusCode: parsedHead.statusCode,
-            headers: parsedHead.headers,
-            body: data.subdata(in: parsedHead.bodyOffset ..< expectedCount)
-        )
+        return response
     }
 
-    static func expectedResponseBytes(in data: Data) throws -> Int? {
-        guard let parsedHead = try parseHead(in: data) else {
-            if data.count > HTTP1Limits.maximumHeaderBytes { throw HTTP1Error.headerTooLarge }
-            return nil
-        }
-        return parsedHead.bodyOffset + parsedHead.contentLength
-    }
-
-    private static func parseHead(in data: Data) throws -> ParsedHead? {
+    fileprivate static func parseHead(in data: Data) throws -> ParsedHead? {
         let separator = Data([0x0D, 0x0A, 0x0D, 0x0A])
         guard let separatorRange = data.range(of: separator) else { return nil }
         guard separatorRange.lowerBound <= HTTP1Limits.maximumHeaderBytes else {
@@ -174,8 +231,12 @@ public enum HTTP1Codec {
             let normalizedName = name.lowercased()
             headers[normalizedName, default: []].append(value)
         }
-        guard headers["transfer-encoding"] == nil,
-              let contentLengths = headers["content-length"],
+        if let transferEncodings = headers["transfer-encoding"] {
+            guard headers["content-length"] == nil, transferEncodings.count == 1,
+                  transferEncodings[0].lowercased() == "chunked" else { throw HTTP1Error.ambiguousResponse }
+            return ParsedHead(statusCode: statusCode, headers: headers, bodyOffset: bodyOffset, framing: .chunked)
+        }
+        guard let contentLengths = headers["content-length"],
               contentLengths.count == 1,
               let literal = contentLengths.first,
               !literal.isEmpty,
@@ -189,7 +250,7 @@ public enum HTTP1Codec {
             statusCode: statusCode,
             headers: headers,
             bodyOffset: bodyOffset,
-            contentLength: contentLength
+            framing: .contentLength(contentLength)
         )
     }
 
@@ -203,10 +264,12 @@ public enum HTTP1Codec {
         }
     }
 
-    private struct ParsedHead {
+    fileprivate enum BodyFraming: Sendable { case contentLength(Int), chunked }
+
+    fileprivate struct ParsedHead: Sendable {
         let statusCode: Int
         let headers: [String: [String]]
         let bodyOffset: Int
-        let contentLength: Int
+        let framing: BodyFraming
     }
 }

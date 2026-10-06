@@ -57,7 +57,7 @@ final class DirectGoInteropTests: XCTestCase {
         XCTAssertThrowsError(try DirectEndpointUpdate.parse(alteredSignature, for: record) { try DirectSecurity.verify($0, signature: $1, authority: ca.der) })
     }
 
-    func testGoIssuedCertificateMatchesCSRAndUsesDirectOnlyControlRequests() async throws {
+    func testGoChunkedIssuedCertificateMatchesCSRAndUsesDirectOnlyControlRequests() async throws {
         let fixture = try fixture()
         let date = try XCTUnwrap(ISO8601DateFormatter().date(from: fixture.invitationExpiresAt)).addingTimeInterval(-30)
         let invitation = try DirectInvitation.parse(fixture.invitation, now: date)
@@ -68,7 +68,14 @@ final class DirectGoInteropTests: XCTestCase {
         let spki = requestFields[2].encoded
         let raw = try Data(contentsOf: XCTUnwrap(Bundle.module.url(forResource: "direct-v2-wire", withExtension: "json", subdirectory: "Fixtures")))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
-        let transport = DirectFixtureTransport(response: HTTPResponse(statusCode: 201, headers: ["content-type": ["application/json"]], body: try JSONSerialization.data(withJSONObject: XCTUnwrap(object["identity"]))))
+        let identityJSON = try JSONSerialization.data(withJSONObject: XCTUnwrap(object["identity"]))
+        // Go's directReply streams this >2-KiB identity as chunked HTTP/1.1,
+        // including when the phone requests Connection: close.
+        XCTAssertGreaterThan(identityJSON.count, 2_048)
+        var response = Data("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n\(String(identityJSON.count, radix: 16))\r\n".utf8)
+        response.append(identityJSON)
+        response.append(Data("\r\n0\r\n\r\n".utf8))
+        let transport = DirectFixtureTransport(response: response)
         let control = DirectControlClient(transport: transport, now: { date })
         var record = DirectClientRecord(clientID: fixture.clientId, displayName: invitation.displayName, endpoint: invitation.endpoint)
         record.invitation = invitation; record.csrPEM = fixture.csrPem
@@ -104,15 +111,22 @@ final class DirectGoInteropTests: XCTestCase {
 }
 private final class DirectFixtureTransport: HTTPTransporting, @unchecked Sendable {
     private let lock = NSLock()
-    let response: HTTPResponse
+    let response: Data
     private var capturedRequest: HTTPRequest?
     private var capturedConfiguration: PinnedCellularTransportConfiguration?
     var request: HTTPRequest? { lock.withLock { capturedRequest } }
     var configuration: PinnedCellularTransportConfiguration? { lock.withLock { capturedConfiguration } }
-    init(response: HTTPResponse) { self.response = response }
+    init(response: Data) { self.response = response }
     func execute(_ request: HTTPRequest, configuration: PinnedCellularTransportConfiguration) async throws -> HTTPResponse {
         lock.withLock { capturedRequest = request; capturedConfiguration = configuration }
-        return response
+        var accumulator = HTTP1ResponseAccumulator()
+        for offset in stride(from: 0, to: response.count, by: 37) {
+            _ = try accumulator.receive(response[offset..<min(offset + 37, response.count)], isComplete: false)
+        }
+        guard case let .complete(decoded) = try accumulator.receive(Data(), isComplete: true) else {
+            throw HTTP1Error.truncatedResponse
+        }
+        return decoded
     }
 }
 #endif

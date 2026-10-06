@@ -127,12 +127,14 @@
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectControlClient.swift",
+            "ios/Sources/MobileEgressCore/Network/HTTP1.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectSecurity.swift",
             "ios/Sources/MobileEgressCore/Identity/SecureEnclaveIdentityKeyManager.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
             "ios/Tests/MobileEgressCoreTests/DirectEnrollmentRejectionTests.swift",
+            "ios/Tests/MobileEgressCoreTests/HTTP1CodecTests.swift",
             "ios/Tests/MobileEgressCoreTests/DirectProtocolTests.swift",
             "ios/Tests/MobileEgressCoreTests/DirectGoInteropTests.swift"
           ]

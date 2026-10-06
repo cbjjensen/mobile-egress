@@ -138,7 +138,7 @@ final class XcodeProjectStructureTests: XCTestCase {
             XCTAssertEqual(configuration["IPHONEOS_DEPLOYMENT_TARGET"], "17.0")
             XCTAssertEqual(configuration["SWIFT_VERSION"], "6.0")
             XCTAssertEqual(configuration["MARKETING_VERSION"], "2.0.0")
-            XCTAssertEqual(configuration["CURRENT_PROJECT_VERSION"], "4")
+            XCTAssertEqual(configuration["CURRENT_PROJECT_VERSION"], "6")
             XCTAssertEqual(configuration["MOBILE_EGRESS_PROVIDER_BUNDLE_IDENTIFIER"], "com.mobileegress.agent.tunnel")
             XCTAssertEqual(configuration["MOBILE_EGRESS_APP_GROUP_IDENTIFIER"], "group.com.mobileegress.agent")
             XCTAssertEqual(configuration["MOBILE_EGRESS_KEYCHAIN_GROUP_SUFFIX"], "com.mobileegress.agent.shared")
