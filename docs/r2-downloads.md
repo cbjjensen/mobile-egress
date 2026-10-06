@@ -22,7 +22,7 @@ Only after all selected public downloads verify does the publisher replace the c
 
 Create a local JSON plan with the **complete intended set of available platforms**. Every included platform needs its own verified frozen release. An absent platform remains unavailable; existing remote catalog entries are never inherited. This allows Windows/Mac and Android to use different compatible 2.x versions without pretending they came from the same source.
 
-For the existing Desktop-only `v2.0.0` release:
+For the published three-platform `v2.0.2` pilot:
 
 ```json
 {
@@ -30,15 +30,15 @@ For the existing Desktop-only `v2.0.0` release:
   "channel": "pilot",
   "releases": [
     {
-      "version": "2.0.0",
-      "sourceCommit": "d7cf65bf09738658343f44810e0663c37e494b2b",
-      "platforms": ["windows", "macos"]
+      "version": "2.0.2",
+      "sourceCommit": "464113dfa7e12ff496d10297d3836e80304d5f7b",
+      "platforms": ["windows", "macos", "android"]
     }
   ]
 }
 ```
 
-This plan intentionally has no Android download. Once a compatible signed Android release is frozen and published through the existing Android release workflow, add a second release entry with its actual version/source and `"platforms": ["android"]`. Do not reuse a historical APK or silently choose another version. Cross-platform interoperability and physical acceptance still require their existing gates; sharing a major version alone is not proof of acceptance.
+This plan explicitly includes all three platforms from one frozen source. A future independent platform release needs its own actual frozen version/source entry; do not reuse a historical APK or silently choose another version. Cross-platform interoperability and physical acceptance still require their existing gates; sharing a major version alone is not proof of acceptance.
 
 The output catalog has `schemaVersion: 1`, `channel: "pilot"`, and a `platforms` object keyed by `windows`, `macos`, or `android`. Each value contains `version`, `sourceCommit`, `url`, `sha256`, and `size`. The website/backend uses explicit configured download values from this verified output; normal product operation does not fetch this catalog. This is not an updater, a product API, or a mechanism to enable subscriptions or sales. iPhone distribution remains TestFlight.
 
@@ -84,3 +84,17 @@ node --test scripts/test-r2-downloads.mjs
 Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/remote source mismatch, different selected platform versions, local corruption, all-object conflicts, misleading matching metadata, interrupted uploads, conditional races, public hashes/sizes/headers, and catalog promotion. Live credentials, R2 writes, R2 conditional behavior, CDN responses, and installation acceptance are external prerequisites not established by these offline tests.
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
+
+## Published 2026-10-05 pilot
+
+The separately authorized [2.0.2 publication plan](superpowers/plans/2026-10-05-inevitable-mobile-relay-pilot-downloads.md) completed. The current [pilot catalog](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/downloads.json) contains these public downloads, mirrored exactly from the [signed GitHub prerelease](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.2):
+
+| Platform / download | Bytes | SHA-256 |
+|---|---:|---|
+| [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.2/InevitableMobileRelaySetup.exe) | 25,684,768 | `b7251b576bcbbee568266643e43724b8662d7aa2cafe10d62beb4ad68b7cbed2` |
+| [Apple Silicon Mac PKG](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.2/inevitable-mobile-relay-macos-2.0.2-arm64.pkg) | 13,767,947 | `1ca6ffe32f063e57dbb19f912d0931dc6823429959e7c17b4f63bd55883271e2` |
+| [Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.2/inevitable-mobile-relay-android-2.0.2.apk) | 11,864,996 | `2860fc5b9590366a5716b696515f4fd981be124851452394bcde7b8b23042952` |
+
+All artifacts use version 2.0.2 and source `464113dfa7e12ff496d10297d3836e80304d5f7b`; Android code is 26. The release gate passed 16 R2 tests plus wrapper checks. Actual publication verified GitHub digests, conditional R2 writes, public artifact bytes and download headers before promoting the catalog; independent public catalog readback also passed. Mac notarization/stapling and the existing Windows/Android signatures passed. Signed installation upgrades/repair and physical phone interoperability remain pilot acceptance gates.
+
+The website download environment variables remain deployment-controlled: set `MOBILE_EGRESS_WINDOWS_DOWNLOAD_URL`, `MOBILE_EGRESS_MACOS_DOWNLOAD_URL`, and `MOBILE_EGRESS_ANDROID_DOWNLOAD_URL` to the matching verified URLs during an authorized rollout. Publication does not deploy those settings, change access eligibility, open sales or promote stable. Historical releases and Order Tracker objects remain unchanged.
