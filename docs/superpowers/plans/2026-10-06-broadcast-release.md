@@ -10,8 +10,8 @@ The owner authorized deploying all pending changes to GitHub, R2, Inevitable, Ap
 - [x] Mirror exact frozen assets to existing R2 prefix and verify public bytes/headers before promoting the pilot catalog.
 - [x] Run native Apple checks, archive/export and validate/upload exact committed iPhone build. Verify signatures, capabilities and version in both bundles.
 - [x] Check automatic tester notifications for the exact new Apple build before external assignment/submission. Preserve existing groups/testers and verify internal availability versus external review status separately.
-- [ ] Deploy the committed Inevitable artwork with the three verified download URLs through the existing production workflow. Preserve eligibility, billing, gateway behavior and all other production configuration.
-- [ ] Record source revisions, build/release/deployment outcomes and remaining physical/Apple review gates in this plan and sibling requirements.
+- [x] Deploy the committed Inevitable artwork with the three verified download URLs through the existing production workflow. Preserve eligibility, billing, gateway behavior and all other production configuration.
+- [x] Record source revisions, build/release/deployment outcomes and remaining physical/Apple review gates in this plan and sibling requirements.
 
 ## Acceptance, risk and rollback
 
@@ -50,3 +50,13 @@ Verified internal testing in existing ZFNF Friends Internal and Mobile Egress ow
 All 238 projected production environment values matched the live host before changes. Only Windows/Mac/Android download URLs advanced from verified 2.0.2 to 2.0.3. Existing Apple release following remains enabled and retains approved build 7 until a compatible newer external release is approved. Website 107 focused tests passed. Source `04a40086af13f3e0e426ecd5a63f155b6356c86a` is pushed; [production workflow 37494987155](https://github.com/cbjjensen/inevitable-proxies/actions/runs/37494987155) is running CI, Terraform plan and runtime deployment, with gateway builds/rollouts and Terraform apply disabled. Final production verification follows.
 
 Private freeze/build/signing/upload evidence is retained under `G:/codex-build-cache/inevitable-mobile-relay-2.0.3/` and existing ignored release output paths. Physical signed Windows/Mac upgrade/repair and Android/iPhone pairing, traffic, camera, lifecycle/keep-awake acceptance remain unverified for this artwork release. No stable promotion is claimed.
+
+### Final production verification
+
+Production workflow **37494987155 succeeded** on 2026-10-06. CI passed the full workspace build, 201 backend suites / 2,466 tests (15 suites / 201 tests skipped under existing environment gates), Core gateway tests and deployment contracts. Terraform plan, all selected image builds and runtime deployment passed. No Terraform apply or gateway build/rollout ran.
+
+At 16:31 UTC, independent read-only SSM verification `3ade06ae-f522-40a8-a921-633031e15fe2` matched all 238 deployed environment values to the intended candidate with no missing, extra or mismatched keys. Backend, UI and outbox containers are running the exact `04a40086af13f3e0e426ecd5a63f155b6356c86a` images; backend container health is healthy. Public `/healthz` and `/readyz` both return HTTP 200/ok.
+
+The actual authenticated production dashboard displays the Broadcast artwork in all three intended locations, with loaded 256px images, no browser console errors, and Windows/Mac/Android links targeting 2.0.3. Public artwork SHA-256 matches the selected source `59959fcaf8714f3c8004292f8a940c041563d4d32fb0eec61c95815008d76395`. Existing account access and the invitation form remain present. No purchase, invitation or Client-management action was submitted during verification. The temporary verification tab was closed.
+
+Publication and deployment are complete within the authorized pilot scope. Apple external review for build 8 and physical device/installer acceptance remain the explicit open gates; internal TestFlight and all three public pilot downloads are available. No signing prerequisite remains blocked.
