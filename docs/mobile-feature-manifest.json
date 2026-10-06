@@ -486,7 +486,9 @@
             "android/app/src/main/res/values/strings.xml",
             "android/app/src/main/AndroidManifest.xml",
             "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreenPresentation.kt",
-            "android/app/src/main/res/drawable-xxxhdpi/ic_mobile_egress_foreground.png"
+            "android/app/src/main/res/drawable-xxxhdpi/ic_mobile_egress_foreground.png",
+            "android/app/src/main/res/mipmap-anydpi-v33/ic_mobile_egress.xml",
+            "scripts/generate-brand-assets.ps1"
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/branding/AgentBrandingTest.kt",
@@ -497,7 +499,7 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Both platforms display Inevitable Mobile Relay in the app, system labels, permission/help text and safe diagnostics. Apple uses native bundle display names and the retained AppIcon/header artwork. Historical ZFNF asset paths remain unchanged; legacy Mobile Egress VPN names identify only the retired profile in recovery guidance. Package/bundle IDs, secure storage, signers and the approved lifecycle exception are preserved.",
+          "nativeEquivalenceNotes": "Both platforms display Inevitable Mobile Relay and the owner-selected original Broadcast mark: white radio waves above six colored stones. Android uses colored launcher/dashboard artwork plus monochrome notification/themed-icon masks; Apple uses an opaque RGB AppIcon and transparent colored header. Historical asset names remain stable. Legacy Mobile Egress VPN names identify only the retired profile in recovery guidance. Package/bundle IDs, secure storage, signers and the approved lifecycle exception are preserved.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift",
             "ios/MobileEgressAgent/Info.plist",
@@ -506,7 +508,9 @@
             "ios/MobileEgressAgent/AgentClientSheets.swift",
             "ios/MobileEgressAgent/AgentViewModel.swift",
             "ios/MobileEgressTunnelExtension/PacketTunnelProvider.swift",
-            "ios/Assets/AppAssets.xcassets/ZFNFHeader.imageset/ZFNFHeader.png"
+            "ios/Assets/AppAssets.xcassets/ZFNFHeader.imageset/ZFNFHeader.png",
+            "ios/Assets/AppAssets.xcassets/AppIcon.appiconset/MobileEgressAppIcon.png",
+            "scripts/generate-brand-assets.ps1"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",

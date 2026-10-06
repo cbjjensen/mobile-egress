@@ -10,6 +10,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 }
 $repositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 $sourcePath = Join-Path $repositoryRoot 'assets\branding\zfnf-logo-source.png'
+$mobileSourcePath = Join-Path $repositoryRoot 'assets\branding\inevitable-mobile-relay-logo-source.png'
 
 Add-Type -AssemblyName System.Drawing
 
@@ -28,7 +29,8 @@ function New-LogoBitmap {
         [Parameter(Mandatory)][int]$Size,
         [Parameter(Mandatory)][bool]$Transparent,
         [double]$Scale = 1.0,
-        [bool]$OpaqueRGB = $false
+        [bool]$OpaqueRGB = $false,
+        [bool]$PreserveColor = $false
     )
 
     $pixelFormat = if ($OpaqueRGB) {
@@ -62,6 +64,10 @@ function New-LogoBitmap {
         $graphics.Dispose()
     }
 
+    if ($PreserveColor -and -not $Transparent) {
+        return $bitmap
+    }
+
     $rectangle = [System.Drawing.Rectangle]::new(0, 0, $Size, $Size)
     $data = $bitmap.LockBits(
         $rectangle,
@@ -74,6 +80,21 @@ function New-LogoBitmap {
         $bytesPerPixel = if ($OpaqueRGB) { 3 } else { 4 }
         for ($index = 0; $index -le $bytes.Length - $bytesPerPixel; $index += $bytesPerPixel) {
             $luminance = [math]::Max($bytes[$index], [math]::Max($bytes[$index + 1], $bytes[$index + 2]))
+            if ($PreserveColor) {
+                # Unmatte black while preserving the original RGB appearance on the app's black background.
+                if ($luminance -le 8) {
+                    $bytes[$index] = 0
+                    $bytes[$index + 1] = 0
+                    $bytes[$index + 2] = 0
+                    $bytes[$index + 3] = 0
+                } else {
+                    for ($channel = 0; $channel -lt 3; $channel++) {
+                        $bytes[$index + $channel] = [byte][math]::Round($bytes[$index + $channel] * 255.0 / $luminance)
+                    }
+                    $bytes[$index + 3] = $luminance
+                }
+                continue
+            }
             $coverage = if ($luminance -le 24) {
                 0
             } elseif ($luminance -ge 180) {
@@ -113,11 +134,12 @@ function Save-LogoPng {
         [Parameter(Mandatory)][int]$Size,
         [Parameter(Mandatory)][bool]$Transparent,
         [double]$Scale = 1.0,
-        [bool]$OpaqueRGB = $false
+        [bool]$OpaqueRGB = $false,
+        [bool]$PreserveColor = $false
     )
 
     New-DirectoryForFile -Path $Path
-    $bitmap = New-LogoBitmap -Source $Source -Size $Size -Transparent $Transparent -Scale $Scale -OpaqueRGB $OpaqueRGB
+    $bitmap = New-LogoBitmap -Source $Source -Size $Size -Transparent $Transparent -Scale $Scale -OpaqueRGB $OpaqueRGB -PreserveColor $PreserveColor
     try {
         $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
     } finally {
@@ -134,7 +156,7 @@ function Save-LogoIco {
     $sizes = @(16, 20, 24, 32, 40, 48, 64, 128, 256)
     $frames = [System.Collections.Generic.List[byte[]]]::new()
     foreach ($size in $sizes) {
-        $bitmap = New-LogoBitmap -Source $Source -Size $size -Transparent $false
+        $bitmap = New-LogoBitmap -Source $Source -Size $size -Transparent $false -PreserveColor $true
         $stream = [System.IO.MemoryStream]::new()
         try {
             $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -205,7 +227,7 @@ function Save-LogoIcns {
     )
     $frames = @()
     foreach ($representation in $representations) {
-        $bitmap = New-LogoBitmap -Source $Source -Size $representation.Size -Transparent $false
+        $bitmap = New-LogoBitmap -Source $Source -Size $representation.Size -Transparent $false -PreserveColor $true
         $stream = [System.IO.MemoryStream]::new()
         try {
             $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -244,6 +266,9 @@ function Save-LogoIcns {
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
     throw "Canonical logo source is missing: $sourcePath"
 }
+if (-not (Test-Path -LiteralPath $mobileSourcePath -PathType Leaf)) {
+    throw "Canonical mobile logo source is missing: $mobileSourcePath"
+}
 
 $outputRelativePaths = @(
     'assets\branding\zfnf-logo.png',
@@ -251,7 +276,12 @@ $outputRelativePaths = @(
     'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_notification.png',
     'ios\Assets\AppAssets.xcassets\AppIcon.appiconset\MobileEgressAppIcon.png',
     'ios\Assets\AppAssets.xcassets\ZFNFHeader.imageset\ZFNFHeader.png',
-    'windows-client\macos\appicon.icns'
+    'windows-client\macos\appicon.icns',
+    'android\app\src\main\res\drawable-xxxhdpi\ic_mobile_egress_monochrome.png',
+    'windows-client\internal\clientapp\assets\brand-logo.png',
+    'assets\branding\inevitable-mobile-relay.ico',
+    'windows-client\cmd\mobile-egress-client-app\brand_windows_amd64.syso',
+    'windows-client\cmd\mobile-egress-setup\brand_windows_amd64.syso'
 )
 $generationRoot = $repositoryRoot
 $checkRoot = $null
@@ -263,14 +293,38 @@ if ($Check) {
 $source = [System.Drawing.Image]::FromFile($sourcePath)
 try {
     Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[0]) -Size 1024 -Transparent $false
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[1]) -Size 432 -Transparent $true -Scale 0.88
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[2]) -Size 96 -Transparent $true -Scale 0.9
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[3]) -Size 1024 -Transparent $false -Scale 0.84 -OpaqueRGB $true
-    Save-LogoPng -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[4]) -Size 256 -Transparent $true -Scale 0.9
-    Save-LogoIcns -Source $source -Path (Join-Path $generationRoot $outputRelativePaths[5])
 } finally {
     $source.Dispose()
 }
+
+$mobileSource = [System.Drawing.Image]::FromFile($mobileSourcePath)
+try {
+    Save-LogoPng -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[1]) -Size 432 -Transparent $true -Scale 0.74 -PreserveColor $true
+    Save-LogoPng -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[2]) -Size 96 -Transparent $true -Scale 0.9
+    Save-LogoPng -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[3]) -Size 1024 -Transparent $false -OpaqueRGB $true -PreserveColor $true
+    Save-LogoPng -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[4]) -Size 256 -Transparent $true -Scale 0.9 -PreserveColor $true
+    Save-LogoPng -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[6]) -Size 432 -Transparent $true -Scale 0.74
+    Save-LogoPng -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[7]) -Size 256 -Transparent $true -PreserveColor $true
+    Save-LogoIco -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[8])
+    Save-LogoIcns -Source $mobileSource -Path (Join-Path $generationRoot $outputRelativePaths[5])
+} finally {
+    $mobileSource.Dispose()
+}
+
+# Track the deterministic resources so ordinary Go builds and release builds use
+# identical artwork without changing the signing or installer assembly process.
+$resourcePath = Join-Path $generationRoot $outputRelativePaths[9]
+New-DirectoryForFile -Path $resourcePath
+Push-Location (Join-Path $PSScriptRoot '..\tools\brand-resource')
+try {
+    & go run . -icon (Join-Path $generationRoot $outputRelativePaths[8]) -output $resourcePath
+    if ($LASTEXITCODE -ne 0) { throw 'Windows branding resource generation failed.' }
+} finally {
+    Pop-Location
+}
+$setupResourcePath = Join-Path $generationRoot $outputRelativePaths[10]
+New-DirectoryForFile -Path $setupResourcePath
+Copy-Item -LiteralPath $resourcePath -Destination $setupResourcePath -Force
 
 if ($Check) {
     try {
@@ -301,4 +355,4 @@ if ($Check) {
     exit 0
 }
 
-Write-Host 'Generated Android, Windows, iOS, and macOS branding assets from assets\branding\zfnf-logo-source.png.'
+Write-Host 'Generated Broadcast artwork for mobile and desktop apps; historical ZFNF source is preserved.'

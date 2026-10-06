@@ -3,11 +3,13 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Inevitable Mobile Relay</title>
+<link rel="icon" type="image/png" href="brand-logo.png">
 <style>
 :root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#e8eef7;background:#101823;color-scheme:dark}
 html{scrollbar-gutter:stable}
 *{box-sizing:border-box}body{margin:0;padding:28px;line-height:1.55}main{max-width:820px;margin:auto}
 h1{font-size:27px;letter-spacing:-.6px;margin:0}h2{font-size:19px;margin:0 0 10px}p{color:#aebed0;margin:8px 0 18px}
+.brandHeader{display:flex;align-items:center;gap:14px}.brandHeader img{width:60px;height:60px;flex:none;object-fit:contain}.brandHeader>div{min-width:0}
 h2[tabindex="-1"]:focus{outline:none}
 .eyebrow{color:#6ce5ca;font-size:11px;font-weight:650;letter-spacing:1.5px;text-transform:uppercase}
 .card{background:#192535;border:1px solid #304157;border-radius:14px;padding:22px;margin:18px 0}
@@ -43,8 +45,13 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 </style>
 </head>
 <body><main>
+<header class="brandHeader">
+<img src="brand-logo.png" width="60" height="60" alt="">
+<div>
 <div class="eyebrow">Private cellular connection</div>
 <h1>Inevitable Mobile Relay</h1>
+</div>
+</header>
 <p>Use your phone’s mobile data in the apps you choose on this computer.</p>
 
 <section id="servicePanel" class="card" aria-labelledby="serviceHeading">
