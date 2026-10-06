@@ -20,6 +20,12 @@ The owner also requested automatic updates for existing enrolled testers and mer
 
 Implemented the tracked `scripts/set-ios-external-auto-notify.ps1` gate and its Python helper. The default verifies without writes; authorized `-Apply` changes only the exact build's notification flag before beta submission, with readback. It does not mutate testers, groups, review submissions or public links. Eight offline regression tests and independent review passed; the Mac-backed wrapper verified current build 7 as `IN_BETA_TESTING`, notifications enabled, no change required and no mutation performed. Manifest validation and PowerShell syntax checks passed. The iOS guide and build-server release procedure require this gate for future external releases.
 
+## Production invitation verification (2026-10-06)
+
+The owner-started [Inevitable production release 37478130954](https://github.com/cbjjensen/inevitable-proxies/actions/runs/37478130954), main source `ef4c852a`, succeeded after the previous GitHub run stalled. Read-only production verification at 14:39 UTC confirmed the exact backend/outbox image SHA, both Mobile migrations, enabled invitation automation and release following, approved unexpired build 2.0.0 (7), a fresh healthy worker and closed sales. The real authenticated website displays the iPhone invitation form without the unavailable notice, alongside the verified 2.0.2 R2 downloads. The sibling enablement implementation summary records the workflow and SSM evidence.
+
+No test invitation or purchase was submitted; actual customer email receipt and physical-device acceptance remain separate checks. Existing tester membership and automatic notification settings remain intact. Terraform apply and Core/Mobile gateway deployments were skipped. The earlier GitHub hold's internal cause remains unconfirmed; no account-plan or protection changes were made by this verification. Native lifecycle behavior and manifest evidence are unchanged. The completed release monitor is stopped.
+
 ## Original approved behavior (2026-10-05)
 
 - One account subscription, monthly/yearly USD. Admin prices start unset; sales stay closed. No new seats, traffic reporting, data quota, proxy allocation or changes to commercial proxy accounting.
