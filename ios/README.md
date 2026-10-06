@@ -12,6 +12,12 @@ Android uses a foreground service; iOS serves only in the active foreground. Thi
 
 ## Pairing and maintenance
 
+Choose **Add Client → Scan QR code** to pair a computer. Pasting a code and importing a file are under **Other options** in that sheet. After pairing, return to the dashboard and tap **Start sharing**. The dashboard shows **Connected** only after an authenticated connection is established; starting sharing can show **Connecting** or **Needs attention** first.
+
+The iPhone dashboard uses Android's black background, dark cards, mint actions and ZFNF branding with a simpler order: connection status, Start/Stop, iPhone availability, current-session activity, Clients and secondary tools. Activity totals come from the current runtime sessions and reset when those sessions end; they are not saved usage history or billing. Open a Client's **Details** to enable/disable it, retry pairing or connection, view connection information, import an update or confirm removal. Errors stay with the affected Client and remain on the dashboard after dismissing a sheet. **Change cellular IP** expands to show rotation guidance; **More options** contains safe status copying and connection-update import.
+
+In-app sheets keep the same sharing runtime. Opening a sheet is different from locking the phone or switching apps: those inactive transitions still pause sharing. Stop remains available during connection retries. Text scales with Dynamic Type, cards expand, controls have at least 44-point targets, status includes readable labels and increased contrast strengthens card borders. No custom motion is required to understand or operate the screen.
+
 Create an invitation in the workload Client app and scan or paste it into the phone. Invitations have a ten-minute initial redemption window. The phone saves its per-Client Secure Enclave key and CSR before sending enrollment, then saves the issued identity before acknowledgement. Interrupted enrollment and lost acknowledgement remain visible as pending; **Retry pairing** reuses the same key. Pending and disabled records occupy one of the ten slots.
 
 Updated builds accept the Client's smaller compact QRs and older plain setup codes, restoring identical bytes before normal trust validation. Older iOS builds need the complete text setup code instead. Existing pairings remain unchanged. See the [compact QR repair](../docs/superpowers/plans/2026-10-05-compact-pairing-qr.md); native parser/build checks do not replace signed physical iPhone acceptance.
@@ -93,6 +99,7 @@ Unit tests and unsigned builds do not establish signed-device behavior. Before r
 
 - Ten direct Clients concurrently, an eleventh rejected, cellular-only peer and target sockets with Wi-Fi present, and HTTP/CONNECT/SOCKS exact traffic.
 - Default-on keep-awake in the real app, preference off, Stop, retries, inactive/background/lock transitions, app switching, relaunch, thermal/battery behavior, and no brightness change.
+- Dashboard and Client/Add Client sheets preserve active sharing, one-shot scan/paste/file callbacks, contextual errors, confirmed removal, rotation recovery and safe status copies; VoiceOver and the largest Dynamic Type sizes remain usable on a physical phone.
 - Upgrading the old signed app with an active on-demand profile: only the owned profile is stopped/disabled/removed, failed cleanup blocks Start, and the compatibility extension never resumes old serving.
 - Entitled Keychain/Secure Enclave availability, first-unlock behavior, independent keys, interrupted pairing, lost ACK, rotation, removal/revocation, certificate renewal, and signed endpoint updates after several missed generations.
 - Slow Client/target pressure, fair progress across peers, bounded memory including old native callbacks, repeated cancel/reconnect, and exact final bytes/EOF.

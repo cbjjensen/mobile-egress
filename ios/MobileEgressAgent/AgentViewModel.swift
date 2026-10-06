@@ -10,6 +10,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     @Published var lifecycle = DirectSharingLifecycle()
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var errorClientID: String?
     @Published var rotationState: CellularIPRotationState = .idle
     @Published var cellularAvailability: DirectCellularAvailability = .unknown
     @Published var isScannerPresented = false
@@ -21,6 +22,27 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     private var lifecycleEpoch: UInt64 = 0
     private var prepared = false
     private let stopLatchKey = "direct-sharing-explicit-stop"
+
+    var presentation: DirectDashboardPresentation {
+        let snapshots = clients.map { client in
+            let peer = statuses.first { $0.clientID == client.id }
+            var snapshot = DirectDashboardClient(id: client.id, name: client.displayName, transport: client.transport)
+            snapshot.enabled = client.enabled; snapshot.paired = client.isPaired
+            snapshot.needsAcknowledgement = client.needsAcknowledgement; snapshot.removing = client.removing
+            if let recovery = peer?.recovery { snapshot.connection = .recovering(recovery) }
+            else if peer?.state == "Connected" { snapshot.connection = .authenticated }
+            else if peer != nil { snapshot.connection = .connecting }
+            snapshot.streams = peer?.streams ?? 0
+            snapshot.uploaded = peer?.uploaded ?? 0; snapshot.downloaded = peer?.downloaded ?? 0
+            if errorClientID == client.id { snapshot.actionError = errorMessage }
+            return snapshot
+        }
+        return .init(clients: snapshots, lifecycle: lifecycle, cellular: cellularAvailability,
+                     busy: isBusy, runtimeAvailable: dependencies != nil)
+    }
+    func reportImportError(_ message: String, clientID: String? = nil) {
+        errorClientID = clientID; errorMessage = message
+    }
 
     init() {
         do {
@@ -90,10 +112,12 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
             guard lifecycleEpoch == epoch, !Task.isCancelled else { return }
             lifecycle.migrationReady = false; lifecycle.terminalFailure(); updateIdleTimer()
             try? await persistPreferences()
+            errorClientID = nil
             errorMessage = "Remove the old Mobile Egress VPN in Settings → General → VPN & Device Management, then reopen this app. Other VPNs should remain unchanged."
         }
     }
     func toggleSharing() {
+        errorClientID = nil
         if lifecycle.startIntent {
             // Stop stays fail-closed across a relaunch even if protected registry
             // storage becomes unavailable before the preference commit.
@@ -124,24 +148,34 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
         }
     }
     func setKeepAwake(_ enabled: Bool) {
+        errorClientID = nil
         lifecycle.keepAwake = enabled; updateIdleTimer()
         Task { do { try await persistPreferences() } catch { errorMessage = "The screen-awake preference could not be saved." } }
     }
-    func acceptScannedCode(_ encoded: String) {
+    func acceptScannedCode(_ encoded: String, destination: ClientCodeImportDestination = .addClient, completion: @escaping (Bool) -> Void = { _ in }) {
         isScannerPresented = false
-        guard !isBusy, lifecycle.sceneActive else { return }
+        guard !isBusy, lifecycle.sceneActive, dependencies != nil else { completion(false); return }
+        // Claim synchronously: repeated scan/import callbacks must not enqueue
+        // multiple operations before the MainActor task begins.
+        isBusy = true; errorMessage = nil; errorClientID = destination.clientID
         operation = Task { [weak self] in
-            guard let self, let dependencies else { return }
-            isBusy = true; errorMessage = nil; defer { isBusy = false }
+            guard let self else { return }
+            var succeeded = false
+            defer { isBusy = false; completion(succeeded) }
+            guard let dependencies else { return }
             do {
                 let normalized = try CompactQRInput.normalize(encoded)
-                if (try? DirectInvitation.parse(normalized)) != nil {
+                switch try destination.route(isInvitation: (try? DirectInvitation.parse(normalized)) != nil) {
+                case .pair:
                     let id = try await dependencies.repository.add(normalized)
                     await dependencies.supervisor.clearRemovalSuppression(id)
                     try await dependencies.repository.recover(id)
-                } else { try await dependencies.repository.importUpdate(normalized) }
+                case let .update(expectedClientID):
+                    try await dependencies.repository.importUpdate(normalized, expectedClientID: expectedClientID)
+                }
                 try Task.checkCancellation()
                 await refresh()
+                succeeded = true
             } catch is CancellationError { } catch DirectAgentError.removalIntentPersistence {
                 errorMessage = "Local storage could not save the pairing change. Free storage and retry; this Client has not been re-enabled."
                 await refresh()
@@ -149,13 +183,16 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
                 errorMessage = "The Client invitation expired or was canceled. Generate a new invitation on the workload Client and scan it again."
                 await refresh()
             } catch {
-                errorMessage = "Pairing or update could not finish. Use a current Client code, then retry; pending pairing is saved."
+                errorMessage = destination == .addClient
+                    ? "Pairing or update could not finish. Use a current Client code, then retry; pending pairing is saved."
+                    : "This update couldn't be applied. Use a current connection-update code from the selected computer's Client app."
                 await refresh()
             }
         }
     }
     func retry(_ client: DirectClientRecord) {
         guard !isBusy, lifecycle.sceneActive else { return }
+        errorMessage = nil; errorClientID = client.id
         operation = Task { [weak self] in
             guard let self, let dependencies else { return }
             isBusy = true; defer { isBusy = false }
@@ -172,12 +209,14 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
         }
     }
     func setEnabled(_ client: DirectClientRecord, _ enabled: Bool) {
+        errorMessage = nil; errorClientID = client.id
         Task {
             do { try await dependencies?.repository.setEnabled(client.id, enabled: enabled); await refresh() }
             catch { errorMessage = "Client preference could not be saved." }
         }
     }
     func remove(_ client: DirectClientRecord) {
+        errorMessage = nil; errorClientID = client.id
         Task {
             await dependencies?.supervisor.suppressPeerForRemoval(client.id)
             do {
@@ -201,7 +240,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     }
     private func updateIdleTimer() { UIApplication.shared.isIdleTimerDisabled = lifecycle.idleTimerDisabled }
     func safeStatusForCopy() -> String {
-        "Mobile Egress\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(statuses.filter { $0.state == "Connected" }.count)\nStreams: \(activeStreamCount)\nCellular only; no automatic fallback"
+        "Mobile Egress\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(presentation.connectedCount)\nStreams: \(presentation.streams)\nCellular only; no automatic fallback"
     }
     func requestRotation() { Task { await rotation?.start() } }
     func confirmRotation(_ accepted: Bool) { Task { await rotation?.confirm(proceed: accepted) } }

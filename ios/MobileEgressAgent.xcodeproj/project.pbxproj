@@ -22,6 +22,10 @@
 		C00000000000000000000014 /* MobileEgressCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000003 /* MobileEgressCore */; };
 		C00000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* PrivacyInfo.xcprivacy */; };
 		C00000000000000000000016 /* PrivacyInfo.xcprivacy in Extension Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* PrivacyInfo.xcprivacy */; };
+		C00000000000000000000040 /* AgentDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000040 /* AgentDesign.swift */; };
+		C00000000000000000000041 /* AgentDashboardContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000041 /* AgentDashboardContent.swift */; };
+		C00000000000000000000042 /* AgentClientSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000042 /* AgentClientSheets.swift */; };
+		C00000000000000000000043 /* AgentVisualFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000043 /* AgentVisualFixtures.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +73,10 @@
 		B00000000000000000000031 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		B00000000000000000000032 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		B00000000000000000000033 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		B00000000000000000000040 /* AgentDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDesign.swift; sourceTree = "<group>"; };
+		B00000000000000000000041 /* AgentDashboardContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDashboardContent.swift; sourceTree = "<group>"; };
+		B00000000000000000000042 /* AgentClientSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentClientSheets.swift; sourceTree = "<group>"; };
+		B00000000000000000000043 /* AgentVisualFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVisualFixtures.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +114,10 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000010 /* AgentDashboardView.swift */,
+				B00000000000000000000043 /* AgentVisualFixtures.swift */,
+				B00000000000000000000042 /* AgentClientSheets.swift */,
+				B00000000000000000000041 /* AgentDashboardContent.swift */,
+				B00000000000000000000040 /* AgentDesign.swift */,
 				B00000000000000000000011 /* AgentViewModel.swift */,
 				B00000000000000000000012 /* MobileEgressAgentApp.swift */,
 				B00000000000000000000013 /* MobileEgressDependencies.swift */,
@@ -270,6 +282,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				C00000000000000000000001 /* AgentDashboardView.swift in Sources */,
+				C00000000000000000000043 /* AgentVisualFixtures.swift in Sources */,
+				C00000000000000000000042 /* AgentClientSheets.swift in Sources */,
+				C00000000000000000000041 /* AgentDashboardContent.swift in Sources */,
+				C00000000000000000000040 /* AgentDesign.swift in Sources */,
 				C00000000000000000000002 /* AgentViewModel.swift in Sources */,
 				C00000000000000000000003 /* MobileEgressAgentApp.swift in Sources */,
 				C00000000000000000000004 /* MobileEgressDependencies.swift in Sources */,

@@ -4,6 +4,23 @@ import XCTest
 @testable import MobileEgressCore
 
 final class DirectRetainedEndpointTests: XCTestCase, @unchecked Sendable {
+    func testDetailsImportCannotUpdateAnotherSavedClient() async throws {
+        let fixture = try fixture()
+        let update = try XCTUnwrap(fixture.retainedUpdates.first)
+        let original = try record(fixture: fixture, endpoint: update.endpoint, generation: 1, pending: false)
+        let vault = RetainedEndpointVault(original)
+        let repository = try DirectClientRepository(store: vault, keys: RetainedEndpointKeys(), control: RetainedEndpointControl(vault: vault))
+        let route = try ClientCodeImportDestination.connectionUpdate(clientID: "another-client").route(isInvitation: false)
+        guard case let .update(expectedID) = route else { return XCTFail("Expected an update") }
+        do {
+            try await repository.importUpdate(update.update, expectedClientID: expectedID)
+            XCTFail("An update for a different Client must not succeed")
+        } catch { XCTAssertEqual(error as? DirectAgentError, .staleUpdate) }
+        XCTAssertEqual(try vault.load().clients, [original])
+        // The same signed update is valid when imported from its own Client.
+        try await repository.importUpdate(update.update, expectedClientID: original.id)
+        XCTAssertEqual(try vault.load().clients[0].generation, update.generation)
+    }
     func testRetainedIdentityReachesNativeKeyLookupAndStagingWithoutWeakeningIdentityValidation() throws {
         let fixture = try fixture()
         let store = try DirectKeychainStore(accessGroup: "test.mobile-egress.absent.\(UUID().uuidString)")

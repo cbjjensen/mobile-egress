@@ -349,14 +349,17 @@
             "ios/Sources/MobileEgressCore/Direct/CompactQRInput.swift",
             "ios/MobileEgressAgent/AgentDashboardView.swift",
             "ios/MobileEgressAgent/QRScannerView.swift",
-            "ios/MobileEgressAgent/AgentViewModel.swift"
+            "ios/MobileEgressAgent/AgentViewModel.swift",
+            "ios/MobileEgressAgent/AgentClientSheets.swift",
+            "ios/Sources/MobileEgressCore/Presentation/DirectDashboardPresentation.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/QRScannerSessionTests.swift",
             "ios/Tests/MobileEgressCoreTests/CompactQRInputTests.swift",
             "ios/Tests/MobileEgressCoreTests/Fixtures/compact-qr-v1.json",
             "ios/Tests/MobileEgressCoreTests/PairingValidationTests.swift",
-            "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift"
+            "ios/Tests/MobileEgressCoreTests/MigrationValidationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectDashboardPresentationTests.swift"
           ]
         }
       }
@@ -389,13 +392,16 @@
             "ios/MobileEgressAgent/AgentViewModel.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectPeerRecovery.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
-            "ios/Sources/MobileEgressCore/Direct/DirectForegroundStatusHost.swift"
+            "ios/Sources/MobileEgressCore/Direct/DirectForegroundStatusHost.swift",
+            "ios/Sources/MobileEgressCore/Presentation/DirectDashboardPresentation.swift",
+            "ios/MobileEgressAgent/AgentDashboardContent.swift"
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift",
             "ios/Tests/MobileEgressCoreTests/DirectPeerRecoveryTests.swift",
             "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
-            "ios/Tests/MobileEgressCoreTests/DirectForegroundStatusTests.swift"
+            "ios/Tests/MobileEgressCoreTests/DirectForegroundStatusTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectDashboardPresentationTests.swift"
           ]
         }
       }
@@ -452,13 +458,17 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Uses a SwiftUI NavigationStack and Apple accessibility APIs instead of Jetpack Compose while preserving the true-black OLED hierarchy, finite status presentation, native confirmations, Dynamic Type, VoiceOver, reduced-motion behavior, and 44-point actions.",
+          "nativeEquivalenceNotes": "The live multi-Client SwiftUI dashboard uses Android OLED colors, ZFNF branding, scalable typography, cards, badges and 44-point minimum controls in the approved simpler layout. Its direct-runtime presenter derives actual authenticated status and current-session activity; sheets retain one scene-owned runtime. Dynamic Type, VoiceOver labels and increased-contrast borders are supported; physical acceptance remains a separate gate.",
           "sourceEvidence": [
             "ios/MobileEgressAgent/AgentDashboardView.swift",
-            "ios/Sources/MobileEgressCore/Presentation/AgentDashboardPresentation.swift"
+            "ios/MobileEgressAgent/AgentDashboardContent.swift",
+            "ios/MobileEgressAgent/AgentDesign.swift",
+            "ios/MobileEgressAgent/AgentClientSheets.swift",
+            "ios/MobileEgressAgent/AgentViewModel.swift",
+            "ios/Sources/MobileEgressCore/Presentation/DirectDashboardPresentation.swift"
           ],
           "testEvidence": [
-            "ios/Tests/MobileEgressCoreTests/AgentDashboardPresentationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectDashboardPresentationTests.swift",
             "ios/Tests/MobileEgressCoreTests/XcodeProjectStructureTests.swift"
           ]
         }
