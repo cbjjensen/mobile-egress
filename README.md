@@ -8,7 +8,7 @@ Inevitable Mobile Relay routes traffic from proxy-compatible applications throug
 
 One product, two companion apps: **Inevitable Mobile Relay** runs on your computer or server, and the **Inevitable Mobile Relay phone app** supplies the cellular connection. You provide the computer, phone, and mobile data plan.
 
-> **Version 2.0 is in pilot validation.** Signed Windows and Mac installers are available in the [2.0.0 prerelease](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.0). Full signed-installation and physical-device acceptance, including iPhone traffic and lifecycle checks, remains incomplete. Published 1.x builds use the previous architecture and cannot be used with this setup.
+> **Version 2.x is in pilot validation.** Signed Windows, Mac and Android downloads are available in the [2.0.3 prerelease](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.3) and through the Inevitable Mobile Relay dashboard. Full signed-installation and physical-device acceptance, including iPhone traffic and lifecycle checks, remains incomplete. Published 1.x builds use the previous architecture and cannot be used with this setup.
 
 ## What you can do
 
@@ -101,7 +101,7 @@ Subscription support offers monthly or yearly billing for one account, covering 
 
 **The iPhone TestFlight pilot is free and requires approval.** Purchasing a subscription does not enroll you. Approved pilot accounts can save a TestFlight invitation email with consent to share it with Apple; no Apple password is requested. Apple review, build expiry and tester capacity can delay availability. The website distinguishes a saved request from an invitation or a build ready to install. Production iPhone distribution will use the approved App Store link.
 
-The [2.0.0 pilot release](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.0) provides the signed **Windows Client installer** (`MobileEgressClientSetup.exe`) and signed/notarized **Apple Silicon Mac Client PKG**. Pair them with a compatible 2.x phone build. iPhone builds are distributed through TestFlight invitations; no compatible Android APK is published in this installer release. The pilot-validation notice above remains in effect; historical 1.x downloads are not substitutes.
+The [2.0.3 pilot release](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.3) provides the signed **Windows Client installer** (`InevitableMobileRelaySetup.exe`), signed/notarized **Apple Silicon Mac Client PKG**, and signed **Android APK**. The [Inevitable Mobile Relay dashboard](https://inevitableproxies.com/dashboard/mobile-egress) links to the same verified downloads on R2. iPhone builds use TestFlight: 2.0.3 (8) is available internally and awaiting external beta review; approved 2.0.0 (7) remains compatible for external testers. Existing 2.x pairings can be retained when updating. The pilot-validation notice above remains in effect; historical 1.x downloads are not substitutes.
 
 Publishing details and integrity checks are documented in the [R2 download guide](docs/r2-downloads.md). Subscription and invitation source changes do not themselves open sales, enable invitations or promote pilot downloads to stable.
 
