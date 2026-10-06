@@ -4,6 +4,23 @@ set -eu
 # Installation on other volumes cannot register a running system daemon.
 [ "${3:-/}" = / ] || exit 1
 STATE='/Library/Application Support/MobileEgressClient'
+APP='/Applications/Inevitable Mobile Relay.app'
+LEGACY_APP='/Applications/ZFNF Mobile Egress Client.app'
+# The publisher Team ID is bound into the private scripts by release packaging.
+# Checking a filename or Info.plist alone could overwrite an unrelated app.
+verify_gui() {
+    [ -d "$1" ] && [ ! -L "$1" ] || return 1
+    [ -d "$1/Contents" ] && [ ! -L "$1/Contents" ] || return 1
+    [ -f "$1/Contents/Info.plist" ] && [ ! -L "$1/Contents/Info.plist" ] || return 1
+    [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist")" = com.zfnf.mobile-egress.client.app ] || return 1
+    [ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$1/Contents/Info.plist")" = mobile-egress-client-app ] || return 1
+    /usr/bin/codesign --verify --deep --strict -R='anchor apple generic and identifier "com.zfnf.mobile-egress.client.app" and certificate leaf[subject.OU] = "@@TEAM_ID@@"' "$1"
+}
+for bundle in "$APP" "$LEGACY_APP"; do
+    if [ -e "$bundle" ] || [ -L "$bundle" ]; then
+        verify_gui "$bundle" || { printf 'An unrecognized application occupies %s. Preserve it and resolve the conflict before retrying Inevitable Mobile Relay setup.\n' "$bundle" >&2; exit 1; }
+    fi
+done
 if [ -e "$STATE" ]; then
     [ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 1
     [ "$(/usr/bin/stat -f %u "$STATE")" = 0 ] || exit 1

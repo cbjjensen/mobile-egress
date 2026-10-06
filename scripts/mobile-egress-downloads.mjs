@@ -39,12 +39,20 @@ function checkVersion(version) {
 
 function definition(version, platform) {
   checkVersion(version);
-  if (platform === 'windows') return { name: 'MobileEgressClientSetup.exe',
-    path: `windows-client/build/release/mobile-egress-client-windows-${version}/MobileEgressClientSetup.exe`, contentType: 'application/octet-stream' };
-  if (platform === 'macos') return { name: `mobile-egress-client-macos-${version}-arm64.pkg`,
-    path: `windows-client/build/release/mobile-egress-client-macos-${version}-arm64.pkg`, contentType: 'application/octet-stream' };
-  if (platform === 'android') return { name: `zfnf-mobile-egress-android-${version}.apk`,
-    path: `android/app/build/outputs/apk/release/zfnf-mobile-egress-android-${version}.apk`, contentType: 'application/vnd.android.package-archive' };
+  const [, minor, patch] = version.split('.').map(Number);
+  const branded = minor > 0 || patch >= 2;
+  if (platform === 'windows') {
+    const name = branded ? 'InevitableMobileRelaySetup.exe' : 'MobileEgressClientSetup.exe';
+    return { name, path: `windows-client/build/release/mobile-egress-client-windows-${version}/${name}`, contentType: 'application/octet-stream' };
+  }
+  if (platform === 'macos') {
+    const name = `${branded ? 'inevitable-mobile-relay-macos' : 'mobile-egress-client-macos'}-${version}-arm64.pkg`;
+    return { name, path: `windows-client/build/release/${name}`, contentType: 'application/octet-stream' };
+  }
+  if (platform === 'android') {
+    const name = `${branded ? 'inevitable-mobile-relay-android' : 'zfnf-mobile-egress-android'}-${version}.apk`;
+    return { name, path: `android/app/build/outputs/apk/release/${name}`, contentType: 'application/vnd.android.package-archive' };
+  }
   throw new Error('Unknown download platform');
 }
 
@@ -295,5 +303,5 @@ async function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(error => { console.error(`Mobile Egress download publication stopped: ${error.message}`); process.exitCode = 1; });
+  main().catch(error => { console.error(`Inevitable Mobile Relay download publication stopped: ${error.message}`); process.exitCode = 1; });
 }

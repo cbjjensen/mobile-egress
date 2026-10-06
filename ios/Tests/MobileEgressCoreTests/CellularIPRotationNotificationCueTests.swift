@@ -35,7 +35,7 @@ final class CellularIPRotationNotificationCueTests: XCTestCase {
             [
                 CellularIPRotationNotificationRequest(
                     identifier: "com.mobileegress.agent.rotation.41",
-                    title: "ZFNF Mobile Egress",
+                    title: "Inevitable Mobile Relay",
                     body: "Turn Airplane Mode off",
                     deliveryDate: deadline
                 ),

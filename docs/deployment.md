@@ -1,17 +1,19 @@
 # Release, deployment, and acceptance
 
-Mobile Egress distributes workload Clients and compatible phone Agents. Hosted connectivity is a separate disabled-by-default service on Inevitable's existing gateway infrastructure; it is deployed from the sibling Inevitable repository, not bundled into Client installers. There is no personal controller, AWS provisioning on customer machines, Tailscale or Funnel dependency. Historical tags/assets remain immutable. Old direct-only phone builds do not accept hosted invitations; coordinate compatible phone downloads before offering hosted setup publicly.
+Inevitable Mobile Relay distributes workload Clients and compatible phone Agents. Hosted connectivity is a separate disabled-by-default service on Inevitable's existing gateway infrastructure; it is deployed from the sibling Inevitable repository, not bundled into Client installers. There is no personal controller, AWS provisioning on customer machines, Tailscale or Funnel dependency. Historical tags/assets remain immutable. Old direct-only phone builds do not accept hosted invitations; coordinate compatible phone downloads before offering hosted setup publicly.
 
-The current [hosted implementation](superpowers/plans/2026-10-03-inevitable-hosted-connectivity.md) remains on feature branches. This work authorizes no release, deployment, secret publication or merge. See [hosted acceptance](hosted-acceptance.md) for software evidence and remaining signed/physical/capacity gates. Pilot access is manually granted; checkout is not implemented by this change.
+The [hosted implementation](superpowers/plans/2026-10-03-inevitable-hosted-connectivity.md) is on main. The owner-approved 2.0.0 Windows/Mac pilot release remains immutable. Subscription support is implemented with prices unset and sales closed. The [branding change](superpowers/plans/2026-10-05-inevitable-mobile-relay-branding.md) does not authorize deployment or another publication. See [hosted acceptance](hosted-acceptance.md) for software evidence and remaining signed/physical/capacity gates.
 
 ## Artifacts and scope
 
 | Component | Primary artifact | Required validation |
 |---|---|---|
-| Windows x64 Client | `MobileEgressClientSetup.exe` | Established Authenticode identity, timestamp, exact embedded payload, service upgrade/repair |
-| Apple Silicon Mac Client | `mobile-egress-client-macos-<version>-arm64.pkg` | Established Developer ID identities, notarization, staple, package and daemon checks |
-| Android Agent | Versioned signed APK | Established APK signing certificate and increasing versionCode |
+| Windows x64 Client | `InevitableMobileRelaySetup.exe` | Established Authenticode identity, timestamp, exact embedded payload, service upgrade/repair |
+| Apple Silicon Mac Client | `inevitable-mobile-relay-macos-<version>-arm64.pkg` | Established Developer ID identities, notarization, staple, package and daemon checks |
+| Android Agent | `inevitable-mobile-relay-android-<version>.apk` | Established APK signing certificate and increasing versionCode |
 | iOS Agent | Compatible signed app/TestFlight build | Authorized app/cleanup-extension profiles, device acceptance |
+
+These filenames apply from 2.0.2. The frozen 2.0.0/2.0.1 artifact contracts retain their original names. Do not rebuild Android 2.0.1 from renamed source: release preparation must first advance its version and versionCode. App Store Connect's existing app now displays Inevitable Mobile Relay; bundle IDs, signing, tester groups and distribution states remain unchanged.
 
 The guarded `Desktop` scope means the coupled Windows/Mac **Clients**. `Windows,Android` is the non-Apple lane; iOS signing/distribution remains separate. Only compatible same-major builds may supply download links. An absent 2.x phone release must remain unavailable, never link to a 1.x fallback. The primary Windows artifact is not a renamed controller installer or a raw EC2 executable.
 
@@ -29,7 +31,7 @@ These include manifest validation, Client frontend behavior, Go tests/vet/build,
 Prepare only from the intended clean `main` commit. The release scripts validate the source origin, component scope, tracked signing identities, exact source bundle and artifact hashes. Mac verification records are private release evidence, not GitHub assets. Preserve their matching source commit, package hash, signature and notarization results.
 
 ```powershell
-& .\scripts\release-all.ps1 -ReleaseVersion '2.0.0' -Components Desktop,Android
+& .\scripts\release-all.ps1 -ReleaseVersion '<new-unfrozen-version>' -Components Desktop,Android
 ```
 
 This command builds/signs and can freeze a local release tag; it is not a read-only check. Publication through `-Publish` additionally changes GitHub and source/tag state. Do not execute it merely to inspect readiness. Never overwrite a frozen tag or published asset. Verify the exact downloaded bytes after publication.

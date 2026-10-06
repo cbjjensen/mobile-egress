@@ -9,7 +9,7 @@ description: Use when preparing, publishing, or verifying a Mobile Egress Deskto
 
 Choose the smallest compatible guarded entry point. Do not reconstruct signing, tagging, upload, or verification manually:
 
-- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled Windows and Apple Silicon Mac Client installers. From 2.0.0, Desktop contains only `MobileEgressClientSetup.exe` and `mobile-egress-client-macos-<version>-arm64.pkg`, sharing one version/tag. No controller, relay, or raw EC2 asset is built or published.
+- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled Windows and Apple Silicon Mac Client installers. From 2.0.2, Desktop contains only `InevitableMobileRelaySetup.exe` and `inevitable-mobile-relay-macos-<version>-arm64.pkg`, sharing one version/tag. Frozen 2.0.0/2.0.1 releases keep their original filenames. No controller, relay, or raw EC2 asset is built or published.
 - `scripts\release-android.ps1 -ReleaseVersion ...` for Android-only changes.
 - `scripts\release-all.ps1 -Components Desktop,Android` for protocol/shared compatibility or coordinated Desktop/Android changes.
 - `scripts\release-all.ps1 -Components Windows,Android` for normal non-Apple releases when Windows and Android should ship while macOS/iOS are handled separately.
@@ -18,7 +18,7 @@ Choose the smallest compatible guarded entry point. Do not reconstruct signing, 
 
 Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1 hotfix. macOS-only selection remains unsupported.
 
-Direct 2.x releases use the self-contained `MobileEgressClientSetup.exe` as the only Windows download, with no legacy filename alias. Android fallback links must remain within the same direct major version. Historical 1.x artifact contracts and published assets remain immutable; rebuilding historical controller releases requires their original source checkout. `payload-verification.zip` and Mac verification JSON remain private validation evidence. Updating source or these instructions does not publish an installer.
+The current 2.x release contract uses the self-contained `InevitableMobileRelaySetup.exe` as the only Windows download from 2.0.2, with no legacy filename alias. Android uses `inevitable-mobile-relay-android-<version>.apk` from 2.0.2; frozen 2.0.1 keeps its `zfnf-mobile-egress-android-2.0.1.apk` name and bytes. Advance Android versionName/versionCode before building branded release source; never rebuild a frozen version. The displayed product name is Inevitable Mobile Relay; internal identities, signing keys and output roots remain unchanged. Android fallback links must remain within the same direct major version. Historical 1.x artifact contracts and published assets remain immutable; rebuilding historical controller releases requires their original source checkout. `payload-verification.zip` and Mac verification JSON remain private validation evidence. Updating source or these instructions does not publish an installer.
 
 **REQUIRED SUB-SKILLS:** Use `mobile-egress-windows-signing` and `mobile-egress-android-signing` for identity recovery or signer failures. Never regenerate an established key to unblock a release.
 

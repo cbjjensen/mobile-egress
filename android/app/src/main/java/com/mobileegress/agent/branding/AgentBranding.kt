@@ -1,9 +1,9 @@
 package com.mobileegress.agent.branding
 
 object AgentBranding {
-    const val appMark = "ZF"
-    const val displayName = "ZFNF Mobile Egress"
-    const val headerTitle = "ZFNF MOBILE EGRESS"
+    const val appMark = "IMR"
+    const val displayName = "Inevitable Mobile Relay"
+    const val headerTitle = "INEVITABLE MOBILE RELAY"
     const val headerSubtitle = "Cellular Agent"
     const val agentName = "$displayName Agent"
     const val statusClipboardLabel = "$displayName status"

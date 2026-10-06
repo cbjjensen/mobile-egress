@@ -19,7 +19,7 @@ struct AgentImportSheet: View {
                     AgentCard {
                         Image(systemName: "qrcode.viewfinder").font(.largeTitle).foregroundStyle(AgentDesign.mint).accessibilityHidden(true)
                         Text(purpose == .pair ? "Pair your computer" : "Update a connection").font(.title2.bold())
-                        Text(purpose == .pair ? "Open Mobile Egress on your computer, choose Pair phone, then scan its QR code here." : "Open the connection-update code on your computer and scan it here.")
+                        Text(purpose == .pair ? "Open Inevitable Mobile Relay on your computer, choose Pair phone, then scan its QR code here." : "Open the connection-update code on your computer and scan it here.")
                             .foregroundStyle(AgentDesign.secondary)
                         Button("Scan QR code") { delivery = ClientCodeDelivery(); showScanner = true }
                             .buttonStyle(AgentActionStyle(primary: true)).disabled(model.isBusy)

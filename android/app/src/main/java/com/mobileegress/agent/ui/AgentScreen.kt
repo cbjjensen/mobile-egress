@@ -171,39 +171,36 @@ private fun AppHeader(presentation: AgentScreenPresentation) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier.size(42.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color.Black,
-                ) {
-                    Image(
-                        painter = painterResource(R.drawable.ic_mobile_egress_foreground),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = presentation.appTitle,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        letterSpacing = 1.4.sp,
-                    )
-                    Text(
-                        text = presentation.appSubtitle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
+            Surface(
+                modifier = Modifier.size(42.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = Color.Black,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_mobile_egress_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
-            StatusBadge(presentation.badge, presentation.tone)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = presentation.appTitle,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    letterSpacing = 1.4.sp,
+                )
+                Text(
+                    text = presentation.appSubtitle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
+        StatusBadge(presentation.badge, presentation.tone)
         Text(
             text = presentation.headline,
             color = MaterialTheme.colorScheme.onBackground,
@@ -660,6 +657,14 @@ private fun readableName(value: String): String = value
     showBackground = true,
     widthDp = 360,
     heightDp = 800,
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Preview(
+    name = "Unpaired narrow larger text",
+    showBackground = true,
+    widthDp = 320,
+    heightDp = 800,
+    fontScale = 1.5f,
     uiMode = Configuration.UI_MODE_NIGHT_YES,
 )
 @Composable

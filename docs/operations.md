@@ -2,7 +2,7 @@
 
 ## Subscription and pilot access
 
-Hosted access can come from a valid paid Mobile Egress subscription or an independent approved pilot grant. Account/user suspension and computer revocation still apply. Subscription cancellation preserves the paid term; failed renewal does not extend it. Full refunds remove the affected invoice contribution and open disputes suspend paid access. These changes never delete phone pairing or Advanced direct settings, and the existing bounded gateway configuration refresh controls enforcement timing.
+Hosted access can come from a valid paid Inevitable Mobile Relay subscription or an independent approved pilot grant. Account/user suspension and computer revocation still apply. Subscription cancellation preserves the paid term; failed renewal does not extend it. Full refunds remove the affected invoice contribution and open disputes suspend paid access. These changes never delete phone pairing or Advanced direct settings, and the existing bounded gateway configuration refresh controls enforcement timing.
 
 The Inevitable page owns subscription management, nullable public platform downloads and the complimentary iPhone pilot request. TestFlight requires Admin pilot approval independently of purchasing. Invitation automation uses a consented email and an explicitly selected compatible, unexpired externally approved build; delivery and installation are never inferred from an API response. Keep iOS open/active/unlocked and Android foreground-service behavior unchanged.
 
@@ -12,7 +12,7 @@ See [R2 publication](r2-downloads.md) and the synchronized [subscription plan](s
 
 - **Setup needed**: complete **Your account** and **Connect this computer**, or explicitly choose Advanced direct mode, then connect a phone. Legacy installations still require fresh pairing.
 - **Waiting for phone**: the phone has not established a usable connection. **Connection details** distinguishes account/gateway readiness, a direct listener and the saved phone; none alone proves cellular traffic.
-- **Adding phone**: leave Mobile Egress open on the phone while pairing finishes; do not create another code merely because acknowledgement is pending.
+- **Adding phone**: leave Inevitable Mobile Relay open on the phone while pairing finishes; do not create another code merely because acknowledgement is pending.
 - **Connected**: the paired phone has an authenticated session and required connection updates are acknowledged. A target may still reject a particular request.
 - **Reconnect your phone**: the saved connection changed and the phone has not acknowledged its update.
 - **App unavailable / Needs attention**: use the stated storage, installation, port, trust or network recovery action. The app retains native error details under **Connection details** and opens them when a connection error first appears.
@@ -43,23 +43,23 @@ On Inevitable, use the separate Mobile health/readiness and sanitized connection
 
 Use Review setup to inspect the address and Network access guidance without removing the paired phone. Public-address discovery is a suggestion from the computer's outgoing network path, and can report a VPN/NAT gateway. It never proves ingress and is not required during normal sharing. Manual hostname/IP entry remains available.
 
-Check firewall reports the existing local policy; Retry firewall reapplies only Mobile Egress's own rule/exception for the saved configuration. Windows uses executable/service/port scope. Mac uses an application exception for the validated installed daemon; its global firewall, block-all, managed policies, PF and other filters are preserved. Disabled means the native firewall is off, not that incoming access was verified. Blocked, unknown and unavailable states need the displayed recovery step; do not assume router or cloud policy can be inferred from local checks.
+Check firewall reports the existing local policy; Retry firewall reapplies only Inevitable Mobile Relay's own rule/exception for the saved configuration. Windows uses executable/service/port scope. Mac uses an application exception for the validated installed daemon; its global firewall, block-all, managed policies, PF and other filters are preserved. Disabled means the native firewall is off, not that incoming access was verified. Blocked, unknown and unavailable states need the displayed recovery step; do not assume router or cloud policy can be inferred from local checks.
 
 Verify the Client service is running and the listener port is free. Allow its chosen TCP port in the workload firewall; verify public address, router forwarding and any cloud security-group rule. Keep local proxy ports 1080/1081 private. The public port may differ from the local listener. Test using the phone’s cellular path, not another machine on the same LAN. No Tailscale/Funnel/AWS login can repair a direct endpoint.
 
 On EC2, an allowed Windows/Mac firewall is not sufficient: the attached security group must allow the selected Client TCP port from the phone's cellular source, and the instance needs a public route/address. See [hosted servers and AWS EC2](standalone-clients.md#hosted-servers-and-aws-ec2), including why AWS My IP may select the wrong source. The wizard provides instructions, not AWS provisioning.
 
-If a port is occupied, stop the conflicting owned service or choose an explicit different bind/public mapping. Mobile Egress never silently selects another port. An old relay may still occupy 8443 on a former controller host.
+If a port is occupied, stop the conflicting owned service or choose an explicit different bind/public mapping. Inevitable Mobile Relay never silently selects another port. An old relay may still occupy 8443 on a former controller host.
 
 ## Phone availability
 
-On Android, tap **Start cellular Agent** in Mobile Egress. Sharing continues through its foreground service while cellular access remains available. Reboot and force-stop require Start again. Wi-Fi availability does not substitute for cellular.
+On Android, tap **Start cellular Agent** in Inevitable Mobile Relay. Sharing continues through its foreground service while cellular access remains available. Reboot and force-stop require Start again. Wi-Fi availability does not substitute for cellular.
 
-On iPhone, tap **Start sharing** and keep Mobile Egress active, open and the phone unlocked. Keep-awake defaults on during sharing and prevents only idle auto-lock. Stop or disabling the option restores normal auto-lock. Manual lock, app switching and inactive interruptions disconnect current streams; returning active creates new sessions only when Start intent remains enabled. Existing browser transfers may need retrying. Keep-awake does not provide background sharing.
+On iPhone, tap **Start sharing** and keep Inevitable Mobile Relay active, open and the phone unlocked. Keep-awake defaults on during sharing and prevents only idle auto-lock. Stop or disabling the option restores normal auto-lock. Manual lock, app switching and inactive interruptions disconnect current streams; returning active creates new sessions only when Start intent remains enabled. Existing browser transfers may need retrying. Keep-awake does not provide background sharing.
 
 Airplane Mode rotation affects every Client. Stop sessions, follow the native rotation guidance, and restore only still-enabled Clients after cellular recovery (and active foreground on iOS). Rotation is best-effort and does not guarantee a new carrier address.
 
-On iOS, return to Mobile Egress with Airplane Mode still on to observe the hold countdown, then turn it off and return again. The app retains cellular transitions it receives while inactive, but cannot guarantee observations while suspended. If no disconnect was observed, repeat the guided sequence. The separate cellular availability status helps distinguish phone connectivity from a particular Client's endpoint failure.
+On iOS, return to Inevitable Mobile Relay with Airplane Mode still on to observe the hold countdown, then turn it off and return again. The app retains cellular transitions it receives while inactive, but cannot guarantee observations while suspended. If no disconnect was observed, repeat the guided sequence. The separate cellular availability status helps distinguish phone connectivity from a particular Client's endpoint failure.
 
 ## Pairing, revocation and updates
 
@@ -86,7 +86,7 @@ Failures affect the corresponding Client. The app never deletes trust automatica
 
 Signed update/repair preserves protected direct pairing and local proxy credentials. Windows LocalSystem DPAPI and Mac file-based System Keychain errors require restoring correct service identity/access. Do not copy plaintext credentials out or recreate keys silently.
 
-The 2.x local installer can migrate a recognized EC2-installed Client without AWS. Unknown paths/accounts reject. Former controller/relay hosts are retired separately; archive encrypted recovery state, disable only app-owned startup and remove only the exact Mobile Egress Funnel rule. Preserve unrelated Tailscale/VPN state and historical tagged artifacts.
+The 2.x local installer can migrate a recognized EC2-installed Client without AWS. Unknown paths/accounts reject. Former controller/relay hosts are retired separately; archive encrypted recovery state, disable only app-owned startup and remove only the exact Inevitable Mobile Relay Funnel rule. Preserve unrelated Tailscale/VPN state and historical tagged artifacts.
 
 ## Performance
 

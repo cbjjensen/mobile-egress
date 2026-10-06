@@ -113,7 +113,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
             lifecycle.migrationReady = false; lifecycle.terminalFailure(); updateIdleTimer()
             try? await persistPreferences()
             errorClientID = nil
-            errorMessage = "Remove the old Mobile Egress VPN in Settings → General → VPN & Device Management, then reopen this app. Other VPNs should remain unchanged."
+            errorMessage = "Remove the legacy Mobile Egress VPN in Settings → General → VPN & Device Management, then reopen Inevitable Mobile Relay. Other VPNs should remain unchanged."
         }
     }
     func toggleSharing() {
@@ -144,7 +144,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
                 try await persistPreferences()
                 UserDefaults.standard.removeObject(forKey: stopLatchKey)
                 updateIdleTimer(); await refresh()
-            } catch { lifecycle.terminalFailure(); updateIdleTimer(); errorMessage = "Cannot start sharing. Check secure storage and remove the retired Mobile Egress VPN in Settings." }
+            } catch { lifecycle.terminalFailure(); updateIdleTimer(); errorMessage = "Cannot start sharing. Check secure storage and remove the legacy Mobile Egress VPN in Settings." }
         }
     }
     func setKeepAwake(_ enabled: Bool) {
@@ -240,7 +240,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     }
     private func updateIdleTimer() { UIApplication.shared.isIdleTimerDisabled = lifecycle.idleTimerDisabled }
     func safeStatusForCopy() -> String {
-        "Mobile Egress\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(presentation.connectedCount)\nStreams: \(presentation.streams)\nCellular only; no automatic fallback"
+        "\(MobileEgressBranding.displayName)\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(presentation.connectedCount)\nStreams: \(presentation.streams)\nCellular only; no automatic fallback"
     }
     func requestRotation() { Task { await rotation?.start() } }
     func confirmRotation(_ accepted: Bool) { Task { await rotation?.confirm(proceed: accepted) } }

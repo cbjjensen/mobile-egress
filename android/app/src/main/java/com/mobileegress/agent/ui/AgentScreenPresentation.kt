@@ -119,7 +119,7 @@ fun presentAgentScreen(state: MainUiState): AgentScreenPresentation {
         pairingStatus = when (state.pairingScanState) {
             PairingScanState.ScannerUnavailable -> "Scanner unavailable. Tap Scan QR to try again."
             PairingScanState.CameraPermissionRequired -> "Allow camera access to scan the QR code."
-            PairingScanState.QrNotRecognized -> "QR not recognized. Scan a Mobile Egress QR code."
+            PairingScanState.QrNotRecognized -> "QR not recognized. Scan an Inevitable Mobile Relay QR code."
             else -> state.pairingStatus
         },
         scanLabel = if (state.pairingInProgress) "Pairing…" else "Scan QR",

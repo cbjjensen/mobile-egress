@@ -240,12 +240,12 @@ func (platform *WindowsPlatform) IsElevated() (bool, error) {
 }
 
 func (platform *WindowsPlatform) Confirm(fingerprint string) (bool, error) {
-	message := "Mobile Egress Setup will trust and install software signed by this publisher certificate.\n\n" +
-		"It will also install Microsoft's WebView2 runtime if needed. Keep an internet connection available and wait for Mobile Egress to open; this can take several minutes.\n\n" +
+	message := "Inevitable Mobile Relay Setup will trust and install software signed by this publisher certificate.\n\n" +
+		"It will also install Microsoft's WebView2 runtime if needed. Keep an internet connection available and wait for Inevitable Mobile Relay to open; this can take several minutes.\n\n" +
 		"Optional: independently inspect Properties > Digital Signatures or use Get-AuthenticodeSignature from trusted system Windows PowerShell, and compare the signer with the SHA-256 fingerprint shared separately by the publisher.\n\n" +
 		"Expected SHA-256 fingerprint (reminder only; this setup-displayed value is not identity evidence):\n" + fingerprint + "\n\n" +
-		"Download setup only from the project's official GitHub Releases. Choose Yes to explicitly trust this publisher and install Mobile Egress.\n\nContinue?"
-	result, err := showMessageBox(message, "Mobile Egress Setup", messageBoxYesNo|messageBoxIconWarning|messageBoxTopmost)
+		"Download setup only from the project's official GitHub Releases. Choose Yes to explicitly trust this publisher and install Inevitable Mobile Relay.\n\nContinue?"
+	result, err := showMessageBox(message, "Inevitable Mobile Relay Setup", messageBoxYesNo|messageBoxIconWarning|messageBoxTopmost)
 	if err != nil {
 		return false, err
 	}
@@ -403,13 +403,15 @@ func (platform *WindowsPlatform) Install(files []InstallFile, identity Identity)
 		}
 	}
 	ops := installTransactionOps{
-		rename:          windows.Rename,
-		remove:          os.Remove,
-		protectRecovery: restrictRecoveryDirectory,
-		shortcutPath:    commonShortcutPath,
-		controllerPath:  filepath.Join(InstallRoot, ControllerExecutableName),
-		stopController:  stopInstalledController,
-		createShortcut:  platform.writeShortcut,
+		rename:             windows.Rename,
+		remove:             os.Remove,
+		protectRecovery:    restrictRecoveryDirectory,
+		shortcutPath:       commonShortcutPath,
+		controllerPath:     filepath.Join(InstallRoot, ControllerExecutableName),
+		stopController:     stopInstalledController,
+		createShortcut:     platform.writeShortcut,
+		verifyShortcut:     verifyInstalledShortcut,
+		legacyShortcutPath: legacyShortcutPath,
 	}
 	if clientProduct {
 		service, err := prepareClientService()
@@ -612,7 +614,7 @@ $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $targetPath
 $shortcut.WorkingDirectory = [System.IO.Path]::GetDirectoryName($targetPath)
-$shortcut.Description = 'Mobile Egress'
+$shortcut.Description = 'Inevitable Mobile Relay'
 $shortcut.Save()`
 	powershellPath, err := systemPowerShellPath()
 	if err != nil {
@@ -631,11 +633,33 @@ $shortcut.Save()`
 	return nil
 }
 
+// A familiar filename does not establish ownership. Read the link's exact
+// destination and launch settings before backing up or replacing either name.
+func verifyInstalledShortcut(path, target string) error {
+	const script = `$ErrorActionPreference = 'Stop'
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($env:MOBILE_EGRESS_SHORTCUT)
+$target = $env:MOBILE_EGRESS_SHORTCUT_TARGET
+if ($shortcut.TargetPath -ine $target -or $shortcut.WorkingDirectory -ine [System.IO.Path]::GetDirectoryName($target) -or $shortcut.Arguments -cne '') { exit 1 }`
+	powershellPath, err := systemPowerShellPath()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, powershellPath, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+	command.Env = append(os.Environ(), "MOBILE_EGRESS_SHORTCUT="+path, "MOBILE_EGRESS_SHORTCUT_TARGET="+target)
+	if err := command.Run(); err != nil {
+		return errors.New("Start Menu name is occupied by an unrecognized shortcut; preserve it and resolve the conflict before retrying setup")
+	}
+	return nil
+}
+
 func (platform *WindowsPlatform) ShowError(err error) {
 	if err == nil {
 		return
 	}
-	_, _ = showMessageBox(err.Error(), "Mobile Egress Setup", messageBoxIconError|messageBoxTopmost)
+	_, _ = showMessageBox(err.Error(), "Inevitable Mobile Relay Setup", messageBoxIconError|messageBoxTopmost)
 }
 
 type shellExecuteInfo struct {
@@ -858,15 +882,17 @@ func winVerifyTrustStatus(path string) (uint32, error) {
 }
 
 type installTransactionOps struct {
-	finalize        func() error
-	rename          func(oldPath, newPath string) error
-	remove          func(path string) error
-	removeAll       func(path string) error
-	protectRecovery func(path string) error
-	shortcutPath    string
-	controllerPath  string
-	stopController  func(controllerPath string) error
-	createShortcut  func(controllerPath string) error
+	finalize           func() error
+	rename             func(oldPath, newPath string) error
+	remove             func(path string) error
+	removeAll          func(path string) error
+	protectRecovery    func(path string) error
+	shortcutPath       string
+	controllerPath     string
+	stopController     func(controllerPath string) error
+	createShortcut     func(controllerPath string) error
+	verifyShortcut     func(shortcutPath, controllerPath string) error
+	legacyShortcutPath string
 }
 
 type installFileBackup struct {
@@ -887,6 +913,7 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 		operations = operationOptions[0]
 	}
 	if operations.rename == nil || operations.remove == nil ||
+		(operations.legacyShortcutPath != "" && operations.verifyShortcut == nil) ||
 		((operations.shortcutPath == "") != (operations.controllerPath == "")) ||
 		((operations.shortcutPath == "") != (operations.stopController == nil)) ||
 		((operations.shortcutPath == "") != (operations.createShortcut == nil)) {
@@ -955,6 +982,28 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 			return err
 		}
 	}
+	// Reject conflicting objects before stopping the service or changing files.
+	shortcutPaths := []string{operations.shortcutPath, operations.legacyShortcutPath}
+	for _, path := range shortcutPaths {
+		if path == "" {
+			continue
+		}
+		info, statErr := os.Lstat(path)
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("Start Menu shortcut is not a regular file")
+		}
+		if operations.verifyShortcut != nil {
+			if err := operations.verifyShortcut(path, operations.controllerPath); err != nil {
+				return err
+			}
+		}
+	}
 	if operations.stopController != nil {
 		if err := operations.stopController(operations.controllerPath); err != nil {
 			return fmt.Errorf("stop installed controller before update: %w", err)
@@ -990,6 +1039,26 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 		}
 		backups = append(backups, backup)
 	}
+	if operations.legacyShortcutPath != "" {
+		path := operations.legacyShortcutPath
+		if info, err := os.Lstat(path); err == nil {
+			if !info.Mode().IsRegular() {
+				return rollback(errors.New("legacy Start Menu shortcut changed during setup"), nil, "", false, false)
+			}
+			if operations.verifyShortcut != nil {
+				if err := operations.verifyShortcut(path, operations.controllerPath); err != nil {
+					return rollback(err, nil, "", false, false)
+				}
+			}
+			backup := installFileBackup{destination: path, backup: filepath.Join(backupRoot, "legacy-shortcut.lnk"), existed: true}
+			if err := operations.rename(path, backup.backup); err != nil {
+				return rollback(err, nil, "", false, false)
+			}
+			backups = append(backups, backup)
+		} else if !os.IsNotExist(err) {
+			return rollback(err, nil, "", false, false)
+		}
+	}
 
 	shortcutBackup := ""
 	shortcutExisted := false
@@ -999,6 +1068,11 @@ func installVerifiedFiles(files []InstallFile, verify func(string) error, operat
 		case statErr == nil:
 			if !info.Mode().IsRegular() {
 				return rollback(errors.New("Start Menu shortcut is not a regular file"), nil, "", false, false)
+			}
+			if operations.verifyShortcut != nil {
+				if err := operations.verifyShortcut(operations.shortcutPath, operations.controllerPath); err != nil {
+					return rollback(err, nil, "", false, false)
+				}
 			}
 			shortcutBackup = filepath.Join(backupRoot, filepath.Base(operations.shortcutPath))
 			if err := operations.rename(operations.shortcutPath, shortcutBackup); err != nil {

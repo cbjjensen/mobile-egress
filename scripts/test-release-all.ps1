@@ -517,11 +517,16 @@ try {
 Assert-Condition $staleVersionCodeRejected 'A new Android release must increase versionCode beyond every prior tag.'
 
 $trackedAndroidBuildFile = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'android\app\build.gradle.kts')
+$trackedAndroidVersion = Get-MobileEgressAndroidVersionName -BuildFileContent $trackedAndroidBuildFile
+Assert-Condition ([version]$trackedAndroidVersion -ge [version]'2.0.1') 'The Android source must not regress behind the frozen hosted pilot.'
+$minimumAndroidVersionCode = if ($trackedAndroidVersion -ceq '2.0.1') { 24 } else { 25 }
 Assert-MobileEgressAndroidReleaseVersion `
     -BuildFileContent $trackedAndroidBuildFile `
-    -ExpectedVersion '2.0.1' `
-    -MaximumPriorVersionCode 24
-Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*25\s*$') 'The Android v2.0.1 hosted pilot must use versionCode 25.'
+    -ExpectedVersion $trackedAndroidVersion `
+    -MaximumPriorVersionCode $minimumAndroidVersionCode
+if ($trackedAndroidVersion -ceq '2.0.1') {
+    Assert-Condition ($trackedAndroidBuildFile -match '(?m)^\s*versionCode\s*=\s*25\s*$') 'The frozen Android v2.0.1 hosted pilot must keep versionCode 25.'
+}
 
 $zipFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("mobile-egress-release-zip-test-" + [guid]::NewGuid().ToString('N'))
 try {

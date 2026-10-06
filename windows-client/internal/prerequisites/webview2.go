@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const webView2InstallMessage = "Microsoft Edge WebView2 Runtime is required; install the Evergreen Standalone Runtime and start Mobile Egress again"
+const webView2InstallMessage = "Microsoft Edge WebView2 Runtime is required; install the Evergreen Standalone Runtime and start Inevitable Mobile Relay again"
 
 func CheckWebView2(detector func() (string, error)) error {
 	if detector == nil {

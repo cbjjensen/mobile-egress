@@ -62,7 +62,7 @@ func TestMacPlistTemplatesRenderReleaseAndStableKeychainIdentity(t *testing.T) {
 	info = strings.ReplaceAll(info, "@@BUILD_VERSION@@", "2.0.0")
 	values := plistValues(t, info)
 	want := map[string]string{
-		"CFBundleDisplayName":        "ZFNF Mobile Egress Client",
+		"CFBundleDisplayName":        "Inevitable Mobile Relay",
 		"CFBundleExecutable":         "mobile-egress-client-app",
 		"CFBundleIdentifier":         "com.zfnf.mobile-egress.client.app",
 		"CFBundlePackageType":        "APPL",

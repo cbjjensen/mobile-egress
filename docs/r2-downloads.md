@@ -1,6 +1,6 @@
-# Mobile Egress pilot downloads on R2
+# Inevitable Mobile Relay pilot downloads on R2
 
-The download publisher mirrors existing, frozen, signed Mobile Egress 2.x release bytes into the existing Order Tracker public R2 bucket. It never builds or signs an app, changes an established identity, modifies GitHub releases, or writes Order Tracker objects. It is a separate, explicitly invoked distribution step after the guarded release workflow.
+The download publisher mirrors existing, frozen, signed Inevitable Mobile Relay 2.x release bytes into the existing Order Tracker public R2 bucket. It never builds or signs an app, changes an established identity, modifies GitHub releases, or writes Order Tracker objects. It is a separate, explicitly invoked distribution step after the guarded release workflow.
 
 ## Scope and integrity
 
@@ -10,7 +10,7 @@ The download publisher mirrors existing, frozen, signed Mobile Egress 2.x releas
 - Mutable operator catalog: `mobile-egress/downloads.json`.
 - Only the `pilot` channel and canonical `2.x.y` releases are supported. This does not promote stable downloads.
 
-Canonical names are `MobileEgressClientSetup.exe`, `mobile-egress-client-macos-<version>-arm64.pkg`, and `zfnf-mobile-egress-android-<version>.apk`. Controller executables, certificate/recovery files, private verification records, historical 1.x packages, and arbitrary filenames are rejected.
+Starting at 2.0.2, canonical names are `InevitableMobileRelaySetup.exe`, `inevitable-mobile-relay-macos-<version>-arm64.pkg`, and `inevitable-mobile-relay-android-<version>.apk`. Versions 2.0.0 and 2.0.1 retain `MobileEgressClientSetup.exe`, `mobile-egress-client-macos-<version>-arm64.pkg`, and `zfnf-mobile-egress-android-<version>.apk`. Frozen artifacts are never renamed or rebuilt. The R2 `mobile-egress/` prefix remains unchanged. Controller executables, certificate/recovery files, private verification records, historical 1.x packages, and arbitrary filenames are rejected.
 
 The existing `windows-client/build/release/mobile-egress-<version>.freeze.json` binds the source, tag, components, artifact names and SHA-256 digests after the guarded release's signing checks. The publisher checks that record, the local tag, and each selected local artifact. Publishing additionally verifies the actual remote Git tag and the published GitHub prerelease's uploaded asset sizes/digests. It does not accept a new hash-only manifest in place of frozen signing evidence. Missing or overwritten local artifacts must be recovered as the exact original verified bytes, never rebuilt under the existing tag.
 
@@ -49,7 +49,7 @@ Requirements:
 1. Node.js 20+ and PowerShell 7 on the existing publisher workstation; Git, authenticated GitHub CLI, and AWS CLI v2 for publication.
 2. Local frozen records/tags and original selected artifacts, plus their matching published GitHub prereleases. Standard release signing/notarization evidence remains private and must be retained.
 3. The existing ignored Order Tracker R2 configuration at `%USERPROFILE%/.order-tracker/desktop-downloads.json`, or an explicit `-ConfigPath`. It contains `r2AccountId`, `r2Bucket`, `r2PublicBaseUrl`, and the existing R2 S3 access credentials. Existing session `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` may supply credentials when the file omits them. Never copy credentials into a plan, source, output, or command-line argument.
-4. Permission to read/write the Mobile Egress prefix and a CLI/R2 endpoint supporting conditional PutObject. The publisher refuses older CLIs instead of using unconditional `s3 cp`. No new bucket, domain, signer, or Cloudflare service is provisioned.
+4. Permission to read/write the Inevitable Mobile Relay prefix and a CLI/R2 endpoint supporting conditional PutObject. The publisher refuses older CLIs instead of using unconditional `s3 cp`. No new bucket, domain, signer, or Cloudflare service is provisioned.
 5. Explicit authorization to publish. The implementation task itself does not authorize live R2 changes.
 
 An offline dry-run is the default and reads no R2 credential file. It checks local freeze/tag/file evidence and prints the proposed catalog; it does **not** claim that remote objects or public downloads have been checked.
@@ -70,7 +70,7 @@ Keep the plan and successful output as local publication evidence. On interrupti
 
 ## Implementation and validation record
 
-The approved subscription plan is [2026-10-05-mobile-egress-subscriptions.md](superpowers/plans/2026-10-05-mobile-egress-subscriptions.md). Order Tracker's `desktop-release-downloads.mjs` and `publish-local-desktop-downloads.ps1` provided the existing R2/environment pattern; its source and objects are unchanged. The publisher adds only integrity requirements for frozen Mobile Egress artifacts and the pilot catalog.
+The approved subscription plan is [2026-10-05-mobile-egress-subscriptions.md](superpowers/plans/2026-10-05-mobile-egress-subscriptions.md). Order Tracker's `desktop-release-downloads.mjs` and `publish-local-desktop-downloads.ps1` provided the existing R2/environment pattern; its source and objects are unchanged. The publisher adds only integrity requirements for frozen Inevitable Mobile Relay artifacts and the pilot catalog.
 
 Implementation phases: define offline provenance/conflict tests; implement the publisher and conditional transport; provide a credential-safe local wrapper; run local dry-run and existing release-contract checks. Rollback means selecting an explicit previously verified catalog plan; do not delete immutable artifacts or change release tags. Native physical acceptance and stable promotion remain separate.
 

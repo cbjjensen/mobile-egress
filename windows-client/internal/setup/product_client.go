@@ -3,10 +3,11 @@ package setup
 // Build-time product selection preserves the exact same signer, elevation
 // binding, mutex, protected staging and transactional file install as setup.
 const (
-	SetupExecutableName      = "MobileEgressClientSetup.exe"
+	SetupExecutableName      = "InevitableMobileRelaySetup.exe"
 	ControllerExecutableName = "mobile-egress-client-app.exe"
 	InstallRoot              = `C:\Program Files\Mobile Egress Client`
-	commonShortcutPath       = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress Client.lnk`
+	commonShortcutPath       = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Inevitable Mobile Relay.lnk`
+	legacyShortcutPath       = `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Mobile Egress Client.lnk`
 	clientProduct            = true
 )
 

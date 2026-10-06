@@ -14,8 +14,8 @@ import (
 // driver producing tiny native Mach-O files. No publisher identity is used.
 func TestClientMacBuildUsesIndependentStages(t *testing.T) {
 	repo, commit := clientMacBuildFixture(t)
-	first := runClientMacFixtureBuild(t, repo, commit, "1.2.3")
-	second := runClientMacFixtureBuild(t, repo, commit, "1.2.4")
+	first := runClientMacFixtureBuild(t, repo, commit, "2.0.2")
+	second := runClientMacFixtureBuild(t, repo, commit, "2.0.3")
 	if first == second {
 		t.Fatal("successive builds reused a staging directory")
 	}
@@ -23,16 +23,31 @@ func TestClientMacBuildUsesIndependentStages(t *testing.T) {
 		if !strings.HasPrefix(stage, filepath.Join(repo, "windows-client", "build")+string(os.PathSeparator)) {
 			t.Fatalf("stage escaped build directory: %s", stage)
 		}
-		if _, err := os.Stat(filepath.Join(stage, "Applications", "ZFNF Mobile Egress Client.app", "Contents", "MacOS", "mobile-egress-client-app")); err != nil {
+		if _, err := os.Stat(filepath.Join(stage, "Applications", "Inevitable Mobile Relay.app", "Contents", "MacOS", "mobile-egress-client-app")); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestClientMacHelpersRejectHistoricalBuildsBeforeStaging(t *testing.T) {
+	repo, commit := clientMacBuildFixture(t)
+	for _, script := range []string{"build-client-macos.sh", "release-client-macos.sh"} {
+		for _, version := range []string{"1.2.3", "2.0.0", "2.0.1"} {
+			output, err := exec.Command("/bin/sh", filepath.Join(repo, "scripts", script), "--release-version", version, "--source-commit", commit).CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "original historical source checkout") {
+				t.Fatalf("historical %s %s did not stop before build/signing: %v %s", script, version, err, output)
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, "windows-client", "build")); !os.IsNotExist(err) {
+		t.Fatalf("historical rejection created a build directory: %v", err)
 	}
 }
 
 func TestClientMacBuildCleansOnlyNewFailedStages(t *testing.T) {
 	repo, commit := clientMacBuildFixture(t)
 	t.Setenv("FAKE_CLIENT_BUILD_FAIL", "1")
-	command := exec.Command("/bin/sh", filepath.Join(repo, "scripts", "build-client-macos.sh"), "--release-version", "1.2.3", "--source-commit", commit)
+	command := exec.Command("/bin/sh", filepath.Join(repo, "scripts", "build-client-macos.sh"), "--release-version", "2.0.2", "--source-commit", commit)
 	if output, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("injected failed build succeeded: %s", output)
 	}
@@ -43,7 +58,7 @@ func TestClientMacBuildCleansOnlyNewFailedStages(t *testing.T) {
 	stage := filepath.Join(repo, "windows-client", "build", "caller-owned")
 	marker := filepath.Join(stage, "keep")
 	writeFakeTool(t, marker, "caller-owned")
-	command = exec.Command("/bin/sh", filepath.Join(repo, "scripts", "build-client-macos.sh"), "--release-version", "1.2.3", "--source-commit", commit, "--stage-dir", stage)
+	command = exec.Command("/bin/sh", filepath.Join(repo, "scripts", "build-client-macos.sh"), "--release-version", "2.0.2", "--source-commit", commit, "--stage-dir", stage)
 	if output, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("existing stage accepted: %s", output)
 	}
@@ -71,7 +86,7 @@ func TestClientMacReleaseOwnsAndCleansStagingAcrossAttempts(t *testing.T) {
 	run := func(version string) ([]byte, error) {
 		return exec.Command("/bin/sh", script, "--release-version", version, "--source-commit", commit, "--team-id", "ABCDEFGHIJ", "--application-identity", "Developer ID Application: Fixture (ABCDEFGHIJ)", "--installer-identity", "Developer ID Installer: Fixture (ABCDEFGHIJ)", "--notary-api-key", key).CombinedOutput()
 	}
-	for _, version := range []string{"1.2.3", "1.2.4"} {
+	for _, version := range []string{"2.0.2", "2.0.3"} {
 		output, err := run(version)
 		if err == nil || !strings.Contains(string(output), "fixture-signing-stage") {
 			t.Fatalf("release did not reach injected signer: %v %s", err, output)
@@ -88,9 +103,9 @@ func TestClientMacReleaseOwnsAndCleansStagingAcrossAttempts(t *testing.T) {
 			t.Fatalf("release left private work directory: %v %v", entries, err)
 		}
 	}
-	artifact := filepath.Join(repo, "windows-client", "build", "release", "mobile-egress-client-macos-1.2.4-arm64.pkg")
+	artifact := filepath.Join(repo, "windows-client", "build", "release", "inevitable-mobile-relay-macos-2.0.3-arm64.pkg")
 	writeFakeTool(t, artifact, "immutable-fixture")
-	output, err := run("1.2.4")
+	output, err := run("2.0.3")
 	if err == nil || !strings.Contains(string(output), "Client release output already exists") || strings.Contains(string(output), "fixture-signing-stage") {
 		t.Fatalf("existing artifact gate was bypassed: %v %s", err, output)
 	}

@@ -78,12 +78,12 @@ final class XcodeProjectStructureTests: XCTestCase {
         let extensionEntitlements = try plist(at: "MobileEgressTunnelExtension/MobileEgressTunnelExtension.entitlements")
 
         XCTAssertEqual(appInfo["CFBundlePackageType"] as? String, "APPL")
-        XCTAssertEqual(appInfo["CFBundleDisplayName"] as? String, "ZFNF Mobile Egress")
-        XCTAssertFalse((appInfo["NSCameraUsageDescription"] as? String ?? "").isEmpty)
+        XCTAssertEqual(appInfo["CFBundleDisplayName"] as? String, "Inevitable Mobile Relay")
+        XCTAssertEqual(appInfo["NSCameraUsageDescription"] as? String, "Scan Inevitable Mobile Relay enrollment and endpoint update codes.")
         XCTAssertEqual(extensionInfo["CFBundlePackageType"] as? String, "XPC!")
         XCTAssertEqual(
             extensionInfo["CFBundleDisplayName"] as? String,
-            "ZFNF Mobile Egress Agent"
+            "Inevitable Mobile Relay Agent"
         )
         for info in [appInfo, extensionInfo] {
             XCTAssertEqual(info["CFBundleShortVersionString"] as? String, "$(MARKETING_VERSION)")

@@ -1,6 +1,6 @@
 # Protocol
 
-Mobile Egress uses phone-initiated cellular TLS/WebSocket sessions terminating at the workload Client. Default hosted mode carries them through Inevitable's gateway; Advanced direct uses a public workload listener. The authoritative inner API and signatures are in [the direct protocol contract](direct-protocol-v2.md), with [hosted mode and live-update additions](hosted-transport-contract.md). Existing 1.x relay endpoints and invitations remain incompatible; there is no automatic fallback.
+Inevitable Mobile Relay uses phone-initiated cellular TLS/WebSocket sessions terminating at the workload Client. Default hosted mode carries them through Inevitable's gateway; Advanced direct uses a public workload listener. The authoritative inner API and signatures are in [the direct protocol contract](direct-protocol-v2.md), with [hosted mode and live-update additions](hosted-transport-contract.md). Existing 1.x relay endpoints and invitations remain incompatible; there is no automatic fallback.
 
 ## User-scanned codes
 

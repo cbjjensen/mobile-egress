@@ -15,7 +15,7 @@ Assert-DirectRelease (($links.Key -join ',') -ceq 'client-windows,client-macos,a
 Assert-DirectRelease (@($links | Where-Object { $_.Url -match '/v1\.' }).Count -eq 0) 'Direct releases must never fall back to incompatible 1.x downloads.'
 Assert-DirectRelease (($links | Where-Object Key -eq 'client-macos').UnavailableReason -ceq 'Not included in this release scope; use a later Desktop release for macOS') 'A Windows-scoped direct release must explain that Mac is outside its scope.'
 $history += [pscustomobject]@{tagName='v2.0.1';isDraft=$false;assets=@([pscustomobject]@{name='zfnf-mobile-egress-android-2.0.1.apk'})}
-$links = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v2.0.2' -Version '2.0.2' -ReleasedArtifacts @([pscustomobject]@{Name='MobileEgressClientSetup.exe'}) -PublishedReleases $history)
+$links = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v2.0.2' -Version '2.0.2' -ReleasedArtifacts @([pscustomobject]@{Name='InevitableMobileRelaySetup.exe'}) -PublishedReleases $history)
 Assert-DirectRelease (($links | Where-Object Key -eq 'android').Tag -ceq 'v2.0.1') 'Compatible same-major fallback should remain available.'
 
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('mobile-egress-direct-release-' + [guid]::NewGuid().ToString('N'))

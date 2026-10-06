@@ -14,6 +14,10 @@ val releaseProperties = Properties().apply {
     }
 }
 val androidVersionName = "2.0.1"
+// Published 2.0.0/2.0.1 assets retain their immutable historical filenames.
+val androidUsesRelayBranding = androidVersionName.split('.').map(String::toInt).let { (major, minor, patch) ->
+    major > 2 || major == 2 && (minor > 0 || patch >= 2)
+}
 
 android {
     namespace = "com.mobileegress.agent"
@@ -84,7 +88,8 @@ android {
         if (buildType.name == "release") {
             outputs.all {
                 (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
-                    "zfnf-mobile-egress-android-$androidVersionName.apk"
+                    if (androidUsesRelayBranding) "inevitable-mobile-relay-android-$androidVersionName.apk"
+                    else "zfnf-mobile-egress-android-$androidVersionName.apk"
             }
         }
     }

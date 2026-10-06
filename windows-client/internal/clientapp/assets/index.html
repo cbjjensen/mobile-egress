@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mobile Egress</title>
+<title>Inevitable Mobile Relay</title>
 <style>
 :root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#e8eef7;background:#101823;color-scheme:dark}
 html{scrollbar-gutter:stable}
@@ -44,11 +44,11 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 </head>
 <body><main>
 <div class="eyebrow">Private cellular connection</div>
-<h1>Mobile Egress</h1>
+<h1>Inevitable Mobile Relay</h1>
 <p>Use your phone’s mobile data in the apps you choose on this computer.</p>
 
 <section id="servicePanel" class="card" aria-labelledby="serviceHeading">
-  <h2 id="serviceHeading">Starting Mobile Egress</h2>
+  <h2 id="serviceHeading">Starting Inevitable Mobile Relay</h2>
   <p id="serviceMessage" role="status">Getting your saved settings ready…</p>
   <button id="serviceRetry" class="hidden">Try again</button>
 </section>
@@ -75,7 +75,7 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
 <details id="recoveryPanel" class="card hidden"><summary id="recoveryHeading">Connection updates</summary>
   <p id="recoveryMessage"></p>
   <button id="exportUpdate" disabled>Show update QR</button><button id="copyUpdate" class="secondary" disabled>Copy update</button>
-  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Connection update QR code for your paired phone"></div><p class="note">On your phone, open Mobile Egress and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the update instead</summary><label for="update">Connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
+  <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Connection update QR code for your paired phone"></div><p class="note">On your phone, open Inevitable Mobile Relay and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the update instead</summary><label for="update">Connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
   <p class="note">Keep this computer enabled in the phone app. If sharing is stopped, tap Start cellular Agent on Android or Start sharing on iPhone after scanning.</p>
   <details><summary>Removed this computer from the phone app?</summary><p>You’ll need to pair again. Open Phone settings here and choose Remove phone. Then show a new QR code and scan it on your phone. Your Inevitable account connection and proxy settings are kept.</p></details>
 </details>
@@ -83,7 +83,7 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
   <h2 id="verifyHeading">Start sharing on your phone</h2><p id="verificationMessage" role="status"></p>
   <div id="phoneStartInstructions" class="hidden">
     <ol class="phoneSteps">
-      <li>Open <strong>Mobile Egress</strong> on your phone.</li>
+      <li>Open <strong>Inevitable Mobile Relay</strong> on your phone.</li>
       <li>Tap <strong>Start cellular Agent</strong> on Android or <strong>Start sharing</strong> on iPhone.</li>
     </ol>
     <p class="note">Keep mobile data on. On iPhone, keep the app open and unlocked.</p>
@@ -169,7 +169,7 @@ ul{padding-left:21px;color:#aebed0;font-size:14px}li{margin:8px 0}
     <button id="cancelInvitation" class="secondary">Cancel this code</button>
     <p class="note">This code works once and expires after ten minutes. Keep it private.</p>
   </div>
-  <p class="note">After scanning, start sharing in the phone app. Android can keep sharing while you use other apps. On iPhone, leave Mobile Egress open and your phone unlocked; keep-awake is on by default while sharing.</p>
+  <p class="note">After scanning, start sharing in the phone app. Android can keep sharing while you use other apps. On iPhone, leave Inevitable Mobile Relay open and your phone unlocked; keep-awake is on by default while sharing.</p>
   <button id="pairNext" class="secondary">Continue to sharing</button>
 </section>
 <section id="phoneSettingsPanel" class="card hidden" aria-labelledby="pairedPhoneHeading">

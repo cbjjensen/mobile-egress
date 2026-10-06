@@ -1,6 +1,6 @@
 # Windows Client installation and repair
 
-The 2.x Windows product is `MobileEgressClientSetup.exe`, containing only the signed Client app, Client service, and public signer metadata. It uses the established publisher identity and timestamp checks. The installer verifies the exact payload before elevated installation; private signing material is never embedded.
+The Windows installer is `InevitableMobileRelaySetup.exe` starting at 2.0.2; frozen 2.0.0/2.0.1 packages keep `MobileEgressClientSetup.exe`. It contains only the signed Client app, Client service, and public signer metadata, using the established publisher identity and timestamp checks. The installer verifies the exact payload before elevated installation; private signing material is never embedded.
 
 Run the installer normally, confirm the expected publisher, and approve the standard Windows elevation request. Do not bypass a signer mismatch. The installer transaction locks its confirmed bytes, verifies payload signatures, stages files under restricted access, and rolls back files/trust changes after failure.
 
@@ -11,6 +11,8 @@ Run the installer normally, confirm the expected publisher, and approve the stan
 - New protected state: `C:\ProgramData\MobileEgressClient`.
 - Existing owner SID and service-account DPAPI data remain protected during repair/upgrade.
 - Local app/service communication uses the protected named-pipe boundary; no public administration port exists.
+
+The visible app, service display name and Start-menu shortcut use **Inevitable Mobile Relay**. An upgrade replaces only a verified old shortcut pointing at this installation, preserving its original copy for rollback if installation fails. Unknown shortcut targets are rejected. The internal installation directory and service ID above do not change; existing pairing and DPAPI data remain in place.
 
 Installation opens the Client app unelevated. New installations default to Inevitable Gateway: activate in your browser, pair your phone, verify its live connection, then copy proxy details. Hosted mode uses outbound TCP 443 and opens no workload listener or firewall rule. Advanced direct retains Computer address and Network access; discovery is only an unverified suggestion. Existing direct configurations remain direct, and paired installations open their dashboard with Review setup available. Finish later preserves configuration and pairing.
 

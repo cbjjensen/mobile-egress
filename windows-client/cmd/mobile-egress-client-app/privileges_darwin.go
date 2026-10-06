@@ -13,7 +13,7 @@ func checkGUIPrivileges() error {
 
 func checkGUIUser(uid int) error {
 	if uid == 0 {
-		return errors.New("Open ZFNF Mobile Egress Client from Applications as the installation owner; the app cannot run as root.")
+		return errors.New("Open Inevitable Mobile Relay from Applications as the installation owner; the app cannot run as root.")
 	}
 	return nil
 }

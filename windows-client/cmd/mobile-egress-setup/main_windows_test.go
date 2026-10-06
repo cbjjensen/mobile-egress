@@ -38,7 +38,7 @@ func TestParseModeAcceptsOnlyFixedInternalOperationAndNonce(t *testing.T) {
 
 func TestFailureResultIsRedacted(t *testing.T) {
 	result := failureResult(strings.Repeat("b", 64), strings.Repeat("a", 64), errors.New(`copy C:\Users\Friend\secret: access denied`))
-	if result.Success || result.Code != "install_failed" || result.Message != "Installation did not complete. Verify the Mobile Egress publisher trust before retrying." {
+	if result.Success || result.Code != "install_failed" || result.Message != "Installation did not complete. Verify the Inevitable Mobile Relay publisher trust before retrying." {
 		t.Fatalf("result = %#v", result)
 	}
 	if strings.Contains(result.Message, "Friend") || strings.Contains(result.Message, "access denied") || strings.Contains(result.Message, "left behind") {

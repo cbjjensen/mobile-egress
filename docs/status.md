@@ -1,5 +1,9 @@
 # Current status
 
+## Current branding update (2026-10-05)
+
+The current product name is **Inevitable Mobile Relay**. Website, Client, Android and iOS source use the new name; Apple's existing app record was renamed in place without changing testers or distribution. Future branded artifacts begin at 2.0.2. Existing published pilot installers and frozen Android 2.0.1 keep their original bytes/names until a separately authorized new release. See the [branding plan and validation](superpowers/plans/2026-10-05-inevitable-mobile-relay-branding.md). Both repositories now use main. The following sections preserve the earlier implementation's validation history rather than current release inventory.
+
 Current development is the [Inevitable hosted connectivity plan](superpowers/plans/2026-10-03-inevitable-hosted-connectivity.md) on `feature/mobile-egress-inevitable-gateway` in both repositories. New setup defaults to hosted outbound connections; existing direct installations remain direct until explicitly switched. Inevitable uses a separate default-off process on existing gateway hosts and does not meter Mobile Egress traffic. See [hosted acceptance](hosted-acceptance.md) for current evidence and blockers. This work does not deploy or publish.
 
 ## Historical direct baseline

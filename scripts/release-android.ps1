@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'release-artifact-names.ps1')
 if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
     if ($ValidateOnly -or $SimulateMissingSigningInputs -or $SimulateMissingKeystore) {
         throw 'Versioned Android publication cannot be combined with low-level signing validation switches.'
@@ -62,6 +63,14 @@ function Test-RepositoryPathTracked {
         return $false
     }
     throw "Git ls-files failed while checking Android signing path: $RelativePath"
+}
+
+function Get-MobileEgressAndroidBuildApkName {
+    param([Parameter(Mandatory)][string]$BuildFileContent)
+    $version = Get-MobileEgressAndroidVersionName -BuildFileContent $BuildFileContent
+    if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Expected one canonical Android release version.' }
+    Assert-MobileEgressCurrentReleaseBuildVersion -Version $version
+    return Get-MobileEgressAndroidApkName -Version $version
 }
 
 if ($MyInvocation.InvocationName -eq '.') {
@@ -151,6 +160,8 @@ if ($ValidateOnly) {
     exit 0
 }
 
+$apkName = Get-MobileEgressAndroidBuildApkName -BuildFileContent (Get-Content -Raw -LiteralPath (Join-Path $androidRoot 'app\build.gradle.kts'))
+
 & (Join-Path $PSScriptRoot 'preflight.ps1') -Components Android
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
@@ -178,9 +189,9 @@ try {
     }
 
     $apksignerCommand = Join-Path $apksigner 'apksigner.bat'
-    $releaseApks = @(Get-ChildItem -LiteralPath '.\app\build\outputs\apk\release' -Filter 'zfnf-mobile-egress-android-*.apk' -File)
+    $releaseApks = @(Get-ChildItem -LiteralPath '.\app\build\outputs\apk\release' -Filter $apkName -File)
     if ($releaseApks.Count -ne 1) {
-        Write-Host 'Expected exactly one versioned ZFNF Android release APK.'
+        Write-Host 'Expected exactly one canonical versioned Android release APK.'
         exit 11
     }
     $releaseApk = $releaseApks[0].FullName
@@ -202,7 +213,7 @@ try {
         exit 11
     }
     if ($actualFingerprintMatch.Groups[1].Value.ToLowerInvariant() -ne $expectedFingerprint) {
-        Write-Host 'Refusing to release: the APK signer does not match the recorded Mobile Egress Android release certificate.'
+        Write-Host 'Refusing to release: the APK signer does not match the recorded Inevitable Mobile Relay Android release certificate.'
         exit 11
     }
 } finally {

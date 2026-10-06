@@ -197,7 +197,7 @@ func (LocalClient) call(ctx context.Context, method, value string) (Response, er
 	defer cancel()
 	connection, err := dialLocal(ctx)
 	if err != nil {
-		return Response{}, errors.New("Client service is unavailable. Install or repair Mobile Egress Client, then reopen this app.")
+		return Response{}, errors.New("Client service is unavailable. Install or repair Inevitable Mobile Relay, then reopen this app.")
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(15 * time.Second))

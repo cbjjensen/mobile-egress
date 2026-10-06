@@ -4,4 +4,4 @@ package main
 
 import "errors"
 
-func runApp() error { return errors.New("Mobile Egress Client supports Windows and macOS") }
+func runApp() error { return errors.New("Inevitable Mobile Relay supports Windows and macOS") }

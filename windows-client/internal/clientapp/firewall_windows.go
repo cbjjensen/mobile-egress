@@ -55,7 +55,7 @@ func windowsFirewallWithSID(ctx context.Context, port uint16, retry bool, progra
 			state = "blocked"
 		}
 		status := firewallResult(state, hostFirewallScope, port)
-		status.Message = "Repair the Mobile Egress Client installation to restore its service identity, then retry the firewall check."
+		status.Message = "Repair the Inevitable Mobile Relay installation to restore its service identity, then retry the firewall check."
 		return status
 	}
 	return windowsFirewall(ctx, port, retry, program, shell, run)
@@ -94,6 +94,7 @@ func runFirewallCommand(ctx context.Context, name string, args, env []string) ([
 // It only manages the exact product-owned rule for this service executable.
 const firewallScript = `$ErrorActionPreference = 'Stop'
 $name = 'MobileEgressDirectClient'
+# Preserve the exact security ownership marker for existing managed rules.
 $description = 'Mobile Egress direct Client managed rule v2'
 $program = $env:MOBILE_EGRESS_DIRECT_PROGRAM
 $port = [int]$env:MOBILE_EGRESS_DIRECT_PORT
@@ -207,7 +208,7 @@ try {
       $rule | Set-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -Profile Any -Program $program -Service MobileEgressClient -EdgeTraversalPolicy Block -ErrorAction Stop | Out-Null
       $rule | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol TCP -LocalPort $port -RemotePort Any -ErrorAction Stop | Out-Null
     } else {
-      New-NetFirewallRule -Name $name -DisplayName 'Mobile Egress direct phone connection' -Description $description -Group 'MobileEgressDirectClient' -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort $port -Program $program -Service MobileEgressClient -EdgeTraversalPolicy Block -ErrorAction Stop | Out-Null
+      New-NetFirewallRule -Name $name -DisplayName 'Inevitable Mobile Relay direct phone connection' -Description $description -Group 'MobileEgressDirectClient' -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort $port -Program $program -Service MobileEgressClient -EdgeTraversalPolicy Block -ErrorAction Stop | Out-Null
     }
   }
   $policy = Get-GlobalPolicy

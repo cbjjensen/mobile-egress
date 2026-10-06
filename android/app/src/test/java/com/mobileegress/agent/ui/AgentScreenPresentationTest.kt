@@ -17,7 +17,7 @@ class AgentScreenPresentationTest {
         for ((scanState, message) in listOf(
             PairingScanState.ScannerUnavailable to "Scanner unavailable. Tap Scan QR to try again.",
             PairingScanState.CameraPermissionRequired to "Allow camera access to scan the QR code.",
-            PairingScanState.QrNotRecognized to "QR not recognized. Scan a Mobile Egress QR code.",
+            PairingScanState.QrNotRecognized to "QR not recognized. Scan an Inevitable Mobile Relay QR code.",
         )) {
             val presentation = presentAgentScreen(MainUiState(
                 paired = true, pairingStatus = "Paired", pairingScanState = scanState,
@@ -44,11 +44,11 @@ class AgentScreenPresentationTest {
         }
     }
     @Test
-    fun `screen header uses ZFNF mobile branding`() {
+    fun `screen header uses Inevitable Mobile Relay branding`() {
         val presentation = presentAgentScreen(MainUiState())
 
-        assertEquals("ZF", presentation.appMark)
-        assertEquals("ZFNF MOBILE EGRESS", presentation.appTitle)
+        assertEquals("IMR", presentation.appMark)
+        assertEquals("INEVITABLE MOBILE RELAY", presentation.appTitle)
         assertEquals("Cellular Agent", presentation.appSubtitle)
     }
 

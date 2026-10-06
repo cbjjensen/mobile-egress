@@ -2,11 +2,11 @@ import XCTest
 @testable import MobileEgressCore
 
 final class AgentDashboardPresentationTests: XCTestCase {
-    func testBrandingUsesTheApprovedZFNFNames() {
-        XCTAssertEqual(MobileEgressBranding.displayName, "ZFNF Mobile Egress")
-        XCTAssertEqual(MobileEgressBranding.agentName, "ZFNF Mobile Egress Agent")
-        XCTAssertEqual(MobileEgressBranding.headerTitle, "ZFNF MOBILE EGRESS")
-        XCTAssertEqual(MobileEgressBranding.statusClipboardLabel, "ZFNF Mobile Egress status")
+    func testBrandingUsesTheApprovedInevitableMobileRelayNames() {
+        XCTAssertEqual(MobileEgressBranding.displayName, "Inevitable Mobile Relay")
+        XCTAssertEqual(MobileEgressBranding.agentName, "Inevitable Mobile Relay Agent")
+        XCTAssertEqual(MobileEgressBranding.headerTitle, "INEVITABLE MOBILE RELAY")
+        XCTAssertEqual(MobileEgressBranding.statusClipboardLabel, "Inevitable Mobile Relay status")
     }
 
     func testSafeStatusIncludesFiniteOperationsDataAndRedactsRotationSecrets() {
@@ -31,8 +31,8 @@ final class AgentDashboardPresentationTests: XCTestCase {
         XCTAssertEqual(
             copied,
             """
-            ZFNF Mobile Egress status
-            ZFNF Mobile Egress Agent
+            Inevitable Mobile Relay status
+            Inevitable Mobile Relay Agent
             Enrolled: yes
             Agent: running
             Cellular: available
@@ -78,7 +78,7 @@ final class AgentDashboardPresentationTests: XCTestCase {
             AgentDashboardState(isEnrolled: false, status: .idle)
         )
 
-        XCTAssertEqual(presentation.appTitle, "ZFNF MOBILE EGRESS")
+        XCTAssertEqual(presentation.appTitle, "INEVITABLE MOBILE RELAY")
         XCTAssertEqual(presentation.headline, "Ready to pair")
         XCTAssertEqual(presentation.scanLabel, "Scan QR")
         XCTAssertTrue(presentation.isScanEnabled)

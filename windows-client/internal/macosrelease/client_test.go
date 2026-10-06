@@ -30,3 +30,26 @@ func TestClientVerificationBindsArtifactSourceAndNativeIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestClientVerificationPreservesHistoricalAndBrandedArtifactContracts(t *testing.T) {
+	for _, tc := range []struct{ version, name string }{
+		{"2.0.0", "mobile-egress-client-macos-2.0.0-arm64.pkg"},
+		{"2.0.1", "mobile-egress-client-macos-2.0.1-arm64.pkg"},
+		{"2.0.2", "inevitable-mobile-relay-macos-2.0.2-arm64.pkg"},
+		{"2.0.2-pilot.1", "inevitable-mobile-relay-macos-2.0.2-pilot.1-arm64.pkg"},
+		{"2.1.0", "inevitable-mobile-relay-macos-2.1.0-arm64.pkg"},
+		{"3.0.0", "inevitable-mobile-relay-macos-3.0.0-arm64.pkg"},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			e := VerificationExpectations{ReleaseVersion: tc.version, SourceCommit: strings.Repeat("a", 40), ArtifactSHA256: strings.Repeat("b", 64), ApplicationIdentity: "fixture application", InstallerIdentity: "fixture installer"}
+			r := ClientVerificationRecord{SchemaVersion: 1, ReleaseVersion: tc.version, SourceCommit: e.SourceCommit, ArtifactName: tc.name, ArtifactSHA256: e.ArtifactSHA256, Architecture: Architecture, MinimumMacOS: MinimumMacOS, AppBundleID: ClientAppBundleID, DaemonBundleID: ClientDaemonBundleID, ApplicationIdentity: e.ApplicationIdentity, InstallerIdentity: e.InstallerIdentity, HardenedRuntime: true, AppSignature: "valid", DaemonSignature: "valid", PackageSignature: "valid", Notarization: "accepted", Staple: "valid", Checks: VerificationChecks{Codesign: "passed", Pkgutil: "passed", Spctl: "passed", Stapler: "passed"}}
+			if err := r.Validate(e); err != nil {
+				t.Fatal(err)
+			}
+			r.ArtifactName = "wrong-name.pkg"
+			if r.Validate(e) == nil {
+				t.Fatal("wrong branded/historical artifact accepted")
+			}
+		})
+	}
+}

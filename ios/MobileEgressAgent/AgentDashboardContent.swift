@@ -21,7 +21,7 @@ struct AgentDashboardContent: View {
                 AgentCard {
                     Image(systemName: "qrcode.viewfinder").font(.largeTitle).foregroundStyle(AgentDesign.mint).accessibilityHidden(true)
                     Text("Pair your first computer").font(.title2.bold())
-                    Text("Open Mobile Egress on your computer and scan its pairing code.").foregroundStyle(AgentDesign.secondary)
+                    Text("Open Inevitable Mobile Relay on your computer and scan its pairing code.").foregroundStyle(AgentDesign.secondary)
                     Button("Scan a QR code", action: addClient).buttonStyle(AgentActionStyle(primary: true))
                 }
             } else { activity.id("activity") }
@@ -32,7 +32,7 @@ struct AgentDashboardContent: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image("ZFNFHeader").resizable().scaledToFit().frame(width: 42, height: 42).accessibilityHidden(true)
-                Text("MOBILE EGRESS").font(.footnote.weight(.bold)).tracking(1.4).foregroundStyle(AgentDesign.secondary)
+                Text(MobileEgressBranding.headerTitle).font(.footnote.weight(.bold)).tracking(1.4).foregroundStyle(AgentDesign.secondary).fixedSize(horizontal: false, vertical: true)
             }
             AgentBadge(label: presentation.badge, tone: presentation.tone)
             Text(presentation.headline).font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true)

@@ -5,11 +5,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release-artifact-names.ps1')
+Assert-MobileEgressCurrentReleaseBuildVersion -Version $ReleaseVersion
 . (Join-Path $PSScriptRoot 'build-windows.ps1') -ReleaseVersion $ReleaseVersion
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $windowsRoot = Join-Path $repositoryRoot 'windows-client'
 $clientPackageRoot = Join-Path $windowsRoot "build\release\mobile-egress-client-windows-$ReleaseVersion"
-$clientSetupPath = Join-Path $clientPackageRoot 'MobileEgressClientSetup.exe'
+$clientSetupPath = Join-Path $clientPackageRoot (Get-MobileEgressClientWindowsInstallerName -Version $ReleaseVersion)
 $clientPayloadPath = Join-Path $windowsRoot 'internal\setup\payload.zip'
 if (Test-Path -LiteralPath $clientPackageRoot) { throw 'Client release output already exists; it must not be overwritten.' }
 if (Test-Path -LiteralPath $clientPayloadPath) { throw 'Setup payload staging already exists; do not overwrite another build.' }

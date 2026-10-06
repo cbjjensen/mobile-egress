@@ -11,6 +11,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $desktopRepositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'release-artifact-names.ps1')
 
 function Invoke-MobileEgressDesktopNativeCommand {
     param(
@@ -371,8 +372,8 @@ function Assert-MobileEgressDesktopMacArtifacts {
     )
 
     if ([version]$Version -ge [version]'2.0.0') {
-        $pkg = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-macos-$Version-arm64.pkg"
-        $record = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-macos-$Version-arm64.verification.json"
+        $pkg = Join-Path (Join-Path $RepositoryRoot 'windows-client\build\release') (Get-MobileEgressClientMacPackageName -Version $Version)
+        $record = Join-Path (Join-Path $RepositoryRoot 'windows-client\build\release') (Get-MobileEgressClientMacRecordName -Version $Version)
         foreach ($path in @($pkg,$record)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required direct Client release evidence is missing: $path" } }
         $hash = (Get-FileHash -LiteralPath $pkg -Algorithm SHA256).Hash.ToLowerInvariant()
         Invoke-MobileEgressTask5RecordVerifier -RepositoryRoot $RepositoryRoot -RecordPath $record -Version $Version -SourceCommit $SourceCommit -ManifestSha256 'unused' -ArtifactSha256 $hash -ApplicationIdentity $Config.ApplicationIdentity -InstallerIdentity $Config.InstallerIdentity -ClientArtifact
@@ -429,8 +430,8 @@ function Invoke-MobileEgressDesktopBuild {
 
     $direct = [version]$Version -ge [version]'2.0.0'
     $releaseDirectory = Join-Path $RepositoryRoot 'windows-client\build\release'
-    $artifactName = if ($direct) { "mobile-egress-client-macos-$Version-arm64.pkg" } else { "mobile-egress-macos-$Version-arm64.pkg" }
-    $recordName = if ($direct) { "mobile-egress-client-macos-$Version-arm64.verification.json" } else { "mobile-egress-macos-$Version-arm64.verification.json" }
+    $artifactName = if ($direct) { Get-MobileEgressClientMacPackageName -Version $Version } else { "mobile-egress-macos-$Version-arm64.pkg" }
+    $recordName = $artifactName.Replace('.pkg', '.verification.json')
     $transferID = [guid]::NewGuid().ToString('N')
     $finalPkgPath = Join-Path $releaseDirectory $artifactName
     $finalRecordPath = Join-Path $releaseDirectory $recordName

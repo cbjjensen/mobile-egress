@@ -17,6 +17,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 printf '%s' "$RELEASE_VERSION" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || fail 'invalid release version'
+BASE_VERSION=${RELEASE_VERSION%%-*}
+MAJOR=${BASE_VERSION%%.*}
+MINOR_PATCH=${BASE_VERSION#*.}
+MINOR=${MINOR_PATCH%%.*}
+PATCH=${MINOR_PATCH#*.}
+if [ "$MAJOR" -lt 2 ] || { [ "$MAJOR" -eq 2 ] && [ "$MINOR" -eq 0 ] && [ "$PATCH" -lt 2 ]; }; then
+    fail 'renamed source requires release version 2.0.2 or later; rebuild only from the original historical source checkout'
+fi
 printf '%s' "$SOURCE_COMMIT" | /usr/bin/grep -Eq '^[0-9a-f]{40}$' || fail 'invalid source commit'
 printf '%s' "$TEAM_ID" | /usr/bin/grep -Eq '^[A-Z0-9]{10}$' || fail 'invalid Team ID'
 [ -f "$NOTARY_API_KEY" ] && [ ! -L "$NOTARY_API_KEY" ] || fail 'notary API key is unavailable'
@@ -26,9 +34,13 @@ case "$INSTALLER_IDENTITY" in "Developer ID Installer: "*"($TEAM_ID)") ;; *) fai
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 REPO=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
 OUTPUT="$REPO/windows-client/build/release"
-NAME="mobile-egress-client-macos-$RELEASE_VERSION-arm64.pkg"
+ARTIFACT_PREFIX=mobile-egress-client-macos
+if [ "$MAJOR" -gt 2 ] || { [ "$MAJOR" -eq 2 ] && { [ "$MINOR" -gt 0 ] || [ "$PATCH" -ge 2 ]; }; }; then
+    ARTIFACT_PREFIX=inevitable-mobile-relay-macos
+fi
+NAME="$ARTIFACT_PREFIX-$RELEASE_VERSION-arm64.pkg"
 FINAL="$OUTPUT/$NAME"
-RECORD="$OUTPUT/mobile-egress-client-macos-$RELEASE_VERSION-arm64.verification.json"
+RECORD="$OUTPUT/$ARTIFACT_PREFIX-$RELEASE_VERSION-arm64.verification.json"
 [ ! -e "$FINAL" ] && [ ! -e "$RECORD" ] || fail 'Client release output already exists'
 /bin/mkdir -p "$OUTPUT"
 WORK=$(/usr/bin/mktemp -d "$OUTPUT/.release-client-macos.XXXXXX")
@@ -41,7 +53,7 @@ cleanup_release() {
 trap cleanup_release EXIT HUP INT TERM
 STAGE="$WORK/payload"
 /bin/sh "$SCRIPT_DIR/build-client-macos.sh" --release-version "$RELEASE_VERSION" --source-commit "$SOURCE_COMMIT" --stage-dir "$STAGE"
-APP="$STAGE/Applications/ZFNF Mobile Egress Client.app"
+APP="$STAGE/Applications/Inevitable Mobile Relay.app"
 DAEMON="$STAGE/Library/Application Support/MobileEgressClient/bin/mobile-egress-client"
 /usr/bin/codesign --force --options runtime --timestamp --identifier com.zfnf.mobile-egress.client --sign "$APPLICATION_IDENTITY" "$DAEMON"
 /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLICATION_IDENTITY" "$APP"
@@ -58,6 +70,10 @@ done
 # Use a private copy of executable installer scripts; repository file modes may
 # originate on Windows. The package payload has no relay/Tailscale/AWS tools.
 /usr/bin/ditto "$REPO/windows-client/macos/client/scripts" "$WORK/scripts"
+for script in preinstall postinstall; do
+    /usr/bin/sed "s/@@TEAM_ID@@/$TEAM_ID/g" "$WORK/scripts/$script" > "$WORK/scripts/$script.bound"
+    /bin/mv "$WORK/scripts/$script.bound" "$WORK/scripts/$script"
+done
 /bin/chmod 755 "$WORK/scripts/preinstall" "$WORK/scripts/postinstall"
 /usr/bin/pkgbuild --root "$STAGE" --component-plist "$REPO/windows-client/macos/client/component.plist" --scripts "$WORK/scripts" --install-location / --identifier com.zfnf.mobile-egress.client.pkg --version "${RELEASE_VERSION%%-*}" --ownership recommended "$WORK/unsigned.pkg"
 /usr/bin/productsign --timestamp --sign "$INSTALLER_IDENTITY" "$WORK/unsigned.pkg" "$WORK/$NAME"

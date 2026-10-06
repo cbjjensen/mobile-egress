@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'operations-common.ps1')
+. (Join-Path $PSScriptRoot 'release-artifact-names.ps1')
 
 function Invoke-MobileEgressNativeResult {
     param(
@@ -299,17 +300,8 @@ function Assert-MobileEgressAndroidReleaseVersion {
         [int]$MaximumPriorVersionCode = 0
     )
 
-    $nameMatch = [regex]::Match($BuildFileContent, '(?m)^\s*versionName\s*=\s*(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*$')
     $codeMatch = [regex]::Match($BuildFileContent, '(?m)^\s*versionCode\s*=\s*([0-9]+)\s*$')
-    $actualVersion = if ($nameMatch.Success -and -not [string]::IsNullOrWhiteSpace($nameMatch.Groups[1].Value)) {
-        $nameMatch.Groups[1].Value
-    } elseif ($nameMatch.Success) {
-        $constantName = [regex]::Escape($nameMatch.Groups[2].Value)
-        $constantMatch = [regex]::Match($BuildFileContent, "(?m)^\s*val\s+$constantName\s*=\s*`"([^`"]+)`"\s*$")
-        if ($constantMatch.Success) { $constantMatch.Groups[1].Value } else { '' }
-    } else {
-        ''
-    }
+    $actualVersion = Get-MobileEgressAndroidVersionName -BuildFileContent $BuildFileContent
     if ($actualVersion -ne $ExpectedVersion) {
         throw "android/app/build.gradle.kts versionName must equal $ExpectedVersion before release."
     }
@@ -587,15 +579,6 @@ function Get-MobileEgressReleaseGateComponents {
     return @($gateComponents)
 }
 
-function Get-MobileEgressAndroidApkName {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Version
-    )
-
-    return "zfnf-mobile-egress-android-$Version.apk"
-}
-
 function Get-MobileEgressReleaseArtifactDefinitions {
     param(
         [Parameter(Mandatory)]
@@ -609,10 +592,12 @@ function Get-MobileEgressReleaseArtifactDefinitions {
     $resolvedComponents = @(Resolve-MobileEgressReleaseComponents -Components $Components)
     if ([version]$Version -ge [version]'2.0.0') {
         if (($resolvedComponents -contains 'Desktop') -or ($resolvedComponents -contains 'Windows')) {
-            [pscustomobject]@{ Name = 'MobileEgressClientSetup.exe'; Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version\MobileEgressClientSetup.exe" }
+            $setupName = Get-MobileEgressClientWindowsInstallerName -Version $Version
+            [pscustomobject]@{ Name = $setupName; Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version\$setupName" }
         }
         if ($resolvedComponents -contains 'Desktop') {
-            [pscustomobject]@{ Name = "mobile-egress-client-macos-$Version-arm64.pkg"; Path = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-macos-$Version-arm64.pkg" }
+            $macName = Get-MobileEgressClientMacPackageName -Version $Version
+            [pscustomobject]@{ Name = $macName; Path = Join-Path $RepositoryRoot "windows-client\build\release\$macName" }
         }
         if ($resolvedComponents -contains 'Android') {
             $androidName = Get-MobileEgressAndroidApkName -Version $Version
@@ -662,7 +647,7 @@ function Get-MobileEgressReleaseArtifactDefinitions {
 function Get-MobileEgressWindowsDownloadName {
     param([Parameter(Mandatory)][string]$Version)
     # Published historical contracts are immutable.
-    if ([version]$Version -ge [version]'2.0.0') { return 'MobileEgressClientSetup.exe' }
+    if ([version]$Version -ge [version]'2.0.0') { return Get-MobileEgressClientWindowsInstallerName -Version $Version }
     if ($Version -match '^1\.1\.[0-6]$') { return "mobile-egress-windows-$Version.zip" }
     return 'MobileEgressSetup.exe'
 }
@@ -680,8 +665,8 @@ function Get-MobileEgressReleaseDownloadItemDefinitions {
     )
 
     if ([version]$Version -ge [version]'2.0.0') {
-        [pscustomobject]@{ Key = 'client-windows'; Label = 'Windows Client installer'; CurrentName = 'MobileEgressClientSetup.exe' }
-        [pscustomobject]@{ Key = 'client-macos'; Label = 'macOS Client PKG (Apple Silicon)'; CurrentName = "mobile-egress-client-macos-$Version-arm64.pkg" }
+        [pscustomobject]@{ Key = 'client-windows'; Label = 'Windows Client installer'; CurrentName = Get-MobileEgressClientWindowsInstallerName -Version $Version }
+        [pscustomobject]@{ Key = 'client-macos'; Label = 'macOS Client PKG (Apple Silicon)'; CurrentName = Get-MobileEgressClientMacPackageName -Version $Version }
         [pscustomobject]@{ Key = 'android'; Label = 'Android Agent APK'; CurrentName = Get-MobileEgressAndroidApkName -Version $Version }
         return
     }
@@ -722,12 +707,12 @@ function Test-MobileEgressReleaseDownloadAssetName {
     )
 
     switch ($Key) {
-        'client-windows' { return $Name -ceq 'MobileEgressClientSetup.exe' }
-        'client-macos' { return $Name -match '^mobile-egress-client-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
+        'client-windows' { return $Name -ceq 'MobileEgressClientSetup.exe' -or $Name -ceq 'InevitableMobileRelaySetup.exe' }
+        'client-macos' { return $Name -cmatch '^(mobile-egress-client-macos|inevitable-mobile-relay-macos)-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
         'windows' { return $Name -ceq 'MobileEgressSetup.exe' -or $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
         'client' { return $Name -ceq 'mobile-egress-client.exe' }
         'macos' { return $Name -match '^mobile-egress-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
-        'android' { return $Name -match '^zfnf-mobile-egress-android-[0-9]+\.[0-9]+\.[0-9]+\.apk$' -or $Name -ceq 'app-release.apk' }
+        'android' { return $Name -cmatch '^(zfnf-mobile-egress-android|inevitable-mobile-relay-android)-[0-9]+\.[0-9]+\.[0-9]+\.apk$' -or $Name -ceq 'app-release.apk' }
         default { throw "Unsupported download item: $Key" }
     }
 }
@@ -758,7 +743,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
 
     $releasedNames = @($ReleasedArtifacts | ForEach-Object { $_.Name })
     $windowsKey = if ([version]$Version -ge [version]'2.0.0') { 'client-windows' } else { 'windows' }
-    $currentWindowsReleased = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key $windowsKey -Name $_ }).Count -gt 0
+    $currentWindowsReleased = @($releasedNames | Where-Object { if ([version]$Version -ge [version]'2.0.0') { $_ -ceq (Get-MobileEgressClientWindowsInstallerName -Version $Version) } else { Test-MobileEgressReleaseDownloadAssetName -Key $windowsKey -Name $_ } }).Count -gt 0
     $policy = Get-MobileEgressReleasePolicy -Version $Version
     $downloadOverride = $policy.DownloadOverride
     if ($null -ne $downloadOverride) {
@@ -771,7 +756,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
         }
     }
     foreach ($item in @(Get-MobileEgressReleaseDownloadItemDefinitions -Version $Version)) {
-        $currentMatch = @($releasedNames | Where-Object { Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $_ } | Select-Object -First 1)
+        $currentMatch = @($releasedNames | Where-Object { if ([version]$Version -ge [version]'2.0.0') { $_ -ceq $item.CurrentName } else { Test-MobileEgressReleaseDownloadAssetName -Key $item.Key -Name $_ } } | Select-Object -First 1)
         if ($currentMatch.Count -ne 0) {
             [pscustomobject]@{
                 Key = $item.Key
@@ -1038,6 +1023,7 @@ function Assert-MobileEgressDirectWindowsArtifacts {
         [scriptblock]$PayloadVerifier = {param($InstallerPath,$PayloadPath,$Sources) Assert-MobileEgressInstallerPayload -InstallerPath $InstallerPath -PayloadPath $PayloadPath -ExpectedSources $Sources}
     )
     $root = Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version"
+    $setupName = Get-MobileEgressClientWindowsInstallerName -Version $Version
     $certificatePath = Join-Path $RepositoryRoot 'windows-signing\mobile-egress-code-signing.cer'
     $recordPath = Join-Path $RepositoryRoot 'windows-signing\release-signing-certificate.txt'
     $record = Get-Content -Raw -LiteralPath $recordPath
@@ -1049,22 +1035,22 @@ function Assert-MobileEgressDirectWindowsArtifacts {
         $fingerprintMatch = [regex]::Match($record,'(?im)^SHA-256 fingerprint:\s*((?:[0-9A-F]{2}:){31}[0-9A-F]{2})\s*$')
         if (-not $thumbprintMatch.Success -or -not $fingerprintMatch.Success -or $thumbprintMatch.Groups[1].Value -cne $certificate.Thumbprint.ToUpperInvariant() -or $fingerprintMatch.Groups[1].Value.Replace(':','') -cne $fingerprint) { throw 'The tracked Windows publisher proofs do not agree.' }
         $sources = [ordered]@{}
-        foreach ($name in @('mobile-egress-client.exe','mobile-egress-client-app.exe','MobileEgressClientSetup.exe')) {
+        foreach ($name in @('mobile-egress-client.exe','mobile-egress-client-app.exe',$setupName)) {
             $path = Join-Path $root $name
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Signed direct Client executable is missing: $name" }
             $signature = & $SignatureReader $path
             if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or $null -eq $signature.TimeStamperCertificate -or [Convert]::ToBase64String($signature.SignerCertificate.RawData) -cne [Convert]::ToBase64String($certificate.RawData)) { throw "Direct Client signature validation failed for $name." }
             $info = (& $BuildInfoReader $path | Out-String)
-            $command = if ($name -ceq 'MobileEgressClientSetup.exe') { 'mobile-egress-setup' } else { [IO.Path]::GetFileNameWithoutExtension($name) }
+            $command = if ($name -ceq $setupName) { 'mobile-egress-setup' } else { [IO.Path]::GetFileNameWithoutExtension($name) }
             if ($info -notmatch ('(?m)^\s*path\s+mobile-egress/windows-client/cmd/' + [regex]::Escape($command) + '\s*$') -or $info -notmatch ('(?m)^\s*build\s+vcs.revision=' + [regex]::Escape($SourceCommit) + '\s*$') -or $info -notmatch '(?m)^\s*build\s+vcs.modified=false\s*$' -or $info -notmatch '(?m)^\s*build\s+GOOS=windows\s*$' -or $info -notmatch '(?m)^\s*build\s+GOARCH=amd64\s*$') { throw "Direct Client build provenance does not match the clean requested source and platform: $name" }
-            if ($name -cne 'MobileEgressClientSetup.exe') {
+            if ($name -cne $setupName) {
                 if ((& $VersionReader $path | Out-String).Trim() -cne $Version) { throw "Direct Client version does not match the release: $name" }
                 $sources[$name]=$path
             }
         }
         $sources['mobile-egress-code-signing.cer']=$certificatePath
         $sources['release-signing-certificate.txt']=$recordPath
-        & $PayloadVerifier (Join-Path $root 'MobileEgressClientSetup.exe') (Join-Path $root 'payload-verification.zip') $sources
+        & $PayloadVerifier (Join-Path $root $setupName) (Join-Path $root 'payload-verification.zip') $sources
     } finally { $hasher.Dispose();$certificate.Dispose() }
 }
 
@@ -1215,7 +1201,7 @@ function Invoke-MobileEgressRelease {
         throw 'ReleaseVersion must be a three-part semantic version such as 1.0.4.'
     }
     if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
-        throw 'The signed Mobile Egress release workflow must run on the Windows publisher workstation.'
+        throw 'The signed Inevitable Mobile Relay release workflow must run on the Windows publisher workstation.'
     }
 
     Import-MobileEgressReleaseEnvironment
@@ -1281,6 +1267,7 @@ function Invoke-MobileEgressRelease {
     }
 
     $resumeArtifacts = -not [string]::IsNullOrWhiteSpace($localTagCommit) -or -not [string]::IsNullOrWhiteSpace($remoteTagCommit)
+    Assert-MobileEgressCurrentReleaseBuildVersion -Version $Version -FrozenResume:$resumeArtifacts
     $artifactDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot $RepositoryRoot -Version $Version -Components $resolvedComponents)
     if ($resumeArtifacts) {
         $missingResumeArtifacts = @($artifactDefinitions | Where-Object { -not (Test-Path -LiteralPath $_.Path -PathType Leaf) })
@@ -1305,9 +1292,9 @@ function Invoke-MobileEgressRelease {
     if (-not $resumeArtifacts) {
         if ($includesDesktop) {
             $windowsZip = if ([version]$Version -ge [version]'2.0.0') { Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-client-windows-$Version" } else { Join-Path $RepositoryRoot "windows-client\build\release\mobile-egress-windows-$Version.zip" }
-            $macPrefix = if ([version]$Version -ge [version]'2.0.0') { 'mobile-egress-client-macos' } else { 'mobile-egress-macos' }
-            $macPkg = Join-Path $RepositoryRoot "windows-client\build\release\$macPrefix-$Version-arm64.pkg"
-            $macRecord = Join-Path $RepositoryRoot "windows-client\build\release\$macPrefix-$Version-arm64.verification.json"
+            $macName = if ([version]$Version -ge [version]'2.0.0') { Get-MobileEgressClientMacPackageName -Version $Version } else { "mobile-egress-macos-$Version-arm64.pkg" }
+            $macPkg = Join-Path $RepositoryRoot "windows-client\build\release\$macName"
+            $macRecord = Join-Path $RepositoryRoot ('windows-client\build\release\' + $macName.Replace('.pkg', '.verification.json'))
             $existingDesktopOutput = @(@($windowsZip, $macPkg, $macRecord) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
             if ($existingDesktopOutput.Count -ne 0) {
                 throw "Unsigned release state is ambiguous because $($existingDesktopOutput[0]) already exists. Do not overwrite it automatically."
@@ -1368,7 +1355,7 @@ function Invoke-MobileEgressRelease {
         return ''
     } -CreateTag {
         param($TagToCreate)
-        $null = Invoke-MobileEgressNativeCommand -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'tag', '-a', $TagToCreate, $head, '-m', "Mobile Egress $Version") -Description 'Creating local release tag'
+        $null = Invoke-MobileEgressNativeCommand -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'tag', '-a', $TagToCreate, $head, '-m', "$(Get-MobileEgressReleaseDisplayName -Version $Version) $Version") -Description 'Creating local release tag'
     }
     if (-not $PublishRelease) {
         Write-Host "Signed $tag artifacts are verified and frozen at $head locally. Re-run with -Publish after explicit publication approval."
@@ -1396,7 +1383,7 @@ function Invoke-MobileEgressRelease {
             'release', 'create', $tag,
             '--repo', 'cbjjensen/mobile-egress',
             '--verify-tag', '--draft',
-            '--title', "Mobile Egress $Version",
+            '--title', "$(Get-MobileEgressReleaseDisplayName -Version $Version) $Version",
             '--generate-notes'
         ) -Description 'Creating GitHub draft release'
         $release = Get-MobileEgressGitHubRelease -Tag $tag

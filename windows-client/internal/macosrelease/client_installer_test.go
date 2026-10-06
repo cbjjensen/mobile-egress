@@ -45,7 +45,7 @@ func TestClientMacInstallerHandsOffOnlyToActiveSavedOwner(t *testing.T) {
 			if !strings.Contains(journal, "kickstart system/com.zfnf.mobile-egress.client\n") {
 				t.Fatal("installation did not start the daemon")
 			}
-			launched := strings.Contains(journal, "open uid="+tc.owner+" app=/Applications/ZFNF Mobile Egress Client.app\n")
+			launched := strings.Contains(journal, "open uid="+tc.owner+" app=/Applications/Inevitable Mobile Relay.app\n")
 			if launched != tc.wantLaunch {
 				t.Fatalf("owner GUI launch = %v, want %v; journal:\n%s", launched, tc.wantLaunch, journal)
 			}
@@ -114,6 +114,7 @@ func TestClientMacInstallerBoundsConsoleUserLookup(t *testing.T) {
 
 type clientInstallerFixture struct {
 	shell, script, state, log, owner string
+	app, legacy                      string
 }
 
 // Each fixture launches several real shell processes. Bound that fan-out so
@@ -139,6 +140,14 @@ func newClientInstallerScriptFixture(t *testing.T, scriptName string, existing b
 	t.Cleanup(func() { <-clientInstallerFixtureSlots })
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
+	app := filepath.Join(root, "Applications", "Inevitable Mobile Relay.app")
+	legacy := filepath.Join(root, "Applications", "ZFNF Mobile Egress Client.app")
+	if err := os.MkdirAll(filepath.Join(app, "Contents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte("verified GUI"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if existing {
 		if err := os.MkdirAll(filepath.Join(state, "bin"), 0o700); err != nil {
 			t.Fatal(err)
@@ -164,6 +173,9 @@ func newClientInstallerScriptFixture(t *testing.T, scriptName string, existing b
 	script := strings.ReplaceAll(string(source), "\r\n", "\n")
 	script = strings.ReplaceAll(script, "/Library/Application Support/MobileEgressClient", filepath.ToSlash(state))
 	script = strings.ReplaceAll(script, "/Library/LaunchDaemons/com.zfnf.mobile-egress.client.plist", filepath.ToSlash(filepath.Join(root, "daemon.plist")))
+	script = strings.ReplaceAll(script, "APP='/Applications/Inevitable Mobile Relay.app'", "APP='"+filepath.ToSlash(app)+"'")
+	script = strings.ReplaceAll(script, "LEGACY_APP='/Applications/ZFNF Mobile Egress Client.app'", "LEGACY_APP='"+filepath.ToSlash(legacy)+"'")
+	script = strings.ReplaceAll(script, "@@TEAM_ID@@", "ABCDEFGHIJ")
 	commands := map[string]string{
 		"/usr/bin/id": `printf '0\n'`,
 		// A remote GUI session can belong to UID 501 while /dev/console
@@ -179,9 +191,24 @@ case "$FIXTURE_CONSOLE" in
   malformed) printf '<dictionary> {\n  UID : 501oops\n}\n';;
   *) printf '<dictionary> {\n  Name : fixture-user\n  SessionInfo : <array> {\n    0 : <dictionary> {\n      UID : 999\n    }\n  }\n  UID : %s\n}\n' "$FIXTURE_CONSOLE";;
 esac`,
-		"/usr/sbin/chown":   `exit 0`,
-		"/bin/chmod":        `exit 0`,
-		"/usr/bin/codesign": `exit 0`,
+		"/usr/sbin/chown": `exit 0`,
+		"/bin/chmod":      `exit 0`,
+		"/usr/bin/plutil": `for path; do :; done
+value=$(cat "$path")
+case "$2" in
+  CFBundleIdentifier) if [ "$value" = wrong-id ]; then printf 'unrelated.bundle\n'; else printf 'com.zfnf.mobile-egress.client.app\n'; fi;;
+  CFBundleExecutable) if [ "$value" = wrong-executable ]; then printf 'unrelated-app\n'; else printf 'mobile-egress-client-app\n'; fi;;
+  *) exit 47;;
+esac`,
+		"/usr/bin/codesign": `for path; do :; done
+printf 'codesign %s\n' "$*" >> "$FIXTURE_LOG"
+if [ -d "$path" ]; then
+  case "$*" in *'anchor apple generic and identifier "com.zfnf.mobile-egress.client.app" and certificate leaf[subject.OU] = "ABCDEFGHIJ"'*) ;; *) exit 48;; esac
+  [ "$(cat "$path/Contents/Info.plist")" != wrong-signer ] || exit 49
+fi
+exit 0`,
+		"/bin/mv": `[ "$FIXTURE_OPEN" != move-fail ] || exit 50
+exec /bin/mv "$@"`,
 		"/bin/launchctl": `printf '%s\n' "$*" >> "$FIXTURE_LOG"
 case "$1" in
   print) case "$2" in
@@ -191,14 +218,15 @@ case "$1" in
     *) exit 42;;
     esac;;
   asuser) [ "$2" = "$FIXTURE_OWNER" ] || exit 41; shift 2; exec "$@";;
-  enable|bootstrap|kickstart) exit 0;;
+  kickstart) [ "$FIXTURE_OPEN" != daemon-fail ];;
+  enable|bootstrap) exit 0;;
   *) exit 42;;
 esac`,
 		"/usr/bin/sudo": `[ "$1" = -n ] && [ "$2" = -H ] && [ "$3" = -u ] && [ "$4" = "#$FIXTURE_OWNER" ] || exit 43
 shift 4
 export FIXTURE_LAUNCH_UID="$FIXTURE_OWNER"
 exec "$@"`,
-		"/usr/bin/open": `[ "$1" = -a ] && [ "$2" = '/Applications/ZFNF Mobile Egress Client.app' ] && [ "$#" = 2 ] || exit 44
+		"/usr/bin/open": `[ "$1" = -a ] && [ "$2" = '/Applications/Inevitable Mobile Relay.app' ] && [ "$#" = 2 ] || exit 44
 printf 'open uid=%s app=%s\n' "${FIXTURE_LAUNCH_UID:-0}" "$2" >> "$FIXTURE_LOG"
 case "$FIXTURE_OPEN" in
   fail) exit 45;;
@@ -212,7 +240,109 @@ esac`,
 	}
 	path := filepath.Join(root, scriptName)
 	write(path, script)
-	return clientInstallerFixture{shell: shell, script: path, state: state, log: log, owner: "501"}
+	return clientInstallerFixture{shell: shell, script: path, state: state, log: log, owner: "501", app: app, legacy: legacy}
+}
+
+func TestClientMacUpgradeArchivesOnlyVerifiedLegacyGUIAfterServiceStarts(t *testing.T) {
+	fixture := newClientInstallerFixture(t)
+	writeLegacyGUI(t, fixture, "verified GUI")
+	output, err := fixture.run(t, "501", "yes", "ok")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, output)
+	}
+	if _, err := os.Stat(fixture.legacy); !os.IsNotExist(err) {
+		t.Fatal("legacy Applications GUI remains")
+	}
+	matches, _ := filepath.Glob(filepath.Join(fixture.state, ".legacy-gui-recovery.*", "ZFNF Mobile Egress Client.app", "Contents", "Info.plist"))
+	if len(matches) != 1 {
+		t.Fatal("verified legacy GUI was not retained for recovery")
+	}
+	b, _ := os.ReadFile(matches[0])
+	if string(b) != "verified GUI" {
+		t.Fatal("recovery lost legacy bytes")
+	}
+	if !strings.Contains(fixture.journal(t), "kickstart system/com.zfnf.mobile-egress.client") {
+		t.Fatal("service did not start")
+	}
+}
+
+func TestClientMacFailedReplacementLeavesLegacyGUIAvailable(t *testing.T) {
+	for _, failure := range []string{"wrong-signer", "daemon-fail", "move-fail"} {
+		t.Run(failure, func(t *testing.T) {
+			fixture := newClientInstallerFixture(t)
+			writeLegacyGUI(t, fixture, "verified GUI")
+			if failure == "wrong-signer" {
+				if err := os.WriteFile(filepath.Join(fixture.app, "Contents", "Info.plist"), []byte(failure), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if output, err := fixture.run(t, "501", "yes", failure); err == nil {
+				t.Fatalf("failed replacement accepted: %s", output)
+			}
+			b, err := os.ReadFile(filepath.Join(fixture.legacy, "Contents", "Info.plist"))
+			if err != nil || string(b) != "verified GUI" {
+				t.Fatal("old app unavailable after failure")
+			}
+			b, err = os.ReadFile(filepath.Join(fixture.state, "retained-state"))
+			if err != nil || string(b) != "preserve fixture state" {
+				t.Fatal("protected state changed")
+			}
+		})
+	}
+}
+
+func TestClientMacPreflightRejectsConflictingApplicationBeforeStoppingService(t *testing.T) {
+	for _, pathName := range []string{"branded", "legacy"} {
+		for _, conflict := range []string{"wrong-id", "wrong-executable", "wrong-signer", "file", "symlink"} {
+			t.Run(pathName+"/"+conflict, func(t *testing.T) {
+				fixture := newClientInstallerScriptFixture(t, "preinstall", true)
+				path := fixture.app
+				if pathName == "legacy" {
+					path = fixture.legacy
+				}
+				if err := os.RemoveAll(path); err != nil {
+					t.Fatal(err)
+				}
+				switch conflict {
+				case "file":
+					if err := os.WriteFile(path, []byte("unrelated"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					if err := os.Symlink(fixture.state, path); err != nil {
+						t.Skip("symlink creation unavailable")
+					}
+				default:
+					if err := os.MkdirAll(filepath.Join(path, "Contents"), 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(path, "Contents", "Info.plist"), []byte(conflict), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				output, err := fixture.run(t, "501", "yes", "ok")
+				if err == nil || !strings.Contains(string(output), "unrecognized application") {
+					t.Fatalf("conflict accepted: %v %s", err, output)
+				}
+				if strings.Contains(fixture.journal(t), "system/com.zfnf.mobile-egress.client") {
+					t.Fatal("changed service before rejecting conflict")
+				}
+				if _, err := os.Lstat(path); err != nil {
+					t.Fatal("conflicting object lost")
+				}
+			})
+		}
+	}
+}
+
+func writeLegacyGUI(t *testing.T, fixture clientInstallerFixture, value string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(fixture.legacy, "Contents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.legacy, "Contents", "Info.plist"), []byte(value), 0600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f clientInstallerFixture) run(t *testing.T, console, gui, open string) ([]byte, error) {

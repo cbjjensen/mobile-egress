@@ -1,4 +1,4 @@
-# Android cellular Agent
+# Inevitable Mobile Relay Android Agent
 
 Android 10+ (API 29+) supports up to ten workload Clients using one owner-started foreground service. Hosted and Advanced direct modes use the same pinned end-to-end TLS and cellular-only sockets. The phone needs no Inevitable login and accepts no inbound connections. The Client list identifies each saved transport mode; switching mode requires a signed update, never automatic fallback.
 
@@ -24,7 +24,7 @@ QR scanning runs entirely on the phone using the bundled detector. The camera pr
 
 ## Endpoint recovery and renewal
 
-The Agent accepts a signed mode/endpoint update through its active authenticated session, persists it and reconnects. It also polls configuration on connection and every 30 seconds. Updates bind Client/pairing identity and generation while preserving trust and keys. Missing mode in older records means direct. Skipped generations work; stale, conflicting, tampered and wrong-peer updates reject. Offline recovery uses the Client's QR/file export. Mobile Egress sends no traffic-usage accounting to Inevitable.
+The Agent accepts a signed mode/endpoint update through its active authenticated session, persists it and reconnects. It also polls configuration on connection and every 30 seconds. Updates bind Client/pairing identity and generation while preserving trust and keys. Missing mode in older records means direct. Skipped generations work; stale, conflicting, tampered and wrong-peer updates reject. Offline recovery uses the Client's QR/file export. Inevitable Mobile Relay sends no traffic-usage accounting to Inevitable.
 
 When the old endpoint is unreachable, import the workload Client's connection update through **Scan QR**, paste/import, or **Import update file**. Desired state is saved before the new endpoint is contacted, so an unavailable endpoint remains visibly pending and can be retried. Certificates with less than seven days remaining are renewed using the same key; expired trust requires fresh pairing. Renewal cannot acknowledge an endpoint generation the phone has not received in a verified update.
 

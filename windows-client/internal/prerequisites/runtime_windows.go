@@ -32,7 +32,7 @@ func installWebView2(ctx context.Context) error {
 }
 
 func installWebView2WithProgress(ctx context.Context, progress func(string)) error {
-	const guidance = "Mobile Egress is installed, but WebView2 setup did not finish. Check your internet connection and retry the runtime step. If this is a work PC, ask your administrator whether runtime installation is allowed."
+	const guidance = "Inevitable Mobile Relay is installed, but WebView2 setup did not finish. Check your internet connection and retry the runtime step. If this is a work PC, ask your administrator whether runtime installation is allowed."
 	progress("Downloading the Microsoft WebView2 installer…")
 	directory, err := os.MkdirTemp("", "mobile-egress-webview2-")
 	if err != nil {

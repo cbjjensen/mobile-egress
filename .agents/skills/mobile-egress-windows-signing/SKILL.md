@@ -51,7 +51,7 @@ They may double-click `MobileEgressSetup.exe` directly; the new installer needs 
 
 Setup displays the fingerprint, requires explicit **Yes**, verifies and locks its exact signed executable through elevation, and waits for actual child completion. The elevated child uses a fixed bounded machine-global mutex across trust, sibling verification, install, and rollback; timeout occurs before trust mutation and abandoned ownership is recoverable. It launches the controller unelevated only after bound success. If install rollback reports `install_rollback_failed`, do not rerun setup: preserve the restricted recovery backup and contact the publisher. Never expose or guess its internal path in friend-facing output.
 
-The new installer shows native setup and WebView2 stages. WebView2 **Retry** repeats only runtime preparation after the application install has succeeded; reopening Mobile Egress from the Start Menu also prepares a missing runtime without reinstalling application files. Embedded payload staging stays under a protected installation-volume parent with restricted permissions and fixed filenames; adjacent files are ignored for embedded installers.
+The new installer shows native setup and WebView2 stages. WebView2 **Retry** repeats only runtime preparation after the application install has succeeded; reopening Inevitable Mobile Relay from the Start Menu also prepares a missing runtime without reinstalling application files. Embedded payload staging stays under a protected installation-volume parent with restricted permissions and fixed filenames; adjacent files are ignored for embedded installers.
 
 ## EC2 trust failures
 

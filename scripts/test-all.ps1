@@ -109,6 +109,7 @@ try {
     Invoke-RequiredCommand -Name 'Mobile feature manifest parity' -Command { & (Join-Path $PSScriptRoot 'validate-mobile-feature-manifest.ps1') }
     Invoke-RequiredCommand -Name 'Release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-all.ps1') }
     Invoke-RequiredCommand -Name 'Direct release contracts' -Command { & (Join-Path $PSScriptRoot 'test-direct-release.ps1') }
+    Invoke-RequiredCommand -Name 'Historical and branded release contracts' -Command { & (Join-Path $PSScriptRoot 'test-release-branding.ps1') }
     Invoke-RequiredCommand -Name 'Mobile manifest schema tests' -Command { & (Join-Path $PSScriptRoot 'test-mobile-feature-manifest.ps1') }
 
     if ($Components -contains 'Windows') {
@@ -117,6 +118,9 @@ try {
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }
+
+        Invoke-RequiredCommand -Name 'R2 download contracts' -Command { node --test (Join-Path $PSScriptRoot 'test-r2-downloads.mjs') }
+        Invoke-RequiredCommand -Name 'R2 publication wrapper safety' -Command { & (Join-Path $PSScriptRoot 'test-r2-downloads.ps1') }
 
         Invoke-RequiredCommand -Name 'Go tests' -Command { go test ./... }
         Invoke-RequiredCommand -Name 'Client installer product and payload contracts' -Command { go test -tags client_setup ./windows-client/internal/setup -run 'TestClientProduct|TestEmbeddedPayload|TestServiceFinalization|TestClientServiceRepair' }

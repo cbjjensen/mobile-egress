@@ -382,6 +382,157 @@ func TestInstallVerifiedFilesStopsControllerAfterVerificationBeforeBackup(t *tes
 	assertTransactionTestFiles(t, files, "new-")
 }
 
+func TestBrandedShortcutMigrationPreservesOldShortcutOnFailures(t *testing.T) {
+	for _, outcome := range []string{"success", "shortcut failure", "service failure", "restore failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			files := transactionTestFiles(t, t.TempDir(), t.TempDir())
+			links := t.TempDir()
+			oldPath, newPath := filepath.Join(links, "Mobile Egress Client.lnk"), filepath.Join(links, "Inevitable Mobile Relay.lnk")
+			if err := os.WriteFile(oldPath, []byte("verified legacy shortcut"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ops := installTransactionOps{rename: os.Rename, remove: os.Remove, shortcutPath: newPath, legacyShortcutPath: oldPath, controllerPath: files[0].Destination, stopController: func(string) error { return nil }, verifyShortcut: func(path, target string) error {
+				if target != files[0].Destination {
+					t.Fatal("changed binary identity")
+				}
+				b, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				if string(b) != "verified legacy shortcut" {
+					return errors.New("unknown shortcut")
+				}
+				return nil
+			}, createShortcut: func(string) error {
+				if err := os.WriteFile(newPath, []byte("branded shortcut"), 0600); err != nil {
+					return err
+				}
+				if outcome == "shortcut failure" {
+					return errors.New("injected creation failure")
+				}
+				return nil
+			}, finalize: func() error {
+				if outcome == "service failure" || outcome == "restore failure" {
+					return errors.New("injected service failure")
+				}
+				return nil
+			}}
+			if outcome == "restore failure" {
+				ops.rename = func(old, new string) error {
+					if new == oldPath {
+						return errors.New("injected restoration failure")
+					}
+					return os.Rename(old, new)
+				}
+			}
+			err := installVerifiedFiles(files, func(string) error { return nil }, ops)
+			if outcome == "success" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+					t.Fatal("legacy shortcut remained")
+				}
+				b, _ := os.ReadFile(newPath)
+				if string(b) != "branded shortcut" {
+					t.Fatal("new shortcut missing")
+				}
+				assertTransactionTestFiles(t, files, "new-")
+				return
+			}
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			assertTransactionTestFiles(t, files, "old-")
+			if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+				t.Fatal("partial branded shortcut remained")
+			}
+			if outcome == "restore failure" {
+				if !errors.Is(err, ErrInstallRollback) {
+					t.Fatal("lost recovery error")
+				}
+				matches, _ := filepath.Glob(filepath.Join(filepath.Dir(files[0].Destination), ".mobile-egress-backup-*", "legacy-shortcut.lnk"))
+				if len(matches) != 1 {
+					t.Fatal("legacy recovery backup was removed")
+				}
+				return
+			}
+			b, _ := os.ReadFile(oldPath)
+			if string(b) != "verified legacy shortcut" {
+				t.Fatal("old shortcut not restored")
+			}
+		})
+	}
+}
+
+func TestBrandedShortcutConflictLeavesServiceAndFilesUntouched(t *testing.T) {
+	for _, conflict := range []string{"legacy", "branded"} {
+		t.Run(conflict, func(t *testing.T) {
+			files := transactionTestFiles(t, t.TempDir(), t.TempDir())
+			links := t.TempDir()
+			oldPath, newPath := filepath.Join(links, "Mobile Egress Client.lnk"), filepath.Join(links, "Inevitable Mobile Relay.lnk")
+			path := newPath
+			if conflict == "legacy" {
+				path = oldPath
+			}
+			if err := os.WriteFile(path, []byte("unrelated shortcut"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ops := installTransactionOps{rename: os.Rename, remove: os.Remove, shortcutPath: newPath, legacyShortcutPath: oldPath, controllerPath: files[0].Destination, stopController: func(string) error { t.Fatal("stopped service on a shortcut conflict"); return nil }, createShortcut: func(string) error { t.Fatal("overwrote conflicting shortcut"); return nil }, verifyShortcut: func(string, string) error { return errors.New("unknown shortcut") }}
+			if installVerifiedFiles(files, func(string) error { return nil }, ops) == nil {
+				t.Fatal("accepted conflict")
+			}
+			assertTransactionTestFiles(t, files, "old-")
+			b, _ := os.ReadFile(path)
+			if string(b) != "unrelated shortcut" {
+				t.Fatal("changed unrelated object")
+			}
+		})
+	}
+}
+
+func TestInstalledShortcutIdentityUsesExactTargetAndLaunchSettings(t *testing.T) {
+	powershell, err := systemPowerShellPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "Inevitable Mobile Relay.lnk")
+	target := filepath.Join(root, "mobile-egress-client-app.exe")
+	if err := os.WriteFile(target, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, target, directory, args string
+		wantValid                     bool
+	}{
+		{"managed", target, root, "", true},
+		{"another program", filepath.Join(root, "another.exe"), root, "", false},
+		{"different directory", target, filepath.Dir(root), "", false},
+		{"injected arguments", target, root, "--unapproved", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const script = `$ErrorActionPreference='Stop'; $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($env:TEST_SHORTCUT_PATH); $link.TargetPath=$env:TEST_SHORTCUT_TARGET; $link.WorkingDirectory=$env:TEST_SHORTCUT_DIRECTORY; $link.Arguments=$env:TEST_SHORTCUT_ARGUMENTS; $link.Save()`
+			command := exec.Command(powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+			command.Env = append(os.Environ(), "TEST_SHORTCUT_PATH="+path, "TEST_SHORTCUT_TARGET="+tc.target, "TEST_SHORTCUT_DIRECTORY="+tc.directory, "TEST_SHORTCUT_ARGUMENTS="+tc.args)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("create fixture link: %v %s", err, output)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyInstalledShortcut(path, target); (err == nil) != tc.wantValid {
+				t.Fatalf("valid=%v error=%v", tc.wantValid, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal("identity inspection changed shortcut")
+			}
+		})
+	}
+}
+
 func TestInstallVerifiedFilesLeavesInstallationUntouchedWhenControllerStopFails(t *testing.T) {
 	sourceRoot := t.TempDir()
 	destinationRoot := t.TempDir()

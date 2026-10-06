@@ -51,7 +51,7 @@ func parseMode(arguments []string) (string, string, error) {
 	if len(arguments) == 2 && arguments[0] == "--internal-elevated-install" && commandNoncePattern.MatchString(arguments[1]) {
 		return elevatedInstallMode, arguments[1], nil
 	}
-	return "", "", errors.New("Mobile Egress Setup accepts no custom operation or destination")
+	return "", "", errors.New("Inevitable Mobile Relay Setup accepts no custom operation or destination")
 }
 
 func runParent(platform *setup.WindowsPlatform) error {
@@ -136,7 +136,7 @@ func completeElevatedRun(nonce, executable string, exchange setup.Exchange, inst
 	if digestErr != nil {
 		return errors.Join(installErr, digestErr)
 	}
-	result := setup.Result{Nonce: nonce, SetupSHA256: setupDigest, Success: true, Message: "Mobile Egress was installed."}
+	result := setup.Result{Nonce: nonce, SetupSHA256: setupDigest, Success: true, Message: "Inevitable Mobile Relay was installed."}
 	if installErr != nil {
 		result = failureResult(nonce, setupDigest, installErr)
 	}
@@ -149,13 +149,13 @@ func completeElevatedRun(nonce, executable string, exchange setup.Exchange, inst
 
 func failureResult(nonce, setupDigest string, installErr error) setup.Result {
 	code := "install_failed"
-	message := "Installation did not complete. Verify the Mobile Egress publisher trust before retrying."
+	message := "Installation did not complete. Verify the Inevitable Mobile Relay publisher trust before retrying."
 	if errors.Is(installErr, setup.ErrInstallRollback) {
 		code = "install_rollback_failed"
-		message = "Installation rollback could not restore the previous Mobile Egress files. Do not rerun setup; contact the publisher and preserve the restricted recovery backup for repair."
+		message = "Installation rollback could not restore the previous Inevitable Mobile Relay files. Do not rerun setup; contact the publisher and preserve the restricted recovery backup for repair."
 	} else if errors.Is(installErr, setup.ErrTrustRollback) {
 		code = "trust_rollback_failed"
-		message = "Installation did not complete and publisher trust cleanup failed. Review the Mobile Egress certificate entries before retrying."
+		message = "Installation did not complete and publisher trust cleanup failed. Review the Inevitable Mobile Relay certificate entries before retrying."
 	}
 	return setup.Result{
 		Nonce:       nonce,
@@ -169,7 +169,7 @@ func failureResult(nonce, setupDigest string, installErr error) setup.Result {
 func ownExecutable() (string, error) {
 	executable, err := os.Executable()
 	if err != nil {
-		return "", errors.New("locate Mobile Egress Setup")
+		return "", errors.New("locate Inevitable Mobile Relay Setup")
 	}
 	executable, err = filepath.Abs(executable)
 	if err != nil || !strings.EqualFold(filepath.Base(executable), setup.SetupExecutableName) {

@@ -1,10 +1,10 @@
 import Foundation
 
 public enum MobileEgressBranding {
-    public static let displayName = "ZFNF Mobile Egress"
-    public static let agentName = "ZFNF Mobile Egress Agent"
-    public static let headerTitle = "ZFNF MOBILE EGRESS"
-    public static let statusClipboardLabel = "ZFNF Mobile Egress status"
+    public static let displayName = "Inevitable Mobile Relay"
+    public static let agentName = "Inevitable Mobile Relay Agent"
+    public static let headerTitle = "INEVITABLE MOBILE RELAY"
+    public static let statusClipboardLabel = "Inevitable Mobile Relay status"
 }
 
 public enum AgentOperationalState: String, Codable, Equatable, Sendable {

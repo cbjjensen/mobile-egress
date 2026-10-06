@@ -7,7 +7,7 @@ import (
 )
 
 func TestClientProductPayloadCannotInstallControllerOrRelay(t *testing.T) {
-	if SetupExecutableName != "MobileEgressClientSetup.exe" || ControllerExecutableName != "mobile-egress-client-app.exe" || InstallRoot == `C:\Program Files\MobileEgress\Controller` {
+	if SetupExecutableName != "InevitableMobileRelaySetup.exe" || ControllerExecutableName != "mobile-egress-client-app.exe" || InstallRoot != `C:\Program Files\Mobile Egress Client` {
 		t.Fatal("Client setup is not isolated from controller installation")
 	}
 	if len(installedExecutableNames) != 2 || installedExecutableNames[0] != "mobile-egress-client-app.exe" || installedExecutableNames[1] != "mobile-egress-client.exe" {

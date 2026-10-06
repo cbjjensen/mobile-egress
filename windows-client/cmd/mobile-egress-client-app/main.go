@@ -13,11 +13,11 @@ func main() {
 		return
 	}
 	if err := checkGUIPrivileges(); err != nil {
-		fmt.Fprintln(os.Stderr, "Mobile Egress Client could not start:", err)
+		fmt.Fprintln(os.Stderr, "Inevitable Mobile Relay could not start:", err)
 		os.Exit(1)
 	}
 	if err := runApp(); err != nil {
-		fmt.Fprintln(os.Stderr, "Mobile Egress Client could not start:", err)
+		fmt.Fprintln(os.Stderr, "Inevitable Mobile Relay could not start:", err)
 		os.Exit(1)
 	}
 }

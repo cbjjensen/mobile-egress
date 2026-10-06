@@ -18,10 +18,15 @@ async function fixture(t, releases = [{ version: '2.0.0', platforms: ['windows',
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests = [];
   for (const release of releases) {
+    const [major, minor, patch] = release.version.split('.').map(Number);
+    const branded = major > 2 || major === 2 && (minor > 0 || patch >= 2);
     const androidOnly = release.platforms.length === 1 && release.platforms[0] === 'android';
-    const definitions = androidOnly ? [[`zfnf-mobile-egress-android-${release.version}.apk`, `android/app/build/outputs/apk/release/zfnf-mobile-egress-android-${release.version}.apk`]] : [
-      ['MobileEgressClientSetup.exe', `windows-client/build/release/mobile-egress-client-windows-${release.version}/MobileEgressClientSetup.exe`],
-      [`mobile-egress-client-macos-${release.version}-arm64.pkg`, `windows-client/build/release/mobile-egress-client-macos-${release.version}-arm64.pkg`],
+    const windowsName = branded ? 'InevitableMobileRelaySetup.exe' : 'MobileEgressClientSetup.exe';
+    const macName = `${branded ? 'inevitable-mobile-relay-macos' : 'mobile-egress-client-macos'}-${release.version}-arm64.pkg`;
+    const androidName = `${branded ? 'inevitable-mobile-relay-android' : 'zfnf-mobile-egress-android'}-${release.version}.apk`;
+    const definitions = androidOnly ? [[androidName, `android/app/build/outputs/apk/release/${androidName}`]] : [
+      [windowsName, `windows-client/build/release/mobile-egress-client-windows-${release.version}/${windowsName}`],
+      [macName, `windows-client/build/release/${macName}`],
     ];
     const freeze = { schemaVersion: 1, tag: `v${release.version}`, sourceCommit: source,
       components: androidOnly ? ['Android'] : ['Desktop'], artifacts: [] };
@@ -100,6 +105,33 @@ test('rejects legacy, unsafe, duplicate and mismatched source selections before 
   await assert.rejects(f.prepare({ ...f.request, releases: [{ ...f.request.releases[0], sourceCommit: 'c'.repeat(40) }] }), /source/i);
   await assert.rejects(prepareDownloads({ repositoryRoot: f.directory, request: f.request, resolveTag: async () => 'd'.repeat(40) }), /source|tag/i);
   await assert.rejects(f.prepare({ ...f.request, releases: [f.request.releases[0], f.request.releases[0]] }), /duplicate/i);
+});
+
+test('branded R2 objects start at 2.0.2 and leave historical keys and bytes unchanged', async t => {
+  const oldFixture = await fixture(t), oldPlan = await oldFixture.prepare(), r = remote(oldPlan);
+  await publishDownloads(oldPlan, r);
+  const before = oldPlan.artifacts.map(a => ({ key: a.key, body: Buffer.from(r.objects.get(a.key).body) }));
+  const f = await fixture(t, [{ version: '2.0.2', platforms: ['windows', 'macos'] }, { version: '2.0.3', platforms: ['android'] }]);
+  const plan = await f.prepare();
+  assert.deepEqual(plan.artifacts.map(a => a.name), ['InevitableMobileRelaySetup.exe', 'inevitable-mobile-relay-macos-2.0.2-arm64.pkg', 'inevitable-mobile-relay-android-2.0.3.apk']);
+  assert.equal(plan.catalog.platforms.windows.url, `${base}/mobile-egress/2.0.2/InevitableMobileRelaySetup.exe`);
+  await publishDownloads(plan, r);
+  for (const old of before) {
+    assert.deepEqual(r.objects.get(old.key).body, old.body);
+    assert.equal(r.writes.filter(key => key === old.key).length, 1);
+  }
+  for (const a of plan.artifacts) await verifyPublicDownload(a, r.fetch.bind(r));
+});
+
+test('R2 freezes reject legacy aliases for branded releases and branded aliases for historical releases', async t => {
+  for (const version of ['2.0.1', '2.0.2']) {
+    const f = await fixture(t, [{ version, platforms: ['windows', 'macos'] }]);
+    const path = join(f.directory, `windows-client/build/release/mobile-egress-${version}.freeze.json`);
+    const freeze = JSON.parse(await readFile(path, 'utf8'));
+    freeze.artifacts[0].name = version === '2.0.1' ? 'InevitableMobileRelaySetup.exe' : 'MobileEgressClientSetup.exe';
+    await writeFile(path, JSON.stringify(freeze));
+    await assert.rejects(f.prepare(), /artifact/i);
+  }
 });
 test('freeze cannot introduce unexpected filenames or altered local bytes', async t => {
   const f = await fixture(t); const path = join(f.directory, 'windows-client/build/release/mobile-egress-2.0.0.freeze.json');

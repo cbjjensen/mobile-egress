@@ -4,13 +4,13 @@ const api = () => window.go.clientapp.App;
 const show = (id, visible) => el(id).classList.toggle("hidden", !visible);
 const steps = ["address", "network", "pair", "verify", "proxy"];
 const titles = ["Computer address", "Network access", "Connect phone", "Start sharing", "Use in your apps"];
-const invitationReadyMessage = "Your code is ready. Open Mobile Egress on your phone and tap Scan QR.";
-const connectionUpdateMessage = "Open Mobile Egress on your phone and tap Scan QR to update this connection.";
+const invitationReadyMessage = "Your code is ready. Open Inevitable Mobile Relay on your phone and tap Scan QR.";
+const connectionUpdateMessage = "Open Inevitable Mobile Relay on your phone and tap Scan QR to update this connection.";
 const browserApprovalMessage = "Approve this computer in your browser, then come back here.";
 const browserResumeMessage = "Finish approving this computer in your browser.";
 const accountRecoveryMessage = "Inevitable couldn't approve this computer. Check your account access, then approve this computer again in your browser. Your saved phone is kept.";
-const connectionFailureMessage = "Mobile Egress needs attention before it can connect. Open Connection details for the problem and next steps.";
-const phoneStartMessage = "Open Mobile Egress on your phone. Tap Start cellular Agent on Android or Start sharing on iPhone. On iPhone, keep the app open and unlocked.";
+const connectionFailureMessage = "Inevitable Mobile Relay needs attention before it can connect. Open Connection details for the problem and next steps.";
+const phoneStartMessage = "Open Inevitable Mobile Relay on your phone. Tap Start cellular Agent on Android or Start sharing on iPhone. On iPhone, keep the app open and unlocked.";
 const labels = {waiting:"Setup needed", migration_required:"Setup needed", listening:"Waiting for phone", awaiting_phone:"Waiting for phone", pairing:"Adding phone", acknowledging:"Adding phone", ready:"Waiting for phone", connected:"Waiting for phone", expired:"Code expired", revoked:"Phone removed", error:"Needs attention", unavailable:"App unavailable"};
 let status = null, setup = {localAddresses:[], defaultBindAddress:":8443", defaultPublicPort:8443};
 let step = "address", dashboard = false, initialized = false, metadataReady = false;
@@ -32,7 +32,7 @@ const configKey = value => [value.transport || (value.endpoint ? "direct" : "hos
 const activeInvitation = () => !!(status && status.invitationExpiresAt && new Date(status.invitationExpiresAt).getTime() > Date.now());
 
 function computerConnectionMessage() {
-  if (!available()) return "Waiting for Mobile Egress to start.";
+  if (!available()) return "Waiting for Inevitable Mobile Relay to start.";
   if (status.phase === "error") return connectionFailureMessage;
   if (status.activationState === "access_rejected" || status.gatewayState === "authorization_rejected") return accountRecoveryMessage;
   if (!hostedAuthorized()) return "Approve this computer in your browser first, then come back here.";
@@ -41,12 +41,12 @@ function computerConnectionMessage() {
   return "Checking this computer’s connection to Inevitable.";
 }
 function connectionMessage() {
-  if (!available()) return "Mobile Egress is not ready yet. Follow the steps above to get it running.";
+  if (!available()) return "Inevitable Mobile Relay is not ready yet. Follow the steps above to get it running.";
   if (status.phase === "error") return connectionFailureMessage;
   if (status.transport === "hosted" && !hostedAuthorized()) return status.activationState === "pending" ? "Approve this computer in your browser to continue." : "Connect this computer to your Inevitable account to continue.";
   if (pendingPhoneUpdate()) return "Your phone needs updated connection details. Use Reconnect your phone above.";
   if (phoneConnected()) return "Your phone is connected and ready to share mobile data.";
-  if (status.phase === "acknowledging") return "Finishing up on your phone. Keep Mobile Egress open; you don’t need to scan again.";
+  if (status.phase === "acknowledging") return "Finishing up on your phone. Keep Inevitable Mobile Relay open; you don’t need to scan again.";
   if (status.phase === "migration_required") return "This installation needs a new setup. Review setup to connect your phone again.";
   if (status.phase === "expired") return "That code has expired. Show a new QR code to connect your phone.";
   if (status.transport === "hosted" && status.gatewayState !== "connected") return computerConnectionMessage();
@@ -124,7 +124,7 @@ function renderNetwork() {
   } else {
     text = "In your router, forward public TCP port " + publicPort + " to this computer's listener port " + localPort + ". LAN addresses on this computer: " + addresses + ". Select the address on the router's network and keep it stable. For a directly reachable IPv6 address, allow inbound TCP in the router firewall. If your ISP uses CGNAT, forwarding on your router alone will not make this computer reachable; ask the ISP for inbound access or use a reachable hosted Client. ";
   }
-  el("networkInstructions").textContent = text + "Mobile Egress does not change routers or cloud firewalls. Never expose proxy ports 1080 or 1081.";
+  el("networkInstructions").textContent = text + "Inevitable Mobile Relay does not change routers or cloud firewalls. Never expose proxy ports 1080 or 1081.";
   el("networkEndpoint").textContent = status?.endpoint || "Save your computer address first.";
   const firewallLabels = {allowed:"Local access allowed", disabled:"Local firewall disabled", blocked:"Local access blocked", unavailable:"Firewall check unavailable", unknown:"Local access not confirmed"};
   el("firewallState").textContent = firewallBusy ? "Checking local firewall…" : firewallLabels[firewall?.state] || "Check local access";
@@ -141,11 +141,11 @@ function renderDashboardNotice() {
       action = "Connect account"; noticeStep = "address";
     } else if (!status.paired) {
       heading = status.phase === "acknowledging" ? "Finishing up on your phone" : "Finish setting up this computer";
-      message = status.phase === "acknowledging" ? "Keep Mobile Egress open on your phone. You don’t need to scan again." : "Continue where you left off to connect your phone.";
+      message = status.phase === "acknowledging" ? "Keep Inevitable Mobile Relay open on your phone. You don’t need to scan again." : "Continue where you left off to connect your phone.";
       action = "Continue setup"; noticeStep = resumeStep();
     } else if (!pendingPhoneUpdate() && !phoneConnected()) {
       if (!status.running) {
-        heading = "Let’s get you connected"; message = "Mobile Egress hasn’t started the connection. Check Connection details, then review your saved settings.";
+        heading = "Let’s get you connected"; message = "Inevitable Mobile Relay hasn’t started the connection. Check Connection details, then review your saved settings.";
         action = "Review settings"; noticeStep = "address";
       } else if (status.transport === "hosted" && status.gatewayState !== "connected") {
         heading = "Connecting this computer"; message = computerConnectionMessage();
@@ -164,7 +164,7 @@ function render() {
   const ready = available(), connected = phoneConnected(), pendingUpdate = pendingPhoneUpdate();
   const canUpdatePhone = pendingUpdate && (status.transport !== "hosted" || status.activationState === "authorized");
   show("servicePanel", !ready); show("serviceRetry", !ready && readinessExpired);
-  el("serviceMessage").textContent = readinessExpired ? "Mobile Egress couldn’t start. Try again, or run the latest installer to repair it. Your saved phone and app settings will be kept." : "Getting Mobile Egress ready. This can take up to 30 seconds.";
+  el("serviceMessage").textContent = readinessExpired ? "Inevitable Mobile Relay couldn’t start. Try again, or run the latest installer to repair it. Your saved phone and app settings will be kept." : "Getting Inevitable Mobile Relay ready. This can take up to 30 seconds.";
   show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard && !managingPhone);
   show("clientNavigation", initialized && (dashboard || reviewingSetup));
   for (const [id, current] of [["backToDashboard", dashboard && !managingPhone], ["managePhone", managingPhone], ["reviewSetup", !dashboard]]) {
@@ -259,13 +259,13 @@ function render() {
   show("cancelPairing", status?.phase === "acknowledging");
   el("cancelPairing").disabled = busy || !ready;
   el("pending").textContent = pendingUpdate ? (canUpdatePhone ? "Reconnect your phone using the update QR above." : "Approve this computer in your browser, then update your phone’s connection.") : "";
-  el("pairNote").textContent = status?.paired ? "Your phone is already saved. Continue to start sharing, or use Phone settings to replace it." : status?.phase === "acknowledging" ? "Finishing up on your phone. Keep Mobile Egress open with mobile data on. You don’t need a new code." : "Show the QR code below. On your phone, open Mobile Egress, tap Scan QR and scan this screen. Keep mobile data on.";
+  el("pairNote").textContent = status?.paired ? "Your phone is already saved. Continue to start sharing, or use Phone settings to replace it." : status?.phase === "acknowledging" ? "Finishing up on your phone. Keep Inevitable Mobile Relay open with mobile data on. You don’t need a new code." : "Show the QR code below. On your phone, open Inevitable Mobile Relay, tap Scan QR and scan this screen. Keep mobile data on.";
   const expires = activeInvitation() ? new Date(status.invitationExpiresAt) : null;
   el("expiry").textContent = expires ? "This code expires at " + expires.toLocaleTimeString() + "." : "";
   const confirmingPairing = status?.phase === "acknowledging";
   show("phoneStartInstructions", ready && status.paired && !confirmingPairing && !connected && !pendingUpdate);
   el("verifyHeading").textContent = pendingUpdate ? "Update the connection on your phone" : connected ? "Your phone is connected" : confirmingPairing ? "Finishing up on your phone" : "Start sharing on your phone";
-  el("verificationMessage").textContent = !ready ? "Waiting for Mobile Egress to start." : pendingUpdate ? (canUpdatePhone ? "Scan the update QR above on your phone. We’ll continue automatically when the update is saved and your phone connects." : "Approve this computer in Inevitable first, then update the saved connection on your phone.") : connected ? "You’re ready to set up your apps." : confirmingPairing ? "Keep Mobile Egress open on your phone while it finishes. You don’t need to scan again." : status?.paired ? "One more step: start sharing in the phone app. We’ll continue automatically when it connects." : "Go to Connect phone and scan the QR code in the Mobile Egress phone app first.";
+  el("verificationMessage").textContent = !ready ? "Waiting for Inevitable Mobile Relay to start." : pendingUpdate ? (canUpdatePhone ? "Scan the update QR above on your phone. We’ll continue automatically when the update is saved and your phone connects." : "Approve this computer in Inevitable first, then update the saved connection on your phone.") : connected ? "You’re ready to set up your apps." : confirmingPairing ? "Keep Inevitable Mobile Relay open on your phone while it finishes. You don’t need to scan again." : status?.paired ? "One more step: start sharing in the phone app. We’ll continue automatically when it connects." : "Go to Connect phone and scan the QR code in the Inevitable Mobile Relay phone app first.";
   if ((status?.paired || confirmingPairing) && el("feedback").textContent === invitationReadyMessage) el("feedback").textContent = "";
   el("proxyConnection").textContent = connected ? "Copy a format below and paste it into your app’s proxy settings." : "You can copy these settings into your app’s proxy settings now. They’ll work when your phone connects and starts sharing.";
   el("version").textContent = status?.version ? "Client " + status.version : "";
@@ -415,7 +415,7 @@ el("exportUpdate").onclick = () => action(el("exportUpdate"), async () => {
   const view = await api().ExportEndpointUpdate(); el("update").value = view.bundle;
   el("updateQR").src = view.qrDataUrl; show("updateDetails", true);
 }, connectionUpdateMessage);
-el("copyUpdate").onclick = () => action(el("copyUpdate"), () => api().CopyEndpointUpdate(), "Update copied. Import it in Mobile Egress on your saved phone.");
+el("copyUpdate").onclick = () => action(el("copyUpdate"), () => api().CopyEndpointUpdate(), "Update copied. Import it in Inevitable Mobile Relay on your saved phone.");
 el("copyHttp").onclick = () => action(el("copyHttp"), () => api().CopyProxy("http"), "Copied. Paste it into your app’s proxy settings.");
 el("copySocks").onclick = () => action(el("copySocks"), () => api().CopyProxy("socks"), "Copied. Paste it into your app’s proxy settings.");
 el("revoke").onclick = () => { show("revokeConfirmation", true); };

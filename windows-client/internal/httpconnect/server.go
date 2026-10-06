@@ -152,7 +152,7 @@ func (server *Server) Stop() error {
 
 func (server *Server) handle(writer http.ResponseWriter, request *http.Request) {
 	if !server.authenticate(request.Header.Get("Proxy-Authorization")) {
-		writer.Header().Set("Proxy-Authenticate", `Basic realm="Mobile Egress"`)
+		writer.Header().Set("Proxy-Authenticate", `Basic realm="Inevitable Mobile Relay"`)
 		writer.WriteHeader(http.StatusProxyAuthRequired)
 		return
 	}

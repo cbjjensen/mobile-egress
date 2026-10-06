@@ -13,6 +13,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 printf '%s' "$RELEASE_VERSION" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || fail 'invalid release version'
+BASE_VERSION=${RELEASE_VERSION%%-*}
+MAJOR=${BASE_VERSION%%.*}
+MINOR_PATCH=${BASE_VERSION#*.}
+MINOR=${MINOR_PATCH%%.*}
+PATCH=${MINOR_PATCH#*.}
+if [ "$MAJOR" -lt 2 ] || { [ "$MAJOR" -eq 2 ] && [ "$MINOR" -eq 0 ] && [ "$PATCH" -lt 2 ]; }; then
+    fail 'renamed source requires release version 2.0.2 or later; rebuild only from the original historical source checkout'
+fi
 printf '%s' "$SOURCE_COMMIT" | /usr/bin/grep -Eq '^[0-9a-f]{40}$' || fail 'invalid source commit'
 [ "$(/usr/bin/uname -s)" = Darwin ] && [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'Apple Silicon macOS is required'
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
@@ -43,7 +51,7 @@ else
 fi
 cleanup_stage() { /bin/rm -rf -- "$STAGE"; }
 trap cleanup_stage EXIT HUP INT TERM
-APP="$STAGE/Applications/ZFNF Mobile Egress Client.app"
+APP="$STAGE/Applications/Inevitable Mobile Relay.app"
 DAEMON="$STAGE/Library/Application Support/MobileEgressClient/bin/mobile-egress-client"
 /bin/mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$(dirname "$DAEMON")" "$STAGE/Library/LaunchDaemons"
 BUILD_VERSION=${RELEASE_VERSION%%-*}

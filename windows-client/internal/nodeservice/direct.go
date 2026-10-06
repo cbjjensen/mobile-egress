@@ -237,7 +237,7 @@ func (m *Direct) refreshLocked() {
 	}
 	if status.Transport == "hosted" && status.GatewayState == "authorization_rejected" {
 		status.ActivationState = "access_rejected"
-		status.Message = "Gateway access was rejected. Check Mobile Egress account access or reactivate this Client. Local phone pairing is preserved."
+		status.Message = "Gateway access was rejected. Check Inevitable Mobile Relay account access or reactivate this Client. Local phone pairing is preserved."
 	}
 	if m.denied.Load() {
 		status.Phase = "error"

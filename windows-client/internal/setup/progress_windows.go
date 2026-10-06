@@ -96,13 +96,13 @@ func (p *NativeProgress) run(ready chan<- error) {
 	}
 	create := user32.NewProc("CreateWindowExW")
 	// A fixed native window with no close control while the transaction is active.
-	hwnd, _, _ := create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Mobile Egress Setup"))), 0x00C00000|0x10000000, 0x80000000, 0x80000000, 570, 180, 0, 0, 0, 0)
+	hwnd, _, _ := create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Inevitable Mobile Relay Setup"))), 0x00C00000|0x10000000, 0x80000000, 0x80000000, 570, 180, 0, 0, 0, 0)
 	if hwnd == 0 {
 		ready <- errors.New("create setup progress window")
 		return
 	}
 	defer progressWindows.Delete(hwnd)
-	label, _, _ := create.Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Preparing Mobile Egress setup…"))), 0x40000000|0x10000000, 24, 32, 510, 82, hwnd, 0, 0, 0)
+	label, _, _ := create.Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Preparing Inevitable Mobile Relay setup…"))), 0x40000000|0x10000000, 24, 32, 510, 82, hwnd, 0, 0, 0)
 	if label == 0 {
 		user32.NewProc("DestroyWindow").Call(hwnd)
 		ready <- errors.New("create setup progress text")
@@ -143,6 +143,6 @@ func (p *NativeProgress) Close() {
 }
 
 func (platform *WindowsPlatform) RetryRuntime() bool {
-	result, err := showMessageBox("Mobile Egress is installed, but Microsoft WebView2 Runtime is not ready. Check your internet connection and choose Retry to finish the runtime step. Mobile Egress will not be reinstalled. Choose Cancel to finish later by opening Mobile Egress from the Start Menu.", "Finish Mobile Egress setup", 0x5|messageBoxIconWarning|messageBoxTopmost)
+	result, err := showMessageBox("Inevitable Mobile Relay is installed, but Microsoft WebView2 Runtime is not ready. Check your internet connection and choose Retry to finish the runtime step. Inevitable Mobile Relay will not be reinstalled. Choose Cancel to finish later by opening Inevitable Mobile Relay from the Start Menu.", "Finish Inevitable Mobile Relay setup", 0x5|messageBoxIconWarning|messageBoxTopmost)
 	return err == nil && result == 4
 }

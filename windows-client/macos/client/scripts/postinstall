@@ -4,6 +4,8 @@ set -eu
 [ "${3:-/}" = / ] || exit 1
 STATE='/Library/Application Support/MobileEgressClient'
 PLIST='/Library/LaunchDaemons/com.zfnf.mobile-egress.client.plist'
+APP='/Applications/Inevitable Mobile Relay.app'
+LEGACY_APP='/Applications/ZFNF Mobile Egress Client.app'
 [ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 1
 /usr/sbin/chown root:wheel "$STATE" "$STATE/bin" "$PLIST"
 /bin/chmod 700 "$STATE"
@@ -16,10 +18,33 @@ case "$OWNER_UID" in ''|*[!0-9]*) exit 1;; esac
 /usr/sbin/chown root:wheel "$STATE/owner.uid"
 /bin/chmod 600 "$STATE/owner.uid"
 /usr/bin/codesign --verify --strict "$STATE/bin/mobile-egress-client"
+[ -d "$APP" ] && [ ! -L "$APP" ] || exit 1
+[ -d "$APP/Contents" ] && [ ! -L "$APP/Contents" ] || exit 1
+[ -f "$APP/Contents/Info.plist" ] && [ ! -L "$APP/Contents/Info.plist" ] || exit 1
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist")" = com.zfnf.mobile-egress.client.app ] || exit 1
+[ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist")" = mobile-egress-client-app ] || exit 1
+/usr/bin/codesign --verify --deep --strict -R='anchor apple generic and identifier "com.zfnf.mobile-egress.client.app" and certificate leaf[subject.OU] = "@@TEAM_ID@@"' "$APP"
 /bin/launchctl enable system/com.zfnf.mobile-egress.client
 /bin/launchctl bootstrap system "$PLIST"
 /bin/launchctl kickstart system/com.zfnf.mobile-egress.client
 # Configuration and keychain items are deliberately retained for update/repair.
+
+# Keep the legacy GUI reachable until the replacement and service are verified.
+# Retain it in root-private recovery storage rather than deleting the only old
+# copy. A payload/startup failure above leaves the old Applications path intact.
+if [ -e "$LEGACY_APP" ] || [ -L "$LEGACY_APP" ]; then
+    [ -d "$LEGACY_APP" ] && [ ! -L "$LEGACY_APP" ] || exit 1
+    [ -d "$LEGACY_APP/Contents" ] && [ ! -L "$LEGACY_APP/Contents" ] || exit 1
+    [ -f "$LEGACY_APP/Contents/Info.plist" ] && [ ! -L "$LEGACY_APP/Contents/Info.plist" ] || exit 1
+    [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$LEGACY_APP/Contents/Info.plist")" = com.zfnf.mobile-egress.client.app ] || exit 1
+    [ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$LEGACY_APP/Contents/Info.plist")" = mobile-egress-client-app ] || exit 1
+    /usr/bin/codesign --verify --deep --strict -R='anchor apple generic and identifier "com.zfnf.mobile-egress.client.app" and certificate leaf[subject.OU] = "@@TEAM_ID@@"' "$LEGACY_APP"
+    RECOVERY=$(/usr/bin/mktemp -d "$STATE/.legacy-gui-recovery.XXXXXX")
+    /usr/sbin/chown root:wheel "$RECOVERY"
+    /bin/chmod 700 "$RECOVERY"
+    /bin/mv -n "$LEGACY_APP" "$RECOVERY/ZFNF Mobile Egress Client.app"
+    [ ! -e "$LEGACY_APP" ] && [ ! -L "$LEGACY_APP" ] || { printf 'The old GUI could not be moved into recovery storage. Preserve both apps and repair the installation.\n' >&2; exit 1; }
+fi
 
 # Installer runs as root. Enter the saved owner's current GUI session AND
 # explicitly drop credentials before asking LaunchServices to open the app.
@@ -32,7 +57,7 @@ open_owner_app() {
     [ "$ACTIVE_UID" = "$OWNER_UID" ] || return 1
     /bin/launchctl print "gui/$OWNER_UID" >/dev/null 2>&1 || return 1
     exec /bin/launchctl asuser "$OWNER_UID" /usr/bin/sudo -n -H -u "#$OWNER_UID" \
-        /usr/bin/open -a '/Applications/ZFNF Mobile Egress Client.app'
+        /usr/bin/open -a '/Applications/Inevitable Mobile Relay.app'
 }
 
 # GUI dispatch is best effort and must never hold up a completed installation.
@@ -48,6 +73,6 @@ if kill -0 "$HANDOFF_PID" 2>/dev/null; then
     kill -KILL "$HANDOFF_PID" 2>/dev/null || true
 fi
 if ! wait "$HANDOFF_PID" 2>/dev/null; then
-    printf 'Open ZFNF Mobile Egress Client from Applications as the installation owner to continue setup.\n'
+    printf 'Open Inevitable Mobile Relay from Applications as the installation owner to continue setup.\n'
 fi
 exit 0

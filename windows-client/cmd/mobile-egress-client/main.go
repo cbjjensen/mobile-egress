@@ -40,7 +40,7 @@ func run(arguments []string, stdout, stderr io.Writer, open repositoryOpener) in
 	}
 	switch arguments[0] {
 	case "bootstrap", "apply-config":
-		fmt.Fprintln(stderr, "Mobile Egress 2 uses direct phone pairing. Install or repair the Client app and configure its endpoint; legacy relay configuration is unsupported.")
+		fmt.Fprintln(stderr, "Inevitable Mobile Relay uses local phone pairing with Inevitable-hosted connectivity or Advanced direct mode. Install or repair the app to configure your connection; legacy relay configuration is unsupported.")
 		return 2
 	case "serve":
 		return runServe(arguments[1:], stderr, open)

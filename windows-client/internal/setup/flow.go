@@ -21,7 +21,7 @@ const (
 var (
 	ErrConfirmationDeclined    = errors.New("setup confirmation was declined")
 	ErrInstallRollback         = errors.New("installation rollback failed")
-	ErrSetupTransactionTimeout = errors.New("another Mobile Egress setup transaction is already running")
+	ErrSetupTransactionTimeout = errors.New("another Inevitable Mobile Relay setup transaction is already running")
 	ErrTrustRollback           = errors.New("publisher trust rollback failed")
 )
 
@@ -58,7 +58,7 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 		return errors.New("inspect setup elevation")
 	}
 	if elevated {
-		return errors.New("run Mobile Egress Setup normally, not from an elevated process")
+		return errors.New("run Inevitable Mobile Relay Setup normally, not from an elevated process")
 	}
 	setupLock, err := platform.AcquireSetupLock(options.Executable)
 	if err != nil {
@@ -79,7 +79,7 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if !confirmed {
 		return ErrConfirmationDeclined
 	}
-	reportProgress(options.Progress, "Waiting for Windows permission and installing Mobile Egress…")
+	reportProgress(options.Progress, "Waiting for Windows permission and installing Inevitable Mobile Relay…")
 	setupSHA256, err := setupLock.SHA256()
 	if err != nil {
 		return errors.New("hash confirmed setup executable")
@@ -118,7 +118,7 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 			return err
 		}
 	}
-	reportProgress(options.Progress, "Opening Mobile Egress…")
+	reportProgress(options.Progress, "Opening Inevitable Mobile Relay…")
 	if err := platform.Launch(options.InstalledController); err != nil {
 		return errors.New("launch installed controller")
 	}
@@ -177,7 +177,7 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 	if err := platform.VerifyPreTrustAuthenticode(options.SetupPath, options.Identity); err != nil {
 		return errors.New("setup Authenticode signature is not intact and bound to the expected signer")
 	}
-	reportProgress(options.Progress, "Waiting for other Mobile Egress setup operations…")
+	reportProgress(options.Progress, "Waiting for other Inevitable Mobile Relay setup operations…")
 	transaction, err := platform.AcquireSetupTransaction()
 	if err != nil {
 		return fmt.Errorf("acquire elevated setup transaction: %w", err)
@@ -190,7 +190,7 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 	releaseDir := filepath.Dir(options.SetupPath)
 	payloadDir := ""
 	if options.PreparePayload != nil {
-		reportProgress(options.Progress, "Unpacking signed Mobile Egress files…")
+		reportProgress(options.Progress, "Unpacking signed Inevitable Mobile Relay files…")
 		directory, cleanup, err := options.PreparePayload()
 		if err != nil {
 			return err
@@ -245,7 +245,7 @@ func RunElevated(options ElevatedOptions, platform ElevatedPlatform) (resultErr 
 	for _, name := range installedExecutableNames {
 		files = append(files, InstallFile{Source: releasePath(name), Destination: filepath.Join(InstallRoot, name)})
 	}
-	reportProgress(options.Progress, "Installing Mobile Egress and its Start Menu shortcut…")
+	reportProgress(options.Progress, "Installing Inevitable Mobile Relay and its Start Menu shortcut…")
 	if err := platform.Install(files, options.Identity); err != nil {
 		return fmt.Errorf("transactionally install signed release files and Start Menu shortcut: %w", err)
 	}

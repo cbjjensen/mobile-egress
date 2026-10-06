@@ -224,8 +224,8 @@ func (s *clientServiceInstall) install() error {
 
 func (s *clientServiceInstall) installRegistration() error {
 	config := mgr.Config{
-		DisplayName:      "Mobile Egress Client",
-		Description:      "Direct cellular workload Client proxy",
+		DisplayName:      "Inevitable Mobile Relay",
+		Description:      "Inevitable Mobile Relay cellular workload proxy",
 		StartType:        mgr.StartAutomatic,
 		ServiceStartName: "LocalSystem",
 		BinaryPathName:   standaloneClientCommandForState(s.stateDirectory),

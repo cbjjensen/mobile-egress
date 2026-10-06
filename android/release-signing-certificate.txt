@@ -1,4 +1,6 @@
-# Mobile Egress Android release signing certificate
+# Inevitable Mobile Relay Android release signing certificate
+
+The historical Mobile Egress signer subject is preserved for compatible upgrades.
 
 This is public certificate metadata, not a private key or password. Every release APK must match this identity so installed copies can receive updates.
 
