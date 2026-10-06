@@ -52,3 +52,7 @@ The owner also requested the selected Broadcast artwork on the Windows and Mac C
 ## Inevitable website follow-up (2026-10-06)
 
 The owner also approved Relay-specific website artwork. Inevitable now imports an exact copy of the generated desktop header (SHA-256 `59959FCAF8714F3C8004292F8A940C041563D4D32FB0EEC61C95815008D76395`) through a shared feature-owned logo component. The customer hero, decorative phone, Settings and activation header use it; Inevitable's global branding and access/billing behavior are preserved. The sibling record is `technical-requirement-docs/2026-10-06-mobile-relay-broadcast-logo/implementation-summary.md`: 107 UI tests and the workspace build passed, and 12 local fixture renders covered desktop/phone widths and all three themes. No website deployment or published app replacement is claimed.
+
+## Authorized delivery follow-up
+
+The subsequent deployment request produced signed Windows/Mac/Android 2.0.3 downloads on GitHub/R2 and signed iPhone 2.0.3 (8) on TestFlight. See the [coordinated publication record](../superpowers/plans/2026-10-06-broadcast-release.md) for hashes, verification, website rollout and Apple/physical acceptance status. The source-only statements above describe the earlier implementation checkpoints.
