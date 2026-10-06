@@ -93,7 +93,15 @@ For longer iPhone sessions, use a dedicated phone and keep it powered. The compu
 
 ## Downloads and existing installations
 
+The Inevitable Mobile Egress page provides **Download for your computer**, **Get the phone app**, and account access management. When configured, Windows, Apple Silicon Mac and Android downloads use verified public R2 files. Unavailable downloads are shown as unavailable; owning an installer does not activate hosted access.
+
+Subscription support offers monthly or yearly billing for one account, covering its activated computers without paid seats or data quotas. Prices and new sales remain disabled until an administrator explicitly opens them. Cancellation keeps access through the paid term; changing billing periods requires that term to end before subscribing again. Complimentary pilot access remains separate.
+
+**The iPhone TestFlight pilot is free and requires approval.** Purchasing a subscription does not enroll you. Approved pilot accounts can save a TestFlight invitation email with consent to share it with Apple; no Apple password is requested. Apple review, build expiry and tester capacity can delay availability. The website distinguishes a saved request from an invitation or a build ready to install. Production iPhone distribution will use the approved App Store link.
+
 The [2.0.0 pilot release](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.0) provides the signed **Windows Client installer** (`MobileEgressClientSetup.exe`) and signed/notarized **Apple Silicon Mac Client PKG**. Pair them with a compatible 2.x phone build. iPhone builds are distributed through TestFlight invitations; no compatible Android APK is published in this installer release. The pilot-validation notice above remains in effect; historical 1.x downloads are not substitutes.
+
+Publishing details and integrity checks are documented in the [R2 download guide](docs/r2-downloads.md). Subscription and invitation source changes do not themselves open sales, enable invitations or promote pilot downloads to stable.
 
 Upgrading from 1.x requires fresh pairing. Existing direct 2.x installations keep their settings until you explicitly switch to hosted mode. Follow the [installation and migration guide](docs/standalone-clients.md). Retire a former controller computer using the [separate retirement instructions](docs/controller-retirement.md).
 

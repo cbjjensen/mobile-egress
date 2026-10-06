@@ -21,3 +21,11 @@ Approved 2026-10-05; implement on main, preserving existing work. The correspond
 - [ ] Billing/backend/frontend/release/manifest validation and independent review.
 
 Implementation does not authorize production deployment, opening sales or stable promotion. Record signed artifact, Apple review and physical-device blockers explicitly. Final evidence and rulings must be synchronized here and in the sibling implementation summary.
+
+## Implementation evidence, 2026-10-05
+
+The R2 publisher and credential-safe PowerShell wrapper are implemented. Fourteen offline publisher tests and the wrapper tests pass, covering immutable conflicts, interrupted uploads, exact source/hash provenance and public-byte verification before catalog promotion. Independent review found no remaining publisher findings. Existing Windows/Mac v2.0.0 frozen bytes remain unchanged; the publisher selects platforms explicitly and never inherits an unverified download.
+
+Android is being prepared as a separate 2.0.1 release, versionCode 25, using the established signer. The Android component gate passed, including 316 unit tests, lint, debug assembly, manifest and release contracts. The version-sensitive release test was updated alongside the version bump. Guarded signed release preparation and final freeze evidence follow in the final validation record; no asset is appended to the immutable v2.0.0 release.
+
+The sibling Inevitable implementation has passed a full workspace build, 600 frontend tests and 2,445 backend tests (including real PostgreSQL billing/pilot scenarios); twelve unrelated environment-gated suites/128 tests were skipped. The safe local billing baseline passed four checks with external Discord calls disabled and no orders created. Additional UI cases passed in a focused 76-test run. Independent review found billing recovery/isolation issues being repaired before completion. Sales, prices, invitation automation and production configuration remain unchanged.

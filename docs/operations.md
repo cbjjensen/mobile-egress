@@ -1,5 +1,13 @@
 # Operations and recovery
 
+## Subscription and pilot access
+
+Hosted access can come from a valid paid Mobile Egress subscription or an independent approved pilot grant. Account/user suspension and computer revocation still apply. Subscription cancellation preserves the paid term; failed renewal does not extend it. Full refunds remove the affected invoice contribution and open disputes suspend paid access. These changes never delete phone pairing or Advanced direct settings, and the existing bounded gateway configuration refresh controls enforcement timing.
+
+The Inevitable page owns subscription management, nullable public platform downloads and the complimentary iPhone pilot request. TestFlight requires Admin pilot approval independently of purchasing. Invitation automation uses a consented email and an explicitly selected compatible, unexpired externally approved build; delivery and installation are never inferred from an API response. Keep iOS open/active/unlocked and Android foreground-service behavior unchanged.
+
+See [R2 publication](r2-downloads.md) and the synchronized [subscription plan](superpowers/plans/2026-10-05-mobile-egress-subscriptions.md). Rollback closes new sales/invitations while preserving reconciliation, existing paid/pilot grants and immutable artifacts. Production configuration and physical acceptance remain separate gates.
+
 ## Reading connection state
 
 - **Setup needed**: complete **Your account** and **Connect this computer**, or explicitly choose Advanced direct mode, then connect a phone. Legacy installations still require fresh pairing.
