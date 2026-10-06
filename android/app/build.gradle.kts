@@ -13,7 +13,7 @@ val releaseProperties = Properties().apply {
         releasePropertiesFile.inputStream().use(::load)
     }
 }
-val androidVersionName = "2.0.1"
+val androidVersionName = "2.0.2"
 // Published 2.0.0/2.0.1 assets retain their immutable historical filenames.
 val androidUsesRelayBranding = androidVersionName.split('.').map(String::toInt).let { (major, minor, patch) ->
     major > 2 || major == 2 && (minor > 0 || patch >= 2)
@@ -27,7 +27,7 @@ android {
         applicationId = "com.mobileegress.agent"
         minSdk = 29
         targetSdk = 35
-        versionCode = 25
+        versionCode = 26
         versionName = androidVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
