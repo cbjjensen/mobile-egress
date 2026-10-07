@@ -2,6 +2,8 @@
 
 - Current customer-facing product name: **Inevitable Mobile Relay**. Preserve existing `mobile-egress`/`com.zfnf` identifiers, signing identities, storage/service paths, published assets and historical evidence. Branding does not restore the retired personal-computer relay. Branded download filenames start at 2.0.2; frozen older artifacts remain immutable.
 
+- Windows and Mac Clients share `windows-client/internal/clientapp/assets/index.html`. Keep its fixed OLED palette in semantic CSS variables aligned with Inevitable's OLED theme, with a black native startup background and dark native appearance. Preserve QR pixels/quiet zones without theme filters; do not style the retired controller assets instead.
+
 - Inevitable Mobile Relay 2.x uses Inevitable-hosted connectivity by default, with explicit Advanced direct mode. Client and phone connect outbound through existing Inevitable gateway machines; phone-to-Client TLS remains end-to-end and application traffic exits through cellular. Existing direct installations stay direct until their owner switches modes.
 - The owner retired the personal-computer relay requirement on 2026-10-03 and approved hosted connectivity afterward. Do not restore a central Desktop controller, customer AWS management, Tailscale, Funnel, or automatic fallback. EC2 may run a locally managed workload Client.
 - Local HTTP/CONNECT and SOCKS proxies remain loopback-only. Hosted mode opens no public workload listener or inbound firewall rule. Advanced direct mode exposes authenticated Agent transport only. Do not automatically change customer routers or cloud ingress.

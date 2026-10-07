@@ -9,6 +9,8 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -19,5 +21,13 @@ func runApp() error {
 	}
 	var appContext context.Context
 	app := clientapp.NewWithBrowser(clientapp.LocalClient{}, func(value string) error { return runtime.ClipboardSetText(appContext, value) }, func(raw string) error { runtime.BrowserOpenURL(appContext, raw); return nil })
-	return wails.Run(&options.App{Title: "Inevitable Mobile Relay", Width: 940, Height: 760, MinWidth: 620, MinHeight: 650, AssetServer: &assetserver.Options{Assets: assets}, OnStartup: func(ctx context.Context) { appContext = ctx }, Bind: []interface{}{app}})
+	return wails.Run(&options.App{
+		Title: "Inevitable Mobile Relay", Width: 940, Height: 760, MinWidth: 620, MinHeight: 650,
+		BackgroundColour: options.NewRGB(0, 0, 0),
+		Windows:          &windows.Options{Theme: windows.Dark},
+		Mac:              &mac.Options{Appearance: mac.NSAppearanceNameDarkAqua},
+		AssetServer:      &assetserver.Options{Assets: assets},
+		OnStartup:        func(ctx context.Context) { appContext = ctx },
+		Bind:             []interface{}{app},
+	})
 }
