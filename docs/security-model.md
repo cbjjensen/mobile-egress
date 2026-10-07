@@ -22,6 +22,10 @@ Windows service secrets use LocalSystem DPAPI. Mac service secrets use a dedicat
 
 Revocation commits before reporting success and closes active streams; reconnection is denied. Removing a Client on the phone durably disables reconnection before destroying its association. A new phone needs explicit re-pairing. Renewal requires an admitted existing identity and the same public key; expired/unrecoverable trust requires local re-pairing.
 
+A Client stores at most ten local phone records, including one pending invitation. Each record owns its pairing ID, admitted certificate serials, proxy credentials, slot and active tunnel. A shared CA does not authorize one phone to acknowledge, renew, update or use another phone's session. Proxy credentials select exactly one phone; there is no pooling or automatic fallback. Reusing a removed slot generates fresh credentials. Website computer revocation disables the Client's hosted access for all phones; local removal affects one record.
+
+If local removal cannot persist, only the target phone is suppressed in that service process and success is not reported. The previous durable state may still admit it after restart; retry removal until it succeeds. Unreadable shared state fails closed for the whole Client. Schema-3 migration validates the full candidate before publishing state and preserves retained schema-2 pairing and recovery. Older binaries reject schema 3; forward repair avoids resurrecting removed trust from stale backups.
+
 Endpoint update signatures cover exact serialized payload bytes, including mode, with a domain separator. The pinned authority, Client ID, pairing ID and generation must match; skipped generations are allowed, stale/conflicting changes reject. Update payloads cannot change authority, keys or proxy credentials. An explicit capability allows one bounded live update per phone session; QR/file recovery remains available. Desired endpoints remain pending until acknowledged.
 
 ## Traffic boundaries

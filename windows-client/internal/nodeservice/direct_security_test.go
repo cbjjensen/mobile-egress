@@ -131,7 +131,7 @@ func TestDirectLostRenewalRetryUsesAcknowledgedEndpointGeneration(t *testing.T) 
 	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}
 	ack := httptest.NewRecorder()
 	m.handler().ServeHTTP(ack, request)
-	if ack.Code != 200 || m.state.Pairing.PreviousSerial != old.Serial {
+	if ack.Code != 200 || m.state.Phones[0].Pairing.PreviousSerial != old.Serial {
 		t.Fatal("old certificate could not acknowledge the endpoint without losing renewal recovery", ack.Code)
 	}
 	if err := m.Configure(context.Background(), DirectConfiguration{Endpoint: "https://third.example:8443", DisplayName: "Client"}); err != nil {
@@ -198,7 +198,7 @@ func TestDirectFailedIssuanceDoesNotReservePairingAndRevokeFailsClosed(t *testin
 	if w := directTestRequest(m, "/v2/direct/enroll", directEnrollBody(i, csr), nil); w.Code != 503 {
 		t.Fatal("failed persistence delivered credentials", w.Code)
 	}
-	if m.state.Pairing != nil {
+	if m.state.Phones[0].Pairing != nil {
 		t.Fatal("failed issuance retained pairing")
 	}
 	store.setFail(false)
@@ -234,7 +234,7 @@ func TestDirectRealTLSAdmissionSessionReplacementAndRevocation(t *testing.T) {
 	m.opMu.Lock()
 	m.runCtx = context.Background()
 	m.opMu.Unlock()
-	defer m.opener.swap(nil)
+	defer m.runtimeLocked(m.state.Phones[0].ID).opener.swap(nil)
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM([]byte(invitation.CACertificatePEM))
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -295,7 +295,7 @@ func TestDirectRealTLSAdmissionSessionReplacementAndRevocation(t *testing.T) {
 	if _, _, err := first.ReadMessage(); err == nil {
 		t.Fatal("replacement kept previous session")
 	}
-	tunnel := m.opener.current()
+	tunnel := m.runtimeLocked(m.state.Phones[0].ID).opener.current()
 	streamResult := make(chan io.ReadWriteCloser, 1)
 	errorsChannel := make(chan error, 1)
 	go func() {

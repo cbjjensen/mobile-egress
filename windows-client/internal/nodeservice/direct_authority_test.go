@@ -76,6 +76,9 @@ func TestDirectCanonicalOriginsReachInvitationAndSignedUpdate(t *testing.T) {
 			if err := m.Configure(context.Background(), DirectConfiguration{Endpoint: tc.endpoint, DisplayName: "Client"}); err != nil {
 				t.Fatal(err)
 			}
+			if err := m.CancelInvitation(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 			bundle, err := m.IssueInvitation(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -109,6 +112,9 @@ func TestDirectCanonicalOriginsAcceptEquivalentPhoneAuthority(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _, csr := directTestConfigured(t)
 			if err := m.Configure(context.Background(), DirectConfiguration{Endpoint: tc.canonical, DisplayName: "Client"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.CancelInvitation(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			bundle, err := m.IssueInvitation(context.Background())
@@ -152,7 +158,7 @@ func TestDirectPersistedNoncanonicalOriginsRecoverAndAcknowledge(t *testing.T) {
 				if update {
 					next.Generation++
 				} else {
-					next.Invitation.Endpoint = tc.endpoint
+					next.Phones[0].Invitation.Endpoint = tc.endpoint
 				}
 				if err := directServerCertificate(next, tc.endpoint); err != nil {
 					t.Fatal(err)
@@ -168,7 +174,7 @@ func TestDirectPersistedNoncanonicalOriginsRecoverAndAcknowledge(t *testing.T) {
 				if got := directEndpointFromUpdate(t, bundle); got != tc.endpoint {
 					t.Errorf("changed the signed endpoint at an existing generation: got %q; want %q", got, tc.endpoint)
 				}
-				if restarted.state.Generation != next.Generation || restarted.state.Pairing.ID != next.Pairing.ID || restarted.state.CACertificatePEM != next.CACertificatePEM || restarted.state.Invitation.Capability != next.Invitation.Capability {
+				if restarted.state.Generation != next.Generation || restarted.state.Phones[0].Pairing.ID != next.Phones[0].Pairing.ID || restarted.state.CACertificatePEM != next.CACertificatePEM || restarted.state.Phones[0].Invitation.Capability != next.Phones[0].Invitation.Capability {
 					t.Fatal("normalization changed generation, pairing, trust or invitation")
 				}
 				ack := map[string]any{"clientId": identity.ClientID, "pairingId": identity.PairingID, "generation": next.Generation}
@@ -183,7 +189,7 @@ func TestDirectPersistedNoncanonicalOriginsRecoverAndAcknowledge(t *testing.T) {
 				if w := directAuthorityRequest(t, restarted, http.MethodPost, "/v2/direct/ack", tc.authority, ack, identity); w.Code != http.StatusOK {
 					t.Fatalf("equivalent authority rejected: %d %s", w.Code, w.Body.String())
 				}
-				if restarted.state.AcknowledgedEndpoint != tc.canonical || restarted.Status().UpdatePending || !restarted.Status().Paired {
+				if restarted.state.Phones[0].AcknowledgedEndpoint != tc.canonical || restarted.Status().UpdatePending || !restarted.Status().Paired {
 					t.Fatal("ACK did not durably complete pairing/update with the canonical origin")
 				}
 				if err := restarted.Configure(context.Background(), *next.Configuration); err != nil {

@@ -315,11 +315,13 @@ func directServerCertificate(state *directState, endpoint string) error {
 	now := time.Now()
 	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: state.ClientID}, NotBefore: now.Add(-time.Minute), NotAfter: now.AddDate(0, 3, 0), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	origins := []string{endpoint}
-	if state.AcknowledgedEndpoint != "" {
-		origins = append(origins, state.AcknowledgedEndpoint)
-	}
-	if state.AcknowledgedEndpoint == "" && state.Invitation != nil {
-		origins = append(origins, state.Invitation.Endpoint)
+	for _, p := range state.Phones {
+		if p.AcknowledgedEndpoint != "" {
+			origins = append(origins, p.AcknowledgedEndpoint)
+		}
+		if p.AcknowledgedEndpoint == "" && p.Invitation != nil {
+			origins = append(origins, p.Invitation.Endpoint)
+		}
 	}
 	if state.Configuration != nil {
 		origins = append(origins, state.Configuration.Endpoint)
@@ -413,7 +415,13 @@ func directServerNeedsRenewal(state *directState) bool {
 	return err != nil || time.Now().Before(certificate.NotBefore) || time.Until(certificate.NotAfter) < 7*24*time.Hour
 }
 func directEndpointBundle(state *directState) (string, error) {
-	if state.Configuration == nil || state.Pairing == nil || state.Pairing.Revoked {
+	if len(state.Phones) != 1 {
+		return "", errors.New("Select a phone for this action.")
+	}
+	return directPhoneEndpointBundle(state, state.Phones[0])
+}
+func directPhoneEndpointBundle(state *directState, phone *directPhone) (string, error) {
+	if state.Configuration == nil || phone.Pairing == nil || phone.Pairing.Revoked {
 		return "", errors.New("Pair a phone before exporting an update.")
 	}
 	payload, err := json.Marshal(struct {
@@ -422,7 +430,7 @@ func directEndpointBundle(state *directState) (string, error) {
 		Generation uint64 `json:"generation"`
 		Endpoint   string `json:"endpoint"`
 		Transport  string `json:"transport,omitempty"`
-	}{state.ClientID, state.Pairing.ID, state.Generation, state.Configuration.Endpoint, wireTransport(state.Configuration.Transport)})
+	}{state.ClientID, phone.Pairing.ID, state.Generation, state.Configuration.Endpoint, wireTransport(state.Configuration.Transport)})
 	if err != nil {
 		return "", err
 	}

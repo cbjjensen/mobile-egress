@@ -172,7 +172,7 @@ func TestAuthorizedActivationSeparatesBrokerAndRouteAndRetainsPhone(t *testing.T
 	if response.Code != 201 {
 		t.Fatal(response.Body.String())
 	}
-	id, pairing, ca, password := m.state.ClientID, m.state.Pairing.ID, m.state.CACertificatePEM, m.state.Password
+	id, pairing, ca, password := m.state.ClientID, m.state.Phones[0].Pairing.ID, m.state.CACertificatePEM, m.state.Phones[0].Password
 	verifier, _ := directRandom()
 	proof := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	m.state.Activation = &activationState{RequestID: "12345678-1234-4234-8234-123456789012", PollSecret: proof, CodeVerifier: verifier, DisplayName: "Workload", Status: "pending", ExpiresAt: time.Now().Add(time.Hour), PollIntervalSeconds: 5}
@@ -191,7 +191,7 @@ func TestAuthorizedActivationSeparatesBrokerAndRouteAndRetainsPhone(t *testing.T
 	if m.state.Configuration.Endpoint != "https://"+route || m.state.Hosted.BrokerEndpoint != "https://broker.example:443" {
 		t.Fatal("broker conflated with phone endpoint")
 	}
-	if m.state.ClientID != id || m.state.Pairing.ID != pairing || m.state.CACertificatePEM != ca || m.state.Password != password || m.state.Invitation != nil {
+	if m.state.ClientID != id || m.state.Phones[0].Pairing.ID != pairing || m.state.CACertificatePEM != ca || m.state.Phones[0].Password != password || m.state.Phones[0].Invitation == nil {
 		t.Fatal("migration replaced identity or stale invitation")
 	}
 	bundle, err := m.ExportEndpointUpdate(context.Background())
@@ -220,6 +220,9 @@ func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
 	proof := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	m.state.Hosted = &hostedState{DeviceID: "12345678-1234-4234-8234-123456789012", DeviceToken: "med1." + proof, BrokerEndpoint: "https://broker.example", GatewayHostname: "old-route.example", GatewayPort: 443}
 	if err := m.configureHostedLocked(ctx, "Workload"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CancelInvitation(ctx); err != nil {
 		t.Fatal(err)
 	}
 	bundle, err := m.IssueInvitation(ctx)
@@ -252,7 +255,7 @@ func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
 		t.Fatal("initial hosted pairing acknowledgement failed", response.Code)
 	}
 	before := m.cloneLocked()
-	if !m.Status().Paired || m.Status().UpdatePending || m.opener.current() != nil {
+	if !m.Status().Paired || m.Status().UpdatePending || m.runtimeLocked(m.state.Phones[0].ID).opener.current() != nil {
 		t.Fatal("fixture must have an acknowledged but offline hosted phone")
 	}
 
@@ -275,8 +278,8 @@ func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
 		t.Fatal("reactivation did not advance to the replacement hosted route")
 	}
 	if m.state.ClientID != before.ClientID || m.state.CACertificatePEM != before.CACertificatePEM || m.state.CAPrivateKeyPEM != before.CAPrivateKeyPEM ||
-		m.state.Pairing.ID != before.Pairing.ID || !bytes.Equal(m.state.Pairing.PublicKey, before.Pairing.PublicKey) || m.state.Pairing.Identity != before.Pairing.Identity ||
-		m.state.Username != before.Username || m.state.Password != before.Password || m.state.Invitation != nil {
+		m.state.Phones[0].Pairing.ID != before.Phones[0].Pairing.ID || !bytes.Equal(m.state.Phones[0].Pairing.PublicKey, before.Phones[0].Pairing.PublicKey) || m.state.Phones[0].Pairing.Identity != before.Phones[0].Pairing.Identity ||
+		m.state.Phones[0].Username != before.Phones[0].Username || m.state.Phones[0].Password != before.Phones[0].Password || m.state.Phones[0].Invitation == nil {
 		t.Fatal("reactivation replaced local trust, pairing, proxy credentials, or created an invitation")
 	}
 
@@ -289,7 +292,7 @@ func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
 	if status := restored.Status(); !status.Paired || !status.UpdatePending || status.Connected || status.Generation != m.state.Generation {
 		t.Fatal("restart lost pending recovery or reported an offline phone connected")
 	}
-	if restored.state.AcknowledgedGeneration != before.Generation || restored.state.AcknowledgedEndpoint != "https://old-route.example" {
+	if restored.state.Phones[0].AcknowledgedGeneration != before.Generation || restored.state.Phones[0].AcknowledgedEndpoint != "https://old-route.example" {
 		t.Fatal("reactivation silently acknowledged an address the phone has not received")
 	}
 	bundle, err = restored.ExportEndpointUpdate(ctx)
@@ -326,7 +329,7 @@ func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
 		Endpoint   string `json:"endpoint"`
 		Transport  string `json:"transport"`
 	}
-	if directStrictJSON(payload, &fields) != nil || fields.ClientID != before.ClientID || fields.PairingID != before.Pairing.ID || fields.Generation != before.Generation+1 || fields.Endpoint != "https://new-route.example" || fields.Transport != "hosted" {
+	if directStrictJSON(payload, &fields) != nil || fields.ClientID != before.ClientID || fields.PairingID != before.Phones[0].Pairing.ID || fields.Generation != before.Generation+1 || fields.Endpoint != "https://new-route.example" || fields.Transport != "hosted" {
 		t.Fatal("recovery update did not bind the new route to the existing phone identity")
 	}
 	tc, err := directTLS(restored.state)
@@ -345,15 +348,15 @@ func TestHostedReactivationRecoversOfflinePhoneWithSignedUpdate(t *testing.T) {
 	}
 	restored.mu.Lock()
 	restored.status.Running = true
-	restored.sessionGeneration, restored.sessionTransport = before.Generation, "hosted"
+	restored.runtimeLocked(restored.state.Phones[0].ID).sessionGeneration, restored.runtimeLocked(restored.state.Phones[0].ID).sessionTransport = before.Generation, "hosted"
 	restored.mu.Unlock()
-	restored.opener.swap(&healthyUpdateTunnel{})
-	defer restored.opener.swap(nil)
+	restored.runtimeLocked(restored.state.Phones[0].ID).opener.swap(&healthyUpdateTunnel{})
+	defer restored.runtimeLocked(restored.state.Phones[0].ID).opener.swap(nil)
 	if restored.Status().Connected {
 		t.Fatal("a stale hosted session verified the replacement route")
 	}
 	restored.mu.Lock()
-	restored.sessionGeneration = fields.Generation
+	restored.runtimeLocked(restored.state.Phones[0].ID).sessionGeneration = fields.Generation
 	restored.mu.Unlock()
 	if !restored.Status().Connected {
 		t.Fatal("current-generation authenticated session did not finish recovery")

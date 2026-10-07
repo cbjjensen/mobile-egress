@@ -90,7 +90,7 @@ func TestDirectEnrollmentRecoveryExpiryAndRevocation(t *testing.T) {
 	}
 	m.opMu.Lock()
 	next := m.cloneLocked()
-	next.Invitation.ExpiresAt = time.Now().Add(-time.Hour)
+	next.Phones[0].Invitation.ExpiresAt = time.Now().Add(-time.Hour)
 	if err := m.saveLocked(context.Background(), next); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestDirectExpiredCanceledAndMalformedInvitationAdmission(t *testing.T) {
 	m, i, csr := directTestConfigured(t)
 	m.opMu.Lock()
 	next := m.cloneLocked()
-	next.Invitation.ExpiresAt = time.Now().Add(-time.Second)
+	next.Phones[0].Invitation.ExpiresAt = time.Now().Add(-time.Second)
 	_ = m.saveLocked(context.Background(), next)
 	m.opMu.Unlock()
 	if w := directTestRequest(m, "/v2/direct/enroll", directEnrollBody(i, csr), nil); w.Code == 201 {

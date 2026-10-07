@@ -86,17 +86,33 @@ func (m *Direct) handleDirectEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := m.state
-	invitation := state.Invitation
+	phone := pendingPhone(state)
+	// Retain acknowledged invitations for same-key recovery without consuming a pending slot.
+	for _, candidate := range state.Phones {
+		if candidate.Invitation != nil && candidate.Invitation.InvitationID == request.InvitationID {
+			phone = candidate
+			break
+		}
+	}
+	if phone == nil {
+		directFailure(w, 401, "invitation_invalid")
+		return
+	}
+	if m.runtimeLocked(phone.ID).denied {
+		directFailure(w, 503, "storage_unavailable")
+		return
+	}
+	invitation := phone.Invitation
 	if request.ClientID != state.ClientID || request.Role != "agent" || invitation == nil || request.InvitationID != invitation.InvitationID || subtle.ConstantTimeCompare([]byte(request.Code), []byte(invitation.Capability)) != 1 {
 		directFailure(w, 401, "invitation_invalid")
 		return
 	}
-	if state.Pairing != nil {
-		if state.Pairing.Revoked || !bytes.Equal(publicKey, state.Pairing.PublicKey) {
+	if phone.Pairing != nil {
+		if phone.Pairing.Revoked || !bytes.Equal(publicKey, phone.Pairing.PublicKey) {
 			directFailure(w, 409, "invitation_used")
 			return
 		}
-		directReply(w, 201, state.Pairing.Identity)
+		directReply(w, 201, phone.Pairing.Identity)
 		return
 	}
 	if !time.Now().Before(invitation.ExpiresAt) {
@@ -114,7 +130,8 @@ func (m *Direct) handleDirectEnroll(w http.ResponseWriter, r *http.Request) {
 		directFailure(w, 503, "unavailable")
 		return
 	}
-	next.Pairing = &directPairing{ID: id, PublicKey: publicKey, Identity: identity}
+	identity.Generation = phone.InvitationGeneration
+	phoneByID(next, phone.ID).Pairing = &directPairing{ID: id, PublicKey: publicKey, Identity: identity}
 	if m.saveLocked(r.Context(), next) != nil {
 		directFailure(w, 503, "storage_unavailable")
 		return
@@ -135,34 +152,40 @@ func directAdmissionFailure(w http.ResponseWriter, err error) {
 
 // Must run under opMu. A valid CA signature never substitutes for durable
 // pairing/serial admission; revocation and replacement serialize here.
-func (m *Direct) admitLocked(r *http.Request, requireAck bool) (string, error) {
+func (m *Direct) admitLocked(r *http.Request, requireAck bool) (*directPhone, string, error) {
 	if err := m.ensureLocked(r.Context()); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if m.denied.Load() {
-		return "", errDirectStorage
+		return nil, "", errDirectStorage
 	}
 	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-		return "", errDirectUnauthorized
-	}
-	pairing := m.state.Pairing
-	if pairing == nil || pairing.Revoked || (requireAck && !pairing.Acknowledged) {
-		return "", errDirectUnauthorized
+		return nil, "", errDirectUnauthorized
 	}
 	cert := r.TLS.PeerCertificates[0]
 	now := time.Now()
 	if now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
-		return "", errDirectUnauthorized
+		return nil, "", errDirectUnauthorized
 	}
 	serial := strings.ToUpper(cert.SerialNumber.Text(16))
-	if serial != pairing.Identity.Serial && serial != pairing.PreviousSerial {
-		return "", errDirectUnauthorized
+	for _, phone := range m.state.Phones {
+		pairing := phone.Pairing
+		if pairing == nil || pairing.Revoked || requireAck && !pairing.Acknowledged {
+			continue
+		}
+		if serial != pairing.Identity.Serial && serial != pairing.PreviousSerial {
+			continue
+		}
+		if m.runtimeLocked(phone.ID).denied {
+			return nil, "", errDirectStorage
+		}
+		public, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+		if err != nil || !bytes.Equal(public, pairing.PublicKey) {
+			return nil, "", errDirectUnauthorized
+		}
+		return phone, serial, nil
 	}
-	public, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-	if err != nil || !bytes.Equal(public, pairing.PublicKey) {
-		return "", errDirectUnauthorized
-	}
-	return serial, nil
+	return nil, "", errDirectUnauthorized
 }
 func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 	var request struct {
@@ -175,12 +198,12 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	serial, err := m.admitLocked(r, false)
+	phone, serial, err := m.admitLocked(r, false)
 	if err != nil {
 		directAdmissionFailure(w, err)
 		return
 	}
-	if request.ClientID != m.state.ClientID || request.PairingID != m.state.Pairing.ID || request.Generation == 0 || request.Generation > m.state.Generation {
+	if request.ClientID != m.state.ClientID || request.PairingID != phone.Pairing.ID || request.Generation == 0 || request.Generation > m.state.Generation {
 		directFailure(w, 409, "configuration_mismatch")
 		return
 	}
@@ -190,7 +213,7 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Advancing to the latest endpoint requires an ACK addressed to that origin.
-	if request.Generation > m.state.AcknowledgedGeneration && request.Generation == m.state.Generation {
+	if request.Generation > phone.AcknowledgedGeneration && request.Generation == m.state.Generation {
 		origin, err := directHTTPSOrigin(m.state.Configuration.Endpoint)
 		if err != nil || requestOrigin.Host != origin.Host {
 			directFailure(w, 409, "endpoint_mismatch")
@@ -198,10 +221,11 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	next := m.cloneLocked()
-	next.Pairing.Acknowledged = true
+	nextPhone := phoneByID(next, phone.ID)
+	nextPhone.Pairing.Acknowledged = true
 	next.MigrationRequired = false
 	var updatedTLS *tls.Config
-	if request.Generation > next.AcknowledgedGeneration {
+	if request.Generation > nextPhone.AcknowledgedGeneration {
 		// The authenticated phone's ACK identifies its reached authority. It
 		// must already be covered by our signed server certificate. Persist it
 		// separately from desired configuration so repeated changes never remove
@@ -211,8 +235,8 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 			directFailure(w, 409, "endpoint_mismatch")
 			return
 		}
-		next.AcknowledgedGeneration = request.Generation
-		next.AcknowledgedEndpoint = requestOrigin.String()
+		nextPhone.AcknowledgedGeneration = request.Generation
+		nextPhone.AcknowledgedEndpoint = requestOrigin.String()
 		if directServerCertificate(next, next.Configuration.Endpoint) != nil {
 			directFailure(w, 503, "unavailable")
 			return
@@ -223,9 +247,9 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	retire := next.Pairing.PreviousSerial != "" && serial == next.Pairing.Identity.Serial
+	retire := nextPhone.Pairing.PreviousSerial != "" && serial == nextPhone.Pairing.Identity.Serial
 	if retire {
-		next.Pairing.PreviousSerial = ""
+		nextPhone.Pairing.PreviousSerial = ""
 	}
 	if m.saveLocked(r.Context(), next) != nil {
 		directFailure(w, 503, "storage_unavailable")
@@ -234,9 +258,9 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 	if updatedTLS != nil {
 		m.tlsConfig.Store(updatedTLS)
 	}
-	if retire && m.activeSerial != serial {
-		m.opener.swap(nil)
-		m.activeSerial = ""
+	if retire && m.runtimeLocked(phone.ID).activeSerial != serial {
+		m.runtimeLocked(phone.ID).opener.swap(nil)
+		m.runtimeLocked(phone.ID).activeSerial = ""
 	}
 	m.refreshLocked()
 	directReply(w, 200, map[string]string{"status": "paired"})
@@ -244,14 +268,14 @@ func (m *Direct) handleDirectAck(w http.ResponseWriter, r *http.Request) {
 func (m *Direct) handleDirectConfig(w http.ResponseWriter, r *http.Request) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	if _, err := m.admitLocked(r, false); err != nil {
+	phone, _, err := m.admitLocked(r, false)
+	if err != nil {
 		directAdmissionFailure(w, err)
 		return
 	}
 	update := ""
-	var err error
-	if m.state.AcknowledgedGeneration < m.state.Generation {
-		update, err = directEndpointBundle(m.state)
+	if phone.AcknowledgedGeneration < m.state.Generation {
+		update, err = directPhoneEndpointBundle(m.state, phone)
 		if err != nil {
 			directFailure(w, 503, "unavailable")
 			return
@@ -275,33 +299,35 @@ func (m *Direct) handleDirectRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	if _, err := m.admitLocked(r, true); err != nil {
+	phone, _, err := m.admitLocked(r, true)
+	if err != nil {
 		directAdmissionFailure(w, err)
 		return
 	}
-	if request.ClientID != m.state.ClientID || request.PairingID != m.state.Pairing.ID || !bytes.Equal(publicKey, m.state.Pairing.PublicKey) {
+	if request.ClientID != m.state.ClientID || request.PairingID != phone.Pairing.ID || !bytes.Equal(publicKey, phone.Pairing.PublicKey) {
 		directFailure(w, 409, "identity_mismatch")
 		return
 	}
-	if m.state.Pairing.PreviousSerial != "" {
+	if phone.Pairing.PreviousSerial != "" {
 		// Endpoint acknowledgement can advance while the phone still uses its
 		// previous certificate after a lost renewal response. Reuse the exact
 		// issued identity, but describe the phone's current acknowledged endpoint
 		// generation rather than the generation at certificate issuance.
-		identity := m.state.Pairing.Identity
-		identity.Generation = m.state.AcknowledgedGeneration
+		identity := phone.Pairing.Identity
+		identity.Generation = phone.AcknowledgedGeneration
 		directReply(w, 201, identity)
 		return
 	}
 	next := m.cloneLocked()
-	identity, err := directIssue(next, next.Pairing.ID, csr)
+	nextPhone := phoneByID(next, phone.ID)
+	identity, err := directIssue(next, nextPhone.Pairing.ID, csr)
 	if err != nil {
 		directFailure(w, 503, "unavailable")
 		return
 	}
-	identity.Generation = next.AcknowledgedGeneration
-	next.Pairing.PreviousSerial = next.Pairing.Identity.Serial
-	next.Pairing.Identity = identity
+	identity.Generation = nextPhone.AcknowledgedGeneration
+	nextPhone.Pairing.PreviousSerial = nextPhone.Pairing.Identity.Serial
+	nextPhone.Pairing.Identity = identity
 	if m.saveLocked(r.Context(), next) != nil {
 		directFailure(w, 503, "storage_unavailable")
 		return
@@ -315,7 +341,7 @@ func (m *Direct) handleDirectSession(w http.ResponseWriter, r *http.Request) {
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	serial, err := m.admitLocked(r, true)
+	phone, serial, err := m.admitLocked(r, true)
 	if err != nil {
 		directAdmissionFailure(w, err)
 		return
@@ -335,13 +361,13 @@ func (m *Direct) handleDirectSession(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
-	m.opener.swap(session)
+	m.runtimeLocked(phone.ID).opener.swap(session)
 	m.mu.Lock()
-	m.sessionGeneration = m.state.AcknowledgedGeneration
-	m.sessionTransport = effectiveTransport(m.state.Configuration.Transport)
+	m.runtimeLocked(phone.ID).sessionGeneration = phone.AcknowledgedGeneration
+	m.runtimeLocked(phone.ID).sessionTransport = effectiveTransport(m.state.Configuration.Transport)
 	m.mu.Unlock()
 	m.notifyEndpointUpdateLocked()
-	m.activeSerial = serial
+	m.runtimeLocked(phone.ID).activeSerial = serial
 	expiry := r.TLS.PeerCertificates[0].NotAfter
 	go func() {
 		timer := time.NewTimer(time.Until(expiry))

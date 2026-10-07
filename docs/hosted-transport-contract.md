@@ -1,5 +1,7 @@
 # Hosted transport additions to direct v2
 
+The [multi-phone extension](superpowers/plans/2026-10-06-multiple-phones.md) keeps one activated Client route and one outbound gateway attachment. Up to ten phones independently establish opaque inner TLS connections over that attachment. Phone identity, proxy selection, revocation and endpoint acknowledgements remain local to the Client. Backend device/API records and gateway wire formats do not gain phone fields. Validate ten phones on one route separately from older ten-route capacity evidence.
+
 The direct v2 TLS enrollment, certificate roles, pairing authority, inner WebSocket handshake/framing, limits and signing domain remain unchanged. Hosting carries that TLS byte stream through the workload Client's outbound gateway attachment. The phone still connects over cellular to the pinned Client certificate for the invitation/update endpoint. It never receives Inevitable account or gateway credentials.
 
 ## Mode metadata

@@ -53,7 +53,6 @@ func (m *Direct) configureHostedLocked(ctx context.Context, name string) error {
 			return errors.New("Endpoint generation exhausted.")
 		}
 		next.Generation++
-		next.Invitation = nil
 		if err := directServerCertificate(next, config.Endpoint); err != nil {
 			return errDirectStorage
 		}
@@ -188,15 +187,50 @@ func validateSavedActivation(a *activationState) error {
 
 // The established authenticated tunnel can carry the signed update even after
 // its old listener is closed. The tunnel negotiates support; QR remains recovery.
+type phoneEndpointNotification struct {
+	tunnel Tunnel
+	sender interface{ SendEndpointUpdate(string) error }
+	bundle string
+}
+
 func (m *Direct) notifyEndpointUpdateLocked() {
-	if m.state.Pairing == nil || m.state.Pairing.Revoked || m.state.AcknowledgedGeneration >= m.state.Generation {
-		return
+	for _, phone := range m.state.Phones {
+		rt := m.runtimeLocked(phone.ID)
+		if phone.Pairing == nil || phone.Pairing.Revoked || phone.AcknowledgedGeneration >= m.state.Generation || rt.denied {
+			continue
+		}
+		tunnel := rt.opener.current()
+		sender, ok := tunnel.(interface{ SendEndpointUpdate(string) error })
+		if !ok {
+			continue
+		}
+		bundle, err := directPhoneEndpointBundle(m.state, phone)
+		if err != nil {
+			continue
+		}
+		// At most one worker and one coalesced update per phone. Network writes must
+		// never hold the shared authority lock or delay sibling mutations/admission.
+		rt.updatePending = &phoneEndpointNotification{tunnel: tunnel, sender: sender, bundle: bundle}
+		if !rt.updateSending {
+			rt.updateSending = true
+			go m.sendPhoneUpdates(phone.ID, rt)
+		}
 	}
-	bundle, err := directEndpointBundle(m.state)
-	if err != nil {
-		return
-	}
-	if sender, ok := m.opener.current().(interface{ SendEndpointUpdate(string) error }); ok {
-		_ = sender.SendEndpointUpdate(bundle)
+}
+func (m *Direct) sendPhoneUpdates(id string, rt *phoneRuntime) {
+	for {
+		m.opMu.Lock()
+		update := rt.updatePending
+		rt.updatePending = nil
+		if m.phones[id] != rt || rt.denied || update == nil {
+			rt.updateSending = false
+			m.opMu.Unlock()
+			return
+		}
+		current := rt.opener.current() == update.tunnel
+		m.opMu.Unlock()
+		if current {
+			_ = update.sender.SendEndpointUpdate(update.bundle)
+		}
 	}
 }

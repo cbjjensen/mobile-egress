@@ -45,6 +45,7 @@ type directPairing struct {
 }
 
 type directState struct {
+	Phones                 []*directPhone       `json:"phones,omitempty"`
 	Hosted                 *hostedState         `json:"hosted,omitempty"`
 	Activation             *activationState     `json:"activation,omitempty"`
 	Version                int                  `json:"version"`
@@ -62,4 +63,43 @@ type directState struct {
 	Invitation             *directInvitation    `json:"invitation,omitempty"`
 	Pairing                *directPairing       `json:"pairing,omitempty"`
 	MigrationRequired      bool                 `json:"migrationRequired"`
+}
+
+// Legacy singleton fields above are read only during the atomic v2 migration.
+// New schema records retain only the first-use credentials until slot 0 is added.
+type directPhone struct {
+	InvitationGeneration   uint64            `json:"invitationGeneration"`
+	ID                     string            `json:"phoneId"`
+	Name                   string            `json:"name"`
+	Slot                   int               `json:"slot"`
+	Username               string            `json:"username"`
+	Password               string            `json:"password"`
+	Invitation             *directInvitation `json:"invitation,omitempty"`
+	Pairing                *directPairing    `json:"pairing,omitempty"`
+	AcknowledgedGeneration uint64            `json:"acknowledgedGeneration"`
+	AcknowledgedEndpoint   string            `json:"acknowledgedEndpoint,omitempty"`
+}
+
+type PhoneStatus struct {
+	ID                  string     `json:"phoneId"`
+	Name                string     `json:"name"`
+	Slot                int        `json:"slot"`
+	Paired              bool       `json:"paired"`
+	Connected           bool       `json:"connected"`
+	UpdatePending       bool       `json:"updatePending"`
+	Phase               string     `json:"phase"`
+	Message             string     `json:"message"`
+	SOCKSAddress        string     `json:"socksAddress"`
+	HTTPAddress         string     `json:"httpAddress"`
+	ProxyRunning        bool       `json:"proxyRunning"`
+	InvitationExpiresAt *time.Time `json:"invitationExpiresAt,omitempty"`
+}
+type PhonesStatus struct {
+	Phones         []PhoneStatus `json:"phones"`
+	MaxPhones      int           `json:"maxPhones"`
+	PendingPhoneID string        `json:"pendingPhoneId,omitempty"`
+}
+type PhoneInvitation struct {
+	PhoneID string `json:"phoneId"`
+	Bundle  string `json:"bundle"`
 }

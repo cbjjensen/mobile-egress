@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"mobile-egress/internal/hostedgateway"
 	"mobile-egress/windows-client/internal/securestore"
@@ -27,6 +29,9 @@ func TestHostedConfigurationPreservesIdentityAndWireMode(t *testing.T) {
 	}
 	if m.state.Generation != generation+1 || m.state.Configuration.Transport != "hosted" {
 		t.Fatal("mode did not advance generation")
+	}
+	if err := m.CancelInvitation(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	bundle, err := m.IssueInvitation(context.Background())
 	if err != nil {
@@ -54,7 +59,7 @@ func TestExistingConfigurationRemainsDirectAndFreshStatusDefaultsHosted(t *testi
 	if m.Status().Transport != "direct" {
 		t.Fatal("existing direct configuration changed")
 	}
-	raw, _ := json.Marshal(m.state.Invitation)
+	raw, _ := json.Marshal(m.state.Phones[0].Invitation)
 	if strings.Contains(string(raw), `"transport"`) {
 		t.Fatal("direct compatibility field must be omitted")
 	}
@@ -69,32 +74,32 @@ func TestTransportConfigurationRejectsNullUnknownAndDuplicateModes(t *testing.T)
 }
 
 type updateTunnel struct {
+	mu     sync.Mutex
 	bundle string
 	closed bool
 }
 
 type healthyUpdateTunnel struct{ updateTunnel }
 
-func (t *healthyUpdateTunnel) Healthy() bool { return !t.closed }
+func (t *healthyUpdateTunnel) Healthy() bool { t.mu.Lock(); defer t.mu.Unlock(); return !t.closed }
 
 func TestMigrationVerificationRequiresCurrentModeGenerationPhoneSession(t *testing.T) {
 	m, i, csr := directTestConfigured(t)
 	if r := directTestRequest(m, "/v2/direct/enroll", directEnrollBody(i, csr), nil); r.Code != 201 {
 		t.Fatal(r.Body.String())
 	}
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
-	m.state.Pairing.Acknowledged = true
-	m.state.AcknowledgedGeneration = m.state.Generation
-	m.state.AcknowledgedEndpoint = m.state.Configuration.Endpoint
+
+	m.state.Phones[0].Pairing.Acknowledged = true
+	m.state.Phones[0].AcknowledgedGeneration = m.state.Generation
+	m.state.Phones[0].AcknowledgedEndpoint = m.state.Configuration.Endpoint
 	oldGeneration := m.state.Generation
 	m.mu.Lock()
 	m.status.Running = true
-	m.sessionGeneration = oldGeneration
-	m.sessionTransport = "direct"
+	m.runtimeLocked(m.state.Phones[0].ID).sessionGeneration = oldGeneration
+	m.runtimeLocked(m.state.Phones[0].ID).sessionTransport = "direct"
 	m.mu.Unlock()
 	phone := &healthyUpdateTunnel{}
-	m.opener.swap(phone)
+	m.runtimeLocked(m.state.Phones[0].ID).opener.swap(phone)
 	m.refreshLocked()
 	if !m.Status().Connected {
 		t.Fatal("valid existing direct phone not connected")
@@ -103,17 +108,17 @@ func TestMigrationVerificationRequiresCurrentModeGenerationPhoneSession(t *testi
 	if err := m.configureHostedLocked(context.Background(), "Workload"); err != nil {
 		t.Fatal(err)
 	}
-	if m.Status().Connected || phone.closed {
+	if m.Status().Connected || !phone.Healthy() {
 		t.Fatal("old direct tunnel verified new hosted mode or was discarded")
 	}
-	m.state.AcknowledgedGeneration = m.state.Generation
+	m.state.Phones[0].AcknowledgedGeneration = m.state.Generation
 	m.refreshLocked()
 	if m.Status().Connected {
 		t.Fatal("ACK alone verified the old direct session")
 	}
 	m.mu.Lock()
-	m.sessionGeneration = m.state.Generation
-	m.sessionTransport = "hosted"
+	m.runtimeLocked(m.state.Phones[0].ID).sessionGeneration = m.state.Generation
+	m.runtimeLocked(m.state.Phones[0].ID).sessionTransport = "hosted"
 	m.mu.Unlock()
 	if !m.Status().Connected {
 		t.Fatal("current hosted authenticated acknowledged session not connected")
@@ -126,20 +131,20 @@ func TestHostedAuthorizationRejectionIsSafeAndDoesNotUnpairPhone(t *testing.T) {
 		t.Fatal(r.Body.String())
 	}
 	m.opMu.Lock()
-	m.state.Pairing.Acknowledged = true
-	m.state.AcknowledgedGeneration = m.state.Generation
+	m.state.Phones[0].Pairing.Acknowledged = true
+	m.state.Phones[0].AcknowledgedGeneration = m.state.Generation
 	m.state.Hosted = &hostedState{DeviceID: "device", DeviceToken: "token", BrokerEndpoint: "https://broker.example", GatewayHostname: "route.example", GatewayPort: 443}
 	if err := m.configureHostedLocked(context.Background(), "Workload"); err != nil {
 		m.opMu.Unlock()
 		t.Fatal(err)
 	}
-	pairing := m.state.Pairing.ID
+	pairing := m.state.Phones[0].Pairing.ID
 	generation := m.state.Generation
 	m.gatewayEpoch = 1
 	m.opMu.Unlock()
 	m.recordGatewayStatus(generation, 1, hostedgateway.Status{State: "disconnected", Reason: "gateway activation rejected"})
 	status := m.Status()
-	if status.GatewayState != "authorization_rejected" || status.ActivationState != "access_rejected" || !status.Paired || m.state.Pairing.ID != pairing || m.state.Pairing.Revoked {
+	if status.GatewayState != "authorization_rejected" || status.ActivationState != "access_rejected" || !status.Paired || m.state.Phones[0].Pairing.ID != pairing || m.state.Phones[0].Pairing.Revoked {
 		t.Fatalf("rejection erased pairing or hid access state: %+v", status)
 	}
 	m.recordGatewayStatus(generation, 1, hostedgateway.Status{State: "disconnected", Reason: "secret-token-should-not-leak"})
@@ -154,8 +159,13 @@ func (t *updateTunnel) Healthy() bool         { return false }
 func (t *updateTunnel) OpenStream(context.Context, string, uint16) (io.ReadWriteCloser, error) {
 	return nil, errors.New("offline")
 }
-func (t *updateTunnel) Close() error                           { t.closed = true; return nil }
-func (t *updateTunnel) SendEndpointUpdate(bundle string) error { t.bundle = bundle; return nil }
+func (t *updateTunnel) Close() error { t.mu.Lock(); defer t.mu.Unlock(); t.closed = true; return nil }
+func (t *updateTunnel) SendEndpointUpdate(bundle string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.bundle = bundle
+	return nil
+}
 
 func TestHostedMigrationUsesVirtualListenerAndNotifiesExistingPhone(t *testing.T) {
 	m, i, csr := directTestConfigured(t)
@@ -163,7 +173,7 @@ func TestHostedMigrationUsesVirtualListenerAndNotifiesExistingPhone(t *testing.T
 		t.Fatal(r.Body.String())
 	}
 	tunnel := &updateTunnel{}
-	m.opener.swap(tunnel)
+	m.runtimeLocked(m.state.Phones[0].ID).opener.swap(tunnel)
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	blocker, err := net.Listen("tcp", "127.0.0.1:0")
@@ -182,10 +192,26 @@ func TestHostedMigrationUsesVirtualListenerAndNotifiesExistingPhone(t *testing.T
 	if m.listener == nil || m.listener.Addr().Network() != "hostedgateway" || m.state.Configuration.BindAddress != "" {
 		t.Fatal("public workload port bound")
 	}
-	if tunnel.bundle == "" || tunnel.closed {
-		t.Fatal("lost live signed update before phone migration")
+	m.opMu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for {
+		tunnel.mu.Lock()
+		sent, closed := tunnel.bundle != "", tunnel.closed
+		tunnel.mu.Unlock()
+		if sent && !closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			m.opMu.Lock()
+			t.Fatal("lost live signed update before phone migration")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	if m.Status().Connected {
+	m.opMu.Lock()
+	m.opMu.Unlock()
+	connected := m.Status().Connected
+	m.opMu.Lock()
+	if connected {
 		t.Fatal("gateway listener claimed phone connection")
 	}
 	if m.server != nil {
