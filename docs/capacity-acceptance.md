@@ -1,4 +1,4 @@
-# Direct Client capacity and performance acceptance
+# Client capacity and performance acceptance
 
 For the hosted pilot, repeat these measurements through Inevitable Gateway with no customer inbound rule and preserve direct measurements separately. Run existing commercial proxy traffic with Mobile disabled, enabled idle, under one-/ten-Client load, overloaded, restarting and unavailable. Verify its usage submissions and billing fields remain unchanged; prove Mobile produces no usage submission. Acceptance requires no new correctness failure and at most 5% Core throughput/p95 setup regression under an agreed combined workload. Resource budgets are admission/backpressure bounds, not an advertised Mbps rate or data quota.
 
@@ -12,12 +12,24 @@ Directional phone data debt is globally bounded at 8,192 frames / 64 MiB, with 3
 
 ## Measurement procedure
 
-Use accepted physical Android and iOS builds with a direct Windows or Mac workload endpoint, old relay offline, and no AWS/Tailscale dependency. Keep destinations and payloads private; use lab labels in evidence.
+Use accepted physical Android and iOS builds with a Windows or Mac workload Client. Measure the default hosted path first and explicitly selected Advanced direct separately, with the retired relay offline and no customer AWS/Tailscale dependency. Keep destinations and payloads private; use lab labels in evidence.
 
-Measure single-Client downloads, uploads and browser-shaped short/long HTTP, CONNECT and SOCKS traffic. Then repeat with ten Clients and mixed fast/slow readers. Record transfer sizes, concurrency, duration, throughput in Mbps, latency distribution, CPU, resident memory, stream/frame debt, control latency, per-Client shares and phone thermal behavior. Distinguish application goodput from network bytes.
+Measure downloads, uploads and browser-shaped short/long HTTP, CONNECT and SOCKS traffic along two separate dimensions:
+
+| Topology | Purpose |
+| --- | --- |
+| One phone / one Client | Establish the device/network baseline. |
+| Five, then ten phones / one Client | Measure the new shared Client/hosted-route contention and per-phone isolation. |
+| One phone / ten Clients | Measure the existing phone-wide budget and per-Client fairness independently. |
+
+Repeat with mixed fast/slow readers. Record transfer sizes, per-phone and aggregate concurrency, duration, throughput in Mbps, latency distribution, CPU, resident memory, stream/frame debt, control latency, per-phone/per-Client shares and phone thermal behavior. Distinguish application goodput from network bytes. Ten phones is a pairing limit, not ten active application requests.
+
+The existing [browser load harness](../tools/browser-load/README.md) selects one phone's local proxy per invocation. To exercise multiple phones simultaneously, use one runner/configuration per phone with its own proxy address, credentials, sanitized label and result directory. Align measured windows and monitor aggregate runner/browser CPU and memory so the load generator is not mistaken for a Client limit. Ramp browser contexts per phone separately from phone count; do not begin with ten phones at 100 contexts each. Qualify lower profiles before the documented 30-minute soak, including external Client/phone telemetry. Controlled reachable HTTPS fixtures and the pinned browser are prerequisites; loopback browser smoke is not a cellular test.
+
+The [2026-10-06 multi-phone load report](../../inevitable-proxies/technical-requirement-docs/2026-10-06-mobile-relay-multiple-phones/load-test-report.md) records isolated local gateway capacity and repeated Client routing checks, with reproducible commands and their limitations. Repeated short fixtures start fresh and cannot establish a continuous soak or cumulative leak behavior.
 
 Include duplicate stream IDs across independent peers, abrupt peer loss/reconnect, target EOF with a queued tail, cancellation while a native write is in flight, and repeated Start/Stop. After each run verify exact byte counts/hashes, orderly EOF, zero leaked debt and no unwanted reconnection. Apply sustained load long enough to observe thermal changes. Do not set a target Mbps before measuring the devices/network.
 
 On iOS, keep the dashboard active with keep-awake enabled during sustained trials. Separately test manual lock, app switching, auto-lock preference off and Stop; those must pause sharing as documented. Do not count foreground iOS results as background serving.
 
-Record new results in a dated direct-mode report using [the acceptance template](templates/physical-acceptance-record.md). Historical relay measurements in [latency benchmarks](latency-benchmarks.md) and [browser measurements](browser-throughput-measurements.md) are comparison context only. Do not carry their pass/fail or rates into the new topology.
+Record new results in a dated report identifying hosted or Advanced direct mode using [the acceptance template](templates/physical-acceptance-record.md). Historical relay measurements in [latency benchmarks](latency-benchmarks.md) and [browser measurements](browser-throughput-measurements.md) are comparison context only. Do not carry their pass/fail or rates into the new topology.
