@@ -1,5 +1,11 @@
 # External iPhone pilot in ZFNF Friends
 
+## Later website-group authorization (2026-10-07)
+
+The owner subsequently requested a separate **Inevitable Proxies Group** for website signups, including the latest unsent request, and explicitly kept ZFNF Friends unchanged. This supersedes the original no-second-group restriction only for that website flow. External group `caff1c49-c628-464e-8a63-89e40d6a32a4` was created with public links disabled. The publisher notification helper verified automatic notifications before the already-approved 2.0.3 (8) build was assigned. The one selected pending request was retargeted with consent preserved and recovered through Inevitable's guarded processor. App-scoped Apple readback confirmed `INVITED` by `EMAIL`, membership in the new group only, and valid external build access at 2026-10-07 19:19 UTC. Mailbox receipt and installation remain unverified. See the sibling [implementation record](../../../../inevitable-proxies/technical-requirement-docs/2026-10-06-mobile-relay-self-service-invitations/implementation-summary.md) for deployment and recovery evidence.
+
+## Original pilot authorization and record
+
 The owner requested another tester and supplied their email after being told that external testing requires a compatible build and Apple's beta review. They then explicitly selected the existing **ZFNF Friends** external group. Reuse that group and invite only the supplied tester; do not create a second external group. Preserve its existing public-link settings without publishing the link. Do not grant App Store Connect roles or submit an App Store production version. The owner subsequently authorized all work on `main` and merging as needed. Existing internal testers may receive the build through their already-approved automatic settings.
 
 ## Inspection and implementation

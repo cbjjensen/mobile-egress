@@ -22,10 +22,12 @@ iOS signing and TestFlight remain a separate native workflow with the appropriat
 
 ## External TestFlight notifications
 
+Website signups use the owner's **Inevitable Proxies Group** external group (`caff1c49-c628-464e-8a63-89e40d6a32a4`), created on 2026-10-07. **ZFNF Friends** (`c00ac6bc-4e4b-474a-b32d-823b80a8f01e`) and its existing testers are preserved separately. Verify and assign each future build to the explicitly intended groups; do not migrate existing testers or assume the website group change updates old group assignments. The example below targets the website group.
+
 For each explicitly authorized compatible external release, verify `autoNotifyEnabled` **before assigning the build to the external group or submitting beta review**. The tracked helper uses the existing ignored Mac publisher configuration and keeps the private API key on the Mac:
 
 ```powershell
-./scripts/set-ios-external-auto-notify.ps1 -AppId 6807680693 -GroupId c00ac6bc-4e4b-474a-b32d-823b80a8f01e -BuildId '<exact Apple build ID>' -ExpectedVersion '2.0.0' -ExpectedBuildNumber '<exact build number>'
+./scripts/set-ios-external-auto-notify.ps1 -AppId 6807680693 -GroupId caff1c49-c628-464e-8a63-89e40d6a32a4 -BuildId '<exact Apple build ID>' -ExpectedVersion '2.0.3' -ExpectedBuildNumber '<exact build number>'
 ```
 
 The default is read-only and fails the release gate when the flag is false. For the owner's authorized release, repeat the exact command with `-Apply` to set only that build's automatic-notification flag, then verify the successful readback. The helper checks the exact app, existing external group, iOS version/build number, valid processing, external-capable distribution and expiry. It rejects versions outside 2.x and builds below the fixed 2.0.0 (7) compatibility floor. New code still needs its normal source, signing and device-acceptance review; metadata checks do not establish physical acceptance.
