@@ -1,5 +1,7 @@
 # Mobile Egress on Inevitable Infrastructure
 
+> Cardinality update (2026-10-06): the approved [multiple-phone plan](2026-10-06-multiple-phones.md) supersedes this plan's original one-phone-per-Client restriction. It retains one hosted attachment per Client and the existing backend/gateway wire interfaces. Historical implementation and capacity evidence below retains its original scope.
+
 > Eligibility clarification (2026-10-04): the owner retains Inevitable's Mobile Egress customer pages for explicitly eligible accounts and hides them from ineligible accounts, including direct URL entry. Eligible activation and selected-computer revocation remain available; Admin pilot management does not require a personal pilot grant. The sibling implementation is recorded in `technical-requirement-docs/2026-10-04-mobile-egress-visibility/`. This correction changes website visibility only, with no Client/phone protocol or commercial proxy changes, deployment or merge.
 
 > Visibility validation: Inevitable's 64 UI test files / 595 tests and full workspace build passed. Independent review confirmed the disabled-approval access-check fix and no remaining actionable findings. Customer and activation routes preserve eligible access while hiding ineligible users; no mobile runtime or parity behavior changed. Production deployment of this correction is pending.

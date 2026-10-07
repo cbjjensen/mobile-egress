@@ -4,6 +4,14 @@ Approved for implementation 2026-10-06. Goal: ten phones simultaneously per Wind
 
 The canonical cross-repository [analysis](../../../../inevitable-proxies/technical-requirement-docs/2026-10-06-mobile-relay-multiple-phones/analysis.md), [plan](../../../../inevitable-proxies/technical-requirement-docs/2026-10-06-mobile-relay-multiple-phones/plan.md), [step ledger](../../../../inevitable-proxies/technical-requirement-docs/2026-10-06-mobile-relay-multiple-phones/implementation-summary.md) and [validation record](../../../../inevitable-proxies/technical-requirement-docs/2026-10-06-mobile-relay-multiple-phones/validation-report.md) must stay synchronized with implementation.
 
+## Implementation outcome (2026-10-06)
+
+Source implementation and independent review are complete. The [service report](2026-10-06-multiple-phones-service-report.md), [desktop UI report](2026-10-06-multiple-phones-ui-report.md), canonical step ledger and validation record document red/green checks, review repairs, decisions, source hashes and limitations. Ten real simulated phone sessions exercise independent authenticated HTTP/SOCKS traffic on the Client; one-route gateway fixtures cover same/cross-node traffic, reconnect/control bursts, EOF/cancellation and cleanup. No runtime phone, gateway, backend, database, commercial proxy or accounting changes were necessary. Website guidance changes are source-only.
+
+The complete Windows component gate, 85 Client UI tests, 317 Android tests/lint/debug build, native Swift 395 tests (two existing platform-security skips), unsigned iOS device/simulator builds, native Mac Go tests/vet/build/race/production GUI, gateway native race/vet/build, 672 website tests and workspace build passed. Xcode's separate package test runner could not contact `testmanagerd` in the SSH session on two attempts; that gate is not passed. Physical cellular runs, installed APK/TestFlight compatibility, signed Windows/Mac upgrades and signed root Mac Keychain acceptance remain unverified. No installer, mobile app, website or gateway was published/deployed.
+
+Implementation commits: `60342d8` (mobile compatibility evidence), `af44d50` (Client authority/runtime), `8f4ff14` (Client IPC/UI), sibling Inevitable `e2be7d0d` (website guidance, gateway tests and synchronized architecture/evidence). The initial plan commits are `1bd9100` here and `8c3fd4b9` in the sibling repository. Final documentation closeout is recorded in the canonical ledger. Publish website guidance only alongside/after verified multi-phone installers through the separately scoped release process.
+
 ## Component boundary
 
 - Required: Windows/Mac protected service and GUI changes; website help/product guidance; both platforms' compatibility evidence; gateway one-route test coverage; current documentation.
@@ -51,6 +59,8 @@ Owner: clientapp implementer; all windows-client/internal/clientapp production/t
 Dashboard lists names, phone status, HTTP/SOCKS copy and settings; Add phone available below ten slots. Selected phone settings provide rename, signed update QR/copy, port retry and confirmed removal. Add flow reuses setup verification without reactivation or disrupting siblings; cancel returns to dashboard. Keep first setup usable, existing OLED semantics/QR pixels/native theme, keyboard focus and mobile lifecycle copy. App exposes Phones, AddPhone(name), CancelPhoneInvitation(id), RenamePhone(id,name), RevokePhone(id), CopyPhoneProxy(id,kind), ExportPhoneEndpointUpdate(id), CopyPhoneEndpointUpdate(id), RetryPhoneProxy(id). AddPhone returns phoneId + existing BundleView fields. Maintain existing API only for legacy single-phone flows.
 
 ## Task 3: sibling website and gateway validation
+
+Task 2 interface ruling: additionally expose `CopyPhoneInvitation(phoneID)` in App. Cache the explicit AddPhone result by stable phone ID; selected UI state must never silently choose another invitation. No additional public phone wire or service operation is required.
 
 Owner: sibling implementer. Change only existing Mobile Relay website guidance and relevant tests; validate intended copy in rendered existing components. Add meaningful ten-phone/same-route gateway coverage (current capacity tests use ten routes), same/cross-node, exact bytes/EOF/cleanup and resource evidence. No gateway production/config/backend/contract edits unless a demonstrated defect causes documented plan revision. Keep website deployment separate from installer/link updates. Record detailed work in website-gateway-report.md in the canonical packet.
 

@@ -2,6 +2,8 @@
 
 Approved by the owner on 2026-10-03. Implementation runs in the existing checkout on **main**. This supersedes the personal-computer relay requirement and the AWS-optional controller design.
 
+Historical decision: the [2026-10-06 multiple-phone plan](2026-10-06-multiple-phones.md) supersedes the single-phone limit and expands stable per-phone proxy ports. The [hosted-connectivity decision](2026-10-03-inevitable-hosted-connectivity.md) supersedes direct-only reachability. The original constraints below remain as decision history; the approved iOS lifecycle exception remains current.
+
 ## Product contract
 
 Application → local Client HTTP/CONNECT or SOCKS proxy ⇄ phone Agent → cellular Internet. The phone initiates one authenticated outbound connection to each reachable workload Client. No central Desktop controller, AWS integration, Tailscale, Funnel, relay fallback, or inbound phone listener remains in the new product.
