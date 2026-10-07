@@ -85,7 +85,24 @@ Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/re
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
 
-## Current Broadcast pilot: 2.0.3
+## Current pilot: Desktop 2.0.4, Android 2.0.3
+
+The owner-authorized [OLED Client publication](superpowers/plans/2026-10-06-client-oled-theme.md)
+advanced Windows and Mac to **2.0.4**, from frozen source
+`d9ac6d73971d0a6c39d5bdeee2d03146509e8608`. The signed Windows installer and
+signed/notarized Mac PKG passed the guarded release and public GitHub/R2 hash
+verification. The linked publication record contains hashes, byte counts and
+website rollout evidence. Android remains the exact 2.0.3 APK (code 27); iPhone
+distribution is unchanged.
+
+- [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.4/InevitableMobileRelaySetup.exe)
+- [Apple Silicon Mac PKG](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.4/inevitable-mobile-relay-macos-2.0.4-arm64.pkg)
+- [Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.3/inevitable-mobile-relay-android-2.0.3.apk)
+
+These remain pilot downloads. Signed physical upgrade/repair and phone
+interoperability acceptance are not established by publication.
+
+## Historical Broadcast pilot: 2.0.3
 
 The owner-authorized [2026-10-06 publication](superpowers/plans/2026-10-06-broadcast-release.md) advanced all three platforms and the verified public catalog to **2.0.3** (Android code 27), from frozen source `06b299df12c3a143aed6f3c97e488c989aadf599`. Original signatures and Mac notarization pass; GitHub/R2 public digests and download headers were verified. The linked publication record contains every SHA-256 and byte count.
 
