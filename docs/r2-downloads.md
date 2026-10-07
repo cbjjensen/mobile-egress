@@ -134,7 +134,9 @@ promotion. Independent catalog readback matched all selected platform fields.
 - [Apple Silicon Mac PKG](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.5/inevitable-mobile-relay-macos-2.0.5-arm64.pkg)
 - [Unchanged Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.3/inevitable-mobile-relay-android-2.0.3.apk)
 
-The linked release record contains exact hashes and website activation status.
+The linked release record contains exact hashes and completed website activation
+evidence. The authenticated live page links these verified versions; all other
+production settings and the prior live website source were preserved.
 These remain pilot downloads; physical signed upgrade/repair, ten-phone cellular
 capacity and distributed phone interoperability remain separate acceptance gates.
 iPhone distribution is unchanged.
