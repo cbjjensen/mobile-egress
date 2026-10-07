@@ -11,11 +11,12 @@ import (
 )
 
 type App struct {
-	browser    func(string) error
-	service    Service
-	clipboard  func(string) error
-	mu         sync.Mutex
-	invitation string
+	browser          func(string) error
+	service          Service
+	clipboard        func(string) error
+	mu               sync.Mutex
+	invitation       string
+	phoneInvitations map[string]string
 }
 
 func New(service Service, clipboard func(string) error) *App {
@@ -58,6 +59,7 @@ func (app *App) Configure(bindAddress, endpoint, displayName string) error {
 	// Saving the endpoint can succeed before host-firewall setup reports an error.
 	// Never let a previous, invalidated invitation survive either outcome.
 	app.invitation = ""
+	app.phoneInvitations = nil
 	return direct.Configure(context.Background(), nodeservice.DirectConfiguration{Transport: "direct", BindAddress: bindAddress, Endpoint: endpoint, DisplayName: displayName})
 }
 func (app *App) IssueInvitation() (BundleView, error) {
@@ -80,10 +82,23 @@ func (app *App) IssueInvitation() (BundleView, error) {
 }
 func (app *App) CopyInvitation() error {
 	app.mu.Lock()
+	defer app.mu.Unlock()
 	bundle := app.invitation
-	app.mu.Unlock()
 	if bundle == "" {
 		return errors.New("Generate a pairing invitation first.")
+	}
+	service := app.service
+	if wrapper, ok := service.(*firewallService); ok {
+		service = wrapper.DirectService
+	}
+	if phones, ok := service.(PhoneService); ok {
+		view, err := phones.Phones(context.Background())
+		if err != nil {
+			return err
+		}
+		if len(view.Phones) > 1 {
+			return errors.New("Choose a phone before copying its pairing invitation.")
+		}
 	}
 	return app.copy(bundle)
 }

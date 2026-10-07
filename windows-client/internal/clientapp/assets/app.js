@@ -11,7 +11,7 @@ const browserResumeMessage = "Finish approving this computer in your browser.";
 const accountRecoveryMessage = "Inevitable couldn't approve this computer. Check your account access, then approve this computer again in your browser. Your saved phone is kept.";
 const connectionFailureMessage = "Inevitable Mobile Relay needs attention before it can connect. Open Connection details for the problem and next steps.";
 const phoneStartMessage = "Open Inevitable Mobile Relay on your phone. Tap Start cellular Agent on Android or Start sharing on iPhone. On iPhone, keep the app open and unlocked.";
-const labels = {waiting:"Setup needed", migration_required:"Setup needed", listening:"Waiting for phone", awaiting_phone:"Waiting for phone", pairing:"Adding phone", acknowledging:"Adding phone", ready:"Waiting for phone", connected:"Waiting for phone", expired:"Code expired", revoked:"Phone removed", error:"Needs attention", unavailable:"App unavailable"};
+const labels = {waiting:"Setup needed", migration_required:"Setup needed", listening:"Waiting for phone", awaiting_phone:"Waiting for phone", pairing:"Adding phone", acknowledging:"Adding phone", ready:"Waiting for phone", connected:"Waiting for phone", update_pending:"Connection update needed", proxy_error:"Proxy ports blocked", expired:"Code expired", revoked:"Phone removed", error:"Needs attention", unavailable:"App unavailable"};
 let status = null, setup = {localAddresses:[], defaultBindAddress:":8443", defaultPublicPort:8443};
 let step = "address", dashboard = false, initialized = false, metadataReady = false;
 let managingPhone = false, reviewingSetup = false, noticeStep = "";
@@ -23,10 +23,31 @@ let waitingSince = Date.now(), readinessExpired = false;
 let selectedTransport = "";
 let recoveryWasPending = false;
 let diagnosticWasError = false;
+let sharedStatus = null, phonesStatus = null, selectedPhoneID = "", addingPhone = false;
+let phoneSelectionRevision = 0, renameEdited = false;
+const phoneRows = new Map();
+let phoneListOrder = "";
+const multiplePhones = () => typeof api().Phones === "function";
+const selectedPhone = () => phonesStatus?.phones.find(phone => phone.phoneId === selectedPhoneID);
+function applySelectedPhone() {
+  if (!multiplePhones() || !sharedStatus) return;
+  if (sharedStatus.phase === "unavailable") { status = {...sharedStatus, connected:false}; return; }
+  const phone = selectedPhone();
+  status = {...sharedStatus, paired:false, connected:false, updatePending:false, httpAddress:"", socksAddress:"", invitationExpiresAt:undefined,
+    phase:sharedStatus.endpoint ? "listening" : sharedStatus.phase,
+    ...(phone || {})};
+  if (sharedStatus.phase === "error") Object.assign(status, {phase:"error", message:sharedStatus.message, connected:false, running:false});
+}
+function selectPhone(id, settings = false) {
+  if (!phonesStatus?.phones.some(phone => phone.phoneId === id)) return;
+  if (id !== selectedPhoneID) { phoneSelectionRevision++; selectedPhoneID = id; clearInvitation(); clearUpdate(); renameEdited = false; renderedScreen = ""; }
+  addingPhone = false; dashboard = true; managingPhone = settings; reviewingSetup = false;
+  show("revokeConfirmation", false); applySelectedPhone(); render();
+}
 const hostedSelected = () => (selectedTransport || status?.transport || (status?.endpoint ? "direct" : "hosted")) === "hosted";
 const hostedAuthorized = (value = status) => value?.transport === "hosted" && !!value.endpoint && value.activationState === "authorized";
 const available = () => status && status.phase !== "unavailable";
-const phoneConnected = () => !!(available() && status.phase !== "error" && status.connected && !status.updatePending);
+const phoneConnected = () => !!(available() && status.phase !== "error" && status.connected && !status.updatePending && (!multiplePhones() || selectedPhone()?.proxyRunning));
 const pendingPhoneUpdate = () => !!(available() && status.paired && status.updatePending);
 const configKey = value => [value.transport || (value.endpoint ? "direct" : "hosted"), value.endpoint, value.bindAddress, value.displayName, value.generation].join("|");
 const activeInvitation = () => !!(status && status.invitationExpiresAt && new Date(status.invitationExpiresAt).getTime() > Date.now());
@@ -99,11 +120,14 @@ function resumeStep() {
 }
 function returnToDashboard() {
   if (busy) return;
-  dashboard = true; managingPhone = false; reviewingSetup = false; selectedTransport = "";
+  dashboard = true; managingPhone = false; reviewingSetup = false; selectedTransport = ""; addingPhone = false;
+  if (multiplePhones() && !selectedPhoneID) selectedPhoneID = phonesStatus?.phones[0]?.phoneId || "";
+  applySelectedPhone();
   show("revokeConfirmation", false); render();
 }
 function selectStep(next) {
   if (busy || !available()) return;
+  if (addingPhone && ["address", "network"].includes(next)) return;
   if (next !== "address" && !status.endpoint) return;
   if (next === "proxy" && !phoneConnected()) return;
   reviewingSetup = reviewingSetup || dashboard;
@@ -124,7 +148,7 @@ function renderNetwork() {
   } else {
     text = "In your router, forward public TCP port " + publicPort + " to this computer's listener port " + localPort + ". LAN addresses on this computer: " + addresses + ". Select the address on the router's network and keep it stable. For a directly reachable IPv6 address, allow inbound TCP in the router firewall. If your ISP uses CGNAT, forwarding on your router alone will not make this computer reachable; ask the ISP for inbound access or use a reachable hosted Client. ";
   }
-  el("networkInstructions").textContent = text + "Inevitable Mobile Relay does not change routers or cloud firewalls. Never expose proxy ports 1080 or 1081.";
+  el("networkInstructions").textContent = text + "Inevitable Mobile Relay does not change routers or cloud firewalls. Never expose local proxy ports " + (multiplePhones() ? "1080–1099" : "1080 or 1081") + ".";
   el("networkEndpoint").textContent = status?.endpoint || "Save your computer address first.";
   const firewallLabels = {allowed:"Local access allowed", disabled:"Local firewall disabled", blocked:"Local access blocked", unavailable:"Firewall check unavailable", unknown:"Local access not confirmed"};
   el("firewallState").textContent = firewallBusy ? "Checking local firewall…" : firewallLabels[firewall?.state] || "Check local access";
@@ -165,6 +189,7 @@ function render() {
   const canUpdatePhone = pendingUpdate && (status.transport !== "hosted" || status.activationState === "authorized");
   show("servicePanel", !ready); show("serviceRetry", !ready && readinessExpired);
   el("serviceMessage").textContent = readinessExpired ? "Inevitable Mobile Relay couldn’t start. Try again, or run the latest installer to repair it. Your saved phone and app settings will be kept." : "Getting Inevitable Mobile Relay ready. This can take up to 30 seconds.";
+  if (multiplePhones() && !ready && status?.message) el("serviceMessage").textContent = status.message;
   show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard && !managingPhone);
   show("clientNavigation", initialized && (dashboard || reviewingSetup));
   for (const [id, current] of [["backToDashboard", dashboard && !managingPhone], ["managePhone", managingPhone], ["reviewSetup", !dashboard]]) {
@@ -270,10 +295,66 @@ function render() {
   el("proxyConnection").textContent = connected ? "Copy a format below and paste it into your app’s proxy settings." : "You can copy these settings into your app’s proxy settings now. They’ll work when your phone connects and starts sharing.";
   el("version").textContent = status?.version ? "Client " + status.version : "";
   renderNetwork();
+  renderPhones();
   const screen = initialized ? (managingPhone ? "phoneSettings" : dashboard ? "dashboard" : step) : "";
   if (screen && screen !== renderedScreen) {
     renderedScreen = screen;
     el(managingPhone ? "phoneSettingsHeading" : dashboard ? "dashboardHeading" : "stepTitle").focus();
+  }
+}
+function renderPhones() {
+  const multi = multiplePhones(), ready = available(), phone = selectedPhone();
+  show("phonesPanel", multi && initialized && dashboard && !managingPhone);
+  if (!multi) return;
+  const phones = phonesStatus?.phones || [], pending = phonesStatus?.pendingPhoneId;
+  el("addPhone").disabled = busy || !ready || !status?.endpoint || (phones.length >= (phonesStatus?.maxPhones || 10) && !pending);
+  el("addPhone").textContent = pending ? "Continue adding phone" : "Add phone";
+  el("phonesCount").textContent = phones.length + " of " + (phonesStatus?.maxPhones || 10) + " phone slots used";
+  el("phonesMessage").textContent = !ready ? "Phone settings are unavailable until the Client service is ready." : phones.length ? "" : "Add your first phone to share its mobile data.";
+  // textContent and native DOM nodes keep user-provided phone names out of HTML.
+  const rows = phones.map(value => {
+    let parts = phoneRows.get(value.phoneId);
+    if (!parts) {
+      const row = document.createElement("div"); row.className = "phoneRow"; row.dataset.phoneId = value.phoneId; row.setAttribute("role", "listitem");
+      const heading = document.createElement("h3"), message = document.createElement("p"), addresses = document.createElement("div"); addresses.className = "endpoints";
+      const http = document.createElement("span"), socks = document.createElement("span"); addresses.append(http, socks);
+      const buttons = document.createElement("div"), actions = [];
+      for (const [kind, label] of [["http", "Copy HTTP proxy"], ["socks", "Copy SOCKS5 proxy"], ["settings", "Phone settings"]]) {
+        const button = document.createElement("button"); button.className = "secondary"; button.textContent = label;
+        button.onclick = kind === "settings" ? () => { if (!busy && available()) selectPhone(value.phoneId, true); } : () => action(button, () => api().CopyPhoneProxy(value.phoneId, kind), "Copied. Paste it into your app’s proxy settings.");
+        actions.push({button, kind, label}); buttons.append(button);
+      }
+      row.append(heading, message, addresses, buttons);
+      parts = {row, heading, message, http, socks, actions}; phoneRows.set(value.phoneId, parts);
+    }
+    const {row, heading, message, http, socks, actions} = parts;
+    heading.textContent = value.name;
+    const connected = ready && sharedStatus?.phase !== "error" && value.connected && !value.updatePending && value.proxyRunning && value.phase !== "error";
+    message.textContent = !ready ? "Client service unavailable" : sharedStatus?.phase === "error" ? "Client needs attention: " + sharedStatus.message : connected ? "Connected" : ["error", "proxy_error"].includes(value.phase) ? "Needs attention: " + value.message : value.updatePending ? "Connection update needed" : !value.paired ? "Adding phone" : "Saved — start sharing on this phone";
+    http.textContent = "HTTP " + value.httpAddress; socks.textContent = "SOCKS5 " + value.socksAddress;
+    for (const {button, kind, label} of actions) {
+      button.setAttribute("aria-label", label + " for " + value.name);
+      button.disabled = busy || !ready || (kind !== "settings" && !value.paired);
+    }
+    return row;
+  });
+  const order = JSON.stringify(phones.map(value => value.phoneId));
+  if (order !== phoneListOrder) { el("phoneList").replaceChildren(...rows); phoneListOrder = order; }
+  for (const id of phoneRows.keys()) if (!phones.some(value => value.phoneId === id)) phoneRows.delete(id);
+  show("multiPhoneSettings", initialized && managingPhone && !!phone);
+  show("phoneNameField", !dashboard && step === "pair" && !phone?.paired && !el("invitation").value);
+  if (!renameEdited) el("phoneRename").value = phone?.name || "";
+  el("pairedPhoneHeading").textContent = phone?.name || "Your phone";
+  el("connectionHeading").textContent = phone ? phone.name + " connection" : "Your connection";
+  el("phoneSettingsHeading").textContent = phone ? phone.name + " settings" : "Phone settings";
+  el("phoneProxyMessage").textContent = phone?.message || "";
+  el("renamePhone").disabled = el("retryPhoneProxy").disabled = busy || !ready || !phone;
+  show("removePhone", initialized && managingPhone && !!phone);
+  el("revoke").disabled = el("confirmRevoke").disabled = busy || !ready || !phone;
+  if (dashboard && !managingPhone) { show("proxyPanel", false); show("recoveryPanel", false); }
+  if (addingPhone) {
+    for (const id of ["stepAddress", "stepNetwork", "reviewSetup", "managePhone"]) el(id).disabled = true;
+    el("finishLater").textContent = "Back to dashboard";
   }
 }
 function startReadinessWait() {
@@ -284,9 +365,13 @@ function refresh() {
   if (refreshing) return refreshing;
   const revision = mutation;
   refreshing = (async () => {
-    let next;
-    try { next = await api().Status(); }
-    catch (_) { next = {phase:"unavailable", message:"The app could not connect to the Client service.", connected:false}; }
+    let next, nextPhones;
+    try {
+      if (multiplePhones()) [next, nextPhones] = await Promise.all([api().Status(), api().Phones()]);
+      else next = await api().Status();
+      if (multiplePhones() && (!nextPhones || !Array.isArray(nextPhones.phones))) throw new Error("Client phone status is unavailable.");
+    }
+    catch (error) { next = {phase:"unavailable", message:String(error), connected:false}; }
     // A response can resolve between the action callback and its finally block.
     // Commit only after the action has finished and a fresh snapshot is fetched.
     if (busy || revision !== mutation) return;
@@ -294,16 +379,23 @@ function refresh() {
     if (next.phase === "unavailable") {
       if (wasAvailable) startReadinessWait();
       status = {...status, ...next, connected:false, running:false};
+      sharedStatus = status;
       if (Date.now() - waitingSince >= 30000) readinessExpired = true;
       clearInvitation(); clearUpdate();
     } else {
-      status = next; readinessExpired = false;
-      if (managingPhone && !status.paired) managingPhone = false;
+      sharedStatus = next;
+      if (multiplePhones()) {
+        phonesStatus = nextPhones;
+        if (selectedPhoneID && !selectedPhone()) { selectedPhoneID = ""; phoneSelectionRevision++; clearInvitation(); clearUpdate(); }
+        if (!selectedPhoneID && !addingPhone) selectedPhoneID = (phonesStatus.phones.find(phone => phone.paired) || phonesStatus.phones[0])?.phoneId || "";
+      }
+      status = next; applySelectedPhone(); readinessExpired = false;
+      if (managingPhone && (multiplePhones() ? !selectedPhone() : !status.paired)) managingPhone = false;
       if (previous?.endpoint && configKey(previous) !== configKey(next)) { firewall = null; clearUpdate(); if (previous.transport !== next.transport) selectedTransport = next.transport; }
       if (!status.paired || (previous?.updatePending && !status.updatePending) || (status.transport === "hosted" && !hostedAuthorized())) clearUpdate();
       if (el("invitation").value && (status.paired || !activeInvitation() || invitationConfiguration !== configKey(status) || (invitationExpiry && invitationExpiry !== status.invitationExpiresAt))) clearInvitation();
       if (el("invitation").value) invitationExpiry = status.invitationExpiresAt;
-      if (!initialized) { initialized = true; dashboard = !!status.paired; step = resumeStep(); }
+      if (!initialized) { initialized = true; dashboard = multiplePhones() ? phonesStatus.phones.some(phone => phone.paired) : !!status.paired; step = resumeStep(); }
       else if (!dashboard) {
         if (!status.endpoint) step = "address";
         // Browser approval can finish before the UI observes a pending snapshot.
@@ -371,6 +463,19 @@ el("managePhone").onclick = () => {
     show("revokeConfirmation", false); render();
   }
 };
+el("addPhone").onclick = () => {
+  if (busy || !available() || el("addPhone").disabled) return;
+  addingPhone = true; dashboard = false; managingPhone = false; reviewingSetup = false; step = "pair";
+  selectedPhoneID = phonesStatus.pendingPhoneId || ""; phoneSelectionRevision++; renameEdited = false;
+  clearInvitation(); clearUpdate(); el("phoneName").value = selectedPhone()?.name || "";
+  applySelectedPhone(); render();
+};
+el("phoneRename").oninput = () => { renameEdited = true; };
+el("renamePhone").onclick = () => {
+  const id = selectedPhoneID, name = el("phoneRename").value;
+  return action(el("renamePhone"), async () => { await api().RenamePhone(id, name); if (id === selectedPhoneID) renameEdited = false; }, "Phone name saved.");
+};
+el("retryPhoneProxy").onclick = () => { const id = selectedPhoneID; return action(el("retryPhoneProxy"), () => api().RetryPhoneProxy(id), "Proxy ports retried. Check this phone’s status."); };
 el("backToDashboard").onclick = returnToDashboard;
 el("advancedDirect").onclick = () => { if (!busy && available()) { selectedTransport = "direct"; step = "address"; dashboard = false; render(); maybeDiscover(); } };
 el("chooseHosted").onclick = () => { if (!busy && available()) { selectedTransport = "hosted"; step = "address"; dashboard = false; render(); } };
@@ -401,27 +506,42 @@ el("configure").onclick = () => action(el("configure"), async () => {
 }, "Address saved. Review network access, then connect your phone.");
 el("issue").onclick = () => action(el("issue"), async () => {
   if (status.paired || status.phase === "acknowledging" || el("invitation").value) return;
-  const key = configKey(status), view = await api().IssueInvitation();
+  const key = configKey(status), selection = phoneSelectionRevision;
+  const view = multiplePhones() ? await api().AddPhone(el("phoneName").value) : await api().IssueInvitation();
+  if (selection !== phoneSelectionRevision) return;
+  if (multiplePhones()) { selectedPhoneID = view.phoneId; }
   invitationConfiguration = key; invitationExpiry = "";
   el("invitation").value = view.bundle; el("invitationQR").src = view.qrDataUrl; show("invitationDetails", true);
 }, invitationReadyMessage);
-el("copyInvitation").onclick = () => action(el("copyInvitation"), () => api().CopyInvitation(), "Setup code copied. Keep it private.");
+el("copyInvitation").onclick = () => { const id = selectedPhoneID; return action(el("copyInvitation"), () => multiplePhones() ? api().CopyPhoneInvitation(id) : api().CopyInvitation(), "Setup code copied. Keep it private."); };
 const cancelInvitation = button => action(button, async () => {
-  await api().CancelInvitation(); clearInvitation(); if (!dashboard) step = "pair";
+  const id = selectedPhoneID;
+  if (multiplePhones()) await api().CancelPhoneInvitation(id); else await api().CancelInvitation();
+  if (id !== selectedPhoneID) return;
+  clearInvitation();
+  if (multiplePhones() && addingPhone) { dashboard = true; addingPhone = false; selectedPhoneID = ""; }
+  else if (!dashboard) step = "pair";
 }, "Code canceled. Show a new QR code when you’re ready.");
 el("cancelInvitation").onclick = () => cancelInvitation(el("cancelInvitation"));
 el("cancelPairing").onclick = () => cancelInvitation(el("cancelPairing"));
 el("exportUpdate").onclick = () => action(el("exportUpdate"), async () => {
-  const view = await api().ExportEndpointUpdate(); el("update").value = view.bundle;
+  const id = selectedPhoneID, selection = phoneSelectionRevision;
+  const view = multiplePhones() ? await api().ExportPhoneEndpointUpdate(id) : await api().ExportEndpointUpdate();
+  if (id !== selectedPhoneID || selection !== phoneSelectionRevision) return;
+  el("update").value = view.bundle;
   el("updateQR").src = view.qrDataUrl; show("updateDetails", true);
 }, connectionUpdateMessage);
-el("copyUpdate").onclick = () => action(el("copyUpdate"), () => api().CopyEndpointUpdate(), "Update copied. Import it in Inevitable Mobile Relay on your saved phone.");
-el("copyHttp").onclick = () => action(el("copyHttp"), () => api().CopyProxy("http"), "Copied. Paste it into your app’s proxy settings.");
-el("copySocks").onclick = () => action(el("copySocks"), () => api().CopyProxy("socks"), "Copied. Paste it into your app’s proxy settings.");
+el("copyUpdate").onclick = () => { const id = selectedPhoneID; return action(el("copyUpdate"), () => multiplePhones() ? api().CopyPhoneEndpointUpdate(id) : api().CopyEndpointUpdate(), "Update copied. Import it in Inevitable Mobile Relay on your saved phone."); };
+el("copyHttp").onclick = () => { const id = selectedPhoneID; return action(el("copyHttp"), () => multiplePhones() ? api().CopyPhoneProxy(id, "http") : api().CopyProxy("http"), "Copied. Paste it into your app’s proxy settings."); };
+el("copySocks").onclick = () => { const id = selectedPhoneID; return action(el("copySocks"), () => multiplePhones() ? api().CopyPhoneProxy(id, "socks") : api().CopyProxy("socks"), "Copied. Paste it into your app’s proxy settings."); };
 el("revoke").onclick = () => { show("revokeConfirmation", true); };
 el("cancelRevoke").onclick = () => { show("revokeConfirmation", false); };
 el("confirmRevoke").onclick = () => action(el("confirmRevoke"), async () => {
-  await api().Revoke(); clearInvitation(); clearUpdate(); show("revokeConfirmation", false);
+  const id = selectedPhoneID;
+  if (multiplePhones()) await api().RevokePhone(id); else await api().Revoke();
+  if (id !== selectedPhoneID) return;
+  clearInvitation(); clearUpdate(); show("revokeConfirmation", false);
+  if (multiplePhones()) { managingPhone = false; dashboard = true; addingPhone = false; selectedPhoneID = ""; return; }
   managingPhone = false; dashboard = false; reviewingSetup = true; step = "pair"; selectedTransport = "";
 }, "Phone removed from this computer. Show a new QR code to connect a phone again.");
 startReadinessWait(); render();

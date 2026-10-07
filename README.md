@@ -15,6 +15,7 @@ One product, two companion apps: **Inevitable Mobile Relay** runs on your comput
 - **Use familiar proxy settings.** Connect applications that support authenticated HTTP/HTTPS CONNECT or SOCKS5 over TCP.
 - **Use your own cellular connection.** Traffic exits through your phone’s carrier network. The Client-to-phone connection is encrypted and authenticated.
 - **Connect several computers.** Save up to ten Clients on one phone, with independent connection status and enable/disable controls. They share the same phone and cellular capacity.
+- **Use several phones on one computer.** The multi-phone Client supports up to ten phones, each with its own HTTP/SOCKS5 proxy ports and credentials. Choose a phone by copying its proxy details; an offline phone never redirects your app to another phone. See the [implementation and acceptance record](docs/superpowers/plans/2026-10-06-multiple-phones.md) for release status.
 - **Manage access locally.** Activate the Client with Inevitable, pair your phone by QR, copy proxy details, and remove a paired phone locally.
 - **Connect without router setup.** Hosted mode uses outbound connections through Inevitable's existing gateways. No separate relay computer, customer AWS account, Tailscale, or Funnel setup is required. Advanced direct mode is also available.
 
@@ -72,7 +73,7 @@ The HTTP copy uses `host:port:username:password`; enter these as separate fields
 | Windows | `127.0.0.2:1081` | `127.0.0.2:1080` |
 | Mac | `127.0.0.1:1081` | `127.0.0.1:1080` |
 
-These proxy addresses are local to the computer. **Keep ports 1080 and 1081 private.** Only Advanced direct mode needs incoming access to its authenticated phone listener. Configure individual applications rather than a system-wide proxy.
+These are the first phone's proxy addresses. Additional phones receive stable SOCKS5/HTTP pairs `1082/1083` through `1098/1099`. Existing phones keep their original details during upgrade; removing a phone never renumbers the others. **Keep all proxy ports 1080–1099 private.** Only Advanced direct mode needs incoming access to its authenticated phone listener. Configure individual applications rather than a system-wide proxy.
 
 ## Keeping your phone connected
 
@@ -89,7 +90,7 @@ For longer iPhone sessions, use a dedicated phone and keep it powered. The compu
 - **Bring your own data plan.** Traffic consumes your phone’s mobile data. Inevitable Mobile Relay does not supply cellular service or a pool of proxy IP addresses.
 - **Access, not data metering.** Inevitable Mobile Relay gateway access depends on entitlement, not traffic volume. It submits no customer traffic usage or destinations to Inevitable, and has no included-data allowance or overage charges. Your carrier's data-plan terms still apply. Inevitable's other proxy products retain their own accounting.
 - **Hosted availability.** Hosted mode depends on Inevitable gateways and access/configuration services. Gateways can observe connection addresses, timing and routing metadata, but do not hold the keys for the phone-to-Client TLS connection. Operational health monitoring is separate from traffic usage reporting.
-- **One phone per Client.** Each Client pairs with one phone. Each phone saves up to ten Clients, including pending and disabled entries.
+- **Ten phones per Client.** The multi-phone Client reserves up to ten phone slots, including pending pairing. Each phone still saves up to ten Clients, including pending and disabled entries. These are local identity limits, not paid seats or data quotas.
 - **Public Internet destinations over TCP.** Private-network destinations, UDP, and QUIC are unsupported. Applications must send the intended traffic through their configured proxy.
 - **Carrier-controlled addresses.** Guided cellular IP rotation requires manual Airplane Mode steps and interrupts every connected Client. A new address is not guaranteed. Separate Clients on one phone do not receive separate dedicated IPs.
 

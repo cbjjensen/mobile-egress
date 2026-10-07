@@ -53,6 +53,7 @@ details{margin-top:18px}summary{cursor:pointer;font-weight:600}details p{margin-
 .firewall p{margin-bottom:0}.firewall strong{font-size:14px}footer{font-size:11px;color:var(--text-muted);display:flex;justify-content:flex-end;margin:18px 0}
 ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
 .phoneSteps{padding-left:24px;font-size:17px;color:var(--text-primary)}.phoneSteps li{margin:14px 0}
+.phoneRow{padding:18px 0;border-top:1px solid var(--border-subtle)}.phoneRow:first-child{border-top:0}.phoneRow h3{margin:0;font-size:16px}.phoneRow p{margin:6px 0}.phoneRow button{font-size:13px}
 @media(max-width:560px){body{padding:16px}.card{padding:18px}.columns{grid-template-columns:1fr}.status{align-items:start}.steps button{font-size:10px}.milestones{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
@@ -75,6 +76,12 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
   <button id="backToDashboard">Dashboard</button><button id="managePhone">Phone settings</button><button id="reviewSetup">Review setup</button>
 </nav>
 <div id="dashboardHeader" class="heading hidden"><h2 id="dashboardHeading" tabindex="-1">Dashboard</h2></div>
+<section id="phonesPanel" class="card hidden" aria-labelledby="phonesHeading">
+  <div class="heading"><h2 id="phonesHeading">Your phones</h2><button id="addPhone">Add phone</button></div>
+  <p id="phonesCount" class="note"></p><p id="phonesMessage" role="status"></p>
+  <div id="phoneList" role="list" aria-label="Saved phones"></div>
+  <p class="note">Choose each phone’s separate HTTP or SOCKS5 settings in your apps. These proxies work only on this computer. Copied details include a private password.</p>
+</section>
 <div id="phoneSettingsHeader" class="heading hidden"><h2 id="phoneSettingsHeading" tabindex="-1">Phone settings</h2></div>
 <div id="wizardHeader" class="hidden">
   <nav class="steps" aria-label="Setup steps">
@@ -96,7 +103,7 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
   <button id="exportUpdate" disabled>Show update QR</button><button id="copyUpdate" class="secondary" disabled>Copy update</button>
   <div id="updateDetails" class="hidden"><div class="qrFrame"><img id="updateQR" class="qr" alt="Connection update QR code for your paired phone"></div><p class="note">On your phone, open Inevitable Mobile Relay and tap Scan QR. Keep the whole code visible.</p><details><summary>Copy the update instead</summary><label for="update">Connection update</label><textarea id="update" readonly spellcheck="false"></textarea></details></div>
   <p class="note">Keep this computer enabled in the phone app. If sharing is stopped, tap Start cellular Agent on Android or Start sharing on iPhone after scanning.</p>
-  <details><summary>Removed this computer from the phone app?</summary><p>You’ll need to pair again. Open Phone settings here and choose Remove phone. Then show a new QR code and scan it on your phone. Your Inevitable account connection and proxy settings are kept.</p></details>
+  <details><summary>Removed this computer from the phone app?</summary><p>You’ll need to pair again. Open Phone settings here and choose Remove phone. Then show a new QR code and scan it on your phone. Your Inevitable account connection and other phones are kept. Copy the new phone’s private proxy details into your apps.</p></details>
 </details>
 <section id="verifyPanel" class="card hidden" aria-labelledby="verifyHeading">
   <h2 id="verifyHeading">Start sharing on your phone</h2><p id="verificationMessage" role="status"></p>
@@ -140,7 +147,7 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
   <details><summary>Advanced: listener and public port</summary>
     <div class="columns"><div><label for="bindAddress">Local listener address</label><input id="bindAddress" value=":8443" spellcheck="false" autocomplete="off"></div>
     <div><label for="publicPort">Public TCP port</label><input id="publicPort" type="number" min="1" max="65535" value="8443"></div></div>
-    <p class="note">Both ports default to 8443. Forward the public port to the local listener port if they differ. Keep the local HTTP and SOCKS proxy ports 1080 and 1081 private.</p>
+    <p class="note">Both ports default to 8443. Forward the public port to the local listener port if they differ. Keep all local HTTP and SOCKS proxy ports 1080–1099 private.</p>
   </details>
   <button id="configure" disabled>Save and continue</button>
   <p class="note">Changing this address may disconnect your phone until you scan an update QR code. Your paired phone and proxy settings are kept.</p>
@@ -180,6 +187,7 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
 
 <section id="pairPanel" class="card hidden" aria-labelledby="pairHeading">
   <h2 id="pairHeading">Connect your phone</h2><p id="pairNote"></p>
+  <div id="phoneNameField" class="hidden"><label for="phoneName">Phone name (optional)</label><input id="phoneName" maxlength="128" placeholder="Phone name" autocomplete="off"><p class="note">Use up to 64 characters. Leave blank to use the next available Phone number.</p></div>
   <button id="issue" disabled>Show QR code</button>
   <div id="invitationDetails" class="hidden">
     <div class="qrFrame"><img id="invitationQR" class="qr" alt="Private one-use phone pairing QR code"></div><p id="expiry"></p>
@@ -192,9 +200,10 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
   <button id="pairNext" class="secondary">Continue to sharing</button>
 </section>
 <section id="phoneSettingsPanel" class="card hidden" aria-labelledby="pairedPhoneHeading">
-  <h2 id="pairedPhoneHeading">Your phone</h2><p>Remove this phone to pair it again or use a different phone. Any apps using its connection will disconnect. Your Inevitable account connection and proxy settings are kept.</p>
+  <h2 id="pairedPhoneHeading">Your phone</h2><p>Remove this phone to pair it again or use a different phone. Apps using this phone’s connection will disconnect. Your Inevitable account connection and other phones are kept. A new pairing gets its own private proxy details.</p>
+  <div id="multiPhoneSettings" class="hidden"><label for="phoneRename">Phone name (up to 64 characters)</label><input id="phoneRename" maxlength="128" autocomplete="off"><button id="renamePhone" class="secondary">Save name</button><p id="phoneProxyMessage" class="note" role="status"></p><button id="retryPhoneProxy" class="secondary">Retry proxy ports</button><p class="note">Each phone keeps its own ports. Close an app using either port, then retry.</p></div>
   <div id="removePhone" class="hidden"><button id="revoke" class="danger" disabled>Remove phone</button>
-    <div id="revokeConfirmation" class="hidden"><p>Remove this phone now? This computer will lose its phone connection immediately. You’ll need to scan a new QR code to pair again.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
+    <div id="revokeConfirmation" class="hidden"><p>Remove this phone now? Apps using this phone’s connection will disconnect immediately. Your other phones stay connected. You’ll need to scan a new QR code to pair again.</p><button id="confirmRevoke" class="danger">Remove phone now</button><button id="cancelRevoke" class="secondary">Keep phone</button></div>
   </div>
 </section>
 
@@ -204,7 +213,7 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
   <div class="endpoints"><span id="httpAddress"></span><span id="socksAddress"></span></div>
   <button id="copyHttp" class="secondary" disabled>Copy HTTP proxy</button><button id="copySocks" class="secondary" disabled>Copy SOCKS5 proxy</button>
   <p class="note">For apps on this computer only. Copied details include your proxy password; keep them private.</p>
-  <details><summary>Which option should I choose?</summary><p>Choose HTTP if your app uses an HTTP proxy; it supports HTTPS browsing too. Choose SOCKS5 if your app asks for SOCKS5.</p><p>The HTTP copy uses <code>host:port:username:password</code>. The SOCKS5 copy is a <code>socks5://username:password@host:port</code> URL. Some apps accept the full copy; others need the address, port, username and password entered separately.</p><p>These proxies work only on this computer. Never open proxy ports 1080 or 1081 to your network or the internet.</p></details>
+  <details><summary>Which option should I choose?</summary><p>Choose HTTP if your app uses an HTTP proxy; it supports HTTPS browsing too. Choose SOCKS5 if your app asks for SOCKS5.</p><p>The HTTP copy uses <code>host:port:username:password</code>. The SOCKS5 copy is a <code>socks5://username:password@host:port</code> URL. Some apps accept the full copy; others need the address, port, username and password entered separately.</p><p>These proxies work only on this computer. Never open proxy ports 1080–1099 to your network or the internet.</p></details>
   <button id="finishSetup">Go to dashboard</button>
 </section>
 <div id="feedback" role="status" aria-live="polite"></div>

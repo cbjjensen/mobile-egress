@@ -29,10 +29,15 @@ type DirectService interface {
 	Revoke(context.Context) error
 }
 type Request struct {
-	Method string `json:"method"`
-	Value  string `json:"value,omitempty"`
+	Method  string `json:"method"`
+	Value   string `json:"value,omitempty"`
+	PhoneID string `json:"phoneId,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind,omitempty"`
 }
 type Response struct {
+	Phones     *nodeservice.PhonesStatus     `json:"phones,omitempty"`
+	Invitation *nodeservice.PhoneInvitation  `json:"invitation,omitempty"`
 	Activation *nodeservice.ActivationView   `json:"activation,omitempty"`
 	Status     *nodeservice.StandaloneStatus `json:"status,omitempty"`
 	Firewall   *FirewallStatus               `json:"firewall,omitempty"`
@@ -88,102 +93,111 @@ func serveConnection(ctx context.Context, connection net.Conn, service Service) 
 		requestCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
 		var err error
-		switch request.Method {
-		case "start-hosted-activation", "resume-hosted-activation", "cancel-hosted-activation":
-			if hosted, ok := service.(HostedService); ok {
-				if request.Method != "start-hosted-activation" && request.Value != "" {
-					err = errors.New("Activation control accepts no credentials or settings.")
-				} else {
-					switch request.Method {
-					case "start-hosted-activation":
-						var view nodeservice.ActivationView
-						view, err = hosted.StartHostedActivation(requestCtx, request.Value)
-						if err == nil {
-							response.Activation = &view
+		if handled, phoneErr := handlePhoneRequest(requestCtx, service, request, &response); handled {
+			err = phoneErr
+		} else if request.PhoneID != "" || request.Name != "" || request.Kind != "" {
+			err = errors.New("Invalid local Client request.")
+		} else {
+			switch request.Method {
+			case "start-hosted-activation", "resume-hosted-activation", "cancel-hosted-activation":
+				if hosted, ok := service.(HostedService); ok {
+					if request.Method != "start-hosted-activation" && request.Value != "" {
+						err = errors.New("Activation control accepts no credentials or settings.")
+					} else {
+						switch request.Method {
+						case "start-hosted-activation":
+							var view nodeservice.ActivationView
+							view, err = hosted.StartHostedActivation(requestCtx, request.Value)
+							if err == nil {
+								response.Activation = &view
+							}
+						case "resume-hosted-activation":
+							var view nodeservice.ActivationView
+							view, err = hosted.ResumeHostedActivation(requestCtx)
+							if err == nil {
+								response.Activation = &view
+							}
+						case "cancel-hosted-activation":
+							err = hosted.CancelHostedActivation(requestCtx)
 						}
-					case "resume-hosted-activation":
-						var view nodeservice.ActivationView
-						view, err = hosted.ResumeHostedActivation(requestCtx)
-						if err == nil {
-							response.Activation = &view
-						}
-					case "cancel-hosted-activation":
-						err = hosted.CancelHostedActivation(requestCtx)
 					}
-				}
-			} else {
-				err = errors.New("Update the Client service to activate hosted connectivity.")
-			}
-		case "check-firewall", "retry-firewall":
-			if request.Value != "" {
-				err = errors.New("Firewall checks accept no program paths or settings.")
-			} else if firewall, ok := service.(FirewallService); ok {
-				var status FirewallStatus
-				if request.Method == "retry-firewall" {
-					status, err = firewall.RetryFirewall(requestCtx)
 				} else {
-					status, err = firewall.CheckFirewall(requestCtx)
+					err = errors.New("Update the Client service to activate hosted connectivity.")
 				}
-				if err == nil {
-					response.Firewall = &status
+			case "check-firewall", "retry-firewall":
+				if request.Value != "" {
+					err = errors.New("Firewall checks accept no program paths or settings.")
+				} else if firewall, ok := service.(FirewallService); ok {
+					var status FirewallStatus
+					if request.Method == "retry-firewall" {
+						status, err = firewall.RetryFirewall(requestCtx)
+					} else {
+						status, err = firewall.CheckFirewall(requestCtx)
+					}
+					if err == nil {
+						response.Firewall = &status
+					}
+				} else {
+					err = errors.New("Update the Client service to check its firewall access.")
 				}
-			} else {
-				err = errors.New("Update the Client service to check its firewall access.")
+			case "status":
+				status := service.Status()
+				response.Status = &status
+			case "configure":
+				configuration, decodeErr := nodeservice.DecodeDirectConfiguration(request.Value)
+				if decodeErr != nil {
+					err = errors.New("Invalid endpoint configuration.")
+				} else if direct, ok := service.(interface {
+					Configure(context.Context, nodeservice.DirectConfiguration) error
+				}); ok {
+					err = direct.Configure(requestCtx, configuration)
+				} else {
+					err = errors.New("Update the Client service to configure a direct endpoint.")
+				}
+			case "issue-invitation":
+				if direct, ok := service.(interface {
+					IssueInvitation(context.Context) (string, error)
+				}); ok {
+					response.Value, err = direct.IssueInvitation(requestCtx)
+				} else {
+					err = errors.New("Update the Client service to pair a phone.")
+				}
+			case "cancel-invitation":
+				if direct, ok := service.(interface{ CancelInvitation(context.Context) error }); ok {
+					err = direct.CancelInvitation(requestCtx)
+				} else {
+					err = errors.New("Update the Client service to cancel pairing.")
+				}
+			case "export-update":
+				if direct, ok := service.(interface {
+					ExportEndpointUpdate(context.Context) (string, error)
+				}); ok {
+					response.Value, err = direct.ExportEndpointUpdate(requestCtx)
+				} else {
+					err = errors.New("Update the Client service to export a connection update.")
+				}
+			case "revoke":
+				if direct, ok := service.(interface{ Revoke(context.Context) error }); ok {
+					err = direct.Revoke(requestCtx)
+				} else {
+					err = errors.New("Update the Client service to remove a phone.")
+				}
+			case "pair", "import":
+				err = errors.New("Relay invitations and updates are unsupported. Configure this Client's endpoint and pair your phone again.")
+			case "proxy":
+				if request.Value != "http" && request.Value != "socks" {
+					err = errors.New("Unknown proxy format.")
+				} else {
+					response.Value, err = service.Proxy(requestCtx, request.Value)
+				}
+			default:
+				err = errors.New("Unknown local Client request.")
 			}
-		case "status":
-			status := service.Status()
-			response.Status = &status
-		case "configure":
-			configuration, decodeErr := nodeservice.DecodeDirectConfiguration(request.Value)
-			if decodeErr != nil {
-				err = errors.New("Invalid endpoint configuration.")
-			} else if direct, ok := service.(interface {
-				Configure(context.Context, nodeservice.DirectConfiguration) error
-			}); ok {
-				err = direct.Configure(requestCtx, configuration)
-			} else {
-				err = errors.New("Update the Client service to configure a direct endpoint.")
-			}
-		case "issue-invitation":
-			if direct, ok := service.(interface {
-				IssueInvitation(context.Context) (string, error)
-			}); ok {
-				response.Value, err = direct.IssueInvitation(requestCtx)
-			} else {
-				err = errors.New("Update the Client service to pair a phone.")
-			}
-		case "cancel-invitation":
-			if direct, ok := service.(interface{ CancelInvitation(context.Context) error }); ok {
-				err = direct.CancelInvitation(requestCtx)
-			} else {
-				err = errors.New("Update the Client service to cancel pairing.")
-			}
-		case "export-update":
-			if direct, ok := service.(interface {
-				ExportEndpointUpdate(context.Context) (string, error)
-			}); ok {
-				response.Value, err = direct.ExportEndpointUpdate(requestCtx)
-			} else {
-				err = errors.New("Update the Client service to export a connection update.")
-			}
-		case "revoke":
-			if direct, ok := service.(interface{ Revoke(context.Context) error }); ok {
-				err = direct.Revoke(requestCtx)
-			} else {
-				err = errors.New("Update the Client service to remove a phone.")
-			}
-		case "pair", "import":
-			err = errors.New("Relay invitations and updates are unsupported. Configure this Client's endpoint and pair your phone again.")
-		case "proxy":
-			if request.Value != "http" && request.Value != "socks" {
-				err = errors.New("Unknown proxy format.")
-			} else {
-				response.Value, err = service.Proxy(requestCtx, request.Value)
-			}
-		default:
-			err = errors.New("Unknown local Client request.")
 		}
 		if err != nil {
+			response.Value = ""
+			response.Invitation = nil
+			response.Phones = nil
 			response.Error = err.Error()
 		}
 	}
@@ -193,6 +207,9 @@ func serveConnection(ctx context.Context, connection net.Conn, service Service) 
 type LocalClient struct{}
 
 func (LocalClient) call(ctx context.Context, method, value string) (Response, error) {
+	return (LocalClient{}).callRequest(ctx, Request{Method: method, Value: value})
+}
+func (LocalClient) callRequest(ctx context.Context, request Request) (Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	connection, err := dialLocal(ctx)
@@ -201,7 +218,7 @@ func (LocalClient) call(ctx context.Context, method, value string) (Response, er
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(15 * time.Second))
-	if err := json.NewEncoder(connection).Encode(Request{Method: method, Value: value}); err != nil {
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		return Response{}, errors.New("Client service connection was interrupted.")
 	}
 	var response Response

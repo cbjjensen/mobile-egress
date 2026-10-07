@@ -21,6 +21,12 @@ Status is deliberately secret-safe. Copy proxy credentials or invitations only t
 
 ## Dashboard and setup
 
+On the multi-phone Client, the dashboard lists up to ten named phones with independent status and proxy actions. Use **Add phone** for another phone without repeating account activation; select its settings to rename, retry its proxy ports, export its signed update, or remove it. One offline/updating phone does not prevent using another ready phone. Global account/gateway failures still affect all hosted phones. Revoking the computer on Inevitable disables its whole hosted attachment while retaining local pairings.
+
+Ports are stable per phone: SOCKS5/HTTP 1080/1081 for the first slot, then 1082/1083 through 1098/1099. Keep every proxy port loopback-only. A conflict disables only that phone's pair; close the conflicting listener and retry without renumbering. An app configured with an offline phone's details fails rather than switching phones. Removal invalidates its credentials; a replacement gets fresh ones.
+
+If local removal cannot be persisted, the affected phone is suppressed in the running Client and the UI reports failure. Retry removal after protected storage recovers and before restarting; failed persistence does not prove durable revocation. Never recover by deleting protected state or restoring a stale backup. Use a compatible repair installer for schema upgrades.
+
 The paired Client opens a dashboard with connection status and local proxy copy actions. An offline phone does not restart setup: follow the dashboard's phone-app Start instructions. **Phone settings** is a separate view for manual connection updates and confirmed phone removal. **Review setup** returns to the wizard for activation, connection mode, address and network guidance while preserving the existing pairing. **Finish later** keeps unfinished work visible through **Continue setup**.
 
 The hosted setup headings are **Your account**, **Connect this computer**, **Connect phone**, **Start sharing** and **Use in your apps**. They describe customer actions; the underlying account approval, gateway attachment and authenticated phone checks are unchanged. Approved account review says **Your account is connected** without displaying the activation name field or requesting a new sign-in. **Advanced connection settings** contains mode selection, and **Connection details** retains diagnostic information rather than making protocol terms the main dashboard copy.

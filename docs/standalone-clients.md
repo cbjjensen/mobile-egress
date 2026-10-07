@@ -40,7 +40,11 @@ The allowed source must include the phone's **cellular** address. AWS's **My IP*
 
 Other hosting providers require the equivalent inbound TCP rule and reachable network route. A connection failure alone cannot identify which firewall, address or route is responsible.
 
-One phone pairs to each Client. One phone saves at most ten Clients, including disabled and pending records. Cancel/expire pending attempts or remove a Client to release a slot. A retry resumes the existing pending identity.
+The multi-phone Client supports ten phones, including a pending pairing reservation. Use **Add phone** on its dashboard, scan a new QR on the next phone, then start sharing there. Account activation and connection settings belong to the computer and are reused. Only one new phone can be pairing at a time; retry resumes its pending identity. Unredeemed expired invitations release their reservation, while an issued identity awaiting acknowledgement stays recoverable until completed or canceled.
+
+Each named phone has separate **Copy HTTP proxy**, **Copy SOCKS5 proxy**, and settings actions. The first phone retains SOCKS5/HTTP ports 1080/1081; additional slots use 1082/1083 through 1098/1099. Assignments survive restarts, renaming and removal of other phones. An occupied port affects that phone's proxy pair only; release the conflicting application and retry from its settings. An offline phone's proxy fails without selecting another phone. A removed slot gets fresh credentials when reused. All addresses remain loopback-only.
+
+Each phone independently saves at most ten Clients, including disabled and pending records. Remove that Client on the phone to release its phone-side slot; local removal on the computer does not edit another device's storage. See the [multi-phone implementation record](superpowers/plans/2026-10-06-multiple-phones.md) for tested compatibility and publication status.
 
 ## iPhone operation
 
@@ -60,6 +64,8 @@ Run a compatible signed installer for upgrades/repair. Direct pairing, proxy cre
 
 Use **Review setup** to change mode or the direct advertised endpoint and keep the phone connected to receive a signed update. If the old endpoint is unreachable, use **Reconnect your phone → Show update QR**, or open **Phone settings** for **Show update QR / Copy update**, and import it on the paired phone. Missed generations can be skipped. Pending remains until acknowledged. Trust replacement requires re-pairing. Revoking Inevitable gateway access stops hosted attachment; it does not erase local phone pairing or affect other commercial proxies.
 
-Open **Phone settings → Remove phone** and confirm to revoke its access and close this computer's phone connection. The Client returns to **Connect phone**; choose **Show QR code** to pair again or add a replacement. Other computers saved on the phone are unaffected. To free a phone registry slot, also remove this saved Client there.
+Choose the intended phone, open **Phone settings → Remove phone**, and confirm to revoke only its access and close its streams. Other phones, proxy details and account activation stay in place. Use **Add phone** for a replacement. Other computers saved on the removed phone are unaffected. To free a phone registry slot, also remove this saved Client there. A failed protected-storage write is reported as failed removal, not successful revocation; retry before restarting because memory-only suppression is not durable.
+
+Upgrading the existing single-phone Client migrates protected state without re-pairing. Older Client binaries cannot read the upgraded schema. Use a compatible repair installer; never restore stale state or delete protected storage to force a downgrade, because that can lose new pairings or resurrect revoked access.
 
 Removing the computer from Inevitable only revokes hosted access; it does not remove its local phone pairing. After reactivation, **Reconnect your phone** appears if the gateway address changed. Choose **Show update QR**, scan it in the phone app and start sharing if stopped. This updates the saved pairing rather than creating a second Client. If you also removed the computer from the phone app, use **Phone settings → Remove phone**, then **Connect phone → Show QR code** to pair again; an update cannot restore a deleted pairing.

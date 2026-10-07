@@ -13,13 +13,17 @@ async function harness(options={}) {
   const tags=[...fs.readFileSync(new URL('./index.html',import.meta.url),'utf8').matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)];
   const markup=new Map(tags.map(tag=>[tag[1],tag[0]]));
   assert.equal(markup.size,tags.length,'HTML ids must be unique');
+  const makeNode=(tag='div',initialClasses='')=>{
+    const classes=new Set(initialClasses.split(/\s+/).filter(Boolean));
+    return {tagName:tag.toUpperCase(),value:'',textContent:'',src:'',disabled:false,className:'',hidden:false,dataset:{},children:[],
+      classList:{toggle(name,on){if(on===undefined)on=!classes.has(name);if(on)classes.add(name);else classes.delete(name);},add(name){classes.add(name);},remove(name){classes.delete(name);},contains(name){return classes.has(name);}},
+      append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=[...nodes];},
+      setAttribute(name,value){this[name]=value;},removeAttribute(name){this[name]='';},focus(){context.document.activeElement=this;}};
+  };
   const get=id=>{
     assert.ok(markup.has(id),'Missing HTML element: '+id);
     if (!elements.has(id)) {
-      const classes=new Set((markup.get(id).match(/class="([^"]*)"/)?.[1] || '').split(/\s+/).filter(Boolean));
-      elements.set(id,{value:'',textContent:'',src:'',disabled:false,className:'',hidden:false,
-        classList:{toggle(name,on){if(on===undefined)on=!classes.has(name);if(on)classes.add(name);else classes.delete(name);},add(name){classes.add(name);},remove(name){classes.delete(name);},contains(name){return classes.has(name);}},
-        setAttribute(name,value){this[name]=value;},removeAttribute(name){this[name]='';},focus(){context.document.activeElement=this;}});
+      elements.set(id,makeNode(markup.get(id).match(/^<(\w+)/)[1],markup.get(id).match(/class="([^"]*)"/)?.[1] || ''));
     }
     return elements.get(id);
   };
@@ -30,7 +34,7 @@ async function harness(options={}) {
     CancelInvitation:async()=>{calls.push(['cancel']);delete status.invitationExpiresAt;status.phase='listening';},Revoke:async()=>{calls.push(['revoke']);status.paired=false;status.connected=false;},CopyProxy:async kind=>calls.push(['proxy',kind]),ExportEndpointUpdate:async()=>({bundle:'signed-update',qrDataUrl:'data:image/png;base64,aA=='}),CopyEndpointUpdate:async()=>calls.push(['copy-update']),CopyInvitation:async()=>calls.push(['copy-invitation']),
     CheckFirewall:async()=>{calls.push(['check-firewall']);return {state:'allowed',scope:'port',port:8443,message:'Rule allows this listener.'};},RetryFirewall:async()=>{calls.push(['retry-firewall']);return {state:'allowed',scope:'port',port:8443,message:'Rule allows this listener.'};},...options.api};
   class Clock extends Date { constructor(...args){super(...(args.length?args:[now]));}static now(){return now;} }
-  const context=vm.createContext({document:{getElementById:get,activeElement:null},go:{clientapp:{App:api}},setInterval(fn,delay){timers.push({fn,delay,at:now+delay,interval:true});},setTimeout(fn,delay){timers.push({fn,delay,at:now+delay});},Date:Clock,URL,console});
+  const context=vm.createContext({document:{getElementById:get,createElement:makeNode,activeElement:null},go:{clientapp:{App:api}},setInterval(fn,delay){timers.push({fn,delay,at:now+delay,interval:true});},setTimeout(fn,delay){timers.push({fn,delay,at:now+delay});},Date:Clock,URL,console});
   context.window=context;
   vm.runInContext(fs.readFileSync(new URL('./app.js',import.meta.url),'utf8'),context);
   await flush();
@@ -39,6 +43,117 @@ async function harness(options={}) {
 const visible=(h,id)=>!h.get(id).classList.contains('hidden');
 const edit=(h,id,value)=>{h.get(id).value=value;h.get(id).oninput();};
 const operations=h=>h.calls.filter(c=>!['check-firewall','discover'].includes(c[0]));
+
+const phoneFixture=(phoneId,name,slot,extra={})=>({phoneId,name,slot,paired:true,connected:false,updatePending:false,phase:'ready',message:'Waiting for phone',socksAddress:`127.0.0.1:${1080+2*slot}`,httpAddress:`127.0.0.1:${1081+2*slot}`,proxyRunning:true,...extra});
+async function multiHarness(options={}) {
+ const phones={maxPhones:10,phones:[phoneFixture('phone-a','Home',0,{connected:true,phase:'connected'}),phoneFixture('phone-b','Travel',1,{updatePending:true})],...options.phones};
+ const calls=[];
+ const h=await harness({status:{paired:true,connected:true,...options.status},api:{
+  Phones:async()=>JSON.parse(JSON.stringify(phones)),
+  CopyPhoneProxy:async(id,kind)=>calls.push(['phone-proxy',id,kind]),
+  RenamePhone:async(id,name)=>{calls.push(['rename-phone',id,name]);phones.phones.find(p=>p.phoneId===id).name=name;},
+  RetryPhoneProxy:async id=>calls.push(['retry-phone-proxy',id]),
+  RevokePhone:async id=>{calls.push(['revoke-phone',id]);phones.phones=phones.phones.filter(p=>p.phoneId!==id);},
+  ExportPhoneEndpointUpdate:async id=>({bundle:'update-'+id,qrDataUrl:'data:image/png;base64,aA=='}),
+  CopyPhoneEndpointUpdate:async id=>calls.push(['copy-phone-update',id]),
+  AddPhone:async name=>{calls.push(['add-phone',name]);phones.pendingPhoneId='phone-c';phones.phones.push(phoneFixture('phone-c',name||'Phone 3',2,{paired:false,phase:'awaiting_phone',invitationExpiresAt:'2026-10-03T12:10:00Z'}));return {phoneId:'phone-c',bundle:'invitation-c',qrDataUrl:'data:image/png;base64,aA=='};},
+  CancelPhoneInvitation:async id=>{calls.push(['cancel-phone-invitation',id]);phones.phones=phones.phones.filter(p=>p.phoneId!==id);delete phones.pendingPhoneId;},
+  ...options.api
+ }});h.phones=phones;h.phoneCalls=calls;return h;
+}
+const row=(h,id)=>h.get('phoneList').children.find(p=>p.dataset.phoneId===id);
+const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
+const rowButton=(h,id,text)=>descendants(row(h,id)).find(n=>n.tagName==='BUTTON'&&n.textContent===text);
+
+test('phone list exposes separate addresses and copies the chosen stable ID',async()=>{
+ const h=await multiHarness();assert.equal(visible(h,'phonesPanel'),true);
+ assert.equal(h.get('phoneList').children.length,2);
+ assert.match(descendants(row(h,'phone-b')).map(n=>n.textContent).join(' '),/Travel.*1083/s);
+ await rowButton(h,'phone-b','Copy HTTP proxy').onclick();await rowButton(h,'phone-a','Copy SOCKS5 proxy').onclick();
+ assert.deepEqual(h.phoneCalls,[['phone-proxy','phone-b','http'],['phone-proxy','phone-a','socks']]);
+ assert.deepEqual(operations(h),[]);
+});
+test('selected offline phone never inherits aggregate connection success',async()=>{
+ const h=await multiHarness();await rowButton(h,'phone-b','Phone settings').onclick();
+ assert.notEqual(h.get('phase').textContent,'Connected');assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(h.get('phoneRename').value,'Travel');assert.equal(h.get('recoveryPanel').open,true);
+ await h.get('copyUpdate').onclick();assert.deepEqual(h.phoneCalls,[['copy-phone-update','phone-b']]);
+});
+test('add phone reuses pairing without computer activation or sibling readiness',async()=>{
+ const h=await multiHarness();await h.get('addPhone').onclick();
+ assert.equal(visible(h,'pairPanel'),true);assert.equal(visible(h,'hostedPanel'),false);
+ h.get('phoneName').value='Road';await h.get('issue').onclick();
+ assert.equal(h.get('invitation').value,'invitation-c');assert.equal(visible(h,'proxyPanel'),false);assert.equal(h.get('verifyNext').disabled,true);
+ assert.deepEqual(h.phoneCalls,[['add-phone','Road']]);assert.deepEqual(operations(h),[]);
+ await h.get('cancelInvitation').onclick();assert.equal(visible(h,'dashboardHeader'),true);
+ assert.equal(h.phones.phones.length,2);assert.deepEqual(h.phoneCalls.at(-1),['cancel-phone-invitation','phone-c']);
+});
+test('ten slots disable add and a pending invitation resumes without a duplicate',async()=>{
+ const h=await multiHarness({phones:{phones:Array.from({length:10},(_,i)=>phoneFixture('phone-'+i,'Phone '+(i+1),i))}});
+ assert.equal(h.get('addPhone').disabled,true);
+ const p=await multiHarness({phones:{pendingPhoneId:'phone-c',phones:[phoneFixture('phone-a','Home',0),phoneFixture('phone-c','Pending',1,{paired:false,phase:'awaiting_phone',invitationExpiresAt:'2026-10-03T12:10:00Z'})]},api:{AddPhone:async()=>({phoneId:'phone-c',bundle:'resumed',qrDataUrl:'data:image/png;base64,aA=='})}});
+ await p.get('addPhone').onclick();await p.get('issue').onclick();assert.equal(p.get('invitation').value,'resumed');assert.equal(p.phones.phones.length,2);
+});
+test('phone settings rename retry and confirmed removal affect only selected phone',async()=>{
+ const h=await multiHarness();await rowButton(h,'phone-b','Phone settings').onclick();
+ h.get('phoneRename').value='Travel renamed';await h.get('renamePhone').onclick();assert.equal(h.phones.phones[1].name,'Travel renamed');
+ await h.get('retryPhoneProxy').onclick();await h.get('revoke').onclick();assert.equal(h.phones.phones.length,2);
+ await h.get('confirmRevoke').onclick();assert.equal(h.phones.phones.length,1);assert.equal(h.phones.phones[0].phoneId,'phone-a');assert.equal(visible(h,'dashboardHeader'),true);
+ assert.deepEqual(h.phoneCalls,[['rename-phone','phone-b','Travel renamed'],['retry-phone-proxy','phone-b'],['revoke-phone','phone-b']]);assert.deepEqual(operations(h),[]);
+});
+test('late connection update cannot appear under a newly selected phone',async()=>{
+ const wait=deferred();const h=await multiHarness({api:{ExportPhoneEndpointUpdate:()=>wait.promise}});
+ await rowButton(h,'phone-b','Phone settings').onclick();const request=h.get('exportUpdate').onclick();
+ // Exercise selection change outside disabled buttons as a future native event can.
+ vm.runInContext("selectPhone('phone-a',true)",h.context);
+ wait.resolve({bundle:'secret-for-b',qrDataUrl:'data:image/png;base64,aA=='});await request;
+ assert.equal(h.get('update').value,'');assert.equal(visible(h,'updateDetails'),false);
+});
+test('phone-list failure disables phone actions without legacy fallback',async()=>{
+ const h=await multiHarness({api:{Phones:async()=>{throw new Error('Protected state unavailable');}}});
+ assert.equal(h.get('addPhone').disabled,true);assert.equal(h.get('copyHttp').disabled,true);
+ assert.match(h.get('serviceMessage').textContent,/Protected state unavailable/);assert.deepEqual(operations(h),[]);
+});
+test('phone list polling preserves keyboard focus on the same action',async()=>{
+ const h=await multiHarness();const button=rowButton(h,'phone-b','Copy HTTP proxy');button.focus();
+ await h.refresh();assert.equal(h.context.document.activeElement,rowButton(h,'phone-b','Copy HTTP proxy'));
+});
+test('first phone setup keeps account steps and completes only for that phone',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',endpoint:'',paired:false,connected:false,phase:'waiting',activationState:'inactive'},phones:{phones:[]}});
+ assert.equal(visible(h,'hostedPanel'),true);assert.equal(visible(h,'dashboardHeader'),false);
+ Object.assign(h.status,{endpoint:'https://client.example',running:true,activationState:'authorized',gatewayState:'connected'});await h.refresh();
+ await h.get('gatewayNext').onclick();await h.get('issue').onclick();assert.deepEqual(h.phoneCalls,[['add-phone','']]);
+ Object.assign(h.phones.phones[0],{paired:true,connected:false,phase:'ready',invitationExpiresAt:undefined});await h.refresh();
+ assert.equal(visible(h,'verifyPanel'),true);assert.equal(h.get('verifyNext').disabled,true);
+ Object.assign(h.phones.phones[0],{connected:true,phase:'connected'});await h.refresh();assert.equal(visible(h,'proxyPanel'),true);
+});
+test('a blocked phone proxy never hides a usable sibling or claims success',async()=>{
+ const h=await multiHarness({phones:{phones:[phoneFixture('phone-a','Home',0,{connected:true,phase:'connected'}),phoneFixture('phone-b','Travel',1,{connected:true,proxyRunning:false,phase:'error',message:'HTTP port 1083 is occupied.'})]}});
+ assert.match(descendants(row(h,'phone-a')).map(n=>n.textContent).join(' '),/Connected/);
+ await rowButton(h,'phone-b','Phone settings').onclick();assert.equal(h.get('verifyNext').disabled,true);assert.match(h.get('phoneProxyMessage').textContent,/1083/);
+});
+test('removal failure retains the selected phone and its retry confirmation',async()=>{
+ const h=await multiHarness({api:{RevokePhone:async()=>{throw new Error('Removal could not be saved. Restarting may restore access.');}}});
+ await rowButton(h,'phone-b','Phone settings').onclick();await h.get('revoke').onclick();await h.get('confirmRevoke').onclick();
+ assert.equal(h.phones.phones.length,2);assert.equal(visible(h,'phoneSettingsPanel'),true);assert.equal(visible(h,'revokeConfirmation'),true);
+ assert.match(h.get('feedback').textContent,/could not be saved.*Restarting/);assert.deepEqual(operations(h),[]);
+});
+test('late add invitation cannot replace a newly selected phone view',async()=>{
+ const wait=deferred(),h=await multiHarness({api:{AddPhone:()=>wait.promise}});await h.get('addPhone').onclick();const request=h.get('issue').onclick();
+ vm.runInContext("selectPhone('phone-a',true)",h.context);wait.resolve({phoneId:'phone-c',bundle:'private-code-c',qrDataUrl:'data:image/png;base64,aA=='});await request;
+ assert.equal(h.get('invitation').value,'');assert.equal(visible(h,'invitationDetails'),false);assert.equal(h.get('feedback').textContent,'');
+});
+test('shared fatal service failure stays visible for a selected healthy phone',async()=>{
+ const h=await multiHarness({status:{phase:'error',running:false,message:'The authenticated listener could not start.'}});
+ assert.notEqual(h.get('phase').textContent,'Connected');assert.match(h.get('message').textContent,/Connection details/);
+ assert.equal(h.get('diagnosticMessage').textContent,'The authenticated listener could not start.');assert.equal(h.get('verifyNext').disabled,true);
+});
+test('dashboard return cannot resurrect healthy phone state after a failed poll',async()=>{
+ const h=await multiHarness();await rowButton(h,'phone-a','Phone settings').onclick();
+ h.api.Phones=async()=>{throw new Error('Protected state unavailable');};await h.refresh();
+ await h.get('backToDashboard').onclick();assert.equal(visible(h,'servicePanel'),true);assert.equal(h.get('addPhone').disabled,true);
+ assert.equal(rowButton(h,'phone-a','Copy HTTP proxy').disabled,true);assert.notEqual(h.get('phase').textContent,'Connected');
+});
 
 test('routine dashboard translates service language and keeps details optional',async()=>{
  const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true,message:'Awaiting authenticated Agent transport session.'}});

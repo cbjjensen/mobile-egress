@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"testing"
 
@@ -50,11 +51,19 @@ func directExchange(t *testing.T, service Service, request string) Response {
 	server, client := net.Pipe()
 	defer client.Close()
 	go serveConnection(context.Background(), server, service)
-	if _, err := client.Write([]byte(request + "\n")); err != nil {
-		t.Fatal(err)
-	}
+	// net.Pipe is unbuffered: the decoder may stop at the closing brace and
+	// leave trailing bytes pending while it writes a response. Read and write
+	// concurrently, as the production local socket permits.
+	written := make(chan error, 1)
+	go func() { _, err := client.Write([]byte(request + "\n")); written <- err }()
 	var response Response
 	if err := json.NewDecoder(client).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	// Closing also releases a pending newline after the server has consumed
+	// the one request it accepts on this connection.
+	client.Close()
+	if err := <-written; err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal(err)
 	}
 	return response
