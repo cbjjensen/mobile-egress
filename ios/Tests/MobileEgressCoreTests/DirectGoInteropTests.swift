@@ -20,6 +20,24 @@ final class DirectGoInteropTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "direct-v2-wire", withExtension: "json", subdirectory: "Fixtures"))
         return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
     }
+    func testSharedClientAuthorityDoesNotAuthorizeAnotherPhonesEndpointUpdate() throws {
+        let fixture = try fixture()
+        let date = try XCTUnwrap(ISO8601DateFormatter().date(from: fixture.invitationExpiresAt)).addingTimeInterval(-30)
+        let ca = try CertificateAuthorityValidator().validate(fixture.caCertificatePem, at: date)
+        var own = DirectClientRecord(clientID: fixture.clientId, displayName: "Shared Client", endpoint: "https://client.example")
+        own.pairingID = fixture.pairingId; own.generation = 1
+        var sibling = own
+        sibling.pairingID = "11111111-2222-4333-8444-555555555555"
+        let originalSibling = sibling
+        let update = try DirectEndpointUpdate.parse(fixture.hostedUpdate, for: own) {
+            try DirectSecurity.verify($0, signature: $1, authority: ca.der)
+        }
+        XCTAssertEqual(update.pairingId, fixture.pairingId)
+        XCTAssertThrowsError(try DirectEndpointUpdate.parse(fixture.hostedUpdate, for: sibling) {
+            try DirectSecurity.verify($0, signature: $1, authority: ca.der)
+        })
+        XCTAssertEqual(sibling, originalSibling)
+    }
     func testGoHostedUpdateVerifiesWithPinnedAuthorityAndProtectsMode() throws {
         let fixture = try fixture()
         let date = try XCTUnwrap(ISO8601DateFormatter().date(from: fixture.invitationExpiresAt)).addingTimeInterval(-30)

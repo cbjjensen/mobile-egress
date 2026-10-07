@@ -7,6 +7,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DirectRegistryTest {
+    @Test fun independentPhonesKeepDistinctPairingsForTheSameClient() {
+        val firstStore = MemoryDirectPersistence()
+        val secondStore = MemoryDirectPersistence()
+        val first = DirectRegistry(firstStore)
+        val second = DirectRegistry(secondStore)
+        val firstPending = first.reserve(invitation(1)) { PendingKey("phone-a", "csr-a") }
+        val secondPending = second.reserve(invitation(1).copy(invitationId = "second-invitation")) { PendingKey("phone-b", "csr-b") }
+        val firstIssued = first.issued(firstPending,
+            AgentIdentity("https://client.example", "agent", "AA", "phone-a", "cert-a", "ca"), "pair-a", 1)
+        val secondIssued = second.issued(secondPending,
+            AgentIdentity("https://client.example", "agent", "BB", "phone-b", "cert-b", "ca"), "pair-b", 1)
+        first.acknowledged(firstIssued)
+        val secondPaired = second.acknowledged(secondIssued)
+        val firstPaired = DirectRegistry(firstStore).get(firstPending.clientId)
+        val update = DirectEndpointPayload(firstPaired.clientId, "pair-a", 3, "https://updated.example", DirectTransport.Hosted)
+        first.endpoint(firstPaired, update)
+        assertEquals("stale_endpoint_update", assertThrows(DirectException::class.java) {
+            second.endpoint(secondPaired, update)
+        }.code)
+        first.remove(firstPaired.clientId)
+        assertTrue(first.snapshot().records.isEmpty())
+        val surviving = DirectRegistry(secondStore).get(secondPending.clientId)
+        assertEquals(secondPaired, surviving)
+        assertEquals("pair-b", surviving.pairingId)
+        assertEquals(1L, surviving.generation)
+        assertEquals(DirectStage.Paired, surviving.stage)
+    }
+
     @Test fun expiredUnsentReservationsReleaseSlotsForFreshPairing() {
         val store = MemoryDirectPersistence()
         val registry = DirectRegistry(store)

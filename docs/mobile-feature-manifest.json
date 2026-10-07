@@ -633,6 +633,34 @@
       }
     },
     {
+      "id": "agent.shared-client-isolation",
+      "title": "Independent phones retain separate pairing and recovery state for one Client",
+      "platforms": {
+        "android": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectRegistry.kt",
+            "android/app/src/main/java/com/mobileegress/agent/direct/DirectBundles.kt"
+          ],
+          "testEvidence": [
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectRegistryTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/direct/DirectGoInteropTest.kt"
+          ]
+        },
+        "ios": {
+          "status": "implemented",
+          "sourceEvidence": [
+            "ios/Sources/MobileEgressCore/Direct/DirectClientRepository.swift",
+            "ios/Sources/MobileEgressCore/Direct/DirectEndpointUpdate.swift"
+          ],
+          "testEvidence": [
+            "ios/Tests/MobileEgressCoreTests/DirectRepositoryTests.swift",
+            "ios/Tests/MobileEgressCoreTests/DirectGoInteropTests.swift"
+          ]
+        }
+      }
+    },
+    {
       "id": "agent.sharing-lifecycle",
       "title": "Platform sharing availability and iOS active-dashboard keep-awake",
       "platforms": {

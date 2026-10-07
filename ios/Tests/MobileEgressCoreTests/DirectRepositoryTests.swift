@@ -5,6 +5,33 @@ import XCTest
 @testable import MobileEgressCore
 
 final class DirectRepositoryTests: XCTestCase {
+    func testIndependentPhonesRetainDistinctPairingsForTheSameClient() async throws {
+        let clientID = UUID().uuidString.lowercased()
+        let firstStore = MemoryDirectVault(); let secondStore = MemoryDirectVault()
+        let firstKeys = MemoryDirectKeys(); let secondKeys = MemoryDirectKeys()
+        let first = try DirectClientRepository(store: firstStore, keys: firstKeys, control: RecoverableDirectControl(store: firstStore))
+        let second = try DirectClientRepository(store: secondStore, keys: secondKeys, control: RecoverableDirectControl(store: secondStore))
+        _ = try await first.add(invitation(clientID: clientID))
+        _ = try await second.add(invitation(clientID: clientID))
+        // Each independent phone persists its issuance before retrying the lost ACK.
+        do { try await first.recover(clientID); XCTFail("first ACK should be lost") } catch { }
+        do { try await second.recover(clientID); XCTFail("first ACK should be lost") } catch { }
+        try await first.recover(clientID)
+        try await second.recover(clientID)
+        let firstBefore = await first.snapshot()
+        let secondBefore = await second.snapshot()
+        XCTAssertEqual(firstBefore.clients[0].clientID, secondBefore.clients[0].clientID)
+        XCTAssertNotEqual(firstBefore.clients[0].pairingID, secondBefore.clients[0].pairingID)
+        XCTAssertFalse(secondBefore.clients[0].needsAcknowledgement)
+        try await first.remove(clientID)
+        let removed = await first.snapshot()
+        XCTAssertTrue(removed.clients.isEmpty)
+        let reopened = try DirectClientRepository(store: secondStore, keys: secondKeys, control: RecoverableDirectControl(store: secondStore))
+        let surviving = await reopened.snapshot()
+        XCTAssertEqual(surviving, secondBefore)
+        XCTAssertTrue(secondKeys.deleted.isEmpty)
+    }
+
     func testRePairAfterReconstructionCannotInheritAnObsoleteRemovalMarker() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
