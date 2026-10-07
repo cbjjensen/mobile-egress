@@ -68,6 +68,42 @@ The lower-level Node entry point accepts `--plan FILE --dry-run` or `--plan FILE
 
 Keep the plan and successful output as local publication evidence. On interruption, rerun that exact plan: matching immutable objects are verified and reused. Stop on any conflict, unknown upload outcome, missing frozen source, public-header/hash mismatch, or concurrent catalog change. Resolve the evidence; never overwrite an immutable object to force a retry.
 
+## Updating website links without unrelated deployments
+
+Installer publication and website download-link updates have a narrow scope:
+**do not deploy unrelated website changes just to update download links.**
+Publishing GitHub/R2 assets does not itself change the website's configured URLs.
+
+1. Verify the actually deployed website source and production configuration.
+   Compare the intended download settings with that baseline; preserve all other
+   values, including sales, access, Apple automation and unrelated downloads.
+   Keep secret-bearing comparisons/backups private and report only safe results.
+2. Use the existing environment publisher and approved release workflow. Select
+   the intended source explicitly; the workflow's `image_tag` names an image and
+   does **not** select the Git revision to build. Do not dispatch current `main`
+   unless its changes are within the separately authorized deployment scope.
+   Preserve normal CI, environment protections and infrastructure gates.
+3. Check active deployments again immediately before dispatch. A rerun of a
+   previously successful release can retain the deployed source, but must not
+   run after a newer deployment and undo it. Cancel only this task's redundant
+   queued rollout when needed; do not cancel another operator's deployment.
+4. If an independently authorized deployment is already proceeding, verify its
+   configuration compatibility and when it reads the environment bundle. Let it
+   carry the intended URL update when safe, then verify the actual result. Do not
+   assume publishing a secret means a running job has consumed it.
+5. Confirm the deployed source, actual backend download values, unchanged other
+   settings, service health and authenticated page links. Record asset
+   publication separately from website activation; if activation is blocked,
+   report the specific pending step without broadening deployment scope.
+6. Synchronize the protected local production configuration only after checking
+   for concurrent edits. Rollback restores only the affected URL settings while
+   preserving the currently deployed source and other settings; never restore a
+   whole stale environment or older website revision just to roll back links.
+
+The [2.0.4 publication record](superpowers/plans/2026-10-06-client-oled-theme.md#website-download-handoff)
+documents this procedure, including cancellation of a queued older-source rerun
+when a separate deployment started and subsequent live verification of its links.
+
 ## Implementation and validation record
 
 The approved subscription plan is [2026-10-05-mobile-egress-subscriptions.md](superpowers/plans/2026-10-05-mobile-egress-subscriptions.md). Order Tracker's `desktop-release-downloads.mjs` and `publish-local-desktop-downloads.ps1` provided the existing R2/environment pattern; its source and objects are unchanged. The publisher adds only integrity requirements for frozen Inevitable Mobile Relay artifacts and the pilot catalog.
