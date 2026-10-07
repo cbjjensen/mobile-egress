@@ -121,7 +121,25 @@ Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/re
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
 
-## Current pilot: Desktop 2.0.4, Android 2.0.3
+## Current pilot: Desktop 2.0.5, Android 2.0.3
+
+The owner-authorized [multi-phone Client publication](superpowers/plans/2026-10-06-multiple-phones-release.md)
+advanced Windows and Mac to **2.0.5**, from frozen source
+`22c9db4b27f8201ef9660df5a1e044587aeb173b`. The guarded release verified
+Windows signatures and Mac signing/notarization, published the two exact GitHub
+assets, and verified public R2 bytes, digests, sizes and headers before catalog
+promotion. Independent catalog readback matched all selected platform fields.
+
+- [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.5/InevitableMobileRelaySetup.exe)
+- [Apple Silicon Mac PKG](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.5/inevitable-mobile-relay-macos-2.0.5-arm64.pkg)
+- [Unchanged Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.3/inevitable-mobile-relay-android-2.0.3.apk)
+
+The linked release record contains exact hashes and website activation status.
+These remain pilot downloads; physical signed upgrade/repair, ten-phone cellular
+capacity and distributed phone interoperability remain separate acceptance gates.
+iPhone distribution is unchanged.
+
+## Historical OLED pilot: Desktop 2.0.4, Android 2.0.3
 
 The owner-authorized [OLED Client publication](superpowers/plans/2026-10-06-client-oled-theme.md)
 advanced Windows and Mac to **2.0.4**, from frozen source
