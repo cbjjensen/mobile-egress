@@ -51,7 +51,16 @@ For the published three-platform `v2.0.2` pilot:
 
 This plan explicitly includes all three platforms from one frozen source. A future independent platform release needs its own actual frozen version/source entry; do not reuse a historical APK or silently choose another version. Cross-platform interoperability and physical acceptance still require their existing gates; sharing a major version alone is not proof of acceptance.
 
-The output catalog has `schemaVersion: 1`, `channel: "pilot"`, and a `platforms` object keyed by `windows`, `macos`, or `android`. Each value contains `version`, `sourceCommit`, `url`, `sha256`, and `size`. The website/backend uses explicit configured download values from this verified output; normal product operation does not fetch this catalog. This is not an updater, a product API, or a mechanism to enable subscriptions or sales. iPhone distribution remains TestFlight.
+The output catalog has `schemaVersion: 1`, `channel: "pilot"`, and a `platforms` object keyed by `windows`, `macos`, or `android`. Each value contains `version`, `sourceCommit`, `url`, `sha256`, and `size`. When the website's `MOBILE_EGRESS_DOWNLOAD_CATALOG_ENABLED` flag is enabled, its backend reads this fixed public catalog and resolves links through the existing product response. A valid snapshot owns Windows, PKG, DMG and Android availability; an omitted platform is unavailable. iPhone configuration remains separate. This is not an installed-app updater or a mechanism to enable subscriptions or sales.
+
+The backend validates canonical artifact metadata/URLs, caps catalog reads at
+32 KiB and two seconds, shares concurrent refreshes, and caches successful
+snapshots for five minutes. Refresh failure retains the last valid links and
+retries no faster than every 30 seconds; before any successful refresh, configured
+download URLs provide the fallback. A normal authorized release only publishes
+the guarded catalog, then verifies the product/page links after the cache refresh.
+It needs no per-version environment edit or website deployment. The browser's
+existing product query remains unchanged; new visits/refetches see resolved links.
 
 ## Validate and publish
 
@@ -84,6 +93,14 @@ Keep the plan and successful output as local publication evidence. On interrupti
 Installer publication and website download-link updates have a narrow scope:
 **do not deploy unrelated website changes just to update download links.**
 Publishing GitHub/R2 assets does not itself change the website's configured URLs.
+
+With dynamic catalog resolution enabled, existing format URL changes require
+no website rollout: publish and verify the guarded catalog, allow its five-minute
+backend cache to refresh, then confirm actual customer-visible links. Keep the
+configured URLs as outage fallbacks. Use the scoped procedure below only when
+enabling/disabling this feature, changing fallback settings, or adding website
+support for a new format. Rollback of a selected release uses an explicit verified
+catalog plan; all immutable artifacts remain unchanged.
 
 1. Verify the actually deployed website source and production configuration.
    Compare the intended download settings with that baseline; preserve all other
@@ -132,7 +149,36 @@ Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/re
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
 
-## Current pilot: Desktop 2.0.5, Android 2.0.3
+## Current pilot: Desktop 2.0.6, Android 2.0.3
+
+The owner-authorized [Mac user DMG publication](superpowers/plans/2026-10-07-macos-user-dmg.md)
+published Desktop **2.0.6** from frozen source
+`46834f6a572a890c259edbf15f8f7f5e51f56942`. Windows EXE and both Mac formats
+passed their guarded signing and artifact checks; the DMG app and image each
+passed notarization, stapling and Gatekeeper, including mounted-payload checks.
+GitHub and R2 public digests match the frozen files. R2 verified every selected
+download before catalog promotion, and independent catalog readback matched.
+The linked publication record contains exact hashes and byte counts.
+
+- [Mac DMG, no administrator installation, keep app open](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.dmg)
+- [Mac PKG, administrator installation, background service](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.pkg)
+- [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/InevitableMobileRelaySetup.exe)
+- [Unchanged Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.3/inevitable-mobile-relay-android-2.0.3.apk)
+
+The owner explicitly waived waiting for standard-account/physical-phone
+acceptance; those checks remain unverified and the release remains a pilot.
+Website activation is recorded separately in the linked publication record.
+iPhone distribution is unchanged.
+
+Dynamic catalog resolution is enabled in production by
+[rollout 37716750300](https://github.com/cbjjensen/inevitable-proxies/actions/runs/37716750300),
+from reviewed website source `ecef2a3ddc39b86adc98e854e39c62df47dd5703`.
+All 241 production settings matched the intended configuration. A read-only
+check inside the deployed backend verified a real catalog fetch, all four links
+and five-minute cache reuse; the authenticated live page showed those same
+download targets. Normal future version links need no website deployment.
+
+## Historical multi-phone pilot: Desktop 2.0.5, Android 2.0.3
 
 The owner-authorized [multi-phone Client publication](superpowers/plans/2026-10-06-multiple-phones-release.md)
 advanced Windows and Mac to **2.0.5**, from frozen source

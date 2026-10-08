@@ -111,3 +111,11 @@ If an operation is interrupted, inspect the exact local, Mac, or GitHub output b
 ## After publication
 
 Report the prerelease URL and public hashes for every selected artifact. Retain the Mac verification JSON as private/local evidence whenever Desktop is selected, never as a GitHub asset. Complete the acceptance applicable to the published component scope before stable promotion; the script intentionally does not declare a release stable.
+
+When the website's `MOBILE_EGRESS_DOWNLOAD_CATALOG_ENABLED` flag is enabled,
+its backend follows the verified R2 catalog with a five-minute cache. Publishing
+ordinary new version URLs then needs no website deployment or per-version env
+edit. After guarded catalog publication, verify actual product/page links after
+refresh. Preserve configured URLs as initial outage fallbacks and keep iPhone
+distribution separate. Adding a new website format or changing the catalog flag
+still uses the scoped source/configuration rollout procedure in `docs/r2-downloads.md`.
