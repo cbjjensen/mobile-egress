@@ -10,7 +10,7 @@ func (app *App) CheckFirewall() (FirewallStatus, error) {
 	if !ok {
 		return FirewallStatus{}, errors.New("Update the Client service to check its firewall access.")
 	}
-	return service.CheckFirewall(context.Background())
+	return service.CheckFirewall(app.lifetime)
 }
 
 func (app *App) RetryFirewall() (FirewallStatus, error) {
@@ -18,7 +18,7 @@ func (app *App) RetryFirewall() (FirewallStatus, error) {
 	if !ok {
 		return FirewallStatus{}, errors.New("Update the Client service to manage its firewall access.")
 	}
-	return service.RetryFirewall(context.Background())
+	return service.RetryFirewall(app.lifetime)
 }
 
 func (client LocalClient) CheckFirewall(ctx context.Context) (FirewallStatus, error) {

@@ -65,6 +65,31 @@ const row=(h,id)=>h.get('phoneList').children.find(p=>p.dataset.phoneId===id);
 const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
 const rowButton=(h,id,text)=>descendants(row(h,id)).find(n=>n.tagName==='BUTTON'&&n.textContent===text);
 
+test('app runtime explains close quit sign-out and minimized traffic lifetime',async()=>{
+ const h=await harness({api:{SetupInfo:async()=>({platform:'darwin',runtimeMode:'app'})}});
+ assert.equal(visible(h,'runtimeLifetime'),true);
+ assert.match(h.get('runtimeLifetime').textContent,/close.*Quit.*sign out/i);
+ assert.match(h.get('runtimeLifetime').textContent,/minimized/i);
+ const service=await harness({api:{SetupInfo:async()=>({platform:'darwin',runtimeMode:'service'})}});
+ assert.equal(visible(service,'runtimeLifetime'),false);
+});
+
+test('app direct firewall retry gives manual policy guidance without service wording',async()=>{
+ const h=await harness({api:{SetupInfo:async()=>({platform:'darwin',runtimeMode:'app'}),CheckFirewall:async()=>({state:'manual',scope:'application',port:8443,message:'Allow Inevitable Mobile Relay in System Settings > Network > Firewall if local policy requires it.'})}});
+ await h.get('checkFirewall').onclick();
+ assert.match(h.get('firewallState').textContent,/manual/i);
+ assert.match(h.get('firewallMessage').textContent,/this app/i);
+ assert.doesNotMatch(h.get('firewallMessage').textContent,/service application/i);
+ assert.equal(h.get('retryFirewall').textContent,'Review firewall policy');
+});
+
+test('app locked protected state explains Keychain recovery and keeps traffic unavailable',async()=>{
+ const h=await harness({api:{SetupInfo:async()=>({platform:'darwin',runtimeMode:'app'}),Phones:async()=>{throw new Error('Protected Client state is unavailable. Repair the installation.');}}});
+ assert.match(h.get('serviceMessage').textContent,/Keychain Access/);
+ assert.doesNotMatch(h.get('serviceMessage').textContent,/Repair the installation/);
+ assert.equal(h.get('copyHttp').disabled,true);
+});
+
 test('phone list exposes separate addresses and copies the chosen stable ID',async()=>{
  const h=await multiHarness();assert.equal(visible(h,'phonesPanel'),true);
  assert.equal(h.get('phoneList').children.length,2);

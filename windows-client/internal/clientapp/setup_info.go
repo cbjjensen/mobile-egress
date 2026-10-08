@@ -17,6 +17,7 @@ import (
 )
 
 type SetupInformation struct {
+	RuntimeMode        string   `json:"runtimeMode"`
 	Platform           string   `json:"platform"`
 	SuggestedName      string   `json:"suggestedName"`
 	LocalAddresses     []string `json:"localAddresses"`
@@ -28,7 +29,12 @@ type SetupInformation struct {
 func (app *App) SetupInfo() SetupInformation {
 	hostname, _ := os.Hostname()
 	addresses, _ := net.InterfaceAddrs()
-	return makeSetupInfo(runtime.GOOS, hostname, addresses)
+	info := makeSetupInfo(runtime.GOOS, hostname, addresses)
+	info.RuntimeMode = "service"
+	if mode, ok := app.service.(interface{ RuntimeMode() string }); ok {
+		info.RuntimeMode = mode.RuntimeMode()
+	}
+	return info
 }
 
 func makeSetupInfo(platform, hostname string, addresses []net.Addr) SetupInformation {
@@ -79,7 +85,7 @@ func (app *App) DiscoverPublicAddress() (AddressSuggestion, error) {
 	transport.Proxy = nil
 	transport.DisableKeepAlives = true
 	defer transport.CloseIdleConnections()
-	return discoverPublicAddress(context.Background(), &http.Client{Transport: transport})
+	return discoverPublicAddress(app.lifetime, &http.Client{Transport: transport})
 }
 
 func discoverPublicAddress(parent context.Context, client *http.Client) (AddressSuggestion, error) {

@@ -28,6 +28,8 @@ let phoneSelectionRevision = 0, renameEdited = false;
 const phoneRows = new Map();
 let phoneListOrder = "";
 const multiplePhones = () => typeof api().Phones === "function";
+const appRuntime = () => setup.runtimeMode === "app";
+const runtimeMessage = message => appRuntime() && String(message).includes("Protected Client state is unavailable.") ? "Your protected login Keychain is unavailable. Unlock your login Keychain in Keychain Access. Keep this app open to retry automatically, or reopen the signed app from your Applications folder. Your saved activation and phone pairing are kept." : message;
 const selectedPhone = () => phonesStatus?.phones.find(phone => phone.phoneId === selectedPhoneID);
 function applySelectedPhone() {
   if (!multiplePhones() || !sharedStatus) return;
@@ -150,9 +152,10 @@ function renderNetwork() {
   }
   el("networkInstructions").textContent = text + "Inevitable Mobile Relay does not change routers or cloud firewalls. Never expose local proxy ports " + (multiplePhones() ? "1080–1099" : "1080 or 1081") + ".";
   el("networkEndpoint").textContent = status?.endpoint || "Save your computer address first.";
-  const firewallLabels = {allowed:"Local access allowed", disabled:"Local firewall disabled", blocked:"Local access blocked", unavailable:"Firewall check unavailable", unknown:"Local access not confirmed"};
+  const firewallLabels = {allowed:"Local access allowed", disabled:"Local firewall disabled", blocked:"Local access blocked", unavailable:"Firewall check unavailable", unknown:"Local access not confirmed", manual:"Manual firewall policy", not_required:"No inbound rule needed"};
   el("firewallState").textContent = firewallBusy ? "Checking local firewall…" : firewallLabels[firewall?.state] || "Check local access";
-  el("firewallMessage").textContent = firewall ? (firewall.message || "") + (firewall.scope === "application" ? " This check applies to the Client service application." : " This check applies to local TCP port " + firewall.port + ".") + " Local firewall results do not prove cellular reachability." : "Check this computer's firewall, then review the network instructions below.";
+  el("firewallMessage").textContent = firewall ? (firewall.message || "") + (firewall.scope === "application" ? (appRuntime() ? " This policy applies to this app." : " This check applies to the Client service application.") : " This check applies to local TCP port " + firewall.port + ".") + " Local firewall results do not prove cellular reachability." : "Check this computer's firewall, then review the network instructions below.";
+  el("retryFirewall").textContent = appRuntime() ? "Review firewall policy" : "Retry firewall";
   el("checkFirewall").disabled = el("retryFirewall").disabled = busy || firewallBusy || !available() || !status.endpoint;
 }
 function renderDashboardNotice() {
@@ -185,11 +188,13 @@ function renderDashboardNotice() {
   el("noticeAction").textContent = action; el("noticeAction").disabled = busy || !available();
 }
 function render() {
+  show("runtimeLifetime", appRuntime());
+  el("runtimeLifetime").textContent = appRuntime() ? "Keep this Mac app open while using your proxies. Traffic stops when you close the window, choose Quit, or sign out. Sharing continues while the window is minimized." : "";
   const ready = available(), connected = phoneConnected(), pendingUpdate = pendingPhoneUpdate();
   const canUpdatePhone = pendingUpdate && (status.transport !== "hosted" || status.activationState === "authorized");
   show("servicePanel", !ready); show("serviceRetry", !ready && readinessExpired);
   el("serviceMessage").textContent = readinessExpired ? "Inevitable Mobile Relay couldn’t start. Try again, or run the latest installer to repair it. Your saved phone and app settings will be kept." : "Getting Inevitable Mobile Relay ready. This can take up to 30 seconds.";
-  if (multiplePhones() && !ready && status?.message) el("serviceMessage").textContent = status.message;
+  if (multiplePhones() && !ready && status?.message) el("serviceMessage").textContent = runtimeMessage(status.message);
   show("wizardHeader", initialized && !dashboard); show("dashboardHeader", initialized && dashboard && !managingPhone);
   show("clientNavigation", initialized && (dashboard || reviewingSetup));
   for (const [id, current] of [["backToDashboard", dashboard && !managingPhone], ["managePhone", managingPhone], ["reviewSetup", !dashboard]]) {

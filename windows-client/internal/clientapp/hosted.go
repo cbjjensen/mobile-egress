@@ -28,6 +28,9 @@ func (app *App) openActivationBrowser(raw string) error {
 	return app.browser(raw)
 }
 func (app *App) hosted() (HostedService, error) {
+	if err := app.lifetime.Err(); err != nil {
+		return nil, err
+	}
 	service, ok := app.service.(HostedService)
 	if !ok {
 		return nil, errors.New("Update the Client service to activate Inevitable.")
@@ -39,7 +42,7 @@ func (app *App) StartHostedActivation(name string) (nodeservice.ActivationView, 
 	if err != nil {
 		return nodeservice.ActivationView{}, err
 	}
-	view, err := service.StartHostedActivation(context.Background(), name)
+	view, err := service.StartHostedActivation(app.lifetime, name)
 	if err != nil {
 		return view, err
 	}
@@ -53,7 +56,7 @@ func (app *App) ResumeHostedActivation() (nodeservice.ActivationView, error) {
 	if err != nil {
 		return nodeservice.ActivationView{}, err
 	}
-	view, err := service.ResumeHostedActivation(context.Background())
+	view, err := service.ResumeHostedActivation(app.lifetime)
 	if err != nil {
 		return view, err
 	}
@@ -67,7 +70,7 @@ func (app *App) CancelHostedActivation() error {
 	if err != nil {
 		return err
 	}
-	return service.CancelHostedActivation(context.Background())
+	return service.CancelHostedActivation(app.lifetime)
 }
 
 func (s *firewallService) hosted() (HostedService, error) {

@@ -28,10 +28,26 @@ type firewallService struct {
 	apply       func(context.Context, uint16) error
 	inspect     func(context.Context, uint16, bool) FirewallStatus
 	configureMu sync.Mutex
+	runtimeMode string
 }
 
 func WithHostFirewall(service DirectService) DirectService {
 	return withFirewall(service, configureHostFirewall)
+}
+
+// WithUserFirewall preserves all management interfaces without privileged
+// firewall commands. Direct access remains an explicit manual policy decision.
+func WithUserFirewall(service DirectService) DirectService {
+	return &firewallService{DirectService: service, runtimeMode: "app", apply: func(context.Context, uint16) error { return nil }, inspect: func(_ context.Context, port uint16, _ bool) FirewallStatus {
+		return FirewallStatus{State: "manual", Scope: "application", Port: port, Message: "Allow Inevitable Mobile Relay in System Settings > Network > Firewall if local or managed policy requires it. Ask your administrator when policy is managed. This app does not change firewall rules. Keep proxy ports 1080–1099 private."}
+	}}
+}
+
+func (s *firewallService) RuntimeMode() string {
+	if s.runtimeMode == "app" {
+		return "app"
+	}
+	return "service"
 }
 func withFirewall(service DirectService, apply func(context.Context, uint16) error) DirectService {
 	return &firewallService{DirectService: service, apply: apply, inspect: inspectHostFirewall}

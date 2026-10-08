@@ -20,7 +20,16 @@ func runApp() error {
 		return err
 	}
 	var appContext context.Context
-	app := clientapp.NewWithBrowser(clientapp.LocalClient{}, func(value string) error { return runtime.ClipboardSetText(appContext, value) }, func(raw string) error { runtime.BrowserOpenURL(appContext, raw); return nil })
+	// Wails already maps native Quit, window-close and SIGTERM to the close
+	// callbacks below. Keep one cancellation path and wait for owned traffic.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session, err := prepareAppSession(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.close()
+	app := clientapp.NewWithLifetime(session.service, ctx, func(value string) error { return runtime.ClipboardSetText(appContext, value) }, func(raw string) error { runtime.BrowserOpenURL(appContext, raw); return nil })
 	return wails.Run(&options.App{
 		Title: "Inevitable Mobile Relay", Width: 940, Height: 760, MinWidth: 620, MinHeight: 650,
 		BackgroundColour: options.NewRGB(0, 0, 0),
@@ -28,6 +37,8 @@ func runApp() error {
 		Mac:              &mac.Options{Appearance: mac.NSAppearanceNameDarkAqua},
 		AssetServer:      &assetserver.Options{Assets: assets},
 		OnStartup:        func(ctx context.Context) { appContext = ctx },
+		OnBeforeClose:    func(context.Context) bool { cancel(); session.close(); return false },
+		OnShutdown:       func(context.Context) { cancel(); session.close() },
 		Bind:             []interface{}{app},
 	})
 }

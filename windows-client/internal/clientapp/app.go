@@ -11,6 +11,7 @@ import (
 )
 
 type App struct {
+	lifetime         context.Context
 	browser          func(string) error
 	service          Service
 	clipboard        func(string) error
@@ -20,7 +21,14 @@ type App struct {
 }
 
 func New(service Service, clipboard func(string) error) *App {
-	return &App{service: service, clipboard: clipboard}
+	return &App{service: service, clipboard: clipboard, lifetime: context.Background()}
+}
+
+// NewWithLifetime ties local UI operations to the in-process app runtime.
+func NewWithLifetime(service Service, ctx context.Context, clipboard func(string) error, opener func(string) error) *App {
+	app := NewWithBrowser(service, clipboard, opener)
+	app.lifetime = ctx
+	return app
 }
 func (app *App) Status() nodeservice.StandaloneStatus { return app.service.Status() }
 
@@ -43,6 +51,9 @@ func renderBundle(bundle string) (BundleView, error) {
 	return BundleView{Bundle: bundle, QRDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)}, nil
 }
 func (app *App) direct() (DirectService, error) {
+	if err := app.lifetime.Err(); err != nil {
+		return nil, err
+	}
 	direct, ok := app.service.(DirectService)
 	if !ok {
 		return nil, errors.New("Update the Client service to use direct pairing.")
@@ -60,7 +71,7 @@ func (app *App) Configure(bindAddress, endpoint, displayName string) error {
 	// Never let a previous, invalidated invitation survive either outcome.
 	app.invitation = ""
 	app.phoneInvitations = nil
-	return direct.Configure(context.Background(), nodeservice.DirectConfiguration{Transport: "direct", BindAddress: bindAddress, Endpoint: endpoint, DisplayName: displayName})
+	return direct.Configure(app.lifetime, nodeservice.DirectConfiguration{Transport: "direct", BindAddress: bindAddress, Endpoint: endpoint, DisplayName: displayName})
 }
 func (app *App) IssueInvitation() (BundleView, error) {
 	app.mu.Lock()
@@ -69,7 +80,7 @@ func (app *App) IssueInvitation() (BundleView, error) {
 	if err != nil {
 		return BundleView{}, err
 	}
-	bundle, err := direct.IssueInvitation(context.Background())
+	bundle, err := direct.IssueInvitation(app.lifetime)
 	if err != nil {
 		return BundleView{}, err
 	}
@@ -92,7 +103,7 @@ func (app *App) CopyInvitation() error {
 		service = wrapper.DirectService
 	}
 	if phones, ok := service.(PhoneService); ok {
-		view, err := phones.Phones(context.Background())
+		view, err := phones.Phones(app.lifetime)
 		if err != nil {
 			return err
 		}
@@ -107,7 +118,7 @@ func (app *App) CancelInvitation() error {
 	if err != nil {
 		return err
 	}
-	if err = direct.CancelInvitation(context.Background()); err != nil {
+	if err = direct.CancelInvitation(app.lifetime); err != nil {
 		return err
 	}
 	app.mu.Lock()
@@ -120,7 +131,7 @@ func (app *App) ExportEndpointUpdate() (BundleView, error) {
 	if err != nil {
 		return BundleView{}, err
 	}
-	bundle, err := direct.ExportEndpointUpdate(context.Background())
+	bundle, err := direct.ExportEndpointUpdate(app.lifetime)
 	if err != nil {
 		return BundleView{}, err
 	}
@@ -131,7 +142,7 @@ func (app *App) CopyEndpointUpdate() error {
 	if err != nil {
 		return err
 	}
-	bundle, err := direct.ExportEndpointUpdate(context.Background())
+	bundle, err := direct.ExportEndpointUpdate(app.lifetime)
 	if err != nil {
 		return err
 	}
@@ -142,7 +153,7 @@ func (app *App) Revoke() error {
 	if err != nil {
 		return err
 	}
-	if err = direct.Revoke(context.Background()); err != nil {
+	if err = direct.Revoke(app.lifetime); err != nil {
 		return err
 	}
 	app.mu.Lock()
@@ -151,6 +162,9 @@ func (app *App) Revoke() error {
 	return nil
 }
 func (app *App) copy(value string) error {
+	if err := app.lifetime.Err(); err != nil {
+		return err
+	}
 	if app.clipboard == nil {
 		return errors.New("Clipboard is unavailable.")
 	}
@@ -160,7 +174,7 @@ func (app *App) CopyProxy(kind string) error {
 	if kind != "http" && kind != "socks" {
 		return errors.New("Unknown proxy format.")
 	}
-	value, err := app.service.Proxy(context.Background(), kind)
+	value, err := app.service.Proxy(app.lifetime, kind)
 	if err != nil {
 		return err
 	}

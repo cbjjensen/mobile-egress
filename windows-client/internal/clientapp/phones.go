@@ -124,15 +124,22 @@ type PhoneBundleView struct {
 }
 
 func (app *App) Phones() (nodeservice.PhonesStatus, error) {
-	s, err := phoneService(app.service)
+	s, err := app.phonesService()
 	if err != nil {
 		return nodeservice.PhonesStatus{}, err
 	}
-	view, err := s.Phones(context.Background())
+	view, err := s.Phones(app.lifetime)
 	if view.Phones == nil {
 		view.Phones = []nodeservice.PhoneStatus{}
 	}
 	return view, err
+}
+
+func (app *App) phonesService() (PhoneService, error) {
+	if err := app.lifetime.Err(); err != nil {
+		return nil, err
+	}
+	return phoneService(app.service)
 }
 func (app *App) AddPhone(name string) (PhoneBundleView, error) {
 	app.mu.Lock()
@@ -141,11 +148,11 @@ func (app *App) AddPhone(name string) (PhoneBundleView, error) {
 	if err != nil {
 		return PhoneBundleView{}, err
 	}
-	s, err := phoneService(app.service)
+	s, err := app.phonesService()
 	if err != nil {
 		return PhoneBundleView{}, err
 	}
-	invitation, err := s.AddPhone(context.Background(), name)
+	invitation, err := s.AddPhone(app.lifetime, name)
 	if err != nil {
 		return PhoneBundleView{}, err
 	}
@@ -167,7 +174,7 @@ func (app *App) CopyPhoneInvitation(id string) error {
 		if bundle == "" {
 			return errors.New("Show this phone’s pairing invitation first.")
 		}
-		view, err := s.Phones(context.Background())
+		view, err := s.Phones(app.lifetime)
 		if err != nil {
 			return err
 		}
@@ -182,7 +189,7 @@ func (app *App) phoneAction(id string, action func(PhoneService) error) error {
 	if err := validPhoneID(id); err != nil {
 		return err
 	}
-	s, err := phoneService(app.service)
+	s, err := app.phonesService()
 	if err != nil {
 		return err
 	}
@@ -191,7 +198,7 @@ func (app *App) phoneAction(id string, action func(PhoneService) error) error {
 func (app *App) CancelPhoneInvitation(id string) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
-	err := app.phoneAction(id, func(s PhoneService) error { return s.CancelPhoneInvitation(context.Background(), id) })
+	err := app.phoneAction(id, func(s PhoneService) error { return s.CancelPhoneInvitation(app.lifetime, id) })
 	if err == nil {
 		delete(app.phoneInvitations, id)
 	}
@@ -202,26 +209,26 @@ func (app *App) RenamePhone(id, name string) error {
 	if err != nil {
 		return err
 	}
-	return app.phoneAction(id, func(s PhoneService) error { return s.RenamePhone(context.Background(), id, name) })
+	return app.phoneAction(id, func(s PhoneService) error { return s.RenamePhone(app.lifetime, id, name) })
 }
 func (app *App) RevokePhone(id string) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
-	err := app.phoneAction(id, func(s PhoneService) error { return s.RevokePhone(context.Background(), id) })
+	err := app.phoneAction(id, func(s PhoneService) error { return s.RevokePhone(app.lifetime, id) })
 	if err == nil {
 		delete(app.phoneInvitations, id)
 	}
 	return err
 }
 func (app *App) RetryPhoneProxy(id string) error {
-	return app.phoneAction(id, func(s PhoneService) error { return s.RetryPhoneProxy(context.Background(), id) })
+	return app.phoneAction(id, func(s PhoneService) error { return s.RetryPhoneProxy(app.lifetime, id) })
 }
 func (app *App) CopyPhoneProxy(id, kind string) error {
 	if kind != "http" && kind != "socks" {
 		return errors.New("Unknown proxy format.")
 	}
 	return app.phoneAction(id, func(s PhoneService) error {
-		value, err := s.PhoneProxy(context.Background(), id, kind)
+		value, err := s.PhoneProxy(app.lifetime, id, kind)
 		if err != nil {
 			return err
 		}
@@ -231,7 +238,7 @@ func (app *App) CopyPhoneProxy(id, kind string) error {
 func (app *App) ExportPhoneEndpointUpdate(id string) (BundleView, error) {
 	var view BundleView
 	err := app.phoneAction(id, func(s PhoneService) error {
-		bundle, err := s.ExportPhoneEndpointUpdate(context.Background(), id)
+		bundle, err := s.ExportPhoneEndpointUpdate(app.lifetime, id)
 		if err != nil {
 			return err
 		}
@@ -242,7 +249,7 @@ func (app *App) ExportPhoneEndpointUpdate(id string) (BundleView, error) {
 }
 func (app *App) CopyPhoneEndpointUpdate(id string) error {
 	return app.phoneAction(id, func(s PhoneService) error {
-		bundle, err := s.ExportPhoneEndpointUpdate(context.Background(), id)
+		bundle, err := s.ExportPhoneEndpointUpdate(app.lifetime, id)
 		if err != nil {
 			return err
 		}
