@@ -2,6 +2,8 @@
 
 The owner approved this plan on 2026-10-07: add a Mac app that needs no administrator password, runs proxies only while open, and is publicly available alongside the existing PKG. Implement, validate, publish the next guarded Desktop pilot release and add both website download choices. Preserve historical assets, signing identities, PKG service/storage, mobile behavior and unrelated website source/configuration.
 
+The owner subsequently instructed: **"No just release this for now. Don't wait for anyone to confirm anything"**. This supersedes the earlier standard-user/physical-phone prerequisite for publication. Complete automated/native signing and release checks, then publish without waiting for human confirmation. Record physical installation/cellular/lifecycle acceptance as unverified, not a publication blocker.
+
 ## Design and interfaces
 
 - Compile an explicit `client_usermode` Mac GUI variant using the existing in-process `nodeservice.Direct` runtime. The default GUI continues using installed service IPC. Never infer user mode from unavailable service IPC.
@@ -21,14 +23,14 @@ The owner approved this plan on 2026-10-07: add a Mac app that needs no administ
 - [ ] 3. Mac build/sign/notarize/verify DMG, Desktop release/freeze/download contracts and R2 support with tests (release agent).
 - [ ] 4. Sibling website contract/config/UI/tests and requirement documentation (website agent).
 - [ ] 5. Independent code review; full applicable component/native/signed tests; fix and reverify (root/reviewer).
-- [ ] 6. Signed standard-user installation, pairing/cellular HTTP/CONNECT/SOCKS and lifecycle acceptance. Missing access is an explicit publication gate.
+- [ ] 6. Record unverified signed standard-user installation, physical pairing/cellular traffic and GUI lifecycle acceptance; the owner waived waiting for these checks before publication.
 - [ ] 7. Clean-source guarded Desktop prerelease, public R2 publication, narrowly scoped website deployment, live links/hash/health verification and synchronized evidence.
 
 ## Validation and rollout
 
 Test lifecycle shutdown under active traffic, recovery, duplicate launches, PKG coexistence, port conflicts, separate storage and same-signed upgrades; locked/missing/denied Keychain errors must preserve existing state. Validate Apple Silicon/macOS13 binaries, hardened runtime, actual runtime mode, signed/notarized/stapled app and image, mounted payload identity and exact hashes. Run existing Windows component, native Go, frontend, installer/release and R2 suites plus sibling focused tests and workspace build. Record standard-user install and real phone acceptance separately from automated evidence.
 
-Use the existing coupled Desktop flow after review and required acceptance. Android/iOS stay at their existing versions. Preserve pilot status. Website code rollout is limited to the new format choice, based on then-live source; compare complete production configuration, preserve unrelated settings, recheck concurrent deployments immediately before dispatch, then verify both live links. Use existing G: caches/temp paths for publisher disk headroom; preserve historical evidence.
+Use the existing coupled Desktop flow after automated review and verification. Android/iOS stay at their existing versions. Preserve pilot status. Website code rollout is limited to the new format choice, based on then-live source; compare complete production configuration, preserve unrelated settings, recheck concurrent deployments immediately before dispatch, then verify both live links. Use existing G: caches/temp paths for publisher disk headroom; preserve historical evidence.
 
 ## Execution evidence
 

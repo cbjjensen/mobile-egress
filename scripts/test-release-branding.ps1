@@ -33,13 +33,15 @@ foreach ($version in @('2.0.0', '2.0.1', '2.0.2', '2.0.10', '2.1.0', '3.0.0')) {
     $windows = if ($branded) { 'InevitableMobileRelaySetup.exe' } else { 'MobileEgressClientSetup.exe' }
     $mac = if ($branded) { "inevitable-mobile-relay-macos-$version-arm64.pkg" } else { "mobile-egress-client-macos-$version-arm64.pkg" }
     $android = if ($branded) { "inevitable-mobile-relay-android-$version.apk" } else { "zfnf-mobile-egress-android-$version.apk" }
+    $dmg = if ([version]$version -ge [version]'2.0.6') { "inevitable-mobile-relay-macos-$version-arm64.dmg" } else { '' }
+    $expectedNames = if ($dmg) { "$windows,$mac,$dmg,$android" } else { "$windows,$mac,$android" }
     $definitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'G:\fixture' -Version $version -Components Desktop,Android)
-    Assert-Branding (($definitions.Name -join ',') -ceq "$windows,$mac,$android") "Release $version must use its exact historical or branded artifact names."
+    Assert-Branding (($definitions.Name -join ',') -ceq $expectedNames) "Release $version must use its exact historical or branded artifact names."
     Assert-Branding ($definitions[0].Path -ceq "G:\fixture\windows-client\build\release\mobile-egress-client-windows-$version\$windows") 'Windows internal release directory must remain unchanged.'
     Assert-Branding ($definitions[1].Path -ceq "G:\fixture\windows-client\build\release\$mac") 'Mac path must use the canonical package basename.'
-    Assert-Branding ($definitions[2].Path -ceq "G:\fixture\android\app\build\outputs\apk\release\$android") 'Android path must agree with the canonical Gradle output.'
+    Assert-Branding ($definitions[-1].Path -ceq "G:\fixture\android\app\build\outputs\apk\release\$android") 'Android path must agree with the canonical Gradle output.'
     $links = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag "v$version" -Version $version -ReleasedArtifacts $definitions)
-    Assert-Branding (($links.Name -join ',') -ceq "$windows,$mac,$android") 'Current direct links must expose exactly the selected artifact contract.'
+    Assert-Branding (($links.Name -join ',') -ceq $expectedNames) 'Current direct links must expose exactly the selected artifact contract.'
 }
 
 foreach ($fallbackVersion in @('2.0.0', '2.0.1', '2.0.2')) {

@@ -20,6 +20,17 @@ Only after all selected public downloads verify does the publisher replace the c
 
 ## Select the complete catalog
 
+Desktop contracts from 2.0.6 add `inevitable-mobile-relay-macos-<version>-arm64.dmg`
+beside the existing PKG. Selecting `macos` expands to both frozen artifacts;
+missing or changed DMG bytes stop preparation, and both public formats must
+verify before catalog promotion. Earlier frozen Desktop contracts stay intact.
+Catalog schema 1 preserves the PKG fields at `platforms.macos` and adds optional
+`platforms.macos.alternatives.dmg` with its own complete `version`, `sourceCommit`,
+`url`, `sha256` and `size`. Private `.dmg.verification.json` remains local evidence.
+The website keeps `downloads.macos` / `MOBILE_EGRESS_MACOS_DOWNLOAD_URL` for PKG
+and uses `downloads.macosDmg` / `MOBILE_EGRESS_MACOS_DMG_DOWNLOAD_URL` for the
+optional user app. See [Mac DMG release and acceptance](macos-user-dmg.md).
+
 Create a local JSON plan with the **complete intended set of available platforms**. Every included platform needs its own verified frozen release. An absent platform remains unavailable; existing remote catalog entries are never inherited. This allows Windows/Mac and Android to use different compatible 2.x versions without pretending they came from the same source.
 
 For the published three-platform `v2.0.2` pilot:

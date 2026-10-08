@@ -56,6 +56,16 @@ function definition(version, platform) {
   throw new Error('Unknown download platform');
 }
 
+function definitions(version, platform) {
+  const result = [definition(version, platform)];
+  const [, minor, patch] = version.split('.').map(Number);
+  if (platform === 'macos' && (minor > 0 || patch >= 6)) {
+    const name = `inevitable-mobile-relay-macos-${version}-arm64.dmg`;
+    result.push({ name, path: `windows-client/build/release/${name}`, contentType: 'application/octet-stream', alternative: 'dmg' });
+  }
+  return result;
+}
+
 async function fileIdentity(file) {
   const info = await lstat(file);
   if (!info.isFile() || info.size < 1 || info.size > maxArtifactBytes) throw new Error('Artifact must be a regular, nonempty file within the upload size bound');
@@ -88,7 +98,7 @@ function validateFreeze(freeze, release) {
   }
   const included = platforms.filter(p => p === 'android' ? components.includes('Android') :
     p === 'macos' ? components.includes('Desktop') : components.includes('Desktop') || components.includes('Windows'));
-  const names = included.map(p => definition(release.version, p).name);
+  const names = included.flatMap(p => definitions(release.version, p).map(d => d.name));
   if (!Array.isArray(freeze.artifacts) || freeze.artifacts.length !== names.length ||
     new Set(freeze.artifacts.map(a => a.name)).size !== names.length ||
     freeze.artifacts.some(a => !names.includes(a.name) || !/^sha256:[a-f0-9]{64}$/.test(a.digest ?? ''))) {
@@ -116,18 +126,23 @@ export async function prepareDownloads({ repositoryRoot, request, resolveTag }) 
     if (await resolveTag(freeze.tag) !== release.sourceCommit) throw new Error('Release tag source differs from the frozen source');
     for (const platform of release.platforms) {
       if (!included.includes(platform)) throw new Error('Selected platform is absent from the frozen release');
-      const def = definition(release.version, platform);
-      const file = join(repositoryRoot, def.path);
-      const identity = await fileIdentity(file);
-      if (`sha256:${identity.sha256}` !== freeze.artifacts.find(a => a.name === def.name).digest) throw new Error(`Local artifact digest differs from frozen release: ${def.name}`);
-      const key = `mobile-egress/${release.version}/${def.name}`;
-      artifacts.push({ ...identity, platform, version: release.version, sourceCommit: release.sourceCommit,
-        name: def.name, contentType: def.contentType, file, key, url: `${publicBase}/${key}` });
+      for (const def of definitions(release.version, platform)) {
+        const file = join(repositoryRoot, def.path);
+        const identity = await fileIdentity(file);
+        if (`sha256:${identity.sha256}` !== freeze.artifacts.find(a => a.name === def.name).digest) throw new Error(`Local artifact digest differs from frozen release: ${def.name}`);
+        const key = `mobile-egress/${release.version}/${def.name}`;
+        artifacts.push({ ...identity, platform, version: release.version, sourceCommit: release.sourceCommit,
+          name: def.name, contentType: def.contentType, ...(def.alternative ? { alternative: def.alternative } : {}), file, key, url: `${publicBase}/${key}` });
+      }
     }
   }
   artifacts.sort((a, b) => platforms.indexOf(a.platform) - platforms.indexOf(b.platform));
   const catalog = { schemaVersion: 1, channel: 'pilot', platforms: {} };
-  for (const { platform, version, sourceCommit, url, sha256, size } of artifacts) catalog.platforms[platform] = { version, sourceCommit, url, sha256, size };
+  for (const { platform, alternative, version, sourceCommit, url, sha256, size } of artifacts) {
+    const metadata = { version, sourceCommit, url, sha256, size };
+    if (alternative) (catalog.platforms[platform].alternatives ??= {})[alternative] = metadata;
+    else catalog.platforms[platform] = metadata;
+  }
   return { artifacts, catalog };
 }
 
@@ -192,7 +207,7 @@ function safeKey(key) {
   const match = /^mobile-egress\/([^/]+)\/([^/]+)$/.exec(key);
   if (!match) throw new Error('Unsafe R2 object key');
   checkVersion(match[1]);
-  if (!platforms.some(p => definition(match[1], p).name === match[2])) throw new Error('Unexpected R2 artifact name');
+  if (!platforms.some(p => definitions(match[1], p).some(d => d.name === match[2]))) throw new Error('Unexpected R2 artifact name');
 }
 
 export function createR2Transport(config, dependencies = {}) {

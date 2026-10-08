@@ -2,11 +2,46 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRunValidatesUserDMGRecordWithoutAcceptingMissingNativeChecks(t *testing.T) {
+	valid := map[string]any{"schemaVersion": 1, "releaseVersion": "2.0.6", "sourceCommit": strings.Repeat("a", 40), "artifactName": "inevitable-mobile-relay-macos-2.0.6-arm64.dmg", "artifactSha256": strings.Repeat("b", 64), "architecture": "arm64", "minimumMacOS": "13.0", "appBundleId": "com.zfnf.mobile-egress.client.app", "appExecutable": "mobile-egress-client-app", "runtimeMode": "app", "binaryRuntimeMode": "app", "binaryVersion": "2.0.6", "binarySourceCommit": strings.Repeat("a", 40), "binarySha256": strings.Repeat("c", 64), "mountedBinarySha256": strings.Repeat("c", 64), "applicationIdentity": "Developer ID Application: Fixture (ABCDEFGHIJ)", "hardenedRuntime": true, "appSignature": "valid", "imageSignature": "valid", "appNotarization": "accepted", "imageNotarization": "accepted", "appStaple": "valid", "imageStaple": "valid", "checks": map[string]string{"codesign": "passed", "spctlApp": "passed", "spctlImage": "passed", "staplerApp": "passed", "staplerImage": "passed", "mountedPayload": "passed", "binarySource": "passed"}}
+	path := filepath.Join(t.TempDir(), "dmg.json")
+	validate := func(record map[string]any) error {
+		data, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return run([]string{"validate-client-dmg-record", path, "2.0.6", strings.Repeat("a", 40), strings.Repeat("b", 64), "Developer ID Application: Fixture (ABCDEFGHIJ)"}, &bytes.Buffer{})
+	}
+	if err := validate(valid); err != nil {
+		t.Fatalf("valid user DMG rejected: %v", err)
+	}
+	for _, field := range []string{"sourceCommit", "artifactName", "artifactSha256", "architecture", "minimumMacOS", "appBundleId", "appExecutable", "runtimeMode", "binaryRuntimeMode", "binaryVersion", "binarySourceCommit", "mountedBinarySha256", "applicationIdentity", "appSignature", "imageSignature", "appNotarization", "imageNotarization", "appStaple", "imageStaple", "checks"} {
+		t.Run(field, func(t *testing.T) {
+			changed := make(map[string]any)
+			for k, v := range valid {
+				changed[k] = v
+			}
+			delete(changed, field)
+			if validate(changed) == nil {
+				t.Fatalf("DMG missing %s accepted", field)
+			}
+		})
+	}
+	valid["binaryRuntimeMode"] = "service"
+	if validate(valid) == nil {
+		t.Fatal("service-mode payload accepted as user app")
+	}
+}
 
 func TestRunValidatesLockAndPrintsSigningPlanWithoutCredentials(t *testing.T) {
 	temporary := t.TempDir()

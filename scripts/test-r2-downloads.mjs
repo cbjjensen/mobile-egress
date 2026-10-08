@@ -28,6 +28,10 @@ async function fixture(t, releases = [{ version: '2.0.0', platforms: ['windows',
       [windowsName, `windows-client/build/release/mobile-egress-client-windows-${release.version}/${windowsName}`],
       [macName, `windows-client/build/release/${macName}`],
     ];
+    if (!androidOnly && (major > 2 || major === 2 && (minor > 0 || patch >= 6))) {
+      const dmg = `inevitable-mobile-relay-macos-${release.version}-arm64.dmg`;
+      definitions.push([dmg, `windows-client/build/release/${dmg}`]);
+    }
     const freeze = { schemaVersion: 1, tag: `v${release.version}`, sourceCommit: source,
       components: androidOnly ? ['Android'] : ['Desktop'], artifacts: [] };
     for (const [name, path] of definitions) {
@@ -94,6 +98,45 @@ test('catalog includes only explicit platform selections, including independentl
   assert.equal(plan.catalog.channel, 'pilot');
   const partial = await f.prepare({ ...f.request, releases: [f.request.releases[0]] });
   assert.equal(partial.catalog.platforms.android, undefined);
+});
+
+test('Mac selection expands both frozen formats from 2.0.6 while retaining PKG metadata in schema 1', async t => {
+  const f = await fixture(t, [{ version: '2.0.6', platforms: ['macos'] }]);
+  const plan = await f.prepare();
+  assert.deepEqual(plan.artifacts.map(a => a.name), ['inevitable-mobile-relay-macos-2.0.6-arm64.pkg', 'inevitable-mobile-relay-macos-2.0.6-arm64.dmg']);
+  assert.equal(plan.catalog.schemaVersion, 1);
+  const mac = plan.catalog.platforms.macos;
+  assert.equal(mac.url, `${base}/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.pkg`);
+  assert.deepEqual(mac.alternatives.dmg, { version: '2.0.6', sourceCommit: source,
+    url: `${base}/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.dmg`,
+    sha256: hash(Buffer.from('signed fixture 2.0.6: inevitable-mobile-relay-macos-2.0.6-arm64.dmg')),
+    size: Buffer.byteLength('signed fixture 2.0.6: inevitable-mobile-relay-macos-2.0.6-arm64.dmg') });
+  const r = remote(plan);
+  await publishDownloads(plan, r);
+  assert.equal(r.writes.at(-1), 'mobile-egress/downloads.json');
+  assert.deepEqual(JSON.parse(r.objects.get('mobile-egress/downloads.json').body), plan.catalog);
+});
+
+test('missing or altered frozen DMG blocks Mac preparation and every catalog write', async t => {
+  const f = await fixture(t, [{ version: '2.0.6', platforms: ['macos'] }]);
+  const path = join(f.directory, 'windows-client/build/release/mobile-egress-2.0.6.freeze.json');
+  const freeze = JSON.parse(await readFile(path, 'utf8'));
+  await writeFile(path, JSON.stringify({ ...freeze, artifacts: freeze.artifacts.slice(0, 2) }));
+  await assert.rejects(f.prepare(), /artifact/i);
+  await writeFile(path, JSON.stringify(freeze));
+  await writeFile(join(f.directory, 'windows-client/build/release/inevitable-mobile-relay-macos-2.0.6-arm64.dmg'), 'changed DMG');
+  await assert.rejects(f.prepare(), /digest|hash/i);
+});
+
+test('DMG public verification failure leaves the catalog unpromoted', async t => {
+  const f = await fixture(t, [{ version: '2.0.6', platforms: ['macos'] }]), plan = await f.prepare(), r = remote(plan);
+  const fetch = r.fetch;
+  r.fetch = async function(url, init) {
+    if (url.endsWith('.dmg')) return new Response('corrupt', { headers: r.headers(plan.artifacts[1]) });
+    return fetch.call(this, url, init);
+  };
+  await assert.rejects(publishDownloads(plan, r), /public|digest/i);
+  assert.equal(r.objects.has('mobile-egress/downloads.json'), false);
 });
 test('rejects legacy, unsafe, duplicate and mismatched source selections before publication', async t => {
   const f = await fixture(t);

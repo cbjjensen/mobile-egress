@@ -110,6 +110,7 @@ try {
     Invoke-RequiredCommand -Name 'Release orchestration tests' -Command { & (Join-Path $PSScriptRoot 'test-release-all.ps1') }
     Invoke-RequiredCommand -Name 'Direct release contracts' -Command { & (Join-Path $PSScriptRoot 'test-direct-release.ps1') }
     Invoke-RequiredCommand -Name 'Historical and branded release contracts' -Command { & (Join-Path $PSScriptRoot 'test-release-branding.ps1') }
+    Invoke-RequiredCommand -Name 'User DMG release contracts' -Command { & (Join-Path $PSScriptRoot 'test-user-dmg-release.ps1') }
     Invoke-RequiredCommand -Name 'Mobile manifest schema tests' -Command { & (Join-Path $PSScriptRoot 'test-mobile-feature-manifest.ps1') }
 
     if ($Components -contains 'Windows') {

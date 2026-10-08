@@ -1,6 +1,6 @@
 ---
 name: mobile-egress-release
-description: Use when preparing, publishing, or verifying a Mobile Egress Desktop, macOS PKG, or Android GitHub release from the Windows publisher workstation.
+description: Use when preparing, publishing, or verifying a Mobile Egress Desktop, macOS PKG/DMG, or Android GitHub release from the Windows publisher workstation.
 ---
 
 # Mobile Egress release
@@ -9,7 +9,7 @@ description: Use when preparing, publishing, or verifying a Mobile Egress Deskto
 
 Choose the smallest compatible guarded entry point. Do not reconstruct signing, tagging, upload, or verification manually:
 
-- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled Windows and Apple Silicon Mac Client installers. From 2.0.2, Desktop contains only `InevitableMobileRelaySetup.exe` and `inevitable-mobile-relay-macos-<version>-arm64.pkg`, sharing one version/tag. Frozen 2.0.0/2.0.1 releases keep their original filenames. No controller, relay, or raw EC2 asset is built or published.
+- `scripts\release-desktop.ps1 -ReleaseVersion ...` for coupled Windows and Apple Silicon Mac Client installers. Desktop 2.0.2–2.0.5 contains `InevitableMobileRelaySetup.exe` and `inevitable-mobile-relay-macos-<version>-arm64.pkg`; from 2.0.6 it also requires `inevitable-mobile-relay-macos-<version>-arm64.dmg`, sharing one version/tag. Frozen older releases retain their exact contract and filenames. No controller, relay, or raw EC2 asset is built or published.
 - `scripts\release-android.ps1 -ReleaseVersion ...` for Android-only changes.
 - `scripts\release-all.ps1 -Components Desktop,Android` for protocol/shared compatibility or coordinated Desktop/Android changes.
 - `scripts\release-all.ps1 -Components Windows,Android` for normal non-Apple releases when Windows and Android should ship while macOS/iOS are handled separately.
@@ -23,6 +23,22 @@ The current 2.x release contract uses the self-contained `InevitableMobileRelayS
 **REQUIRED SUB-SKILLS:** Use `mobile-egress-windows-signing` and `mobile-egress-android-signing` for identity recovery or signer failures. Never regenerate an established key to unblock a release.
 
 ## Before running
+
+For the user DMG, follow [the guarded format procedure](../../../docs/macos-user-dmg.md).
+Preserve the established GUI bundle/executable identifiers; verify signed
+`MobileEgressRuntimeMode=app` against actual binary `--runtime-mode`, clean
+embedded source/version and arm64/macOS 13. Require app and image signatures,
+accepted notarization, both staples/Gatekeeper checks and mounted executable
+hash before exclusive promotion. Retain `.dmg.verification.json` privately;
+never upload it. Desktop transfer validates both PKG and DMG before either is
+promoted. Schema 1 R2 `macos` selection expands both formats from 2.0.6 and
+retains PKG metadata with `alternatives.dmg`; all selected public bytes must
+verify before catalog promotion. A standalone fresh-prerelease DMG validation
+build signs/notarizes but does not freeze, tag or publish Windows/Desktop.
+
+The owner authorized the 2026-10-07 DMG pilot release without waiting for tester
+confirmation. Keep unperformed standard-user/physical-phone acceptance marked
+unverified; do not remove automated/native release checks or promote stable.
 
 Require:
 
@@ -85,7 +101,7 @@ If an operation is interrupted, inspect the exact local, Mac, or GitHub output b
 | Condition | Response |
 |---|---|
 | Missing/mismatched signer | Recover the established private pair; do not initialize or replace it. |
-| Desktop PSD1, SSH, signing/notary prerequisite, PKG, verification record, or hash is invalid | Stop and repair the exact prerequisite; do not upload the PKG. |
+| Desktop PSD1, SSH, signing/notary prerequisite, PKG/required DMG, verification record, or hash is invalid | Stop and repair the exact prerequisite; do not upload the invalid or incomplete Desktop set. |
 | Known Gradle lint-cache deletion lock | Let the script stop Gradle daemons and retry once. |
 | Any other build failure or repeated lock | Stop and diagnose; do not skip gates or kill unrelated Java. |
 | Tagged release lacks exact local artifacts | Stop; never rebuild or replace a tagged release. |

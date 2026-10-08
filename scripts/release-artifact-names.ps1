@@ -27,6 +27,22 @@ function Get-MobileEgressClientMacRecordName {
     return (Get-MobileEgressClientMacPackageName -Version $Version).Replace('.pkg', '.verification.json')
 }
 
+function Test-MobileEgressUserDmgRelease {
+    param([Parameter(Mandatory)][string]$Version)
+    return [version]($Version -split '-')[0] -ge [version]'2.0.6'
+}
+
+function Get-MobileEgressClientMacDmgName {
+    param([Parameter(Mandatory)][string]$Version)
+    if (-not (Test-MobileEgressUserDmgRelease -Version $Version)) { throw 'The user DMG contract starts at 2.0.6.' }
+    return "inevitable-mobile-relay-macos-$Version-arm64.dmg"
+}
+
+function Get-MobileEgressClientMacDmgRecordName {
+    param([Parameter(Mandatory)][string]$Version)
+    return (Get-MobileEgressClientMacDmgName -Version $Version) + '.verification.json'
+}
+
 function Get-MobileEgressAndroidApkName {
     param([Parameter(Mandatory)][string]$Version)
     if (Test-MobileEgressBrandedRelease -Version $Version) { return "inevitable-mobile-relay-android-$Version.apk" }

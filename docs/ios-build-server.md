@@ -1,6 +1,6 @@
 # Apple build server
 
-Windows remains the editing/publishing workstation. Native Apple Silicon Mac builds produce the direct Client PKG and compile/test iOS. The Mac is development infrastructure, never a Mobile Egress traffic relay.
+Windows remains the editing/publishing workstation. Native Apple Silicon Mac builds produce the Client PKG and, from Desktop 2.0.6, the app-only user DMG, and compile/test iOS. The Mac is development infrastructure, never a Mobile Egress traffic relay. Follow [Mac DMG release and acceptance](macos-user-dmg.md) for the new format's signing, mounted payload verification and private evidence; its standalone validation path does not freeze or publish a Desktop release.
 
 ## Connection and isolation
 

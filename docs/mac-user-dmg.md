@@ -59,6 +59,13 @@ Keychain APIs emit expected Apple deprecation warnings; this isolated backend
 preserves the current signing arrangement without adding restricted entitlements
 or provisioning changes.
 
+Source `6cd7849b98dd2f97de1f57389e11f523bf2764bd` also passed native runtime
+tests for duplicate-lock rejection/reopen, symlink and writable-path rejection,
+installed-service classification, trusted-home lookup, active-connection shutdown
+and stable-port recovery. The runtime and Client adapter passed Go's race
+detector on the Mac. These automated checks do not substitute for the field
+acceptance listed below.
+
 ## Release acceptance
 
 Public release requires the automated release gates and signed/notarized DMG

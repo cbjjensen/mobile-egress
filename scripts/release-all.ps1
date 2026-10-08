@@ -598,6 +598,10 @@ function Get-MobileEgressReleaseArtifactDefinitions {
         if ($resolvedComponents -contains 'Desktop') {
             $macName = Get-MobileEgressClientMacPackageName -Version $Version
             [pscustomobject]@{ Name = $macName; Path = Join-Path $RepositoryRoot "windows-client\build\release\$macName" }
+            if (Test-MobileEgressUserDmgRelease -Version $Version) {
+                $dmgName = Get-MobileEgressClientMacDmgName -Version $Version
+                [pscustomobject]@{ Name = $dmgName; Path = Join-Path $RepositoryRoot "windows-client\build\release\$dmgName" }
+            }
         }
         if ($resolvedComponents -contains 'Android') {
             $androidName = Get-MobileEgressAndroidApkName -Version $Version
@@ -667,6 +671,9 @@ function Get-MobileEgressReleaseDownloadItemDefinitions {
     if ([version]$Version -ge [version]'2.0.0') {
         [pscustomobject]@{ Key = 'client-windows'; Label = 'Windows Client installer'; CurrentName = Get-MobileEgressClientWindowsInstallerName -Version $Version }
         [pscustomobject]@{ Key = 'client-macos'; Label = 'macOS Client PKG (Apple Silicon)'; CurrentName = Get-MobileEgressClientMacPackageName -Version $Version }
+        if (Test-MobileEgressUserDmgRelease -Version $Version) {
+            [pscustomobject]@{ Key = 'client-macos-dmg'; Label = 'macOS Client DMG (Apple Silicon, no admin, keep app open)'; CurrentName = Get-MobileEgressClientMacDmgName -Version $Version }
+        }
         [pscustomobject]@{ Key = 'android'; Label = 'Android Agent APK'; CurrentName = Get-MobileEgressAndroidApkName -Version $Version }
         return
     }
@@ -709,6 +716,7 @@ function Test-MobileEgressReleaseDownloadAssetName {
     switch ($Key) {
         'client-windows' { return $Name -ceq 'MobileEgressClientSetup.exe' -or $Name -ceq 'InevitableMobileRelaySetup.exe' }
         'client-macos' { return $Name -cmatch '^(mobile-egress-client-macos|inevitable-mobile-relay-macos)-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
+        'client-macos-dmg' { return $Name -cmatch '^inevitable-mobile-relay-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.dmg$' }
         'windows' { return $Name -ceq 'MobileEgressSetup.exe' -or $Name -match '^mobile-egress-windows-[0-9]+\.[0-9]+\.[0-9]+\.zip$' }
         'client' { return $Name -ceq 'mobile-egress-client.exe' }
         'macos' { return $Name -match '^mobile-egress-macos-[0-9]+\.[0-9]+\.[0-9]+-arm64\.pkg$' }
@@ -815,7 +823,7 @@ function Resolve-MobileEgressReleaseDownloadLinks {
             Tag = if ($null -ne $fallback) { $fallback.Tag } else { '' }
             Name = if ($null -ne $fallback) { $fallback.Name } else { '' }
             Url = if ($null -ne $fallback) { New-MobileEgressReleaseDownloadUrl -Tag $fallback.Tag -Name $fallback.Name } else { '' }
-            UnavailableReason = if ($null -eq $fallback -and $item.Key -in @('macos', 'client-macos') -and $currentWindowsReleased) {
+            UnavailableReason = if ($null -eq $fallback -and $item.Key -in @('macos', 'client-macos', 'client-macos-dmg') -and $currentWindowsReleased) {
                 $policy.MacUnavailableReason
             } else {
                 ''

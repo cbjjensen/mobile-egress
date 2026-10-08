@@ -257,7 +257,7 @@ function Invoke-MobileEgressMacDesktopAction {
                 -Description 'Uploading exact Windows node manifest'
             return
         }
-        'release' {
+        { $_ -in @('release', 'release-dmg') } {
             $version = ConvertTo-MobileEgressPosixLiteral $Context.Version
             $team = ConvertTo-MobileEgressPosixLiteral $Context.TeamID
             $application = ConvertTo-MobileEgressPosixLiteral $Context.ApplicationIdentity
@@ -265,7 +265,10 @@ function Invoke-MobileEgressMacDesktopAction {
             $notaryApiKey = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyPath
             $notaryApiKeyID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiKeyID
             $notaryApiIssuerID = ConvertTo-MobileEgressPosixLiteral $Context.NotaryApiIssuerID
-            if ($Context.ClientArtifact) {
+            if ($Action -eq 'release-dmg') {
+                $scriptPath = ConvertTo-MobileEgressPosixLiteral ($Context.MacRepositoryPath + '/scripts/release-client-dmg.sh')
+                $releaseArguments = "--release-version $version --source-commit $commit --team-id $team --application-identity $application --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
+            } elseif ($Context.ClientArtifact) {
                 $scriptPath = ConvertTo-MobileEgressPosixLiteral ($Context.MacRepositoryPath + '/scripts/release-client-macos.sh')
                 $releaseArguments = "--release-version $version --source-commit $commit --team-id $team --application-identity $application --installer-identity $installer --notary-api-key $notaryApiKey --notary-api-key-id $notaryApiKeyID --notary-api-issuer-id $notaryApiIssuerID"
             } else {
@@ -323,7 +326,8 @@ function Invoke-MobileEgressTask5RecordVerifier {
         [Parameter(Mandatory)][string]$ArtifactSha256,
         [Parameter(Mandatory)][string]$ApplicationIdentity,
         [Parameter(Mandatory)][string]$InstallerIdentity,
-        [switch]$ClientArtifact
+        [switch]$ClientArtifact,
+        [switch]$DmgArtifact
     )
 
     $goCommand = Get-Command 'go' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -347,17 +351,13 @@ function Invoke-MobileEgressTask5RecordVerifier {
 
     Push-Location $RepositoryRoot
     try {
-        $null = Invoke-MobileEgressDesktopNativeCommand -FilePath $goExecutable -Arguments @(
-            'run', './windows-client/cmd/mobile-egress-macos-release',
+        $verificationArguments = if ($DmgArtifact) { @('validate-client-dmg-record', $RecordPath, $Version, $SourceCommit, $ArtifactSha256, $ApplicationIdentity) } else { @(
             $(if ($ClientArtifact) { 'validate-client-record' } else { 'validate-record' }),
-            $RecordPath,
-            $Version,
-            $SourceCommit,
-            $ManifestSha256,
-            $ArtifactSha256,
-            $ApplicationIdentity,
-            $InstallerIdentity
-        ) -Description 'Task 5 macOS verification-record validation'
+            $RecordPath, $Version, $SourceCommit, $ManifestSha256, $ArtifactSha256, $ApplicationIdentity, $InstallerIdentity
+        ) }
+        $null = Invoke-MobileEgressDesktopNativeCommand -FilePath $goExecutable -Arguments (@(
+            'run', './windows-client/cmd/mobile-egress-macos-release'
+            ) + $verificationArguments) -Description 'Task 5 macOS verification-record validation'
     } finally {
         Pop-Location
     }
@@ -377,6 +377,13 @@ function Assert-MobileEgressDesktopMacArtifacts {
         foreach ($path in @($pkg,$record)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required direct Client release evidence is missing: $path" } }
         $hash = (Get-FileHash -LiteralPath $pkg -Algorithm SHA256).Hash.ToLowerInvariant()
         Invoke-MobileEgressTask5RecordVerifier -RepositoryRoot $RepositoryRoot -RecordPath $record -Version $Version -SourceCommit $SourceCommit -ManifestSha256 'unused' -ArtifactSha256 $hash -ApplicationIdentity $Config.ApplicationIdentity -InstallerIdentity $Config.InstallerIdentity -ClientArtifact
+        if (Test-MobileEgressUserDmgRelease -Version $Version) {
+            $dmg = Join-Path (Join-Path $RepositoryRoot 'windows-client\build\release') (Get-MobileEgressClientMacDmgName -Version $Version)
+            $dmgRecord = $dmg + '.verification.json'
+            foreach ($path in @($dmg,$dmgRecord)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required user DMG release evidence is missing: $path" } }
+            $dmgHash = (Get-FileHash -LiteralPath $dmg -Algorithm SHA256).Hash.ToLowerInvariant()
+            Invoke-MobileEgressTask5RecordVerifier -RepositoryRoot $RepositoryRoot -RecordPath $dmgRecord -Version $Version -SourceCommit $SourceCommit -ManifestSha256 'unused' -ArtifactSha256 $dmgHash -ApplicationIdentity $Config.ApplicationIdentity -InstallerIdentity $Config.InstallerIdentity -DmgArtifact
+        }
         return [pscustomobject]@{ArtifactName=[IO.Path]::GetFileName($pkg);ArtifactPath=$pkg;ArtifactSha256=$hash;RecordPath=$record;ManifestPath='';ManifestSha256='unused'}
     }
     $manifestPath = Join-Path $RepositoryRoot 'windows-client\build\bin\release-manifest.json'
@@ -413,6 +420,38 @@ function Assert-MobileEgressDesktopMacArtifacts {
         RecordPath = $recordPath
         ManifestPath = $manifestPath
         ManifestSha256 = $manifestHash
+    }
+}
+
+function Invoke-MobileEgressMacTransferSet {
+    param([Parameter(Mandatory)][object[]]$Contexts, [Parameter(Mandatory)][scriptblock]$InvokeMacAction, [Parameter(Mandatory)][scriptblock]$ValidateRecord)
+    $promoted = [Collections.Generic.List[string]]::new()
+    try {
+        foreach ($transfer in $Contexts) {
+            $remoteHash = (& $InvokeMacAction 'remote-hash' $transfer | Out-String).Trim()
+            if ($remoteHash -notmatch '^[0-9a-f]{64}$') { throw 'The Mac did not return a valid artifact SHA-256.' }
+            & $InvokeMacAction 'download-pkg' $transfer
+            & $InvokeMacAction 'download-record' $transfer
+            foreach ($path in @($transfer.LocalPkgPath,$transfer.LocalRecordPath)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Mac release transfer did not produce: $path" } }
+            $transfer.ArtifactSha256 = (Get-FileHash -LiteralPath $transfer.LocalPkgPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($transfer.ArtifactSha256 -cne $remoteHash) { throw 'Downloaded macOS artifact SHA-256 does not match the Mac build output.' }
+            & $ValidateRecord $transfer
+        }
+        # File.Move without overwrite is exclusive, including a concurrent writer
+        # after validation. Roll back only paths this invocation actually created.
+        foreach ($transfer in $Contexts) {
+            [IO.File]::Move($transfer.LocalPkgPath,$transfer.FinalPkgPath)
+            $promoted.Add($transfer.FinalPkgPath)
+            [IO.File]::Move($transfer.LocalRecordPath,$transfer.FinalRecordPath)
+            $promoted.Add($transfer.FinalRecordPath)
+        }
+    } catch {
+        foreach ($path in $promoted) { [IO.File]::Delete($path) }
+        throw
+    } finally {
+        foreach ($transfer in $Contexts) {
+            foreach ($path in @($transfer.LocalPkgPath,$transfer.LocalRecordPath)) { if (Test-Path -LiteralPath $path -PathType Leaf) { [IO.File]::Delete($path) } }
+        }
     }
 }
 
@@ -467,6 +506,21 @@ function Invoke-MobileEgressDesktopBuild {
         RemoteRecordPath = $Config.RepositoryPath.TrimEnd('/') + "/windows-client/build/release/$recordName"
         ArtifactSha256 = ''
         ClientArtifact = $direct
+        DmgArtifact = $false
+    }
+    $dmgContext = $null
+    if (Test-MobileEgressUserDmgRelease -Version $Version) {
+        $dmgContext = $context.PSObject.Copy()
+        $dmgContext.DmgArtifact = $true
+        $dmgContext.ArtifactName = Get-MobileEgressClientMacDmgName -Version $Version
+        $dmgContext.RecordName = Get-MobileEgressClientMacDmgRecordName -Version $Version
+        $dmgContext.RemotePkgPath = $context.RemoteReleaseDirectory + '/' + $dmgContext.ArtifactName
+        $dmgContext.RemoteRecordPath = $context.RemoteReleaseDirectory + '/' + $dmgContext.RecordName
+        $dmgContext.FinalPkgPath = Join-Path $releaseDirectory $dmgContext.ArtifactName
+        $dmgContext.FinalRecordPath = Join-Path $releaseDirectory $dmgContext.RecordName
+        $dmgContext.LocalPkgPath = Join-Path $releaseDirectory ('.' + $dmgContext.ArtifactName + ".$transferID.partial")
+        $dmgContext.LocalRecordPath = Join-Path $releaseDirectory ('.' + $dmgContext.RecordName + ".$transferID.partial")
+        foreach ($path in @($dmgContext.FinalPkgPath,$dmgContext.FinalRecordPath)) { if (Test-Path -LiteralPath $path) { throw "Desktop release output already exists and will not be overwritten: $path" } }
     }
     foreach ($path in @($context.FinalPkgPath, $context.FinalRecordPath)) {
         if (Test-Path -LiteralPath $path) {
@@ -520,7 +574,8 @@ function Invoke-MobileEgressDesktopBuild {
                 -ArtifactSha256 $ValidationContext.ArtifactSha256 `
                 -ApplicationIdentity $ValidationContext.ApplicationIdentity `
                 -InstallerIdentity $ValidationContext.InstallerIdentity `
-                -ClientArtifact:$ValidationContext.ClientArtifact
+                -ClientArtifact:$ValidationContext.ClientArtifact `
+                -DmgArtifact:$ValidationContext.DmgArtifact
         }
     }
 
@@ -542,6 +597,11 @@ function Invoke-MobileEgressDesktopBuild {
         & $InvokeMacAction 'prepare' $context
         if (-not $direct) { & $InvokeMacAction 'upload-manifest' $context }
         & $InvokeMacAction 'release' $context
+        if ($null -ne $dmgContext) {
+            & $InvokeMacAction 'release-dmg' $dmgContext
+            Invoke-MobileEgressMacTransferSet -Contexts @($context,$dmgContext) -InvokeMacAction $InvokeMacAction -ValidateRecord $ValidateRecord
+            return [pscustomobject]@{ ArtifactName=$context.ArtifactName; ArtifactPath=$context.FinalPkgPath; ArtifactSha256=$context.ArtifactSha256; RecordPath=$context.FinalRecordPath; ManifestPath=$context.ManifestPath; ManifestSha256=$context.ManifestSha256; DmgArtifactPath=$dmgContext.FinalPkgPath; DmgArtifactSha256=$dmgContext.ArtifactSha256; DmgRecordPath=$dmgContext.FinalRecordPath }
+        }
         $remoteHash = (& $InvokeMacAction 'remote-hash' $context | Out-String).Trim()
         if ($remoteHash -notmatch '^[0-9a-f]{64}$') {
             throw 'The Mac did not return a valid package SHA-256.'

@@ -20,6 +20,20 @@ func run(args []string, output io.Writer) error {
 		return fmt.Errorf("usage: mobile-egress-macos-release validate-lock <path> | signing-plan | validate-record <path> <version> <source-commit> <manifest-sha256> <artifact-sha256> <application-identity> <installer-identity>")
 	}
 	switch args[0] {
+	case "validate-client-dmg-record":
+		if len(args) != 6 {
+			return fmt.Errorf("validate-client-dmg-record requires path, version, source commit, artifact SHA-256, and application identity")
+		}
+		file, err := os.Open(args[1])
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		record, err := macosrelease.DecodeClientDMGVerificationRecord(file)
+		if err != nil {
+			return err
+		}
+		return record.Validate(macosrelease.VerificationExpectations{ReleaseVersion: args[2], SourceCommit: args[3], ArtifactSHA256: args[4], ApplicationIdentity: args[5]})
 	case "validate-client-record":
 		if len(args) != 8 {
 			return fmt.Errorf("validate-client-record requires path, version, source commit, manifest SHA-256, artifact SHA-256, application identity, and installer identity")
