@@ -149,7 +149,32 @@ Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/re
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
 
-## Current pilot: Windows 2.0.7, Mac 2.0.6, Android 2.0.3
+## Current pilot: Windows 2.0.8, Mac 2.0.6, Android 2.0.3
+
+The owner-authorized [Windows PowerShell signature correction](superpowers/plans/2026-10-11-windows-powershell-signature-status.md)
+published Windows **2.0.8** from frozen source
+`6b86d5928c9cfcd9efe248550dfdee6ff2ca9d1f`. Its only GitHub asset is
+`InevitableMobileRelaySetup.exe`, 25,913,632 bytes, SHA-256
+`f1c9b3afcf1407fe20f2bd6cf9f37f263b3ac05ecc8320d01ff1c5c2dcc290c3`.
+The guarded complete catalog retained Mac **2.0.6** PKG/DMG and Android
+**2.0.3**, verified all four public downloads, and conditionally promoted the
+catalog. Independent readback and the Windows download matched at
+`2026-10-11T08:00:39Z`.
+
+- [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.8/InevitableMobileRelaySetup.exe)
+- [Mac DMG](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.dmg)
+- [Mac PKG](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.pkg)
+- [Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.3/inevitable-mobile-relay-android-2.0.3.apk)
+
+A read-only check of the deployed backend's configuration and catalog resolver
+confirmed the new Windows link, retained platform links and five-minute cache
+reuse. No website deployment or environment update was required. A fresh
+authenticated page check was unavailable because browser automation was not
+connected; the diagnostic resolver check does not establish the existing HTTP
+process's cache state. Reported Server 2022 installation acceptance remains
+pending and this release remains a pilot. iPhone distribution is unchanged.
+
+## Previous pilot: Windows 2.0.7, Mac 2.0.6, Android 2.0.3
 
 The owner-authorized [Windows Server installer hotfix](superpowers/plans/2026-10-10-windows-server-elevation.md)
 published Windows **2.0.7** from frozen source

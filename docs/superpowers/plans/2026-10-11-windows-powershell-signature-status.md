@@ -52,8 +52,9 @@ produced no signature evidence.
   metadata, missing timestamp and post-trust rejection using an isolated
   in-memory validator identity, without requiring publisher signing files.
 
-This is an unpublished source correction. Signed build, release and physical
-Server 2022 acceptance remain separate required steps.
+This correction is published in the Windows 2.0.8 pilot. Signed build and
+publication verification are recorded below; installation on the affected
+Server 2022 machine remains unverified.
 
 Independent review of the exact production and regression-test diff found no
 blocking issues. It confirmed that the exception is restricted to the native
@@ -136,3 +137,53 @@ timestamp fails the test. No Mac production script, artifact or release scope
 is changed. Diagnostic logs are retained under the 2.0.8 publisher work folder.
 All three corrected timing checks passed with their normal parallel execution;
 the measured GUI phases were 5.567–5.623 seconds.
+
+## Completed Windows 2.0.8 pilot publication
+
+The next full gate encountered MSYS child-process failures, including
+`0xC000012D` (commitment limit) and fork resource errors. The publisher reran
+the unchanged gate with process-local `GOFLAGS=-p=1` and `GOMAXPROCS=1`, using
+the existing Go cache and temporary storage on G:. All integration checks
+passed, including every Go package, vet/build, installer contracts, mobile
+manifest checks, 19 R2 tests and 88 Client frontend tests. No gate was skipped
+and no unrelated process or machine policy was changed.
+
+The guarded Windows-only build and publication completed on 2026-10-11:
+
+- [GitHub v2.0.8 prerelease](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.8)
+- Frozen source: `6b86d5928c9cfcd9efe248550dfdee6ff2ca9d1f`
+- Only release asset: `InevitableMobileRelaySetup.exe`, 25,913,632 bytes
+- SHA-256: `f1c9b3afcf1407fe20f2bd6cf9f37f263b3ac05ecc8320d01ff1c5c2dcc290c3`
+- [Verified public installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.8/InevitableMobileRelaySetup.exe)
+
+The build verified the signed payload and installer against the established
+publisher. The exact frozen setup then passed
+`TestWindowsSetupLockVerifiesSignedArtifactThroughHeldHandle` with `-count=1`;
+native Authenticode reported `Valid`, the expected publisher thumbprint and
+a timestamp. The publication gate passed again with that new setup as the
+signed-artifact fixture. GitHub's digest, the local freeze record, the actual
+remote tag and an independent local file hash all agree.
+
+The complete guarded R2 plan retained frozen Mac 2.0.6 PKG/DMG and Android
+2.0.3. All four public files passed byte, size and header verification before
+conditional catalog promotion. Independent public catalog readback and a
+fresh Windows download matched at `2026-10-11T08:00:39Z`; the catalog returned
+`no-store` and the installer returned immutable caching and attachment headers.
+
+A read-only check in the current deployed backend container passed at
+`2026-10-11T08:00:39Z` (SSM command
+`574173f5-b9ba-4a19-bd77-bcadc23c69a7`). It loaded the deployed configuration
+and catalog resolver, fetched the real public catalog, resolved Windows 2.0.8
+and all retained platform links, preserved the iOS setting, and verified
+five-minute cache reuse. No website deployment or configuration edit occurred.
+This check used a fresh resolver instance; it does not establish the existing
+HTTP process's cache state or a rendered authenticated page. Browser automation
+was unavailable, so a new authenticated page check remains unverified.
+
+Publisher logs are retained under
+`G:\codex-build-cache\inevitable-mobile-relay-server-2.0.8`: the failed and
+successful build logs, `signed-native-check.log`, `windows-publish.log`,
+`r2-dryrun.log`, `r2-publish.log`, `public-verification.json` and the private
+read-only resolver result. Historical 2.0.7 bytes were not replaced. Physical
+Server 2022 installation and end-to-end phone acceptance remain pending;
+this is a pilot, not a stable promotion.

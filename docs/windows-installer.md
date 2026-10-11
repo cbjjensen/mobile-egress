@@ -23,7 +23,7 @@ WebView2 preparation and application launch happen after this stage. Setup rolls
 back changes and removes its request/result exchange, so missing files or trust
 entries afterward do not establish the original cause.
 
-An [unpublished source correction](superpowers/plans/2026-10-11-windows-powershell-signature-status.md)
+The [Windows 2.0.8 pilot correction](superpowers/plans/2026-10-11-windows-powershell-signature-status.md)
 addresses Windows PowerShell 5.1 labeling the native untrusted-root condition
 `UnknownError`. Published 2.0.7 can reject that label before adding confirmed
 publisher trust. The correction still requires the precise native untrusted-root
