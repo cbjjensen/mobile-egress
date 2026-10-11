@@ -75,7 +75,7 @@ func TestClientMacInstallerDoesNotWaitIndefinitelyForGUI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stalled GUI handoff failed installation: %v\n%s", err, output)
 	}
-	if elapsed := time.Since(started); elapsed > 8*time.Second {
+	if elapsed := fixture.handoffElapsed(t, started); elapsed > 8*time.Second {
 		t.Fatalf("GUI handoff exceeded its bound: %v", elapsed)
 	}
 	if !strings.Contains(fixture.journal(t), "open uid=501") || !strings.Contains(string(output), "Applications") {
@@ -88,8 +88,11 @@ func TestClientMacInstallerBoundsGUISessionLookup(t *testing.T) {
 	fixture := newClientInstallerFixture(t)
 	started := time.Now()
 	output, err := fixture.run(t, "501", "hang", "ok")
-	if err != nil || time.Since(started) > 8*time.Second {
+	if err != nil {
 		t.Fatalf("GUI domain lookup held up installation: %v\n%s", err, output)
+	}
+	if elapsed := fixture.handoffElapsed(t, started); elapsed > 8*time.Second {
+		t.Fatalf("GUI domain lookup exceeded its bound: %v\n%s", elapsed, output)
 	}
 	if strings.Contains(fixture.journal(t), "open uid=") || !strings.Contains(string(output), "Applications") {
 		t.Fatalf("unavailable GUI lookup must skip launch and provide fallback: %s", output)
@@ -101,8 +104,11 @@ func TestClientMacInstallerBoundsConsoleUserLookup(t *testing.T) {
 	fixture := newClientInstallerFixture(t)
 	started := time.Now()
 	output, err := fixture.run(t, "hang", "yes", "ok")
-	if err != nil || time.Since(started) > 8*time.Second {
+	if err != nil {
 		t.Fatalf("console user lookup held up installation: %v\n%s", err, output)
+	}
+	if elapsed := fixture.handoffElapsed(t, started); elapsed > 8*time.Second {
+		t.Fatalf("console user lookup exceeded its bound: %v\n%s", elapsed, output)
 	}
 	if strings.Contains(fixture.journal(t), "open uid=") || !strings.Contains(string(output), "Applications") {
 		t.Fatalf("unavailable console user lookup must skip launch and provide fallback: %s", output)
@@ -238,6 +244,15 @@ esac`,
 		write(path, "#!/bin/sh\nset -eu\n"+body+"\n")
 		script = strings.ReplaceAll(script, command, "'"+strings.ReplaceAll(filepath.ToSlash(path), "'", "'\\''")+"'")
 	}
+	if scriptName == "postinstall" {
+		// Time the actual GUI phase, excluding earlier ownership, signature, and
+		// daemon checks. This shell builtin adds no process or watchdog changes.
+		const handoff = "open_owner_app >/dev/null 2>&1 &"
+		if strings.Count(script, handoff) != 1 {
+			t.Fatal("missing unique GUI handoff instrumentation point")
+		}
+		script = strings.Replace(script, handoff, ": > \"$FIXTURE_HANDOFF_MARKER\"\n"+handoff, 1)
+	}
 	path := filepath.Join(root, scriptName)
 	write(path, script)
 	return clientInstallerFixture{shell: shell, script: path, state: state, log: log, owner: "501", app: app, legacy: legacy}
@@ -350,9 +365,26 @@ func (f clientInstallerFixture) run(t *testing.T, console, gui, open string) ([]
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, f.shell, filepath.ToSlash(f.script), "fixture.pkg", "/", "/")
-	command.Env = append(os.Environ(), "FIXTURE_CONSOLE="+console, "FIXTURE_GUI="+gui, "FIXTURE_OPEN="+open, "FIXTURE_LOG="+filepath.ToSlash(f.log), "FIXTURE_OWNER="+f.owner)
+	marker := f.script + ".handoff-start"
+	command.Env = append(os.Environ(), "FIXTURE_CONSOLE="+console, "FIXTURE_GUI="+gui, "FIXTURE_OPEN="+open, "FIXTURE_LOG="+filepath.ToSlash(f.log), "FIXTURE_OWNER="+f.owner, "FIXTURE_HANDOFF_MARKER="+filepath.ToSlash(marker))
 	command.WaitDelay = time.Second
 	return command.CombinedOutput()
+}
+
+func (f clientInstallerFixture) handoffElapsed(t *testing.T, started time.Time) time.Duration {
+	t.Helper()
+	finished := time.Now()
+	info, err := os.Stat(f.script + ".handoff-start")
+	if err != nil {
+		t.Fatalf("missing GUI handoff timing marker: %v", err)
+	}
+	handoffStarted := info.ModTime()
+	if handoffStarted.IsZero() || handoffStarted.Before(started) || handoffStarted.After(finished) {
+		t.Fatalf("invalid GUI handoff timing: script start=%s handoff start=%s finish=%s", started, handoffStarted, finished)
+	}
+	elapsed := finished.Sub(handoffStarted)
+	t.Logf("phase timing: total=%s before_handoff=%s handoff=%s", finished.Sub(started), handoffStarted.Sub(started), elapsed)
+	return elapsed
 }
 
 func (f clientInstallerFixture) journal(t *testing.T) string {

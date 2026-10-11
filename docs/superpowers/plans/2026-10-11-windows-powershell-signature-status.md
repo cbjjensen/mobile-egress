@@ -113,3 +113,26 @@ installer correction. Prepare a fresh 2.0.8 pilot through the guarded release
 workflow, retaining frozen Mac 2.0.6 PKG/DMG and Android 2.0.3 downloads. The
 reported Server 2022 installation remains a separate acceptance check; stable
 promotion is not authorized.
+
+## Shared gate timing fixture correction
+
+The initial guarded build stopped before creating artifacts: two existing Mac
+installer fixture assertions exceeded eight seconds while timing the entire
+postinstall, including mocked ownership, signature and daemon setup. Sequential
+execution and moving the small fixtures back to C: did not resolve the failure.
+Instrumentation at the actual GUI handoff boundary established the cause:
+
+| Fixture | Whole script | Before GUI handoff | GUI handoff |
+| --- | ---: | ---: | ---: |
+| Hung GUI launch | 8.615 s | 2.964 s | 5.651 s |
+| Hung console lookup | 8.010 s | 2.460 s | 5.551 s |
+| Hung GUI session lookup | 7.738 s | 2.280 s | 5.458 s |
+
+The test-only correction measures the intended GUI phase, starting immediately
+before the unchanged production handoff line. It preserves the eight-second
+GUI assertion, the ten-second whole-script command deadline, actual shell
+branching and the five-iteration production watchdog. A missing or invalid
+timestamp fails the test. No Mac production script, artifact or release scope
+is changed. Diagnostic logs are retained under the 2.0.8 publisher work folder.
+All three corrected timing checks passed with their normal parallel execution;
+the measured GUI phases were 5.567–5.623 seconds.
