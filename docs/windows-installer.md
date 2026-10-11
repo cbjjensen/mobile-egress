@@ -4,6 +4,16 @@ The Windows installer is `InevitableMobileRelaySetup.exe` starting at 2.0.2; fro
 
 Run the installer normally, confirm the expected publisher, and approve the standard Windows elevation request. Do not bypass a signer mismatch. The installer transaction locks its confirmed bytes, verifies payload signatures, stages files under restricted access, and rolls back files/trust changes after failure.
 
+The next Windows build supports interactive Administrator desktops that already
+run with full privileges, including Windows Server 2019/2022 installations using
+the built-in Administrator without Admin Approval Mode. A normal double-click
+can be elevated on these desktops even when **Run as administrator** is unchecked.
+Published 2.0.6 still rejects that case. The source fix distinguishes an unsplit
+desktop token from an explicitly elevated split token; the latter must still be
+restarted from the normal desktop. Service accounts and session zero are rejected.
+No UAC policy, account permissions, publisher verification or install transaction
+is changed. This fix has not yet been published or accepted on a Server 2022 host.
+
 ## Stable installation identities
 
 - App/service installation: `C:\Program Files\Mobile Egress Client`.
@@ -14,7 +24,7 @@ Run the installer normally, confirm the expected publisher, and approve the stan
 
 The visible app, service display name and Start-menu shortcut use **Inevitable Mobile Relay**. An upgrade replaces only a verified old shortcut pointing at this installation, preserving its original copy for rollback if installation fails. Unknown shortcut targets are rejected. The internal installation directory and service ID above do not change; existing pairing and DPAPI data remain in place.
 
-Installation opens the Client app unelevated. New installations default to Inevitable Gateway: activate in your browser, pair your phone, verify its live connection, then copy proxy details. Hosted mode uses outbound TCP 443 and opens no workload listener or firewall rule. Advanced direct retains Computer address and Network access; discovery is only an unverified suggestion. Existing direct configurations remain direct, and paired installations open their dashboard with Review setup available. Finish later preserves configuration and pairing.
+Installation opens the Client app using the setup parent's desktop token: normally unelevated, or with the existing privileges of an unsplit Administrator desktop in the next Windows build. New installations default to Inevitable Gateway: activate in your browser, pair your phone, verify its live connection, then copy proxy details. Hosted mode uses outbound TCP 443 and opens no workload listener or firewall rule. Advanced direct retains Computer address and Network access; discovery is only an unverified suggestion. Existing direct configurations remain direct, and paired installations open their dashboard with Review setup available. Finish later preserves configuration and pairing.
 
 The default Agent TLS listener is TCP 8443. Its host-firewall rule is scoped to the exact Client executable, service and selected listener port. An unrelated rule with the same name is not adopted. Check/Retry firewall actions operate on the saved listener without regenerating pairing or endpoint state. Router forwarding and cloud ingress remain manual, including the additional EC2 security-group rule described in the [server networking guide](standalone-clients.md#hosted-servers-and-aws-ec2). Local HTTP 1081 and SOCKS 1080 stay on `127.0.0.2`.
 

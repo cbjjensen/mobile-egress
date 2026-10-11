@@ -36,7 +36,7 @@ type ParentOptions struct {
 }
 
 type ParentPlatform interface {
-	IsElevated() (bool, error)
+	CheckParentElevation() error
 	AcquireSetupLock(path string) (ParentSetupLock, error)
 	Confirm(fingerprint string) (bool, error)
 	ElevateAndWait(executable, nonce string) (exitCode uint32, err error)
@@ -53,12 +53,8 @@ func RunParent(ctx context.Context, options ParentOptions, platform ParentPlatfo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	elevated, err := platform.IsElevated()
-	if err != nil {
-		return errors.New("inspect setup elevation")
-	}
-	if elevated {
-		return errors.New("run Inevitable Mobile Relay Setup normally, not from an elevated process")
+	if err := platform.CheckParentElevation(); err != nil {
+		return err
 	}
 	setupLock, err := platform.AcquireSetupLock(options.Executable)
 	if err != nil {

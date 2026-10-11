@@ -304,6 +304,9 @@ func (platform *WindowsPlatform) Launch(executable string) error {
 	if !strings.EqualFold(filepath.Clean(executable), filepath.Clean(want)) {
 		return errors.New("installed controller path is invalid")
 	}
+	if err := platform.CheckParentElevation(); err != nil {
+		return err
+	}
 	return exec.Command(executable).Start()
 }
 

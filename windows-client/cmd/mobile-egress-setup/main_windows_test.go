@@ -137,7 +137,7 @@ type commandFlowParentPlatform struct {
 	t         *testing.T
 }
 
-func (fake *commandFlowParentPlatform) IsElevated() (bool, error) { return false, nil }
+func (fake *commandFlowParentPlatform) CheckParentElevation() error { return nil }
 func (fake *commandFlowParentPlatform) AcquireSetupLock(string) (setup.ParentSetupLock, error) {
 	return &commandFlowSetupLock{setupPath: fake.setupPath}, nil
 }

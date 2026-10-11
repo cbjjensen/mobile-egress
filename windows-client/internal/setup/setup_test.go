@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -165,23 +166,23 @@ func TestExchangeConsumesOnlyNonceBoundFixedInstallRequest(t *testing.T) {
 }
 
 type parentPlatformFake struct {
-	elevated        bool
-	confirmed       bool
-	setupPath       string
-	elevatedExe     string
-	launched        string
-	exchange        Exchange
-	preTrustChecked bool
-	elevationErr    error
-	forgeResult     bool
-	resultDigest    string
-	childExitCode   uint32
-	resultSuccess   *bool
-	resultCode      string
-	resultMessage   string
+	parentElevationErr error
+	confirmed          bool
+	setupPath          string
+	elevatedExe        string
+	launched           string
+	exchange           Exchange
+	preTrustChecked    bool
+	elevationErr       error
+	forgeResult        bool
+	resultDigest       string
+	childExitCode      uint32
+	resultSuccess      *bool
+	resultCode         string
+	resultMessage      string
 }
 
-func (fake *parentPlatformFake) IsElevated() (bool, error) { return fake.elevated, nil }
+func (fake *parentPlatformFake) CheckParentElevation() error { return fake.parentElevationErr }
 func (fake *parentPlatformFake) AcquireSetupLock(string) (ParentSetupLock, error) {
 	return &parentSetupLockFake{platform: fake}, nil
 }
@@ -382,7 +383,7 @@ type lifecycleParentPlatformFake struct {
 	events   []string
 }
 
-func (fake *lifecycleParentPlatformFake) IsElevated() (bool, error) { return false, nil }
+func (fake *lifecycleParentPlatformFake) CheckParentElevation() error { return nil }
 func (fake *lifecycleParentPlatformFake) AcquireSetupLock(string) (ParentSetupLock, error) {
 	fake.lockHeld = true
 	fake.events = append(fake.events, "lock")
@@ -436,6 +437,77 @@ func TestRunParentHoldsSetupLockFromPreTrustThroughChildCompletion(t *testing.T)
 func (fake *parentPlatformFake) Launch(executable string) error {
 	fake.launched = executable
 	return nil
+}
+
+func TestRunParentSupportsUnfilteredAdministratorWithoutSkippingConfirmation(t *testing.T) {
+	for _, confirmed := range []bool{false, true} {
+		t.Run(fmt.Sprint(confirmed), func(t *testing.T) {
+			executable := filepath.Join(t.TempDir(), SetupExecutableName)
+			if err := os.WriteFile(executable, []byte("signed setup fixture"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			exchange := Exchange{Root: t.TempDir()}
+			fake := &parentPlatformFake{confirmed: confirmed, setupPath: executable, exchange: exchange}
+			options := ParentOptions{Executable: executable, InstalledController: "installed-client", Nonce: strings.Repeat("a", 64), Exchange: exchange}
+			err := RunParent(context.Background(), options, fake)
+			if !confirmed {
+				if !errors.Is(err, ErrConfirmationDeclined) || fake.elevatedExe != "" || fake.launched != "" {
+					t.Fatalf("declined administrator setup performed work: error=%v child=%q launch=%q", err, fake.elevatedExe, fake.launched)
+				}
+			} else if err != nil || fake.elevatedExe != executable || fake.launched != options.InstalledController {
+				t.Fatalf("normal unfiltered administrator could not install: error=%v child=%q launch=%q", err, fake.elevatedExe, fake.launched)
+			}
+			if !fake.preTrustChecked {
+				t.Fatal("administrator setup skipped pre-trust verification")
+			}
+		})
+	}
+}
+
+func TestRunParentRejectsElevationPolicyFailureBeforeConfirmationOrRequest(t *testing.T) {
+	exchange := Exchange{Root: t.TempDir()}
+	policyErr := errors.New("split-token administrator or unreadable token")
+	fake := &parentPlatformFake{confirmed: true, parentElevationErr: policyErr, exchange: exchange}
+	nonce := strings.Repeat("b", 64)
+	err := RunParent(context.Background(), ParentOptions{Nonce: nonce, Exchange: exchange}, fake)
+	if !errors.Is(err, policyErr) || fake.preTrustChecked || fake.elevatedExe != "" || fake.launched != "" {
+		t.Fatalf("elevation policy failure was not rejected before setup: %v", err)
+	}
+	if _, err := os.Stat(exchange.RequestPath(nonce)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("created a request for a rejected parent: %v", err)
+	}
+}
+
+func TestUnfilteredAdministratorStillRequiresSuccessfulBoundInstallAndRuntime(t *testing.T) {
+	for _, scenario := range []string{"wrong digest", "nonzero child with success result", "failed result", "runtime unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			executable := filepath.Join(t.TempDir(), SetupExecutableName)
+			if err := os.WriteFile(executable, []byte("signed setup fixture"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			exchange := Exchange{Root: t.TempDir()}
+			fake := &parentPlatformFake{confirmed: true, setupPath: executable, exchange: exchange}
+			options := ParentOptions{Executable: executable, InstalledController: "installed-client", Nonce: strings.Repeat("c", 64), Exchange: exchange}
+			switch scenario {
+			case "wrong digest":
+				fake.resultDigest = strings.Repeat("0", 64)
+			case "nonzero child with success result":
+				fake.childExitCode = 1
+			case "failed result":
+				success := false
+				fake.resultSuccess = &success
+				fake.resultCode = "install_failed"
+			case "runtime unavailable":
+				options.PrepareRuntime = func(context.Context) error { return errors.New("runtime unavailable") }
+			}
+			if err := RunParent(context.Background(), options, fake); err == nil || fake.launched != "" {
+				t.Fatalf("launched after %s: %v", scenario, err)
+			}
+			if !fake.preTrustChecked || fake.elevatedExe != executable {
+				t.Fatal("did not reach the verified child-install path")
+			}
+		})
+	}
 }
 
 func TestRunParentRequiresConfirmationAndElevatesOnlyItself(t *testing.T) {
