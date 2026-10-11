@@ -16,8 +16,9 @@ Choose the smallest compatible guarded entry point. Do not reconstruct signing, 
 - `scripts\release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android` only when reproducing the immutable v1.1.0 interim release scope.
 - `scripts\release-all.ps1 -ReleaseVersion 1.1.1 -Components Windows` only for the explicitly approved v1.1.1 Windows proxy hotfix. Android remains on the published v1.1.0 APK and macOS remains unavailable.
 - `scripts\release-all.ps1 -ReleaseVersion 2.0.7 -Components Windows` for the explicitly approved Windows Server installer hotfix. Keep Mac PKG/DMG on frozen 2.0.6 and Android on frozen 2.0.3.
+- `scripts\release-all.ps1 -ReleaseVersion 2.0.8 -Components Windows` for the explicitly approved Windows Server Authenticode certificate-chain hotfix. Keep Mac PKG/DMG on frozen 2.0.6, Android on frozen 2.0.3, and iOS unchanged.
 
-Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1 and v2.0.7 hotfixes. macOS-only selection remains unsupported.
+Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1, v2.0.7, and v2.0.8 hotfixes. macOS-only selection remains unsupported.
 
 The current 2.x release contract uses the self-contained `InevitableMobileRelaySetup.exe` as the only Windows download from 2.0.2, with no legacy filename alias. Android uses `inevitable-mobile-relay-android-<version>.apk` from 2.0.2; frozen 2.0.1 keeps its `zfnf-mobile-egress-android-2.0.1.apk` name and bytes. Advance Android versionName/versionCode before building branded release source; never rebuild a frozen version. The displayed product name is Inevitable Mobile Relay; internal identities, signing keys and output roots remain unchanged. Android fallback links must remain within the same direct major version. Historical 1.x artifact contracts and published assets remain immutable; rebuilding historical controller releases requires their original source checkout. `payload-verification.zip` and Mac verification JSON remain private validation evidence. Updating source or these instructions does not publish an installer.
 
@@ -98,6 +99,13 @@ for Apple notarization or tester confirmation. Use
 `scripts\release-all.ps1 -ReleaseVersion '2.0.7' -Components Windows -Publish`.
 Preserve existing Mac 2.0.6 PKG/DMG and Android 2.0.3 links in release notes and
 the complete R2 catalog; keep unperformed Server 2022 acceptance unverified.
+
+The owner approved the Windows-only 2.0.8 Authenticode certificate-chain hotfix
+for pilot publication. Use
+`scripts\release-all.ps1 -ReleaseVersion '2.0.8' -Components Windows -Publish`.
+Preserve frozen Mac 2.0.6 PKG/DMG and Android 2.0.3 links in release notes and
+the complete R2 catalog; leave iOS unchanged. Keep native Server 2022 acceptance
+unverified until performed, and do not promote stable.
 
 The non-publishing path freezes a local tag only after artifact verification and writes an ignored local record binding the source commit, component scope, asset names, and SHA-256 digests. The publish path requires that exact record, pushes the verified source/tag, creates an empty draft, starts missing asset uploads in parallel, waits for GitHub's `uploaded` state and matching SHA-256 digest for every asset, and only then exposes the prerelease.
 

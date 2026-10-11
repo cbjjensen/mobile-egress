@@ -544,6 +544,11 @@ function Get-MobileEgressReleasePolicy {
         $policy.ExactScope = 'Windows'
         $policy.ScopeError = 'The v2.0.7 Windows Server installer hotfix must contain exactly Windows.'
     }
+    # The authorized Windows-only follow-up fixes PowerShell signature status handling.
+    if ($Version -ceq '2.0.8') {
+        $policy.ExactScope = 'Windows'
+        $policy.ScopeError = 'The v2.0.8 Windows signature status hotfix must contain exactly Windows.'
+    }
     if ($historicalPolicies.ContainsKey($Version)) {
         foreach ($entry in $historicalPolicies[$Version].GetEnumerator()) {
             $policy[$entry.Key] = $entry.Value
