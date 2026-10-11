@@ -149,7 +149,22 @@ Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/re
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
 
-## Current pilot: Desktop 2.0.6, Android 2.0.3
+## Current pilot: Windows 2.0.7, Mac 2.0.6, Android 2.0.3
+
+The owner-authorized [Windows Server installer hotfix](superpowers/plans/2026-10-10-windows-server-elevation.md)
+published Windows **2.0.7** from frozen source
+`b483f811d6aaf4cf6a88516fcd581ccf9c972f5a`, with only
+`InevitableMobileRelaySetup.exe` on its GitHub prerelease. The complete R2 plan
+retains Mac **2.0.6** and Android **2.0.3** at their existing sources. All four
+public downloads passed byte/hash/header verification before conditional catalog
+promotion, and independent public catalog readback matched the plan. Windows
+SHA-256 is `59365093e3c2cf9b448f9f5c776c5c54f11df557ca767d5ece353f6ca7a6011f`
+(25,913,632 bytes). This remains a pilot; the reported Server 2022 installation
+has not yet been verified.
+
+After the existing cache refreshed, the authenticated live page showed Windows
+2.0.7 and the retained Mac 2.0.6/Android 2.0.3 links at `2026-10-11T05:47Z`.
+This update required no website deployment or environment changes.
 
 The owner-authorized [Mac user DMG publication](superpowers/plans/2026-10-07-macos-user-dmg.md)
 published Desktop **2.0.6** from frozen source
@@ -162,7 +177,7 @@ The linked publication record contains exact hashes and byte counts.
 
 - [Mac DMG, no administrator installation, keep app open](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.dmg)
 - [Mac PKG, administrator installation, background service](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/inevitable-mobile-relay-macos-2.0.6-arm64.pkg)
-- [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.6/InevitableMobileRelaySetup.exe)
+- [Windows installer](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.7/InevitableMobileRelaySetup.exe)
 - [Unchanged Android APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.3/inevitable-mobile-relay-android-2.0.3.apk)
 
 The owner explicitly waived waiting for standard-account/physical-phone
