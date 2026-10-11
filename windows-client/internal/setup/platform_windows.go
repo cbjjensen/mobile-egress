@@ -702,7 +702,11 @@ func validatePreTrustAuthenticodeResult(raw []byte, trustStatus uint32, identity
 			return errors.New("Windows Authenticode status does not match valid trust")
 		}
 	case certEUntrustedRoot:
-		if result.Status != "NotTrusted" {
+		// Windows PowerShell 5.1 maps CERT_E_UNTRUSTEDROOT to UnknownError.
+		// The independent native result above, not that broad label, limits
+		// this exception to an untrusted root. Still require the exact signed
+		// certificate and timestamp below, and Valid after installing trust.
+		if result.Status != "NotTrusted" && result.Status != "UnknownError" {
 			return errors.New("Windows Authenticode status is not the precise untrusted-root condition")
 		}
 	default:

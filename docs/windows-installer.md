@@ -14,6 +14,37 @@ restarted from the normal desktop. Service accounts and session zero are rejecte
 No UAC policy, account permissions, publisher verification or install transaction
 is changed. The fix is published as a pilot; installation on the reported Server 2022 host remains unverified. See the [release evidence](superpowers/plans/2026-10-10-windows-server-elevation.md).
 
+## Diagnosing an installation failure
+
+For the generic `install_failed` dialog in 2.0.7, the publisher-trust wording does
+not identify the failed step. The same dialog covers child signature inspection,
+payload staging, trust, file/shortcut installation and service registration.
+WebView2 preparation and application launch happen after this stage. Setup rolls
+back changes and removes its request/result exchange, so missing files or trust
+entries afterward do not establish the original cause.
+
+An [unpublished source correction](superpowers/plans/2026-10-11-windows-powershell-signature-status.md)
+addresses Windows PowerShell 5.1 labeling the native untrusted-root condition
+`UnknownError`. Published 2.0.7 can reject that label before adding confirmed
+publisher trust. The correction still requires the precise native untrusted-root
+code, exact timestamped signer and successful post-trust verification; a generic
+`UnknownError` alone is never sufficient to accept an installer.
+
+Use the read-only [setup diagnostic](../scripts/diagnose-windows-client-setup.ps1)
+on the affected server, passing its downloaded installer:
+
+```powershell
+& .\diagnose-windows-client-setup.ps1 -InstallerPath "$env:USERPROFILE\Downloads\InevitableMobileRelaySetup.exe"
+```
+
+Send the resulting JSON to the publisher. It compares the exact frozen 2.0.7
+bytes and reports signature, trust-store access, OS build and scoped service
+failure facts without account/machine names, paths, raw event messages or keys.
+Unavailable queries remain unknown. It does not run setup, import certificates,
+change services or alter security settings. Windows signature verification may
+consult network services under the machine's existing policy. An absent
+`TrustedPublisher` store is a diagnostic lead, not proof of this reported cause.
+
 ## Stable installation identities
 
 - App/service installation: `C:\Program Files\Mobile Egress Client`.

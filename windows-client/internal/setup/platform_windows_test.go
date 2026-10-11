@@ -200,8 +200,8 @@ func TestPreTrustAuthenticodeAcceptsOnlyValidOrExactUntrustedRoot(t *testing.T) 
 		t.Fatal("accepted a non-root trust failure before elevation")
 	}
 	unknown := strings.Replace(signer, `"NotTrusted"`, `"UnknownError"`, 1)
-	if err := validatePreTrustAuthenticodeResult([]byte(unknown), certEUntrustedRoot, identity); err == nil {
-		t.Fatal("accepted UnknownError before elevation")
+	if err := validatePreTrustAuthenticodeResult([]byte(unknown), certEUntrustedRoot, identity); err != nil {
+		t.Fatalf("rejected PowerShell untrusted-root label despite precise native status: %v", err)
 	}
 }
 
