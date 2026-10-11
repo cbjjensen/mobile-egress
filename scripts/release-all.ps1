@@ -538,6 +538,12 @@ function Get-MobileEgressReleasePolicy {
         MacUnavailableReason = 'Not included in this release scope; use a later Desktop release for macOS'
         DownloadOverride = $null
     }
+    # The owner approved this Windows-only Server installer hotfix on 2026-10-10.
+    # Existing Mac and Android downloads remain on their published releases.
+    if ($Version -ceq '2.0.7') {
+        $policy.ExactScope = 'Windows'
+        $policy.ScopeError = 'The v2.0.7 Windows Server installer hotfix must contain exactly Windows.'
+    }
     if ($historicalPolicies.ContainsKey($Version)) {
         foreach ($entry in $historicalPolicies[$Version].GetEnumerator()) {
             $policy[$entry.Key] = $entry.Value

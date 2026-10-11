@@ -15,8 +15,9 @@ Choose the smallest compatible guarded entry point. Do not reconstruct signing, 
 - `scripts\release-all.ps1 -Components Windows,Android` for normal non-Apple releases when Windows and Android should ship while macOS/iOS are handled separately.
 - `scripts\release-all.ps1 -ReleaseVersion 1.1.0 -Components Windows,Android` only when reproducing the immutable v1.1.0 interim release scope.
 - `scripts\release-all.ps1 -ReleaseVersion 1.1.1 -Components Windows` only for the explicitly approved v1.1.1 Windows proxy hotfix. Android remains on the published v1.1.0 APK and macOS remains unavailable.
+- `scripts\release-all.ps1 -ReleaseVersion 2.0.7 -Components Windows` for the explicitly approved Windows Server installer hotfix. Keep Mac PKG/DMG on frozen 2.0.6 and Android on frozen 2.0.3.
 
-Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1 hotfix. macOS-only selection remains unsupported.
+Legacy `release-windows.ps1` is a fail-closed migration shim, not a publication path. The deterministic orchestrator supports `Windows,Android` for non-Apple releases; bare `Windows` remains reserved for the approved v1.1.1 and v2.0.7 hotfixes. macOS-only selection remains unsupported.
 
 The current 2.x release contract uses the self-contained `InevitableMobileRelaySetup.exe` as the only Windows download from 2.0.2, with no legacy filename alias. Android uses `inevitable-mobile-relay-android-<version>.apk` from 2.0.2; frozen 2.0.1 keeps its `zfnf-mobile-egress-android-2.0.1.apk` name and bytes. Advance Android versionName/versionCode before building branded release source; never rebuild a frozen version. The displayed product name is Inevitable Mobile Relay; internal identities, signing keys and output roots remain unchanged. Android fallback links must remain within the same direct major version. Historical 1.x artifact contracts and published assets remain immutable; rebuilding historical controller releases requires their original source checkout. `payload-verification.zip` and Mac verification JSON remain private validation evidence. Updating source or these instructions does not publish an installer.
 
@@ -43,7 +44,7 @@ unverified; do not remove automated/native release checks or promote stable.
 Require:
 
 - explicit user approval before any run that selects Desktop, because even without `-Publish` it contacts the Mac, signs Windows artifacts, Developer ID-signs and notarizes the Mac PKG, and freezes a local tag;
-- explicit user approval before a `Windows,Android` or approved v1.1.1 Windows-only run, because even without `-Publish` it signs artifacts and freezes a local tag;
+- explicit user approval before a `Windows,Android` or approved Windows-only hotfix run, because even without `-Publish` it signs artifacts and freezes a local tag;
 - separate explicit user approval before `-Publish`, because publication pushes source/tag state and changes GitHub;
 - the intended code committed on clean `main`;
 - Android `versionName` matching the release and an increased `versionCode` only when Android is selected;
@@ -91,6 +92,12 @@ Explicitly approved v1.1.1 Windows proxy-hotfix build and publication with Andro
 ```
 
 The Windows/Android-scoped release notes must mark macOS outside the release scope. The v1.1.1 notes link its current Windows artifacts and fall back to the published v1.1.0 Android APK; do not select, rebuild, or version-bump Android for this hotfix. Never add a Mac asset to a Windows-scoped tag; use a later version for macOS/Desktop once Apple signing/notarization is ready.
+
+The owner approved publishing only Windows 2.0.7 on 2026-10-10, without waiting
+for Apple notarization or tester confirmation. Use
+`scripts\release-all.ps1 -ReleaseVersion '2.0.7' -Components Windows -Publish`.
+Preserve existing Mac 2.0.6 PKG/DMG and Android 2.0.3 links in release notes and
+the complete R2 catalog; keep unperformed Server 2022 acceptance unverified.
 
 The non-publishing path freezes a local tag only after artifact verification and writes an ignored local record binding the source commit, component scope, asset names, and SHA-256 digests. The publish path requires that exact record, pushes the verified source/tag, creates an empty draft, starts missing asset uploads in parallel, waits for GitHub's `uploaded` state and matching SHA-256 digest for every asset, and only then exposes the prerelease.
 

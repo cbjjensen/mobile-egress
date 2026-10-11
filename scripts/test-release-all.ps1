@@ -82,7 +82,8 @@ foreach ($scopeCase in @(
     @{ Version = '1.1.1'; Allowed = @('Windows') },
     @{ Version = '1.1.3'; Allowed = @('Windows,Android') },
     @{ Version = '1.1.2'; Allowed = @('Desktop', 'Android', 'Desktop,Android', 'Windows,Android') },
-    @{ Version = '2.0.0'; Allowed = @('Desktop', 'Android', 'Desktop,Android', 'Windows,Android') }
+    @{ Version = '2.0.0'; Allowed = @('Desktop', 'Android', 'Desktop,Android', 'Windows,Android') },
+    @{ Version = '2.0.7'; Allowed = @('Windows') }
 )) {
     foreach ($candidateScope in @('Desktop', 'Windows', 'Android', 'Desktop,Android', 'Windows,Android', 'macOS', 'Desktop,Windows')) {
         $accepted = $true
@@ -122,6 +123,31 @@ $interimGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('
 Assert-Condition (($interimGateComponents -join ',') -eq 'Windows,Android') 'The interim release must run the Windows and Android gates without resolving macOS prerequisites.'
 $androidGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Android'))
 Assert-Condition (($androidGateComponents -join ',') -eq 'Android') 'An Android-only release must not resolve Windows or macOS build prerequisites.'
+$serverGateComponents = @(Get-MobileEgressReleaseGateComponents -Components @('Windows'))
+Assert-Condition (($serverGateComponents -join ',') -ceq 'Windows') 'The Windows Server hotfix must only run the Windows component gate.'
+$serverDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '2.0.7' -Components @('Windows'))
+Assert-Condition (($serverDefinitions.Name -join ',') -ceq 'InevitableMobileRelaySetup.exe') 'The Windows Server hotfix must publish only its signed Client installer.'
+$serverDownloadLinks = @(Resolve-MobileEgressReleaseDownloadLinks -CurrentTag 'v2.0.7' -Version '2.0.7' -ReleasedArtifacts $serverDefinitions -PublishedReleases @(
+    [pscustomobject]@{
+        tagName = 'v2.0.6'
+        isDraft = $false
+        assets = @(
+            [pscustomobject]@{ name = 'InevitableMobileRelaySetup.exe' },
+            [pscustomobject]@{ name = 'inevitable-mobile-relay-macos-2.0.6-arm64.pkg' },
+            [pscustomobject]@{ name = 'inevitable-mobile-relay-macos-2.0.6-arm64.dmg' }
+        )
+    },
+    [pscustomobject]@{
+        tagName = 'v2.0.3'
+        isDraft = $false
+        assets = @([pscustomobject]@{ name = 'inevitable-mobile-relay-android-2.0.3.apk' })
+    }
+))
+Assert-Condition ($serverDownloadLinks.Count -eq 4) 'The Windows Server hotfix notes must retain all four current download choices.'
+Assert-Condition (($serverDownloadLinks | Where-Object { $_.Key -ceq 'client-windows' }).Tag -ceq 'v2.0.7') 'The Windows download must advance to the current hotfix.'
+Assert-Condition (($serverDownloadLinks | Where-Object { $_.Key -ceq 'client-macos' }).Tag -ceq 'v2.0.6') 'The Mac PKG must retain its existing published release.'
+Assert-Condition (($serverDownloadLinks | Where-Object { $_.Key -ceq 'client-macos-dmg' }).Tag -ceq 'v2.0.6') 'The Mac DMG must retain its existing published release.'
+Assert-Condition (($serverDownloadLinks | Where-Object { $_.Key -ceq 'android' }).Tag -ceq 'v2.0.3') 'Android must retain its existing published release.'
 
 $desktopDefinitions = @(Get-MobileEgressReleaseArtifactDefinitions -RepositoryRoot 'C:\fixture' -Version '1.2.3' -Components @('Desktop'))
 Assert-Condition (($desktopDefinitions.Name -join ',') -eq 'MobileEgressSetup.exe,mobile-egress-client.exe,MobileEgressClientSetup.exe,mobile-egress-macos-1.2.3-arm64.pkg,mobile-egress-client-macos-1.2.3-arm64.pkg') 'A Desktop release must publish the self-contained Windows installer, EC2 Client, and macOS PKG together.'

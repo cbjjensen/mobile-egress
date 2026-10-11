@@ -58,9 +58,13 @@ Windows signing identity validated successfully, and both complete setup and
 setup-command suites now pass with their real public certificate fixture.
 The earlier sandbox failures above are historical and resolved.
 
-Desktop 2.0.7 is the next unused guarded release. Its coupled Windows EXE, Mac
-PKG and Mac DMG publication is authorized; Android remains the frozen 2.0.3 APK
-and iOS is unchanged. Normal release gates remain required. The dynamic website
-catalog needs no deployment for these version URL changes. Published v2.0.6
-remains immutable. Neither this workstation's token probe nor simulated token
-tests establish successful installation on the reporter's Server 2022 machine.
+The complete Windows component gate passed at `bed76cb5d7eaeccea52c22abfd034e4b5dd6f2e2`.
+While the coupled Desktop build was awaiting Apple notarization, the owner
+instructed **"Can we progress with just Windows?"**. The combined publisher was
+stopped before freezing, tagging or publishing 2.0.7. The release scope is now
+exactly Windows 2.0.7, enforced by a narrow version-specific release policy.
+Mac PKG/DMG remain the frozen 2.0.6 downloads, Android remains 2.0.3 and iOS is
+unchanged. Normal Windows signing, verification and publication gates remain
+required. The dynamic website catalog needs no deployment for this URL change.
+Neither this workstation's token probe nor simulated token tests establish
+successful installation on the reporter's Server 2022 machine.
