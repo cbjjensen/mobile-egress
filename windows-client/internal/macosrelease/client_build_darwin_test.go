@@ -67,6 +67,35 @@ func TestClientMacBuildCleansOnlyNewFailedStages(t *testing.T) {
 	}
 }
 
+func TestClientMacBuildRejectsUnattributedBackgroundService(t *testing.T) {
+	for _, value := range []string{"missing", "wrong-app", "wrong-type"} {
+		t.Run(value, func(t *testing.T) {
+			repo, _ := clientMacBuildFixture(t)
+			plist := filepath.Join(repo, "windows-client", "macos", "client", "com.zfnf.mobile-egress.client.plist")
+			// Removing an absent key is harmless for the pre-fix regression run.
+			_ = exec.Command("/usr/bin/plutil", "-remove", "AssociatedBundleIdentifiers", plist).Run()
+			if value != "missing" {
+				kind, content := "-string", "com.example.unrelated"
+				if value == "wrong-type" {
+					kind, content = "-integer", "42"
+				}
+				if output, err := exec.Command("/usr/bin/plutil", "-insert", "AssociatedBundleIdentifiers", kind, content, plist).CombinedOutput(); err != nil {
+					t.Fatalf("prepare attribution fixture: %v %s", err, output)
+				}
+			}
+			commit := commitClientMacFixture(t, repo)
+			output, err := exec.Command("/bin/sh", filepath.Join(repo, "scripts", "build-client-macos.sh"), "--release-version", "2.0.2", "--source-commit", commit).CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "background service app association mismatch") {
+				t.Fatalf("invalid association reached successful staging: %v %s", err, output)
+			}
+			stages, err := filepath.Glob(filepath.Join(repo, "windows-client", "build", "client-macos.*"))
+			if err != nil || len(stages) != 0 {
+				t.Fatalf("failed attribution left staged payload: %v %v", stages, err)
+			}
+		})
+	}
+}
+
 func TestClientMacReleaseOwnsAndCleansStagingAcrossAttempts(t *testing.T) {
 	repo, _ := clientMacBuildFixture(t)
 	stub := filepath.Join(t.TempDir(), "reject-signing")

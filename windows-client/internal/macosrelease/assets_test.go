@@ -75,7 +75,13 @@ func TestMacPlistTemplatesRenderReleaseAndStableKeychainIdentity(t *testing.T) {
 			t.Fatalf("Info.plist %s = %q, want %q", key, values[key], expected)
 		}
 	}
-
+	daemon, err := os.ReadFile("../../macos/client/com.zfnf.mobile-egress.client.plist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plistValues(t, string(daemon))["AssociatedBundleIdentifiers"] != values["CFBundleIdentifier"] {
+		t.Fatal("background service must be attributed to the installed product app")
+	}
 }
 
 func TestClientMacReleasePublishesRecordLastAndRemovesOrphanPackage(t *testing.T) {

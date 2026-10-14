@@ -15,6 +15,43 @@ selects the user runtime explicitly. Signed Info.plist records
 `MobileEgressRuntimeMode=app` and `MobileEgressSourceCommit`; the default PKG GUI
 records `service`. An unavailable daemon never selects the user runtime.
 
+## PKG background activity attribution
+
+The PKG daemon's `AssociatedBundleIdentifiers` must name the installed GUI,
+`com.zfnf.mobile-egress.client.app`. The GUI's bundle/display name is
+`Inevitable Mobile Relay`. Native staging checks that the association is a
+string matching the staged app's bundle identifier before building or signing.
+Preserve the daemon label, executable, storage and signing identities.
+
+[Apple documents](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos)
+that legacy services without this association fall back to their signing
+certificate's organization name in Login Items. The missing association was
+identified on 2026-10-14 after a reported background-activity notification used
+the individual signer name. This corrects app attribution; it does not remove
+the name from the Developer ID certificates or guarantee every security prompt
+uses the product name. Removing that certificate exposure requires an Apple
+organization identity and a separately planned signing migration. Existing
+signed downloads retain their original identity.
+
+For release acceptance, check a fresh signed PKG installation and an upgrade
+from the previous PKG on an Apple Silicon Mac. Verify both the background
+notification and Login Items & Extensions show the product app. Inspect the
+installed plist and the relevant `sfltool dumpbtm` entry locally; do not publish
+the full dump because it contains unrelated user/application information.
+Also check PKG/DMG coexistence, where both app formats share a bundle identifier.
+Retain activation, pairing and existing user background permissions. macOS may
+cache old attribution; do not reset its global background-item database or
+promise an upgrade will erase an already-delivered notification. Automated
+metadata/staging checks do not establish these customer-visible results.
+
+On 2026-10-14 the owner authorized publishing the background-name correction.
+Prepare Desktop 2.0.9 through the existing coupled Windows/PKG/DMG publisher;
+Android 2.0.3 and iOS remain unchanged. Windows and native Apple Silicon
+packaging tests pass, including rejection of missing, wrong-app and wrong-type
+associations. Retain the existing Developer ID identities and pilot channel.
+Signing/notarization and public download verification are release gates;
+fresh-install/upgrade notification and Login Items UI acceptance remain pending.
+
 ## Guarded publisher flow
 
 Use `scripts/release-desktop.ps1 -ReleaseVersion <version>` after review,

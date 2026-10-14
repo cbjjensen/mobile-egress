@@ -69,6 +69,9 @@ BUILD_VERSION=${RELEASE_VERSION%%-*}
 cd "$REPO"
 if [ "$RUNTIME_MODE" = service ]; then
     /bin/cp "$REPO/windows-client/macos/client/com.zfnf.mobile-egress.client.plist" "$STAGE/Library/LaunchDaemons/"
+    ASSOCIATED_APP=$(/usr/bin/plutil -extract AssociatedBundleIdentifiers raw -expect string -o - "$STAGE/Library/LaunchDaemons/com.zfnf.mobile-egress.client.plist") || fail 'background service app association mismatch'
+    APP_BUNDLE_ID=$(/usr/bin/plutil -extract CFBundleIdentifier raw -expect string -o - "$APP/Contents/Info.plist") || fail 'Client app bundle identifier missing'
+    [ "$ASSOCIATED_APP" = "$APP_BUNDLE_ID" ] || fail 'background service app association mismatch'
     "$GO_BIN" build -buildvcs=true -trimpath -ldflags "-X main.version=$RELEASE_VERSION" -o "$DAEMON" ./windows-client/cmd/mobile-egress-client
 fi
 "$GO_BIN" build -buildvcs=true -trimpath -tags "$TAGS" -ldflags "-X main.version=$RELEASE_VERSION" -o "$APP/Contents/MacOS/mobile-egress-client-app" ./windows-client/cmd/mobile-egress-client-app
