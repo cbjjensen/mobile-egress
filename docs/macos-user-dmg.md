@@ -52,6 +52,40 @@ associations. Retain the existing Developer ID identities and pilot channel.
 Signing/notarization and public download verification are release gates;
 fresh-install/upgrade notification and Login Items UI acceptance remain pending.
 
+### Published 2.0.9 pilot
+
+[Desktop 2.0.9](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.9)
+was published on 2026-10-14 from clean source
+`92605e948287bb416857f0ac50e2db27776a4a25`. The existing coupled publisher ran
+the complete component gate (including Go tests/vet/build, installer/release
+contracts, 19 R2 tests and 88 Client frontend tests), verified established
+signers, notarization, staples and Gatekeeper, and verified every GitHub asset
+digest before exposing the prerelease. The Mac DMG also passed app/image and
+mounted-payload checks. A separate expansion of the signed PKG verified the
+actual bundled daemon association, app identity/name/version and stable daemon
+label/root user. This is package evidence, not notification UI acceptance.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `InevitableMobileRelaySetup.exe` | `9b6141a680c787322a256845297a2dad6a393becfdcd2bfe554274548b94c5fa` |
+| `inevitable-mobile-relay-macos-2.0.9-arm64.pkg` | `cda2b8b44514569358a99e7a9c4036f817e3620c90f2e1dee469d5a585b6c6a1` |
+| `inevitable-mobile-relay-macos-2.0.9-arm64.dmg` | `47990647e432630f1bcf241a2dcac1927f527570e509a03095968cddb954bdd0` |
+
+Guarded R2 dry-run/publication and independent public catalog readback passed.
+Only the customer catalog's Mac PKG/DMG entries advanced to 2.0.9; Windows 2.0.8
+and Android 2.0.3 entries are byte-for-byte equivalent as JSON values. iOS was
+not released. Read-only SSM verification
+`de5f0427-f357-4285-999d-33b81fb0ec6a` ran the deployed download resolver with
+its real configuration and confirmed the new Mac links and preserved other
+platforms. The backend remained on source
+`ce1153bd7cb09f8aff188a4ce4ddfd6898243a19`; no website deployment or environment
+edit was needed. Existing HTTP-process caches may take five minutes to refresh.
+
+The dashboard browser could not attach, so authenticated rendered-page links
+were not independently inspected. Fresh-install/upgrade notification and Login
+Items appearance, cached attribution and PKG/DMG coexistence remain unverified.
+Developer ID certificate names and TestFlight identity remain unchanged.
+
 ## Guarded publisher flow
 
 Use `scripts/release-desktop.ps1 -ReleaseVersion <version>` after review,
