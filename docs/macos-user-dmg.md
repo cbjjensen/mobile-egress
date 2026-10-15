@@ -49,6 +49,36 @@ Advance only Mac PKG/DMG in the customer download catalog; Windows 2.0.8,
 Android 2.0.3 and iOS remain on their existing customer versions. Signing,
 notarization and public download verification remain mandatory release gates.
 
+### Published 2.0.10 pilot
+
+[Desktop 2.0.10](https://github.com/cbjjensen/mobile-egress/releases/tag/v2.0.10)
+was published on 2026-10-15 from clean source
+`279e9b46155cbfedf9a3ad155879267322e2845b`. The coupled publisher passed the
+complete component gate, established signer checks, Apple notarization,
+staples, Gatekeeper and mounted DMG payload verification. All three uploaded
+GitHub asset hashes matched the frozen local artifacts before publication.
+Private Mac verification records remain local.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `InevitableMobileRelaySetup.exe` | 25913632 | `215e2f03b3fcb6159c44ed704e068590c8f96fb1bba21a9346fa6672c053fdf4` |
+| `inevitable-mobile-relay-macos-2.0.10-arm64.pkg` | 14679045 | `3a417cdfff688adb360ba79a11f43b88fbad87b340e51af494123c24e513b459` |
+| `inevitable-mobile-relay-macos-2.0.10-arm64.dmg` | 10204108 | `cb80ced7eaf68e9f3b5da8634db9d0e2a10d37e222e3028e236fc6caf7e9b783` |
+
+Guarded R2 publication verified public bytes and headers, then advanced only
+Mac PKG/DMG to 2.0.10. Independent catalog readback matched the plan and
+preserved the Windows 2.0.8 and Android 2.0.3 entries exactly. iOS is unchanged.
+Read-only production check `40a2d404-126d-4164-8967-c2d444c57f5b` ran the
+deployed download resolver with its real configuration and verified both new
+Mac URLs and the preserved other platforms. The running backend remained on
+`ce1153bd7cb09f8aff188a4ce4ddfd6898243a19`; no website deployment or environment
+edit occurred. Existing process caches can take five minutes to refresh.
+
+The verification browser reached the login screen, so authenticated rendered
+page links were not independently checked. No installed Mac app was replaced;
+new-package standard-user upgrade and physical-phone acceptance remain
+unverified. Local publication evidence is under `.local/mac-http-2.0.10/`.
+
 The GUI bundle identifier remains `com.zfnf.mobile-egress.client.app` and its
 executable remains `mobile-egress-client-app`. The `client_usermode` build tag
 selects the user runtime explicitly. Signed Info.plist records
