@@ -71,9 +71,11 @@ The HTTP copy uses `host:port:username:password`; enter these as separate fields
 | Computer | HTTP / HTTPS CONNECT | SOCKS5 |
 |---|---|---|
 | Windows | `127.0.0.2:1081` | `127.0.0.2:1080` |
-| Mac | `127.0.0.1:1081` | `127.0.0.1:1080` |
+| Mac | `localtest.me:1081` | `127.0.0.1:1080` |
 
-These are the first phone's proxy addresses. Additional phones receive stable SOCKS5/HTTP pairs `1082/1083` through `1098/1099`. Existing phones keep their original details during upgrade; removing a phone never renumbers the others. **Keep all proxy ports 1080–1099 private.** Only Advanced direct mode needs incoming access to its authenticated phone listener. Configure individual applications rather than a system-wide proxy.
+These are the first phone's proxy addresses. Additional phones receive stable SOCKS5/HTTP pairs `1082/1083` through `1098/1099`. Existing phones keep their ports and credentials during upgrade; removing a phone never renumbers the others. **Keep all proxy ports 1080–1099 private.** Only Advanced direct mode needs incoming access to its authenticated phone listener. Configure individual applications rather than a system-wide proxy.
+
+Mac HTTP copies use `localtest.me` for Refract compatibility in both the PKG and DMG. The hostname resolves to loopback; the Client still binds only to `127.0.0.1`, with no administrator setup or alias required. After upgrading, copy the HTTP line again; ports, credentials and phone pairing are preserved. This third-party hostname requires working DNS and may be blocked by DNS rebinding protection. If resolution fails, apps that accept numeric loopback can use `127.0.0.1` with the same port and credentials; Refract does not accept that substitute.
 
 ## Keeping your phone connected
 

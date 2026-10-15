@@ -9,6 +9,46 @@ Keep the app open while using proxies. Minimize keeps traffic active; close,
 Quit and sign-out stop traffic. The formats have separate activation/identity/
 pairing; a same-signed DMG app upgrade retains per-user state.
 
+## HTTP proxy compatibility (2.0.10)
+
+Both Mac runtime modes display and copy HTTP proxy lines as
+`localtest.me:PORT:USERNAME:PASSWORD`. The first phone keeps port 1081;
+later slots retain their existing odd ports through 1099. SOCKS5 remains on
+numeric `127.0.0.1`. Listener binding is always numeric IPv4 loopback;
+the compatibility hostname is never a bind address, and no alias,
+administrator prompt, firewall change or additional service is introduced.
+Existing installations need the updated build and a fresh HTTP copy;
+credentials, ports, activation and pairing remain intact.
+
+`localtest.me` is third-party DNS that resolves to loopback. The consuming
+application needs working DNS; DNS rebinding protection may block it. For
+applications that accept numeric loopback, `127.0.0.1` with the same details
+still works. Refract rejects that numeric entry. No automatic alternate
+address or networking change is made if DNS fails.
+
+On 2026-10-15 the owner confirmed Refract accepted the hostname and worked
+with the existing DMG after editing its copied HTTP line. An authenticated
+HTTPS CONNECT check on the same Mac returned 200 through both the hostname
+and numeric loopback, with a proxy exit IP different from the Mac's direct
+connection. An earlier CONNECT timeout did not recur; its cause is unknown.
+This validates the manual compatibility format, not a newly packaged release.
+New-build signing, notarization and distribution remain separate release gates.
+
+Source validation on 2026-10-15 passed the Windows component gate and native
+macOS `go test ./...`, `go vet ./...` and `go build ./...`. The Mac also passed
+the `client_usermode` runtime tests and app build, plus race checks for the
+node service, HTTP CONNECT, SOCKS and proxy endpoint packages. Regression
+coverage checks displayed and copied HTTP/SOCKS lines at slots 0, 1 and 9.
+Native builds retain existing deprecated Keychain API warnings. Validation
+used a private source directory without replacing the installed app; no
+installer was signed, notarized or published.
+
+The owner authorized release on 2026-10-15. Prepare Desktop 2.0.10 through
+the existing coupled Windows/PKG/DMG publisher and keep the pilot channel.
+Advance only Mac PKG/DMG in the customer download catalog; Windows 2.0.8,
+Android 2.0.3 and iOS remain on their existing customer versions. Signing,
+notarization and public download verification remain mandatory release gates.
+
 The GUI bundle identifier remains `com.zfnf.mobile-egress.client.app` and its
 executable remains `mobile-egress-client-app`. The `client_usermode` build tag
 selects the user runtime explicitly. Signed Info.plist records

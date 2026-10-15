@@ -57,7 +57,7 @@ func TestPhonesReservationsLimitsAndIndependentRemoval(t *testing.T) {
 		t.Fatal(status, err)
 	}
 	for n, p := range status.Phones {
-		if p.Name != fmt.Sprintf("Phone %d", n+1) || p.Slot != n || p.SOCKSAddress != fmt.Sprintf("%s:%d", proxyendpoint.Host, 1080+2*n) || p.HTTPAddress != fmt.Sprintf("%s:%d", proxyendpoint.Host, 1081+2*n) {
+		if p.Name != fmt.Sprintf("Phone %d", n+1) || p.Slot != n || p.SOCKSAddress != fmt.Sprintf("%s:%d", proxyendpoint.Host, 1080+2*n) || p.HTTPAddress != proxyendpoint.HTTPProxyAddress(uint16(1081+2*n)) {
 			t.Fatalf("unstable slot: %#v", p)
 		}
 	}

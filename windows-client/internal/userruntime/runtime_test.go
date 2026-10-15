@@ -165,7 +165,7 @@ func TestOccupiedPhoneProxyRollsBackAndKeepsItsStablePorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := phones.Phones[0]
-	if p.ProxyRunning || p.HTTPAddress != net.JoinHostPort(proxyendpoint.Host, "1099") || p.Phase != "proxy_error" || !strings.Contains(p.Message, "1099") {
+	if p.ProxyRunning || p.HTTPAddress != proxyendpoint.HTTPProxyAddress(1099) || p.Phase != "proxy_error" || !strings.Contains(p.Message, "1099") {
 		t.Fatalf("proxy conflict hidden or renumbered: %#v", p)
 	}
 	rolledBack, err := net.Listen("tcp", net.JoinHostPort(proxyendpoint.Host, "1098"))
@@ -178,7 +178,7 @@ func TestOccupiedPhoneProxyRollsBackAndKeepsItsStablePorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	phones, err = direct.Phones(context.Background())
-	if err != nil || !phones.Phones[0].ProxyRunning || phones.Phones[0].HTTPAddress != net.JoinHostPort(proxyendpoint.Host, "1099") {
+	if err != nil || !phones.Phones[0].ProxyRunning || phones.Phones[0].HTTPAddress != proxyendpoint.HTTPProxyAddress(1099) {
 		t.Fatalf("stable proxy retry failed: %#v %v", phones, err)
 	}
 	active := make([]net.Conn, 0, 2)

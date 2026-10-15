@@ -197,7 +197,7 @@ func (m *Direct) refreshLocked() {
 	if s == nil {
 		return
 	}
-	status := StandaloneStatus{Version: m.version, ClientID: s.ClientID, Generation: s.Generation, SOCKSAddress: proxyendpoint.SOCKSAddress(), HTTPAddress: proxyendpoint.HTTPConnectAddress(), Phase: "waiting", Message: "Configure this Client's public endpoint to pair a phone."}
+	status := StandaloneStatus{Version: m.version, ClientID: s.ClientID, Generation: s.Generation, SOCKSAddress: proxyendpoint.SOCKSAddress(), HTTPAddress: proxyendpoint.HTTPProxyAddress(proxyendpoint.HTTPConnectPort), Phase: "waiting", Message: "Configure this Client's public endpoint to pair a phone."}
 	status.Transport = "hosted"
 	status.Message = "Activate Inevitable to connect this Client, then pair your phone."
 	status.ActivationState = "inactive"

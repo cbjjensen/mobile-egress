@@ -483,7 +483,7 @@ func (m *Direct) solePhoneLocked() (*directPhone, error) {
 func fmtPhoneAddress(slot int, http bool) string {
 	port := 1080 + 2*slot
 	if http {
-		port++
+		return proxyendpoint.HTTPProxyAddress(uint16(port + 1))
 	}
 	return proxyendpoint.Address(uint16(port))
 }

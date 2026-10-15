@@ -23,6 +23,12 @@ func HTTPConnectAddress() string {
 	return Address(HTTPConnectPort)
 }
 
+// HTTPProxyAddress is the application-facing HTTP endpoint. Do not use it to
+// bind a listener: on Mac its compatibility hostname requires DNS resolution.
+func HTTPProxyAddress(port uint16) string {
+	return net.JoinHostPort(httpProxyHost, strconv.Itoa(int(port)))
+}
+
 func IP() net.IP {
 	return net.ParseIP(Host)
 }

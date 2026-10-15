@@ -16,7 +16,7 @@ In hosted mode the TLS server accepts virtual connections from the outbound gate
 
 In Advanced direct mode the TLS listener defaults to `:8443`; its advertised HTTPS origin is configured separately because forwarding can change the public port. Server certificate SANs match either selected endpoint and chain to the Client’s own authority. Only an authenticated live phone session completes connection verification.
 
-Local proxy endpoints remain Windows `127.0.0.2`, Mac `127.0.0.1`, ports HTTP 1081/SOCKS 1080. The public listener has no general proxy or Owner administration API. Applications opt into the local proxy; no default routes or system proxy settings are changed.
+Local proxy listeners remain Windows `127.0.0.2`, Mac `127.0.0.1`, ports HTTP 1081/SOCKS 1080. Mac HTTP display/copy details use the DNS hostname `localtest.me` for Refract compatibility; both PKG and DMG still bind numerically to loopback without alias setup. SOCKS5 stays numeric. The public listener has no general proxy or Owner administration API. Applications opt into the local proxy; no default routes or system proxy settings are changed.
 
 The existing Tunnel abstraction connects proxies to an admitted phone session. The workload resolves destination names through bounded DNS admission and validates every candidate against the public-address policy. The phone repeats validation before opening targets.
 

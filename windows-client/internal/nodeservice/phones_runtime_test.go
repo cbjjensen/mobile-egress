@@ -95,7 +95,7 @@ func TestPhoneOccupiedPortRollsBackOnlyItsPairAndRetriesStablePorts(t *testing.T
 	}
 	for _, p := range status.Phones {
 		if p.ID == id {
-			if p.ProxyRunning || p.Phase != "proxy_error" || p.HTTPAddress != proxyendpoint.Address(1099) {
+			if p.ProxyRunning || p.Phase != "proxy_error" || p.HTTPAddress != proxyendpoint.HTTPProxyAddress(1099) {
 				t.Fatal("incorrect scoped port error", p)
 			}
 		} else if !p.ProxyRunning {
