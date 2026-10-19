@@ -73,6 +73,15 @@ ul{padding-left:21px;color:var(--text-muted);font-size:14px}li{margin:8px 0}
   <p id="serviceMessage" role="status">Getting your saved settings ready…</p>
   <button id="serviceRetry" class="hidden">Try again</button>
 </section>
+<section id="computerRecoveryPanel" class="card hidden" aria-labelledby="computerRecoveryHeading">
+  <h2 id="computerRecoveryHeading" tabindex="-1"></h2>
+  <p id="computerRecoveryMessage" role="status"></p>
+  <button id="computerRecoveryAction">Continue in browser</button>
+  <div id="computerRecoveryChecks" class="hidden">
+    <p class="note">If this screen remains, send support a screenshot including Connection details below.</p>
+  </div>
+  <p class="note">Keep your saved phones and proxy settings. We’ll guide you through the next step after this computer connects.</p>
+</section>
 <nav id="clientNavigation" class="viewTabs hidden" aria-label="Client pages">
   <button id="backToDashboard">Dashboard</button><button id="managePhone">Phone settings</button><button id="reviewSetup">Review setup</button>
 </nav>

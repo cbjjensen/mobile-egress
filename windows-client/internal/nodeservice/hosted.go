@@ -115,11 +115,15 @@ func (m *Direct) recordGatewayStatus(generation, epoch uint64, s hostedgateway.S
 	if m.gatewayEpoch != epoch || m.state == nil || m.state.Generation != generation || m.state.Configuration == nil || m.state.Configuration.Transport != "hosted" {
 		return
 	}
-	switch s.State {
-	case "connected", "connecting", "disconnected":
-		m.gatewayState = s.State
-	default:
-		m.gatewayState = "disconnected"
+	// A retry is not evidence that a rejected device credential is valid again.
+	// Keep the actionable rejection until this connector actually attaches.
+	if m.gatewayState != "authorization_rejected" || s.State == "connected" {
+		switch s.State {
+		case "connected", "connecting", "disconnected":
+			m.gatewayState = s.State
+		default:
+			m.gatewayState = "disconnected"
+		}
 	}
 	if s.Reason == "gateway activation rejected" {
 		m.gatewayState = "authorization_rejected"

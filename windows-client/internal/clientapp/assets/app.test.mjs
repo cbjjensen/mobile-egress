@@ -65,6 +65,137 @@ const row=(h,id)=>h.get('phoneList').children.find(p=>p.dataset.phoneId===id);
 const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
 const rowButton=(h,id,text)=>descendants(row(h,id)).find(n=>n.tagName==='BUTTON'&&n.textContent===text);
 
+test('hosted rejection overrides pending pairing and directly opens browser approval',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',activationState:'access_rejected',gatewayState:'authorization_rejected'},
+  phones:{pendingPhoneId:'phone-a',phones:[phoneFixture('phone-a','Home',0,{paired:false,connected:false,phase:'acknowledging'})]},
+  api:{StartHostedActivation:async name=>{h.calls.push(['activate',name]);h.status.activationState='pending';}}});
+ assert.equal(visible(h,'verifyPanel'),false);
+ assert.equal(h.get('pairNext').disabled,true);
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.match(h.get('computerRecoveryHeading').textContent,/Connect this computer/);
+ assert.equal(h.get('computerRecoveryAction').disabled,false);
+ await h.get('computerRecoveryAction').onclick();
+ assert.deepEqual(operations(h),[['activate','Workload']]);
+ assert.equal(h.phones.phones[0].phoneId,'phone-a');
+ assert.deepEqual(h.phoneCalls,[]);
+});
+
+test('pending browser recovery resumes the existing request and suppresses duplicate clicks',async()=>{
+ const request=deferred();
+ const h=await harness({status:{transport:'hosted',activationState:'pending',gatewayState:'authorization_rejected',phase:'acknowledging'},
+  api:{ResumeHostedActivation:async()=>{h.calls.push(['resume']);await request.promise;}}});
+ assert.equal(visible(h,'verifyPanel'),false);
+ assert.equal(h.get('pairNext').disabled,true);
+ const click=h.get('computerRecoveryAction').onclick();await flush();
+ assert.equal(h.get('computerRecoveryAction').disabled,true);
+ await h.get('computerRecoveryAction').onclick();request.resolve();await click;
+ assert.deepEqual(operations(h),[['resume']]);
+});
+
+test('gateway outage suspends an in-progress invitation and restores it without rescanning',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected'}});
+ await h.get('gatewayNext').onclick();await h.get('issue').onclick();
+ h.status.gatewayState='disconnected';await h.refresh();
+ assert.equal(visible(h,'pairPanel'),false);
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.match(h.get('computerRecoveryMessage').textContent,/Reconnecting/);
+ assert.doesNotMatch(h.get('computerRecoveryMessage').textContent,/approve|sign.in/i);
+ assert.equal(h.get('issue').disabled,true);
+ await h.get('computerRecoveryAction').onclick();
+ assert.equal(visible(h,'computerRecoveryChecks'),true);
+ assert.deepEqual(operations(h),[['issue']]);
+ h.status.gatewayState='connected';await h.refresh();
+ assert.equal(visible(h,'computerRecoveryPanel'),false);
+ assert.equal(visible(h,'pairPanel'),true);
+ assert.equal(h.get('invitation').value,'invitation');
+});
+
+test('gateway recovery takes precedence on every phone card including stale connected snapshots',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',activationState:'authorized',gatewayState:'disconnected'}});
+ const text=descendants(row(h,'phone-a')).map(n=>n.textContent).join(' ');
+ assert.match(text,/computer.*Inevitable/i);
+ assert.doesNotMatch(text,/Connected|start sharing/);
+ assert.equal(rowButton(h,'phone-a','Copy HTTP proxy').disabled,true);
+ await rowButton(h,'phone-a','Phone settings').onclick();
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.equal(visible(h,'phoneSettingsPanel'),false);
+ h.status.gatewayState='connected';await h.refresh();
+ assert.equal(visible(h,'phoneSettingsPanel'),true);
+ assert.equal(h.get('phoneRename').value,'Home');
+});
+
+test('reauthorization during add-phone returns to the same pending phone after attachment',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected'},
+  api:{StartHostedActivation:async()=>{h.calls.push(['activate']);Object.assign(h.status,{activationState:'authorized',gatewayState:'connecting'});}}});
+ await h.get('addPhone').onclick();await h.get('issue').onclick();
+ Object.assign(h.status,{activationState:'access_rejected',gatewayState:'authorization_rejected'});await h.refresh();
+ assert.equal(visible(h,'pairPanel'),false);
+ await h.get('computerRecoveryAction').onclick();
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ h.status.gatewayState='connected';await h.refresh();
+ assert.equal(visible(h,'pairPanel'),true);
+ assert.equal(h.get('invitation').value,'invitation-c');
+ assert.deepEqual(operations(h),[['activate']]);
+ assert.deepEqual(h.phoneCalls,[['add-phone','']]);
+});
+
+test('opening a rejected Client resumes pending confirmation automatically after recovery',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',activationState:'access_rejected',gatewayState:'authorization_rejected'},
+  phones:{pendingPhoneId:'phone-a',phones:[phoneFixture('phone-a','Home',0,{paired:false,connected:false,phase:'acknowledging'})]}});
+ Object.assign(h.status,{activationState:'authorized',gatewayState:'connected'});await h.refresh();
+ assert.equal(visible(h,'verifyPanel'),true);
+ assert.equal(visible(h,'pairPanel'),false);
+ assert.deepEqual(h.phoneCalls,[]);
+});
+
+test('browser recovery failure stays actionable without clearing the saved invitation',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected'},
+  api:{StartHostedActivation:async()=>{throw new Error('Browser could not open. Try again.');}}});
+ await h.get('gatewayNext').onclick();await h.get('issue').onclick();
+ Object.assign(h.status,{activationState:'access_rejected',gatewayState:'authorization_rejected'});await h.refresh();
+ await h.get('computerRecoveryAction').onclick();
+ assert.match(h.get('feedback').textContent,/Browser could not open/);
+ assert.equal(h.get('computerRecoveryAction').disabled,false);
+ assert.equal(h.get('invitation').value,'invitation');
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+});
+
+test('a selected phone error cannot hide shared gateway approval recovery',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',activationState:'access_rejected',gatewayState:'authorization_rejected'},
+  phones:{phones:[phoneFixture('phone-a','Home',0,{phase:'error',message:'Removal could not be saved.',connected:false}),phoneFixture('phone-b','Travel',1)]}});
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.equal(h.get('computerRecoveryAction').disabled,false);
+ assert.match(descendants(row(h,'phone-b')).map(n=>n.textContent).join(' '),/Connect this computer/);
+ assert.match(h.get('message').textContent,/approve this computer/i);
+ h.status.activationState='authorized';h.status.gatewayState='connected';await h.refresh();
+ assert.equal(visible(h,'computerRecoveryPanel'),false);
+ assert.match(h.get('diagnosticMessage').textContent,/Removal could not be saved/);
+});
+
+test('unsaved direct selection exempts only the editable address screen from hosted recovery',async()=>{
+ const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'connected',paired:true}});
+ await h.get('reviewSetup').onclick();await h.get('advancedDirect').onclick();
+ Object.assign(h.status,{activationState:'access_rejected',gatewayState:'authorization_rejected'});await h.refresh();
+ assert.equal(visible(h,'addressPanel'),true);
+ assert.equal(visible(h,'computerRecoveryPanel'),false);
+ await h.get('stepPair').onclick();
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.equal(visible(h,'pairPanel'),false);
+ await h.get('stepNetwork').onclick();
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.equal(visible(h,'networkPanel'),false);
+});
+
+test('sole phone aggregate error still allows computer approval while true service errors take priority',async()=>{
+ const h=await multiHarness({status:{transport:'hosted',phase:'error',phoneError:true,activationState:'access_rejected',gatewayState:'authorization_rejected',message:'Gateway access was rejected.'},
+  phones:{phones:[phoneFixture('phone-a','Home',0,{phase:'error',message:'Removal could not be saved.',connected:false})]}});
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
+ assert.equal(h.get('computerRecoveryAction').disabled,false);
+ h.status.phoneError=false;h.status.message='Client storage unavailable';await h.refresh();
+ assert.equal(visible(h,'computerRecoveryPanel'),false);
+ assert.equal(h.get('diagnosticMessage').textContent,'Client storage unavailable');
+});
+
 test('app runtime explains close quit sign-out and minimized traffic lifetime',async()=>{
  const h=await harness({api:{SetupInfo:async()=>({platform:'darwin',runtimeMode:'app'})}});
  assert.equal(visible(h,'runtimeLifetime'),true);
@@ -200,7 +331,8 @@ test('reviewing an approved account does not present activation or renaming as u
 test('unknown connection states do not display raw enums or claim sharing',async()=>{
  const h=await harness({status:{transport:'hosted',activationState:'authorized',gatewayState:'future_internal_state',phase:'future_phase',paired:true,message:'Opaque internal state.'}});
  for(const id of ['message','gatewayMessage','listeningState','noticeMessage'])assert.doesNotMatch(h.get(id).textContent,/future_internal_state|Opaque internal/);
- assert.equal(h.get('phase').textContent,'Checking connection');assert.equal(h.get('verifyNext').disabled,true);
+ assert.doesNotMatch(h.get('phase').textContent,/future_phase|Connected/);assert.equal(h.get('verifyNext').disabled,true);
+ assert.equal(visible(h,'computerRecoveryPanel'),true);
  assert.match(h.get('listeningState').textContent,/checking/i);
 });
 
@@ -457,6 +589,8 @@ test('hosted recovery prioritizes activation before exporting a pending route up
  assert.equal(h.get('activateHosted').textContent,'Reconnect in browser');
  h.status.activationState='pending';await h.refresh();assert.equal(h.get('exportUpdate').disabled,true);
  h.status.activationState='authorized';await h.refresh();
+ assert.equal(h.get('exportUpdate').disabled,true);
+ h.status.gatewayState='connected';await h.refresh();
  assert.equal(h.get('exportUpdate').disabled,false);assert.equal(h.get('recoveryPanel').open,true);
  await h.get('exportUpdate').onclick();assert.equal(h.get('update').value,'signed-update');
  h.status.activationState='access_rejected';await h.refresh();
@@ -599,11 +733,12 @@ test('offline dashboard tells the owner what to do on the phone without restarti
 });
 
 test('dashboard activation notice takes priority over pairing and pending phone update',async()=>{
- const h=await harness({status:{transport:'hosted',paired:true,activationState:'access_rejected',gatewayState:'authorization_rejected',updatePending:true}});
- assert.equal(visible(h,'dashboardNotice'),true);assert.match(h.get('noticeHeading').textContent,/Inevitable/);
+ const h=await harness({status:{transport:'hosted',paired:true,activationState:'access_rejected',gatewayState:'authorization_rejected',updatePending:true},
+  api:{StartHostedActivation:async()=>h.calls.push(['activate'])}});
+ assert.equal(visible(h,'computerRecoveryPanel'),true);assert.match(h.get('computerRecoveryHeading').textContent,/Inevitable/);
  assert.equal(visible(h,'recoveryPanel'),false);assert.equal(visible(h,'hostedPanel'),false);
- await h.get('noticeAction').onclick();assert.equal(visible(h,'hostedPanel'),true);
- assert.equal(h.get('stepTitle').textContent,'Your account');assert.equal(h.status.paired,true);assert.deepEqual(operations(h),[]);
+ await h.get('computerRecoveryAction').onclick();
+ assert.equal(h.status.paired,true);assert.deepEqual(operations(h),[['activate']]);
 });
 
 test('Finish later gives a resume action that preserves the current invitation',async()=>{
@@ -630,7 +765,7 @@ test('dashboard uses the saved transport after abandoning a mode change',async()
  await h.get('reviewSetup').onclick();await h.get('advancedDirect').onclick();edit(h,'endpoint','unsaved.example');
  await h.get('finishLater').onclick();await h.refresh();
  assert.equal(visible(h,'addressPanel'),false);assert.match(h.get('noticeHeading').textContent,/Inevitable/);
- await h.get('noticeAction').onclick();assert.equal(visible(h,'hostedPanel'),true);assert.deepEqual(operations(h),[]);
+ assert.equal(visible(h,'computerRecoveryPanel'),true);assert.deepEqual(operations(h),[]);
 });
 
 test('service loss suppresses stale dashboard guidance and gateway health',async()=>{

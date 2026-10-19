@@ -147,10 +147,76 @@ func TestHostedAuthorizationRejectionIsSafeAndDoesNotUnpairPhone(t *testing.T) {
 	if status.GatewayState != "authorization_rejected" || status.ActivationState != "access_rejected" || !status.Paired || m.state.Phones[0].Pairing.ID != pairing || m.state.Phones[0].Pairing.Revoked {
 		t.Fatalf("rejection erased pairing or hid access state: %+v", status)
 	}
+	for _, retry := range []hostedgateway.Status{{State: "connecting"}, {State: "disconnected", Reason: "gateway connection unavailable"}} {
+		m.recordGatewayStatus(generation, 1, retry)
+		if m.Status().GatewayState != "authorization_rejected" || m.Status().ActivationState != "access_rejected" {
+			t.Fatal("retry hid the unresolved authorization rejection")
+		}
+	}
+	m.recordGatewayStatus(generation, 0, hostedgateway.Status{State: "connected"})
+	if m.Status().GatewayState != "authorization_rejected" {
+		t.Fatal("stale connector cleared rejection")
+	}
+	m.opMu.Lock()
+	m.state.Activation = &activationState{Status: "pending"}
+	m.refreshLocked()
+	m.opMu.Unlock()
+	if m.Status().ActivationState != "pending" {
+		t.Fatal("rejection hid the in-progress browser approval")
+	}
+	m.opMu.Lock()
+	m.state.Activation = nil
+	m.opMu.Unlock()
+	m.recordGatewayStatus(generation, 1, hostedgateway.Status{State: "connected"})
+	if m.Status().GatewayState != "connected" || m.Status().ActivationState != "authorized" || !m.Status().Paired {
+		t.Fatal("successful attachment did not restore authorization and pairing")
+	}
 	m.recordGatewayStatus(generation, 1, hostedgateway.Status{State: "disconnected", Reason: "secret-token-should-not-leak"})
 	raw, _ := json.Marshal(m.Status())
 	if strings.Contains(string(raw), "secret-token") {
 		t.Fatal("gateway reason leaked")
+	}
+}
+
+func TestHostedStatusDistinguishesSolePhoneErrorFromClientFailure(t *testing.T) {
+	m, invitation, csr := directTestConfigured(t)
+	if response := directTestRequest(m, "/v2/direct/enroll", directEnrollBody(invitation, csr), nil); response.Code != 201 {
+		t.Fatal(response.Body.String())
+	}
+	m.opMu.Lock()
+	m.state.Hosted = &hostedState{DeviceID: "device", DeviceToken: "token", BrokerEndpoint: "https://broker.example", GatewayHostname: "route.example", GatewayPort: 443}
+	if err := m.configureHostedLocked(context.Background(), "Workload"); err != nil {
+		m.opMu.Unlock()
+		t.Fatal(err)
+	}
+	m.runtimeLocked(m.state.Phones[0].ID).denied = true
+	m.gatewayState = "authorization_rejected"
+	m.refreshLocked()
+	m.opMu.Unlock()
+	phoneError := func() bool {
+		raw, err := json.Marshal(m.Status())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var view map[string]any
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatal(err)
+		}
+		return view["phoneError"] == true
+	}
+	if m.Status().Phase != "error" || !phoneError() || m.Status().ActivationState != "access_rejected" {
+		t.Fatal("sole phone error lost its scope or hid gateway rejection")
+	}
+	m.setError("The TLS listener stopped.")
+	if phoneError() {
+		t.Fatal("listener failure retained phone error scope")
+	}
+	m.opMu.Lock()
+	m.denied.Store(true)
+	m.refreshLocked()
+	m.opMu.Unlock()
+	if phoneError() {
+		t.Fatal("Client revocation failure retained phone error scope")
 	}
 }
 

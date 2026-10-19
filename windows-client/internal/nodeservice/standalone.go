@@ -15,6 +15,7 @@ type StandaloneStatus struct {
 	UpdatePending       bool       `json:"updatePending"`
 	InvitationExpiresAt *time.Time `json:"invitationExpiresAt,omitempty"`
 	Phase               string     `json:"phase"`
+	PhoneError          bool       `json:"phoneError,omitempty"`
 	Message             string     `json:"message"`
 	Running             bool       `json:"running"`
 	Connected           bool       `json:"connected"`

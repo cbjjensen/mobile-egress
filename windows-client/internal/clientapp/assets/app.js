@@ -27,6 +27,7 @@ let sharedStatus = null, phonesStatus = null, selectedPhoneID = "", addingPhone 
 let phoneSelectionRevision = 0, renameEdited = false;
 const phoneRows = new Map();
 let phoneListOrder = "";
+let computerChecksOpen = false;
 const multiplePhones = () => typeof api().Phones === "function";
 const appRuntime = () => setup.runtimeMode === "app";
 const runtimeMessage = message => appRuntime() && String(message).includes("Protected Client state is unavailable.") ? "Your protected login Keychain is unavailable. Unlock your login Keychain in Keychain Access. Keep this app open to retry automatically, or reopen the signed app from your Applications folder. Your saved activation and phone pairing are kept." : message;
@@ -38,7 +39,7 @@ function applySelectedPhone() {
   status = {...sharedStatus, paired:false, connected:false, updatePending:false, httpAddress:"", socksAddress:"", invitationExpiresAt:undefined,
     phase:sharedStatus.endpoint ? "listening" : sharedStatus.phase,
     ...(phone || {})};
-  if (sharedStatus.phase === "error") Object.assign(status, {phase:"error", message:sharedStatus.message, connected:false, running:false});
+  if (clientFailure()) Object.assign(status, {phase:"error", message:sharedStatus.message, connected:false, running:false});
 }
 function selectPhone(id, settings = false) {
   if (!phonesStatus?.phones.some(phone => phone.phoneId === id)) return;
@@ -49,14 +50,48 @@ function selectPhone(id, settings = false) {
 const hostedSelected = () => (selectedTransport || status?.transport || (status?.endpoint ? "direct" : "hosted")) === "hosted";
 const hostedAuthorized = (value = status) => value?.transport === "hosted" && !!value.endpoint && value.activationState === "authorized";
 const available = () => status && status.phase !== "unavailable";
-const phoneConnected = () => !!(available() && status.phase !== "error" && status.connected && !status.updatePending && (!multiplePhones() || selectedPhone()?.proxyRunning));
+const phoneConnected = () => !!(available() && !computerRecovery() && status.phase !== "error" && status.connected && !status.updatePending && (!multiplePhones() || selectedPhone()?.proxyRunning));
 const pendingPhoneUpdate = () => !!(available() && status.paired && status.updatePending);
 const configKey = value => [value.transport || (value.endpoint ? "direct" : "hosted"), value.endpoint, value.bindAddress, value.displayName, value.generation].join("|");
 const activeInvitation = () => !!(status && status.invitationExpiresAt && new Date(status.invitationExpiresAt).getTime() > Date.now());
 
+// Overlay the current page without replacing its selected phone or setup step.
+// Fresh setup already has an account screen; direct mode keeps its own guidance.
+function clientFailure() {
+  const value = sharedStatus || status;
+  return value?.phase === "error" && !value.phoneError;
+}
+function computerRecovery() {
+  const editingDirect = selectedTransport === "direct" && !dashboard && step === "address";
+  if (!available() || clientFailure() || status.transport !== "hosted" || editingDirect || !status.endpoint) return "";
+  if (!hostedAuthorized() || status.gatewayState === "authorization_rejected") return "approval";
+  return status.gatewayState === "connected" ? "" : "connection";
+}
+function computerRecoveryLabel() {
+  return computerRecovery() === "approval" ? "Connect this computer to Inevitable" : "This computer is reconnecting to Inevitable";
+}
+function renderComputerRecovery() {
+  const recovery = computerRecovery();
+  show("computerRecoveryPanel", initialized && !!recovery);
+  if (!recovery) { computerChecksOpen = false; return; }
+  el("computerRecoveryHeading").textContent = computerRecoveryLabel();
+  el("computerRecoveryMessage").textContent = recovery === "approval"
+    ? status.activationState === "pending"
+      ? "Finish approving this computer in your browser. This screen will continue automatically when the computer connects."
+      : "This computer needs your account approval before your phone can connect. Continue in your browser to check access and approve it."
+    : "This computer isn’t connected to Inevitable. Reconnecting automatically… Phone setup will continue when the connection is restored.";
+  el("computerRecoveryAction").textContent = recovery === "approval" ? "Continue in browser" : "Check connection";
+  el("computerRecoveryAction").disabled = busy;
+  show("computerRecoveryChecks", recovery === "connection" && computerChecksOpen);
+  for (const id of ["wizardHeader", "dashboardNotice", "addressPanel", "networkPanel", "hostedPanel", "gatewayPanel", "transportChoice", "pairPanel", "verifyPanel", "proxyPanel", "recoveryPanel", "phoneSettingsPanel", "phoneSettingsHeader"]) show(id, false);
+  for (const id of ["addPhone", "issue", "copyInvitation", "pairNext", "gatewayNext", "verifyNext", "copyHttp", "copySocks", "exportUpdate", "copyUpdate"]) el(id).disabled = true;
+  show("connectionSummary", true);
+  if (computerChecksOpen) el("connectionDetails").open = true;
+}
+
 function computerConnectionMessage() {
   if (!available()) return "Waiting for Inevitable Mobile Relay to start.";
-  if (status.phase === "error") return connectionFailureMessage;
+  if (clientFailure()) return connectionFailureMessage;
   if (status.activationState === "access_rejected" || status.gatewayState === "authorization_rejected") return accountRecoveryMessage;
   if (!hostedAuthorized()) return "Approve this computer in your browser first, then come back here.";
   if (status.gatewayState === "connected") return phoneConnected() ? "Your computer and phone are connected." : "Your computer is connected to Inevitable. Next, connect your phone and start sharing.";
@@ -65,6 +100,7 @@ function computerConnectionMessage() {
 }
 function connectionMessage() {
   if (!available()) return "Inevitable Mobile Relay is not ready yet. Follow the steps above to get it running.";
+  if (computerRecovery()) return computerConnectionMessage();
   if (status.phase === "error") return connectionFailureMessage;
   if (status.transport === "hosted" && !hostedAuthorized()) return status.activationState === "pending" ? "Approve this computer in your browser to continue." : "Connect this computer to your Inevitable account to continue.";
   if (pendingPhoneUpdate()) return "Your phone needs updated connection details. Use Reconnect your phone above.";
@@ -115,7 +151,7 @@ function fillInputs() {
 }
 function resumeStep() {
   if (!status.endpoint) return "address";
-  if (status.transport === "hosted" && !hostedAuthorized()) return "address";
+  if (status.transport === "hosted" && !hostedAuthorized() && !computerRecovery()) return "address";
   if (status.phase === "acknowledging") return "verify";
   if (activeInvitation() || status.phase === "revoked") return "pair";
   return "network";
@@ -251,7 +287,7 @@ function render() {
   el("recoveryHeading").textContent = canUpdatePhone ? "Reconnect your phone" : "Connection updates";
   el("recoveryMessage").textContent = canUpdatePhone ? "This computer’s connection details changed. Show the update QR below, then scan it on your saved phone to reconnect." : pendingUpdate ? "Approve this computer in your browser first. Then show the update QR and scan it on your phone." : "If this computer’s connection details change, scan an update QR on your saved phone to reconnect.";
   show("connectionSummary", initialized && !managingPhone && (dashboard || status?.phase === "error"));
-  el("phase").textContent = connected ? "Connected" : labels[status?.phase] || "Checking connection";
+  el("phase").textContent = computerRecovery() ? (computerRecovery() === "approval" ? "Approval needed" : "Reconnecting") : connected ? "Connected" : labels[status?.phase] || "Checking connection";
   el("phase").className = "badge " + (!ready || status?.phase === "error" ? "error" : connected ? "ready" : "");
   el("message").textContent = connectionMessage();
   el("diagnosticMessage").textContent = status?.message || "No additional details are available yet.";
@@ -301,10 +337,11 @@ function render() {
   el("version").textContent = status?.version ? "Client " + status.version : "";
   renderNetwork();
   renderPhones();
-  const screen = initialized ? (managingPhone ? "phoneSettings" : dashboard ? "dashboard" : step) : "";
+  renderComputerRecovery();
+  const screen = initialized ? (computerRecovery() || (managingPhone ? "phoneSettings" : dashboard ? "dashboard" : step)) : "";
   if (screen && screen !== renderedScreen) {
     renderedScreen = screen;
-    el(managingPhone ? "phoneSettingsHeading" : dashboard ? "dashboardHeading" : "stepTitle").focus();
+    el(computerRecovery() ? "computerRecoveryHeading" : managingPhone ? "phoneSettingsHeading" : dashboard ? "dashboardHeading" : "stepTitle").focus();
   }
 }
 function renderPhones() {
@@ -334,12 +371,12 @@ function renderPhones() {
     }
     const {row, heading, message, http, socks, actions} = parts;
     heading.textContent = value.name;
-    const connected = ready && sharedStatus?.phase !== "error" && value.connected && !value.updatePending && value.proxyRunning && value.phase !== "error";
-    message.textContent = !ready ? "Client service unavailable" : sharedStatus?.phase === "error" ? "Client needs attention: " + sharedStatus.message : connected ? "Connected" : ["error", "proxy_error"].includes(value.phase) ? "Needs attention: " + value.message : value.updatePending ? "Connection update needed" : !value.paired ? "Adding phone" : "Saved — start sharing on this phone";
+    const connected = ready && !clientFailure() && value.connected && !value.updatePending && value.proxyRunning && value.phase !== "error";
+    message.textContent = !ready ? "Client service unavailable" : clientFailure() ? "Client needs attention: " + sharedStatus.message : computerRecovery() ? computerRecoveryLabel() : connected ? "Connected" : ["error", "proxy_error"].includes(value.phase) ? "Needs attention: " + value.message : value.updatePending ? "Connection update needed" : !value.paired ? "Adding phone" : "Saved — start sharing on this phone";
     http.textContent = "HTTP " + value.httpAddress; socks.textContent = "SOCKS5 " + value.socksAddress;
     for (const {button, kind, label} of actions) {
       button.setAttribute("aria-label", label + " for " + value.name);
-      button.disabled = busy || !ready || (kind !== "settings" && !value.paired);
+      button.disabled = busy || !ready || (kind !== "settings" && (!value.paired || !!computerRecovery()));
     }
     return row;
   });
@@ -352,7 +389,7 @@ function renderPhones() {
   el("pairedPhoneHeading").textContent = phone?.name || "Your phone";
   el("connectionHeading").textContent = phone ? phone.name + " connection" : "Your connection";
   el("phoneSettingsHeading").textContent = phone ? phone.name + " settings" : "Phone settings";
-  el("phoneProxyMessage").textContent = phone?.message || "";
+  el("phoneProxyMessage").textContent = computerRecovery() ? computerRecoveryLabel() : phone?.message || "";
   el("renamePhone").disabled = el("retryPhoneProxy").disabled = busy || !ready || !phone;
   show("removePhone", initialized && managingPhone && !!phone);
   el("revoke").disabled = el("confirmRevoke").disabled = busy || !ready || !phone;
@@ -462,6 +499,13 @@ for (const id of ["bindAddress","endpoint","displayName","publicPort"]) el(id).o
 for (const name of steps) el("step" + name[0].toUpperCase() + name.slice(1)).onclick = () => selectStep(name);
 el("reviewSetup").onclick = () => { if (dashboard) selectStep("address"); };
 el("noticeAction").onclick = () => { if (noticeStep) selectStep(noticeStep); };
+el("computerRecoveryAction").onclick = () => {
+  if (busy || !computerRecovery()) return;
+  if (computerRecovery() === "connection") { computerChecksOpen = true; render(); return; }
+  return action(el("computerRecoveryAction"), () => status.activationState === "pending"
+    ? api().ResumeHostedActivation()
+    : api().StartHostedActivation(status.displayName || setup.suggestedName || "My computer"), browserApprovalMessage);
+};
 el("managePhone").onclick = () => {
   if (!busy && available() && status.paired && !managingPhone) {
     dashboard = true; managingPhone = true; reviewingSetup = false; selectedTransport = "";

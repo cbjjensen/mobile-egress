@@ -182,6 +182,7 @@ func (m *Direct) Status() StandaloneStatus {
 	}
 	if status.Connected {
 		status.Phase = "ready"
+		status.PhoneError = false
 		status.Message = "Phone connected. Copy a proxy to use it in your application."
 	}
 	return status
@@ -189,6 +190,7 @@ func (m *Direct) Status() StandaloneStatus {
 func (m *Direct) setError(message string) {
 	m.mu.Lock()
 	m.status.Phase = "error"
+	m.status.PhoneError = false
 	m.status.Message = message
 	m.mu.Unlock()
 }
@@ -245,6 +247,7 @@ func (m *Direct) refreshLocked() {
 		}
 		if len(s.Phones) == 1 && p.Pairing != nil {
 			status.Phase = ps.Phase
+			status.PhoneError = ps.Phase == "error"
 			status.Message = ps.Message
 		}
 	}
@@ -257,11 +260,15 @@ func (m *Direct) refreshLocked() {
 		status.HTTPAddress = fmtPhoneAddress(s.Phones[0].Slot, true)
 	}
 	if status.Transport == "hosted" && status.GatewayState == "authorization_rejected" {
-		status.ActivationState = "access_rejected"
+		// Browser recovery must remain resumable while the old connector retries.
+		if status.ActivationState != "pending" {
+			status.ActivationState = "access_rejected"
+		}
 		status.Message = "Gateway access was rejected. Check Inevitable Mobile Relay account access or reactivate this Client. Local phone pairing is preserved."
 	}
 	if m.denied.Load() {
 		status.Phase = "error"
+		status.PhoneError = false
 		status.Message = "Access is disabled because revocation could not be saved. Repair protected storage."
 	}
 	m.mu.Lock()
