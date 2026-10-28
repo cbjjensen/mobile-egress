@@ -77,6 +77,7 @@ fun AgentScreen(
     onRetryClient: (String) -> Unit = {},
     onImportBundle: (String) -> Unit = {},
     onImportFile: () -> Unit = {},
+    onRefreshIp: () -> Unit = {},
 ) {
     val presentation = presentAgentScreen(state)
     val colorScheme = MaterialTheme.colorScheme
@@ -113,6 +114,7 @@ fun AgentScreen(
                 onRotateIp = onRotateIp,
                 onCancelRotation = onCancelRotation,
                 onCopyStatus = onCopyStatus,
+                onRefreshIp = onRefreshIp,
             )
             Text(
                 text = "Cellular only • No Wi-Fi fallback",
@@ -300,6 +302,7 @@ private fun AgentCard(
     onRotateIp: (Int) -> Unit,
     onCancelRotation: () -> Unit,
     onCopyStatus: () -> Unit,
+    onRefreshIp: () -> Unit,
 ) {
     val runtime = state.runtime
     var pendingRotationSeconds by remember { mutableStateOf<Int?>(null) }
@@ -343,6 +346,18 @@ private fun AgentCard(
             MetricTile("Data down", formatByteCount(runtime.bytesDown), Modifier.weight(1f))
         }
         AgentMessage(runtime.errorClass)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Current cellular IP", style = MaterialTheme.typography.titleSmall)
+            if (runtime.rotation.isActive()) {
+                Text("Current IP will update after rotation.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text("IPv4: ${state.currentIp.snapshot.ipv4 ?: "Not verified"}", style = MaterialTheme.typography.bodySmall)
+                Text("IPv6: ${state.currentIp.snapshot.ipv6 ?: "Not verified"}", style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onRefreshIp, enabled = state.currentIp.canRefresh && !state.currentIp.checking) {
+                Text(if (state.currentIp.checking) "Checking cellular IP…" else "Refresh IP")
+            }
+        }
         val addressRows = rotationAddressRows(runtime.rotation)
         if (addressRows.isNotEmpty()) {
             Surface(

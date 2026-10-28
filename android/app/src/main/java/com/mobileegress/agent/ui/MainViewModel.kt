@@ -2,10 +2,17 @@ package com.mobileegress.agent.ui
 
 import android.app.Application
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.os.Handler
+import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobileegress.agent.direct.*
 import com.mobileegress.agent.network.CellularNetworkAcquirer
+import com.mobileegress.agent.network.CurrentCellularIpController
+import com.mobileegress.agent.network.CurrentCellularIpState
+import com.mobileegress.agent.network.IpifyPublicIpProbe
 import com.mobileegress.agent.network.isActive
 import com.mobileegress.agent.pairing.CompactQrEnvelope
 import com.mobileegress.agent.security.DeviceKeyStore
@@ -35,6 +42,7 @@ data class MainUiState(
     val pairingScanState: PairingScanState = PairingScanState.Idle,
     val runtime: AgentRuntimeStatus = AgentRuntimeStatus(),
     val clients: List<ClientUiState> = emptyList(),
+    val currentIp: CurrentCellularIpState = CurrentCellularIpState(),
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -45,9 +53,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableState = MutableStateFlow(MainUiState())
     private val actionRecoveries = mutableMapOf<String, DirectRecovery>()
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
+    private val connectivityManager = application.getSystemService(ConnectivityManager::class.java)
+    private var currentIpCallback: ConnectivityManager.NetworkCallback? = null
+    private val currentIp = CurrentCellularIpController<Network>(viewModelScope, IpifyPublicIpProbe()::probe) { value ->
+        mutableState.update { it.copy(currentIp = value) }
+    }
     init {
         refresh()
-        viewModelScope.launch { AgentStatusBus.status.collect { runtime -> mutableState.update { it.copy(runtime = runtime) } } }
+        viewModelScope.launch { AgentStatusBus.status.collect { runtime ->
+            currentIp.setRotating(runtime.rotation.isActive())
+            mutableState.update { it.copy(runtime = runtime) }
+        } }
         viewModelScope.launch { DirectRuntimeBus.peers.collect { peers ->
             peers.filter { it.connected }.forEach { peer ->
                 val recovery = actionRecoveries[peer.clientId]
@@ -57,6 +73,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } }
         viewModelScope.launch { DirectRegistrySignals.revision.collect { refresh() } }
     }
+    fun observeCurrentIp(active: Boolean) {
+        currentIpCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        currentIpCallback = null
+        currentIp.networkChanged(null)
+        if (!active) return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (currentIpCallback === this) currentIp.networkChanged(network)
+            }
+            override fun onLost(network: Network) {
+                if (currentIpCallback === this) currentIp.networkLost(network)
+            }
+            override fun onUnavailable() {
+                if (currentIpCallback === this) currentIp.networkChanged(null)
+            }
+        }
+        currentIpCallback = callback
+        try {
+            connectivityManager.requestNetwork(CellularNetworkAcquirer.cellularRequest(), callback, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) {
+            currentIpCallback = null
+            currentIp.networkChanged(null)
+        }
+    }
+    fun refreshCurrentIp() = currentIp.refresh()
+    override fun onCleared() { observeCurrentIp(false); super.onCleared() }
     private fun refresh() {
         try {
             val saved = registry.snapshot()

@@ -6,7 +6,7 @@ import UIKit
 /// Only value snapshots and no-op actions. Never initializes pairing, keychain,
 /// path monitoring or the live view model. Excluded from release builds.
 enum AgentVisualFixtures {
-    static let scenarios = ["empty", "pending", "stopped", "connecting", "connected", "mixed", "disabled", "removal", "cellular", "recovery"]
+    static let scenarios = ["empty", "pending", "stopped", "connecting", "connected", "mixed", "disabled", "removal", "cellular", "recovery", "ip-checking", "ip-unverified", "rotation"]
     static var requested: String? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "--visual-fixture"), arguments.indices.contains(index + 1), scenarios.contains(arguments[index + 1]) else { return nil }
@@ -53,7 +53,13 @@ struct AgentVisualFixtureView: View {
     private func content(_ name: String) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             AgentDashboardContent(presentation: AgentVisualFixtures.presentation(name), toggleSharing: {}, setKeepAwake: { _ in }, addClient: {}, showClient: { _ in })
-            AgentRotationCard(state: .idle, canRotate: true, request: {}, cancel: {})
+            AgentRotationCard(state: name == "rotation" ? .completed(attemptID: 1,
+                before: .init(ipv4: "198.51.100.10", ipv6: "2001:db8::1"),
+                after: .init(ipv4: "198.51.100.20", ipv6: "2001:db8::2"), result: .changed) : .idle,
+                canRotate: true, currentIP: .init(
+                    snapshot: name == "ip-checking" || name == "ip-unverified" || name == "cellular" ? .init() :
+                        .init(ipv4: "198.51.100.20", ipv6: "2001:db8:1234:5678:abcd:abcd:abcd:1234"),
+                    checking: name == "ip-checking", canRefresh: name != "cellular"), request: {}, cancel: {})
         }
     }
     @MainActor private func captureGallery() async {

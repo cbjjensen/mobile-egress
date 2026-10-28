@@ -13,6 +13,7 @@ struct AgentDashboardView: View {
                     setKeepAwake: model.setKeepAwake, addClient: { sheet = .add }, showClient: { sheet = .client($0) })
                 AgentRotationCard(state: model.rotationState,
                     canRotate: model.lifecycle.shouldServe && model.cellularAvailability == .available && !model.rotationState.isActive,
+                    currentIP: model.currentIP, refreshIP: model.refreshCurrentIP,
                     request: model.requestRotation, cancel: model.cancelRotation)
                 if let error = model.errorMessage { AgentCard { AgentNotice(text: error) } }
                 Menu {
@@ -49,6 +50,8 @@ private enum DashboardSheet: Identifiable {
 struct AgentRotationCard: View {
     let state: CellularIPRotationState
     let canRotate: Bool
+    var currentIP = CurrentCellularIPState()
+    var refreshIP: () -> Void = {}
     let request: () -> Void
     let cancel: () -> Void
     @State private var expanded = false
@@ -62,6 +65,16 @@ struct AgentRotationCard: View {
                     Image(systemName: expanded || state.isActive ? "chevron.up" : "chevron.down").foregroundStyle(AgentDesign.secondary)
                 }.frame(minHeight: 44)
             }.accessibilityValue(expanded || state.isActive ? "Expanded" : "Collapsed")
+            if state.isActive {
+                Text("Current IP will update after rotation.").font(.footnote).foregroundStyle(AgentDesign.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    addressRow("Current cellular IPv4", address: currentIP.snapshot.ipv4)
+                    addressRow("Current cellular IPv6", address: currentIP.snapshot.ipv6)
+                }
+            }
+            Button(currentIP.checking ? "Checking cellular IP…" : "Refresh IP", action: refreshIP)
+                .buttonStyle(AgentActionStyle()).disabled(!currentIP.canRefresh || currentIP.checking)
             if expanded || state.isActive || hasResult {
                 Text(prompt).font(.subheadline).foregroundStyle(AgentDesign.secondary).fixedSize(horizontal: false, vertical: true)
                 if case let .completed(_, before, after, _) = state {

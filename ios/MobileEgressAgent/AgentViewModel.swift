@@ -11,12 +11,18 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var errorClientID: String?
-    @Published var rotationState: CellularIPRotationState = .idle
-    @Published var cellularAvailability: DirectCellularAvailability = .unknown
+    @Published var rotationState: CellularIPRotationState = .idle {
+        didSet { currentIPController?.setRotating(rotationState.isActive) }
+    }
+    @Published var cellularAvailability: DirectCellularAvailability = .unknown {
+        didSet { currentIPController?.cellularChanged(available: cellularAvailability == .available) }
+    }
+    @Published private(set) var currentIP = CurrentCellularIPState()
     @Published var isScannerPresented = false
     private var dependencies: MobileEgressDependencies?
     private var cleaner: TunnelManager?
     private var rotation: CellularIPRotationCoordinator<AgentViewModel>?
+    private var currentIPController: CurrentCellularIPController?
     private var monitor: Task<Void, Never>?
     private var operation: Task<Void, Never>?
     private var lifecycleEpoch: UInt64 = 0
@@ -45,6 +51,9 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
     }
 
     init() {
+        let currentIPController = CurrentCellularIPController(probe: CellularPublicIPProbe())
+        self.currentIPController = currentIPController
+        currentIPController.setChangeHandler { [weak self] in self?.currentIP = $0 }
         do {
             let dependencies = try MobileEgressDependencies.live()
             self.dependencies = dependencies
@@ -72,6 +81,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
         lifecycleEpoch &+= 1
         let epoch = lifecycleEpoch
         lifecycle.sceneActive = active
+        currentIPController?.setActive(active)
         if active { beginForegroundActivation() }
         updateIdleTimer()
         monitor?.cancel(); monitor = nil
@@ -243,6 +253,7 @@ final class AgentViewModel: ObservableObject, DirectForegroundStatusHosting {
         "\(MobileEgressBranding.displayName)\niOS foreground only\nSharing: \(lifecycle.startIntent ? "enabled" : "stopped")\n\(cellularAvailability.safeStatusLine)\nClients: \(clients.count)/10\nConnected: \(presentation.connectedCount)\nStreams: \(presentation.streams)\nCellular only; no automatic fallback"
     }
     func requestRotation() { Task { await rotation?.start() } }
+    func refreshCurrentIP() { currentIPController?.refresh() }
     func confirmRotation(_ accepted: Bool) { Task { await rotation?.confirm(proceed: accepted) } }
     func cancelRotation() { Task { await rotation?.cancel() } }
     func reconcileDirectSharing() async {

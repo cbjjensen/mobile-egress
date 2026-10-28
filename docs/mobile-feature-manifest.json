@@ -408,12 +408,16 @@
     },
     {
       "id": "agent.cellular-ip-rotation",
-      "title": "Phone-wide guided cellular rotation with before/after addresses restoring only enabled Clients",
+      "title": "Current cellular IP display and phone-wide guided rotation restoring only enabled Clients",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/network/CellularIpRotationController.kt",
+            "android/app/src/main/java/com/mobileegress/agent/network/CurrentCellularIpController.kt",
+            "android/app/src/main/java/com/mobileegress/agent/network/PublicIpProbe.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/MainViewModel.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/MainActivity.kt",
             "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt",
             "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreenPresentation.kt",
             "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt",
@@ -421,16 +425,19 @@
           ],
           "testEvidence": [
             "android/app/src/test/java/com/mobileegress/agent/network/CellularIpRotationControllerTest.kt",
+            "android/app/src/test/java/com/mobileegress/agent/network/CurrentCellularIpControllerTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/ui/AgentScreenPresentationTest.kt",
             "android/app/src/test/java/com/mobileegress/agent/direct/DirectPeerSupervisorTest.kt"
           ]
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores sharing only for still-enabled Clients while respecting explicit Stop and the approved foreground lifecycle. Both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes. Completed rotations display IPv4 and IPv6 before/after addresses, with Not verified for unavailable probes, so users can compare the actual cellular addresses.",
+          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores sharing only for still-enabled Clients while respecting explicit Stop and the approved foreground lifecycle. Both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes. Both foreground dashboards display current cellular IPv4/IPv6 before sharing or rotation and offer Refresh IP, using cellular-only probes on entry, path changes and rotation completion without polling. Loss, deactivation, refresh and rotation clear current addresses; generation guards reject late results. Completed rotations separately display IPv4/IPv6 before/after addresses, with Not verified for unavailable probes. Addresses are excluded from safe copied diagnostics.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift",
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift",
+            "ios/Sources/MobileEgressCore/Network/CurrentCellularIPController.swift",
+            "ios/Sources/MobileEgressCore/Network/CellularPublicIPProbe.swift",
             "ios/MobileEgressAgent/AgentDashboardView.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectForegroundRotationHost.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
@@ -438,6 +445,7 @@
           ],
           "testEvidence": [
             "ios/Tests/MobileEgressCoreTests/CellularIPRotationTests.swift",
+            "ios/Tests/MobileEgressCoreTests/CurrentCellularIPControllerTests.swift",
             "ios/Tests/MobileEgressCoreTests/CellularIPRotationCoordinatorTests.swift",
             "ios/Tests/MobileEgressCoreTests/DirectAgentTests.swift"
           ]

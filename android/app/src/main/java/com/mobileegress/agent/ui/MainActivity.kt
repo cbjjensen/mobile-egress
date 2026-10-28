@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                     onRotateIp = viewModel::rotateCellularIp,
                     onCancelRotation = viewModel::cancelCellularIpRotation,
                     onCopyStatus = ::copySafeStatus,
+                    onRefreshIp = viewModel::refreshCurrentIp,
                     onClientEnabled = viewModel::setClientEnabled,
                     onRemoveClient = viewModel::removeClient,
                     onRetryClient = viewModel::retryClient,
@@ -77,6 +78,9 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStart() { super.onStart(); viewModel.observeCurrentIp(true) }
+    override fun onStop() { viewModel.observeCurrentIp(false); super.onStop() }
 
     private fun scanQrFromVisibleUi() {
         when (
