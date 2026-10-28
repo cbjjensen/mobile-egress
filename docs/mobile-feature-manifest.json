@@ -408,12 +408,14 @@
     },
     {
       "id": "agent.cellular-ip-rotation",
-      "title": "Phone-wide guided cellular rotation restoring only enabled Clients",
+      "title": "Phone-wide guided cellular rotation with before/after addresses restoring only enabled Clients",
       "platforms": {
         "android": {
           "status": "implemented",
           "sourceEvidence": [
             "android/app/src/main/java/com/mobileegress/agent/network/CellularIpRotationController.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreen.kt",
+            "android/app/src/main/java/com/mobileegress/agent/ui/AgentScreenPresentation.kt",
             "android/app/src/main/java/com/mobileegress/agent/service/AgentForegroundService.kt",
             "android/app/src/main/java/com/mobileegress/agent/direct/DirectPeerSupervisor.kt"
           ],
@@ -425,10 +427,11 @@
         },
         "ios": {
           "status": "native-equivalent",
-          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores sharing only for still-enabled Clients while respecting explicit Stop and the approved foreground lifecycle. Both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes.",
+          "nativeEquivalenceNotes": "Guides the user through manual Control Center Airplane Mode changes, observes cellular loss and return, and restores sharing only for still-enabled Clients while respecting explicit Stop and the approved foreground lifecycle. Both platforms confirm active-stream disruption and support 10-second attempts, 30-second unchanged retries, cancellation, and changed/unchanged/unverified outcomes. Completed rotations display IPv4 and IPv6 before/after addresses, with Not verified for unavailable probes, so users can compare the actual cellular addresses.",
           "sourceEvidence": [
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotation.swift",
             "ios/Sources/MobileEgressCore/Rotation/CellularIPRotationCoordinator.swift",
+            "ios/MobileEgressAgent/AgentDashboardView.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectForegroundRotationHost.swift",
             "ios/Sources/MobileEgressCore/Direct/DirectAgentSupervisor.swift",
             "ios/MobileEgressAgent/AgentViewModel.swift"

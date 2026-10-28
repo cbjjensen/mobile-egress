@@ -64,6 +64,14 @@ struct AgentRotationCard: View {
             }.accessibilityValue(expanded || state.isActive ? "Expanded" : "Collapsed")
             if expanded || state.isActive || hasResult {
                 Text(prompt).font(.subheadline).foregroundStyle(AgentDesign.secondary).fixedSize(horizontal: false, vertical: true)
+                if case let .completed(_, before, after, _) = state {
+                    VStack(alignment: .leading, spacing: 10) {
+                        addressRow("IPv4 before", address: before.ipv4)
+                        addressRow("IPv4 after", address: after.ipv4)
+                        addressRow("IPv6 before", address: before.ipv6)
+                        addressRow("IPv6 after", address: after.ipv6)
+                    }
+                }
                 if state.isActive {
                     Button("Cancel rotation", action: cancel).buttonStyle(AgentActionStyle())
                 } else {
@@ -73,6 +81,13 @@ struct AgentRotationCard: View {
                 }
             }
         }
+    }
+    private func addressRow(_ label: String, address: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(AgentDesign.secondary)
+            Text(address ?? "Not verified").font(.footnote.monospaced()).foregroundStyle(AgentDesign.text)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        }.accessibilityElement(children: .combine)
     }
     private var hasResult: Bool { switch state { case .completed, .failed: true; default: false } }
     private var prompt: String {
