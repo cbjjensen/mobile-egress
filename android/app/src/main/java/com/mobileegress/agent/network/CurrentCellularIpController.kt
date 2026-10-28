@@ -20,18 +20,32 @@ class CurrentCellularIpController<N : Any>(
     var state = CurrentCellularIpState()
         private set
     private var network: N? = null
+    private var addresses: Set<String>? = null
     private var rotating = false
     private var generation = 0L
     private var job: Job? = null
 
     fun networkChanged(network: N?) {
         this.network = network
+        addresses = null
         invalidate()
         refresh()
     }
 
     fun networkLost(network: N) {
         if (this.network == network) networkChanged(null)
+    }
+
+    fun networkAddressesChanged(network: N, addresses: List<String>) {
+        if (this.network != network) return
+        val previous = this.addresses
+        this.addresses = addresses.toSet()
+        // Android immediately delivers initial link properties after onAvailable.
+        // That initial delivery belongs to the check already started there.
+        if (previous != null && previous != this.addresses) {
+            invalidate()
+            refresh()
+        }
     }
 
     fun setRotating(rotating: Boolean) {

@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.LinkProperties
 import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
@@ -84,6 +85,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             override fun onLost(network: Network) {
                 if (currentIpCallback === this) currentIp.networkLost(network)
+            }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                if (currentIpCallback === this) {
+                    currentIp.networkAddressesChanged(network, linkProperties.linkAddresses.map { it.toString() })
+                }
             }
             override fun onUnavailable() {
                 if (currentIpCallback === this) currentIp.networkChanged(null)

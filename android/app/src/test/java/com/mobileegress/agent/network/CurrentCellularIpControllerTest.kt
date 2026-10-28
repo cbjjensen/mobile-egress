@@ -10,6 +10,24 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class CurrentCellularIpControllerTest {
+    @Test fun `same network address change invalidates pending probe without duplicate initial check`() = runTest {
+        val old = CompletableDeferred<PublicIpSnapshot>()
+        var calls = 0
+        val controller = CurrentCellularIpController<String>(this, {
+            if (++calls == 1) withContext(NonCancellable) { old.await() }
+            else PublicIpSnapshot(ipv6 = "2001:db8::2")
+        }) {}
+        controller.networkChanged("cell"); runCurrent()
+        controller.networkAddressesChanged("cell", listOf("2001:db8::1/64")); runCurrent()
+        assertEquals(1, calls)
+        controller.networkAddressesChanged("cell", listOf("2001:db8::2/64")); runCurrent()
+        assertEquals("2001:db8::2", controller.state.snapshot.ipv6)
+        old.complete(PublicIpSnapshot(ipv6 = "2001:db8::1")); runCurrent()
+        assertEquals("2001:db8::2", controller.state.snapshot.ipv6)
+        controller.networkAddressesChanged("old", listOf("2001:db8::3/64")); runCurrent()
+        assertEquals(2, calls)
+    }
+
     @Test fun `available cellular checks before sharing and refresh coalesces`() = runTest {
         var calls = 0
         val result = CompletableDeferred<PublicIpSnapshot>()
