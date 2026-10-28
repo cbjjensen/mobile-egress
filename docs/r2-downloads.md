@@ -149,7 +149,26 @@ Tests cover unsafe versions/names/origins, missing selected artifacts, frozen/re
 
 2026-10-05 validation: all 14 Node tests passed, and the isolated PowerShell wrapper checks passed (offline default, explicit publication confirmation, session credential fallback and environment restoration after failure). Existing `test-release-all.ps1`, `test-release-desktop.ps1`, and `test-direct-release.ps1` passed. The offline preparation function verified the actual frozen Desktop `v2.0.0` files and local tag, yielding Windows SHA-256 `480a26dc5fc35a7f6075b6dc4ac3b93408ccaaecacef00ed34373d20db6dab17` (25,677,088 bytes) and Mac SHA-256 `57d9378e42e26dda93c94a9b1a4115a3887128b04e99484b71b1e2d1461e00a1` (13,767,181 bytes). No production credentials were read, no GitHub/R2 calls were made, and no objects were published for this validation.
 
-## Current pilot: Windows 2.0.8, Mac 2.0.10, Android 2.0.3
+## Current pilot: Windows 2.0.8, Mac 2.0.10, Android 2.0.11
+
+On 2026-10-28, the authorized [current cellular IP mobile release](superpowers/plans/2026-10-28-current-cellular-ip-release.md)
+advanced only Android to **2.0.11** (code 28), from frozen source
+`8ce527720cb594c2e40913f0520c2e0a3a9eadfc`. The original APK signer,
+GitHub uploaded digest, public R2 bytes/headers and conditional complete-catalog
+promotion passed. Independent public catalog readback preserved Windows 2.0.8
+and both Mac 2.0.10 entries exactly. Read-only production resolver check
+`4ef1faed-ae6f-4489-b834-e56931f44a70` verified the new Android URL with the
+deployed configuration; the backend was running source
+`0bc084baa843d07c76f223b40d4b6ea63cd835fa`. No website deployment or environment
+change occurred. Authenticated rendered-page links were not independently checked.
+
+- [Android 2.0.11 APK](https://pub-854a819dc52143fcaa714026721d9d4b.r2.dev/mobile-egress/2.0.11/inevitable-mobile-relay-android-2.0.11.apk)
+- APK SHA-256: `4f4be44ab9b5093fad374fc670d7a221951de4522f36d5f4d93a6c9d97078dcb` (11,922,431 bytes).
+
+Physical signed upgrade, carrier rotation and sustained multi-Client acceptance
+remain separate pilot gates. iPhone distribution is through TestFlight.
+
+## Historical Mac 2.0.10 publication
 
 On 2026-10-15, the authorized [Mac HTTP compatibility release](macos-user-dmg.md#published-2010-pilot)
 advanced only Mac PKG/DMG to 2.0.10. Guarded publication verified GitHub

@@ -22,6 +22,16 @@ iOS signing and TestFlight remain a separate native workflow with the appropriat
 
 ## External TestFlight notifications
 
+Latest owner-authorized mobile pilot: **2.0.11 (9)**, build
+`69810e0b-01d6-4a94-beb0-182a489e1bbc`, uploaded 2026-10-28. The original
+Distribution signer and profiles, native gate and Apple validation/upload passed.
+Notification readbacks passed before assignment to both existing external groups
+and before beta-review submission. Internal access is verified in both existing
+internal groups; external state is `WAITING_FOR_BETA_REVIEW`. See the
+[publication record](superpowers/plans/2026-10-28-current-cellular-ip-release.md)
+for source, hashes and remaining physical/Apple acceptance. Existing testers
+were not re-invited.
+
 Website signups use the owner's **Inevitable Proxies Group** external group (`caff1c49-c628-464e-8a63-89e40d6a32a4`), created on 2026-10-07. **ZFNF Friends** (`c00ac6bc-4e4b-474a-b32d-823b80a8f01e`) and its existing testers are preserved separately. Verify and assign each future build to the explicitly intended groups; do not migrate existing testers or assume the website group change updates old group assignments. The example below targets the website group.
 
 For each explicitly authorized compatible external release, verify `autoNotifyEnabled` **before assigning the build to the external group or submitting beta review**. The tracked helper uses the existing ignored Mac publisher configuration and keeps the private API key on the Mac:
